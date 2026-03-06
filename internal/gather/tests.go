@@ -146,3 +146,43 @@ func FindRelatedTests(ctx context.Context, db *index.DB, symbolName, file string
 
 	return results
 }
+
+// isTestFunction returns true if the symbol name matches test function conventions
+// for the given file extension.
+func isTestFunction(name string, file string) bool {
+	ext := filepath.Ext(file)
+	switch ext {
+	case ".go":
+		return strings.HasPrefix(name, "Test") ||
+			strings.HasPrefix(name, "Benchmark") ||
+			strings.HasPrefix(name, "Example")
+	case ".py":
+		return strings.HasPrefix(name, "test_") ||
+			strings.HasPrefix(name, "Test")
+	case ".js", ".jsx", ".ts", ".tsx":
+		return strings.HasPrefix(name, "test") ||
+			name == "it" || name == "describe" || name == "test"
+	case ".java":
+		return strings.HasPrefix(name, "test") ||
+			strings.HasPrefix(name, "Test")
+	case ".rb":
+		return strings.HasPrefix(name, "test_")
+	default:
+		// Generic: anything with "test" prefix
+		lower := strings.ToLower(name)
+		return strings.HasPrefix(lower, "test")
+	}
+}
+
+// partitionTests splits test symbols into actual test functions and helpers.
+// Test functions are returned first for budget priority.
+func partitionTests(tests []index.SymbolInfo) (funcs, helpers []index.SymbolInfo) {
+	for _, t := range tests {
+		if isTestFunction(t.Name, t.File) {
+			funcs = append(funcs, t)
+		} else {
+			helpers = append(helpers, t)
+		}
+	}
+	return
+}

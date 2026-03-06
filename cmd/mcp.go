@@ -221,6 +221,11 @@ func serveMCP(db *index.DB) error {
 				args.Flags = map[string]any{}
 			}
 
+			// Check for stale files before dispatching
+			if stale, _ := index.HasStaleFiles(ctx, db); stale {
+				index.IndexRepo(ctx, db)
+			}
+
 			result, err := dispatch.Dispatch(ctx, db, args.Cmd, args.Args, args.Flags)
 
 			var text string

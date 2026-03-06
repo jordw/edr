@@ -115,21 +115,21 @@ func runRepoMap(ctx context.Context, db *index.DB, flags map[string]any) (any, e
 	}
 
 	budget := flagInt(flags, "budget", 0)
+	truncated := false
 	if budget > 0 {
 		size := len(repoMap) / 4
 		if size > budget {
 			chars := budget * 4
-			if chars < len(repoMap) {
-				repoMap = repoMap[:chars] + "\n... (trimmed to budget)"
-			}
+			repoMap, truncated = output.TruncateAtLine(repoMap, chars)
 		}
 	}
 
 	files, symbols, _ := db.Stats(ctx)
 	return map[string]any{
-		"files":   files,
-		"symbols": symbols,
-		"map":     repoMap,
+		"files":     files,
+		"symbols":   symbols,
+		"map":       repoMap,
+		"truncated": truncated,
 	}, nil
 }
 
@@ -217,15 +217,15 @@ func runReadSymbol(ctx context.Context, db *index.DB, root string, args []string
 	body := string(src[sym.StartByte:sym.EndByte])
 	size := len(body) / 4
 
+	truncated := false
 	if budget > 0 && size > budget {
 		chars := budget * 4
-		if chars < len(body) {
-			body = body[:chars] + "\n... (trimmed to budget)"
-		}
+		body, truncated = output.TruncateAtLine(body, chars)
 	}
 
 	hash, _ := edit.FileHash(sym.File)
 	return output.ExpandResult{
+		Truncated: truncated,
 		Symbol: output.Symbol{
 			Type:  sym.Type,
 			Name:  sym.Name,
@@ -275,9 +275,7 @@ func runExpand(ctx context.Context, db *index.DB, root string, args []string, fl
 			size := len(body) / 4
 			if size > budget {
 				chars := budget * 4
-				if chars < len(body) {
-					body = body[:chars] + "\n... (trimmed to budget)"
-				}
+				body, _ = output.TruncateAtLine(body, chars)
 			}
 		}
 		result.Body = body
@@ -442,10 +440,7 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 	truncated := false
 	if budget > 0 && size > budget {
 		chars := budget * 4
-		if chars < len(body) {
-			body = body[:chars] + "\n... (trimmed to budget)"
-			truncated = true
-		}
+		body, truncated = output.TruncateAtLine(body, chars)
 		size = budget
 	}
 
@@ -1021,9 +1016,7 @@ func runBatchRead(ctx context.Context, db *index.DB, root string, args []string,
 			size := len(body) / 4
 			if perFile > 0 && size > perFile {
 				chars := perFile * 4
-				if chars < len(body) {
-					body = body[:chars] + "\n... (trimmed to budget)"
-				}
+				body, _ = output.TruncateAtLine(body, chars)
 			}
 			hash, _ := edit.FileHash(sym.File)
 			results = append(results, batchEntry{
@@ -1049,9 +1042,7 @@ func runBatchRead(ctx context.Context, db *index.DB, root string, args []string,
 			size := len(body) / 4
 			if perFile > 0 && size > perFile {
 				chars := perFile * 4
-				if chars < len(body) {
-					body = body[:chars] + "\n... (trimmed to budget)"
-				}
+				body, _ = output.TruncateAtLine(body, chars)
 			}
 			hash, _ := edit.FileHash(file)
 			entry := batchEntry{

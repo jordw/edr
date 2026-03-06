@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/jordw/edr/internal/index"
@@ -50,27 +51,41 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int,
 			Score: 1.0,
 		}
 
-		if showBody && (budget == 0 || totalTokens+size <= budget) {
+		if showBody {
 			src, err := os.ReadFile(s.File)
 			if err == nil && int(s.EndByte) <= len(src) {
 				body := string(src[s.StartByte:s.EndByte])
 				if budget > 0 {
-					remaining := (budget - totalTokens) * 4
-					if remaining > 0 && remaining < len(body) {
-						body = body[:remaining] + "\n... (trimmed to budget)"
-					}
+					body, _ = output.TruncateBodyToTokenBudget(body, budget, totalTokens)
 				}
 				m.Body = body
-				totalTokens += size
 			}
-		} else if showBody && budget > 0 && totalTokens+size > budget {
-			// Over budget for body, still include metadata
-			matches = append(matches, m)
-			truncated = true
-			break
+			totalTokens += size
 		}
 
 		matches = append(matches, m)
+
+		// When showing body, stop adding matches once budget is fully used
+		if showBody && budget > 0 && totalTokens >= budget {
+			truncated = true
+			// Continue adding metadata-only matches until we've added a reasonable count
+			for _, s2 := range symbols[len(matches):] {
+				if len(matches) >= len(symbols) || len(matches) >= 20 {
+					break
+				}
+				matches = append(matches, output.Match{
+					Symbol: output.Symbol{
+						Type:  s2.Type,
+						Name:  s2.Name,
+						File:  output.Rel(s2.File),
+						Lines: [2]int{int(s2.StartLine), int(s2.EndLine)},
+						Size:  int(s2.EndByte-s2.StartByte) / 4,
+					},
+					Score: 1.0,
+				})
+			}
+			break
+		}
 	}
 	return &SearchResult{
 		Matches:      matches,
@@ -180,10 +195,8 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 		lowerPattern = strings.ToLower(pattern)
 	}
 
-	matches := make([]output.Match, 0)
-	totalTokens := 0
+	var allMatches []output.Match
 	totalMatches := 0
-	truncated := false
 
 	err := index.WalkRepoFiles(root, func(file string) error {
 		if ctx.Err() != nil {
@@ -218,8 +231,11 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 			if matched {
 				totalMatches++
 
-				// Build display text with optional context
-				displayName := strings.TrimSpace(line)
+				// Name is always the single matched line (trimmed)
+				matchedLine := strings.TrimSpace(line)
+
+				// Snippet contains context block when --context is used
+				var snippet string
 				displayStart := lineNum
 				displayEnd := lineNum
 				if cfg.context > 0 {
@@ -235,20 +251,22 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 					for i := ctxStart; i < ctxEnd; i++ {
 						ctxLines = append(ctxLines, fmt.Sprintf("%d\t%s", i+1, allLines[i]))
 					}
-					displayName = strings.Join(ctxLines, "\n")
+					snippet = strings.Join(ctxLines, "\n")
 					displayStart = ctxStart + 1
 					displayEnd = ctxEnd
 				}
 
-				size := len(displayName) / 4
+				sizeStr := matchedLine
+				if snippet != "" {
+					sizeStr = snippet
+				}
+				size := len(sizeStr) / 4
 				if size < 1 {
 					size = 1
 				}
-				if budget > 0 && totalTokens+size > budget {
-					truncated = true
-					continue // keep counting total
-				}
-				totalTokens += size
+
+				// Compute score: source files rank higher, exact matches rank higher
+				score := scoreTextMatch(rel, line, pattern, lowerPattern, re)
 
 				// Find column offset of match
 				col := 0
@@ -260,25 +278,75 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 					col = strings.Index(strings.ToLower(line), lowerPattern) + 1
 				}
 
-				matches = append(matches, output.Match{
+				allMatches = append(allMatches, output.Match{
 					Symbol: output.Symbol{
 						Type:  "text",
-						Name:  displayName,
+						Name:  matchedLine,
 						File:  output.Rel(file),
 						Lines: [2]int{displayStart, displayEnd},
 						Size:  size,
 					},
-					Score:  0.5,
-					Column: col,
+					Score:   score,
+					Snippet: snippet,
+					Column:  col,
 				})
 			}
 		}
 		return nil
 	})
 
+	// Sort by score descending
+	sort.Slice(allMatches, func(i, j int) bool {
+		return allMatches[i].Score > allMatches[j].Score
+	})
+
+	// Apply budget trimming after sorting
+	truncated := false
+	var result []output.Match
+	totalTokens := 0
+	for _, m := range allMatches {
+		if budget > 0 && totalTokens+m.Symbol.Size > budget {
+			truncated = true
+			continue
+		}
+		totalTokens += m.Symbol.Size
+		result = append(result, m)
+	}
+
 	return &SearchResult{
-		Matches:      matches,
+		Matches:      result,
 		TotalMatches: totalMatches,
 		Truncated:    truncated,
 	}, err
+}
+
+// sourceExts contains file extensions for source code files.
+var sourceExts = map[string]bool{
+	".go": true, ".py": true, ".js": true, ".jsx": true,
+	".ts": true, ".tsx": true, ".rs": true, ".java": true,
+	".rb": true, ".c": true, ".h": true, ".cpp": true,
+	".cc": true, ".cs": true, ".swift": true, ".kt": true,
+}
+
+func isSourceFile(path string) bool {
+	ext := filepath.Ext(path)
+	return sourceExts[ext]
+}
+
+// scoreTextMatch computes a relevance score for a text search match.
+// Source files score higher than config/docs; exact case matches score higher.
+func scoreTextMatch(relPath, line, pattern, lowerPattern string, re *regexp.Regexp) float64 {
+	score := 0.5
+
+	// Source file bonus
+	if isSourceFile(relPath) {
+		score += 0.3
+	}
+
+	// Exact case match bonus (only for non-regex)
+	if re == nil && strings.Contains(line, pattern) {
+		score += 0.2
+	}
+
+	return score
 }
