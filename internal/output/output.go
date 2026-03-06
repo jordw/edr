@@ -1,0 +1,82 @@
+package output
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+)
+
+// Symbol describes a code symbol (function, type, variable, etc.).
+type Symbol struct {
+	Type    string `json:"type"`
+	Name    string `json:"name"`
+	File    string `json:"file"`
+	Lines   [2]int `json:"lines"`
+	Summary string `json:"summary,omitempty"`
+	Size    int    `json:"size"`
+	Hash    string `json:"hash,omitempty"`
+}
+
+// Match pairs a Symbol with a relevance score.
+type Match struct {
+	Symbol Symbol  `json:"symbol"`
+	Score  float64 `json:"score"`
+}
+
+// ExpandResult contains the full details of an expanded symbol.
+type ExpandResult struct {
+	Symbol  Symbol   `json:"symbol"`
+	Body    string   `json:"body"`
+	Callers []Symbol `json:"callers,omitempty"`
+	Deps    []Symbol `json:"deps,omitempty"`
+}
+
+// EditResult reports the outcome of an edit operation.
+type EditResult struct {
+	OK      bool   `json:"ok"`
+	File    string `json:"file"`
+	Message string `json:"message"`
+}
+
+// GatherResult aggregates context around a target symbol.
+type GatherResult struct {
+	Target      Symbol   `json:"target"`
+	Deps        []Symbol `json:"deps,omitempty"`
+	Callers     []Symbol `json:"callers,omitempty"`
+	Tests       []Symbol `json:"tests,omitempty"`
+	TotalTokens int      `json:"total_tokens"`
+}
+
+// Print marshals v to indented JSON and writes it to stdout.
+func Print(v any) {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "output: marshal error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(data))
+}
+
+// PrintList prints a structured list of matches under the given label.
+func PrintList(label string, items []Match) {
+	wrapper := struct {
+		Label   string  `json:"label"`
+		Count   int     `json:"count"`
+		Matches []Match `json:"matches"`
+	}{
+		Label:   label,
+		Count:   len(items),
+		Matches: items,
+	}
+	Print(wrapper)
+}
+
+// TokenEstimate returns an approximate token count for the given code string,
+// using a heuristic of ~4 characters per token.
+func TokenEstimate(code string) int {
+	n := len(code)
+	if n == 0 {
+		return 0
+	}
+	return (n + 3) / 4
+}
