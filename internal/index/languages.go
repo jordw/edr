@@ -16,12 +16,26 @@ import (
 	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
 
+// ImportNodeConfig describes how to extract imports from tree-sitter AST.
+type ImportNodeConfig struct {
+	// TopLevel is the import declaration node type (e.g., "import_declaration").
+	TopLevel []string
+	// SpecNode is the individual import spec within a group (e.g., "import_spec").
+	SpecNode string
+	// PathField is the field name for the import path (e.g., "path").
+	PathField string
+	// AliasField is the field name for the import alias (e.g., "name").
+	AliasField string
+}
+
 // LangConfig holds the tree-sitter language and the AST node types that
 // represent symbols worth indexing for a given programming language.
 type LangConfig struct {
 	Language    *tree_sitter.Language
 	SymbolNodes []string
 	NameField   string
+	Imports     *ImportNodeConfig
+	LangID      string // "go", "python", "javascript", "typescript", etc.
 }
 
 // GetLangConfig returns the language configuration for the given filename
@@ -40,6 +54,13 @@ func GetLangConfig(filename string) *LangConfig {
 				"type_spec",
 			},
 			NameField: "name",
+			LangID:    "go",
+			Imports: &ImportNodeConfig{
+				TopLevel:   []string{"import_declaration"},
+				SpecNode:   "import_spec",
+				PathField:  "path",
+				AliasField: "name",
+			},
 		}
 	case ".py":
 		return &LangConfig{
@@ -49,6 +70,10 @@ func GetLangConfig(filename string) *LangConfig {
 				"class_definition",
 			},
 			NameField: "name",
+			LangID:    "python",
+			Imports: &ImportNodeConfig{
+				TopLevel: []string{"import_statement", "import_from_statement"},
+			},
 		}
 	case ".js", ".jsx":
 		return &LangConfig{
@@ -60,6 +85,11 @@ func GetLangConfig(filename string) *LangConfig {
 				"arrow_function",
 			},
 			NameField: "name",
+			LangID:    "javascript",
+			Imports: &ImportNodeConfig{
+				TopLevel:  []string{"import_statement"},
+				PathField: "source",
+			},
 		}
 	case ".c", ".h":
 		return &LangConfig{
@@ -69,6 +99,7 @@ func GetLangConfig(filename string) *LangConfig {
 				"struct_specifier",
 			},
 			NameField: "name",
+			LangID:    "c",
 		}
 	case ".rs":
 		return &LangConfig{
@@ -80,6 +111,7 @@ func GetLangConfig(filename string) *LangConfig {
 				"enum_item",
 			},
 			NameField: "name",
+			LangID:    "rust",
 		}
 	case ".java":
 		return &LangConfig{
@@ -90,6 +122,7 @@ func GetLangConfig(filename string) *LangConfig {
 				"interface_declaration",
 			},
 			NameField: "name",
+			LangID:    "java",
 		}
 	case ".ts":
 		return &LangConfig{
@@ -104,6 +137,11 @@ func GetLangConfig(filename string) *LangConfig {
 				"type_alias_declaration",
 			},
 			NameField: "name",
+			LangID:    "typescript",
+			Imports: &ImportNodeConfig{
+				TopLevel:  []string{"import_statement"},
+				PathField: "source",
+			},
 		}
 	case ".tsx":
 		return &LangConfig{
@@ -118,6 +156,11 @@ func GetLangConfig(filename string) *LangConfig {
 				"type_alias_declaration",
 			},
 			NameField: "name",
+			LangID:    "typescript",
+			Imports: &ImportNodeConfig{
+				TopLevel:  []string{"import_statement"},
+				PathField: "source",
+			},
 		}
 	case ".rb":
 		return &LangConfig{
@@ -128,6 +171,7 @@ func GetLangConfig(filename string) *LangConfig {
 				"module",
 			},
 			NameField: "name",
+			LangID:    "ruby",
 		}
 	default:
 		return nil

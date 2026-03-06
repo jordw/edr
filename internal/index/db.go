@@ -57,7 +57,47 @@ func (d *DB) Close() error {
 	return d.db.Close()
 }
 
+const currentSchemaVersion = 2
+
 func (d *DB) migrate() error {
+	// Create schema_version table if it doesn't exist
+	_, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)`)
+	if err != nil {
+		return err
+	}
+
+	var version int
+	err = d.db.QueryRow("SELECT version FROM schema_version LIMIT 1").Scan(&version)
+	if err != nil {
+		// No version row yet — check if tables exist from v0 (pre-versioning)
+		var count int
+		_ = d.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='symbols'").Scan(&count)
+		if count > 0 {
+			version = 1 // existing DB without version tracking
+		}
+	}
+
+	if version < 1 {
+		if err := d.migrateV1(); err != nil {
+			return err
+		}
+	}
+	if version < 2 {
+		if err := d.migrateV2(); err != nil {
+			return err
+		}
+	}
+
+	// Upsert version
+	_, err = d.db.Exec(`DELETE FROM schema_version`)
+	if err != nil {
+		return err
+	}
+	_, err = d.db.Exec(`INSERT INTO schema_version (version) VALUES (?)`, currentSchemaVersion)
+	return err
+}
+
+func (d *DB) migrateV1() error {
 	_, err := d.db.Exec(`
 		CREATE TABLE IF NOT EXISTS files (
 			path TEXT PRIMARY KEY,
@@ -83,6 +123,34 @@ func (d *DB) migrate() error {
 	return err
 }
 
+func (d *DB) migrateV2() error {
+	_, err := d.db.Exec(`
+		CREATE TABLE IF NOT EXISTS imports (
+			file TEXT NOT NULL,
+			import_path TEXT NOT NULL,
+			alias TEXT DEFAULT ''
+		);
+		CREATE INDEX IF NOT EXISTS idx_imports_file ON imports(file);
+		CREATE INDEX IF NOT EXISTS idx_imports_path ON imports(import_path);
+
+		CREATE TABLE IF NOT EXISTS refs (
+			file TEXT NOT NULL,
+			from_symbol_id INTEGER NOT NULL,
+			to_name TEXT NOT NULL,
+			line INTEGER NOT NULL,
+			kind TEXT DEFAULT 'identifier'
+		);
+		CREATE INDEX IF NOT EXISTS idx_refs_to_name ON refs(to_name);
+		CREATE INDEX IF NOT EXISTS idx_refs_from_symbol ON refs(from_symbol_id);
+	`)
+	if err != nil {
+		return err
+	}
+	// Force full re-index so imports and refs get populated
+	_, err = d.db.Exec(`UPDATE files SET hash = ''`)
+	return err
+}
+
 // UpsertFile updates or inserts a file record.
 func (d *DB) UpsertFile(ctx context.Context, path, hash string, mtime int64) error {
 	_, err := d.db.ExecContext(ctx, `
@@ -102,10 +170,24 @@ func (d *DB) GetFileHash(ctx context.Context, path string) (string, error) {
 	return hash, err
 }
 
-// ClearSymbols removes all symbols for a file.
-func (d *DB) ClearSymbols(ctx context.Context, file string) error {
-	_, err := d.db.ExecContext(ctx, "DELETE FROM symbols WHERE file = ?", file)
+// ClearFileData removes all symbols, imports, and refs for a file.
+func (d *DB) ClearFileData(ctx context.Context, file string) error {
+	// Delete refs that reference symbols in this file
+	_, err := d.db.ExecContext(ctx, `DELETE FROM refs WHERE file = ?`, file)
+	if err != nil {
+		return err
+	}
+	_, err = d.db.ExecContext(ctx, "DELETE FROM imports WHERE file = ?", file)
+	if err != nil {
+		return err
+	}
+	_, err = d.db.ExecContext(ctx, "DELETE FROM symbols WHERE file = ?", file)
 	return err
+}
+
+// ClearSymbols removes all symbols for a file (legacy compat).
+func (d *DB) ClearSymbols(ctx context.Context, file string) error {
+	return d.ClearFileData(ctx, file)
 }
 
 // InsertSymbol adds a symbol to the index.
@@ -115,6 +197,314 @@ func (d *DB) InsertSymbol(ctx context.Context, s SymbolInfo) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`, s.Name, s.Type, s.File, s.StartLine, s.EndLine, s.StartByte, s.EndByte)
 	return err
+}
+
+// InsertSymbolReturnID adds a symbol and returns its rowid.
+func (d *DB) InsertSymbolReturnID(ctx context.Context, s SymbolInfo) (int64, error) {
+	res, err := d.db.ExecContext(ctx, `
+		INSERT INTO symbols (name, type, file, start_line, end_line, start_byte, end_byte)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, s.Name, s.Type, s.File, s.StartLine, s.EndLine, s.StartByte, s.EndByte)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// ImportInfo represents an import statement extracted from a source file.
+type ImportInfo struct {
+	File       string // importing file path
+	ImportPath string // raw import string
+	Alias      string // "", ".", alias name, or "*"
+}
+
+// RefInfo represents a reference edge from one symbol to an identifier.
+type RefInfo struct {
+	FromSymbolID int64
+	ToName       string
+	Line         uint32
+	Kind         string // "identifier", "type", "field", "call"
+}
+
+// InsertImports bulk-inserts import records for a file.
+func (d *DB) InsertImports(ctx context.Context, imports []ImportInfo) error {
+	if len(imports) == 0 {
+		return nil
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO imports (file, import_path, alias) VALUES (?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, imp := range imports {
+		if _, err := stmt.ExecContext(ctx, imp.File, imp.ImportPath, imp.Alias); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// InsertRefs bulk-inserts reference edges for a file.
+func (d *DB) InsertRefs(ctx context.Context, file string, refs []RefInfo) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO refs (file, from_symbol_id, to_name, line, kind) VALUES (?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, r := range refs {
+		if _, err := stmt.ExecContext(ctx, file, r.FromSymbolID, r.ToName, r.Line, r.Kind); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// HasRefs returns true if the refs table has any data.
+func (d *DB) HasRefs(ctx context.Context) bool {
+	var count int
+	err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM refs LIMIT 1").Scan(&count)
+	return err == nil && count > 0
+}
+
+// FindSemanticReferences finds references to a symbol, filtered by import visibility.
+// symbolFile is the file where the target symbol is defined.
+func (d *DB) FindSemanticReferences(ctx context.Context, symbolName, symbolFile string) ([]SymbolInfo, error) {
+	// Find all refs to this name, join with the containing symbol
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT r.file, r.line, s.name, s.type, s.file, s.start_line, s.end_line, s.start_byte, s.end_byte
+		FROM refs r
+		JOIN symbols s ON s.id = r.from_symbol_id
+		WHERE r.to_name = ?
+	`, symbolName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type refRow struct {
+		refFile   string
+		refLine   int
+		container SymbolInfo
+	}
+	var candidates []refRow
+	for rows.Next() {
+		var rr refRow
+		if err := rows.Scan(&rr.refFile, &rr.refLine,
+			&rr.container.Name, &rr.container.Type, &rr.container.File,
+			&rr.container.StartLine, &rr.container.EndLine,
+			&rr.container.StartByte, &rr.container.EndByte); err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, rr)
+	}
+
+	// Filter by import visibility
+	var results []SymbolInfo
+	seen := make(map[string]bool)
+	importCache := make(map[string][]ImportInfo)
+
+	for _, c := range candidates {
+		// Same-file refs always included
+		if c.refFile == symbolFile {
+			key := c.container.File + ":" + c.container.Name
+			if !seen[key] {
+				seen[key] = true
+				results = append(results, SymbolInfo{
+					Type:      "reference",
+					Name:      symbolName,
+					File:      c.refFile,
+					StartLine: uint32(c.refLine),
+					EndLine:   uint32(c.refLine),
+				})
+			}
+			continue
+		}
+
+		// Check if the referring file imports the symbol's file
+		imports, ok := importCache[c.refFile]
+		if !ok {
+			imports = d.getImportsForFile(ctx, c.refFile)
+			importCache[c.refFile] = imports
+		}
+
+		if importsReach(imports, symbolFile, c.refFile, d.root) {
+			key := c.refFile + ":" + fmt.Sprintf("%d", c.refLine)
+			if !seen[key] {
+				seen[key] = true
+				results = append(results, SymbolInfo{
+					Type:      "reference",
+					Name:      symbolName,
+					File:      c.refFile,
+					StartLine: uint32(c.refLine),
+					EndLine:   uint32(c.refLine),
+				})
+			}
+		}
+	}
+
+	return results, nil
+}
+
+// FindSemanticCallers finds symbols that call/reference the given symbol, filtered by imports.
+func (d *DB) FindSemanticCallers(ctx context.Context, symbolName, symbolFile string) ([]SymbolInfo, error) {
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT DISTINCT s.name, s.type, s.file, s.start_line, s.end_line, s.start_byte, s.end_byte
+		FROM refs r
+		JOIN symbols s ON s.id = r.from_symbol_id
+		WHERE r.to_name = ?
+	`, symbolName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var candidates []SymbolInfo
+	for rows.Next() {
+		var s SymbolInfo
+		if err := rows.Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte); err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, s)
+	}
+
+	// Filter by import visibility
+	var results []SymbolInfo
+	seen := make(map[string]bool)
+	importCache := make(map[string][]ImportInfo)
+
+	for _, c := range candidates {
+		key := c.File + ":" + c.Name
+		if seen[key] {
+			continue
+		}
+
+		if c.File == symbolFile {
+			// Same-file: skip self
+			if c.Name == symbolName {
+				continue
+			}
+			seen[key] = true
+			results = append(results, c)
+			continue
+		}
+
+		imports, ok := importCache[c.File]
+		if !ok {
+			imports = d.getImportsForFile(ctx, c.File)
+			importCache[c.File] = imports
+		}
+
+		if importsReach(imports, symbolFile, c.File, d.root) {
+			seen[key] = true
+			results = append(results, c)
+		}
+	}
+
+	return results, nil
+}
+
+// FindSemanticDeps finds symbols that the given symbol depends on, filtered by imports.
+func (d *DB) FindSemanticDeps(ctx context.Context, symbolID int64, symbolFile string) ([]SymbolInfo, error) {
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT DISTINCT r.to_name
+		FROM refs r
+		WHERE r.from_symbol_id = ?
+	`, symbolID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+
+	if len(names) == 0 {
+		return nil, nil
+	}
+
+	// Get imports for the symbol's file
+	imports := d.getImportsForFile(ctx, symbolFile)
+
+	var results []SymbolInfo
+	seen := make(map[string]bool)
+
+	for _, name := range names {
+		// Look up symbols with this exact name
+		syms, err := d.db.QueryContext(ctx, `
+			SELECT name, type, file, start_line, end_line, start_byte, end_byte
+			FROM symbols WHERE name = ?
+		`, name)
+		if err != nil {
+			continue
+		}
+
+		for syms.Next() {
+			var s SymbolInfo
+			if err := syms.Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte); err != nil {
+				continue
+			}
+			key := s.File + ":" + s.Name
+			if seen[key] {
+				continue
+			}
+			// Same file or import-reachable
+			if s.File == symbolFile || importsReach(imports, s.File, symbolFile, d.root) {
+				seen[key] = true
+				results = append(results, s)
+			}
+		}
+		syms.Close()
+	}
+
+	return results, nil
+}
+
+// GetSymbolID returns the DB row ID for a symbol.
+func (d *DB) GetSymbolID(ctx context.Context, file, name string) (int64, error) {
+	var id int64
+	err := d.db.QueryRowContext(ctx, `SELECT id FROM symbols WHERE file = ? AND name = ?`, file, name).Scan(&id)
+	return id, err
+}
+
+func (d *DB) getImportsForFile(ctx context.Context, file string) []ImportInfo {
+	rows, err := d.db.QueryContext(ctx, `SELECT file, import_path, alias FROM imports WHERE file = ?`, file)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var imports []ImportInfo
+	for rows.Next() {
+		var imp ImportInfo
+		if err := rows.Scan(&imp.File, &imp.ImportPath, &imp.Alias); err != nil {
+			continue
+		}
+		imports = append(imports, imp)
+	}
+	return imports
 }
 
 // SearchSymbols finds symbols matching a name pattern.
@@ -287,6 +677,12 @@ func (d *DB) Prune(ctx context.Context) error {
 	defer tx.Rollback()
 
 	for _, path := range stale {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM refs WHERE file = ?", path); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM imports WHERE file = ?", path); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM symbols WHERE file = ?", path); err != nil {
 			return err
 		}

@@ -27,43 +27,47 @@ func Gather(ctx context.Context, db *index.DB, file, symbolName string, budget i
 		return result, nil
 	}
 
-	// Find references (callers/deps) via the index
-	refs, err := index.FindReferences(ctx, db, symbolName)
-	if err != nil {
-		return result, nil // non-fatal
-	}
-
-	// Classify refs: callers are symbols that contain a reference to our symbol
-	// (but are not the symbol itself)
-	allSymbols, _ := db.AllSymbols(ctx)
-	symMap := make(map[string][]index.SymbolInfo) // file -> symbols
-	for _, s := range allSymbols {
-		symMap[s.File] = append(symMap[s.File], s)
-	}
-
-	seen := make(map[string]bool)
-	for _, ref := range refs {
-		if ref.File == file && ref.StartLine >= sym.StartLine && ref.EndLine <= sym.EndLine {
-			continue // skip self-references
+	// Find callers via semantic refs (import-filtered)
+	callers, err := db.FindSemanticCallers(ctx, symbolName, file)
+	if err != nil || len(callers) == 0 {
+		// Fallback to text-based
+		refs, _ := index.FindReferencesInFile(ctx, db, symbolName, file)
+		allSymbols, _ := db.AllSymbols(ctx)
+		symMap := make(map[string][]index.SymbolInfo)
+		for _, s := range allSymbols {
+			symMap[s.File] = append(symMap[s.File], s)
 		}
-
-		// Find which symbol contains this reference
-		for _, s := range symMap[ref.File] {
-			if ref.StartLine >= s.StartLine && ref.EndLine <= s.EndLine {
-				key := s.File + ":" + s.Name
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
-
-				caller := symbolToOutput(s)
-				if remaining-caller.Size < 0 {
-					continue
-				}
-				remaining -= caller.Size
-				result.Callers = append(result.Callers, caller)
-				result.TotalTokens += caller.Size
+		seen := make(map[string]bool)
+		for _, ref := range refs {
+			if ref.File == file && ref.StartLine >= sym.StartLine && ref.EndLine <= sym.EndLine {
+				continue
 			}
+			for _, s := range symMap[ref.File] {
+				if ref.StartLine >= s.StartLine && ref.EndLine <= s.EndLine {
+					key := s.File + ":" + s.Name
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+					caller := symbolToOutput(s)
+					if remaining-caller.Size < 0 {
+						continue
+					}
+					remaining -= caller.Size
+					result.Callers = append(result.Callers, caller)
+					result.TotalTokens += caller.Size
+				}
+			}
+		}
+	} else {
+		for _, c := range callers {
+			caller := symbolToOutput(c)
+			if remaining-caller.Size < 0 {
+				continue
+			}
+			remaining -= caller.Size
+			result.Callers = append(result.Callers, caller)
+			result.TotalTokens += caller.Size
 		}
 	}
 

@@ -271,34 +271,48 @@ func runExpand(ctx context.Context, db *index.DB, root string, args []string, fl
 	}
 
 	if showCallers {
-		refs, err := index.FindReferences(ctx, db, sym.Name)
-		if err == nil {
-			allSyms, _ := db.AllSymbols(ctx)
-			symMap := make(map[string][]index.SymbolInfo)
-			for _, s := range allSyms {
-				symMap[s.File] = append(symMap[s.File], s)
-			}
-
-			seen := make(map[string]bool)
-			for _, ref := range refs {
-				if ref.File == sym.File && ref.StartLine >= sym.StartLine && ref.EndLine <= sym.EndLine {
-					continue
+		callers, err := db.FindSemanticCallers(ctx, sym.Name, sym.File)
+		if err != nil || len(callers) == 0 {
+			// Fallback to text-based
+			refs, err := index.FindReferencesInFile(ctx, db, sym.Name, sym.File)
+			if err == nil {
+				allSyms, _ := db.AllSymbols(ctx)
+				symMap := make(map[string][]index.SymbolInfo)
+				for _, s := range allSyms {
+					symMap[s.File] = append(symMap[s.File], s)
 				}
-				for _, s := range symMap[ref.File] {
-					if ref.StartLine >= s.StartLine && ref.EndLine <= s.EndLine {
-						key := s.File + ":" + s.Name
-						if !seen[key] {
-							seen[key] = true
-							result.Callers = append(result.Callers, output.Symbol{
-								Type:  s.Type,
-								Name:  s.Name,
-								File:  output.Rel(s.File),
-								Lines: [2]int{int(s.StartLine), int(s.EndLine)},
-								Size:  int(s.EndByte-s.StartByte) / 4,
-							})
+
+				seen := make(map[string]bool)
+				for _, ref := range refs {
+					if ref.File == sym.File && ref.StartLine >= sym.StartLine && ref.EndLine <= sym.EndLine {
+						continue
+					}
+					for _, s := range symMap[ref.File] {
+						if ref.StartLine >= s.StartLine && ref.EndLine <= s.EndLine {
+							key := s.File + ":" + s.Name
+							if !seen[key] {
+								seen[key] = true
+								result.Callers = append(result.Callers, output.Symbol{
+									Type:  s.Type,
+									Name:  s.Name,
+									File:  output.Rel(s.File),
+									Lines: [2]int{int(s.StartLine), int(s.EndLine)},
+									Size:  int(s.EndByte-s.StartByte) / 4,
+								})
+							}
 						}
 					}
 				}
+			}
+		} else {
+			for _, c := range callers {
+				result.Callers = append(result.Callers, output.Symbol{
+					Type:  c.Type,
+					Name:  c.Name,
+					File:  output.Rel(c.File),
+					Lines: [2]int{int(c.StartLine), int(c.EndLine)},
+					Size:  int(c.EndByte-c.StartByte) / 4,
+				})
 			}
 		}
 	}

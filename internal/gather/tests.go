@@ -123,7 +123,7 @@ func FindRelatedTests(ctx context.Context, db *index.DB, symbolName, file string
 	}
 
 	// --- (c) Reference-based: find test files that reference the symbol ---
-	refs, err := index.FindReferences(ctx, db, symbolName)
+	refs, err := index.FindReferencesInFile(ctx, db, symbolName, file)
 	if err == nil {
 		// Build a set of test files that contain references
 		testFiles := make(map[string]bool)

@@ -62,7 +62,7 @@ edr search-text "TODO" --include "*.go" --exclude "*_test.go"
 # List symbols in a file
 edr symbols src/config.go
 
-# Find all references to a symbol
+# Find all references to a symbol (import-aware, filters false positives)
 edr xrefs parseConfig
 ```
 
@@ -106,7 +106,7 @@ edr insert-after src/config.go parseConfig
 ## Refactoring
 
 ```bash
-# Cross-file rename (finds all references via tree-sitter, applies atomically)
+# Cross-file rename (import-aware refs via tree-sitter, applies atomically)
 edr rename-symbol oldFuncName newFuncName
 
 # Preview what rename would change before applying
@@ -179,8 +179,8 @@ strings — no shell escaping needed.
 | `symbols <file>` | List symbols in a file |
 | `read-symbol [file] <sym>` | Read one symbol's source (`--budget`) |
 | `read-file <file> [start] [end]` | Read any file with optional line range (`--budget`) |
-| `expand [file] <sym>` | Progressive disclosure: `--body`, `--callers`, `--deps`, `--budget` |
-| `xrefs <symbol>` | Find all references |
+| `expand [file] <sym>` | Progressive disclosure: `--body`, `--callers`, `--deps`, `--budget` (import-aware) |
+| `xrefs <symbol>` | Find all references (import-aware, filters false positives) |
 | `gather [file] <sym>` | Context bundle: target + callers + tests (`--budget`) |
 | `smart-edit [file] <sym>` | Read + diff + replace in one call |
 | `replace-text <file> <old> <new>` | Find-and-replace in any file (`--all`, `--regex`, `--expect-hash`) |
@@ -189,7 +189,7 @@ strings — no shell escaping needed.
 | `replace-span <file> <start> <end>` | Replace byte range (`--expect-hash`) |
 | `diff-preview [file] <sym>` | Preview edit as unified diff |
 | `diff-preview-span <file> <start> <end>` | Preview span edit |
-| `rename-symbol <old> <new>` | Cross-file rename (`--dry-run`) |
+| `rename-symbol <old> <new>` | Cross-file rename, import-aware (`--dry-run`) |
 | `write-file <file>` | Create/overwrite file (`--mkdir`) |
 | `append-file <file>` | Append to end of file |
 | `insert-after [file] <sym>` | Insert code after a symbol |

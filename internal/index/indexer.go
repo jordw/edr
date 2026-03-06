@@ -96,8 +96,8 @@ func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 			return nil // already indexed, skip
 		}
 
-		// Parse and index
-		symbols, err := ParseSource(path, src, lang)
+		// Parse and index with full import/ref extraction
+		result, err := ParseFileComplete(path, src, lang)
 		if err != nil {
 			return nil // skip parse errors
 		}
@@ -106,15 +106,30 @@ func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 		if err := db.UpsertFile(ctx, path, hash, info.ModTime().Unix()); err != nil {
 			return nil
 		}
-		if err := db.ClearSymbols(ctx, path); err != nil {
+		if err := db.ClearFileData(ctx, path); err != nil {
 			return nil
 		}
 
-		for _, sym := range symbols {
-			if err := db.InsertSymbol(ctx, sym); err != nil {
+		// Insert symbols and collect IDs
+		symbolIDs := make(map[int]int64)
+		for i, sym := range result.Symbols {
+			id, err := db.InsertSymbolReturnID(ctx, sym)
+			if err != nil {
 				return nil
 			}
+			symbolIDs[i] = id
 			symbolsFound++
+		}
+
+		// Insert imports
+		if err := db.InsertImports(ctx, result.Imports); err != nil {
+			return nil
+		}
+
+		// Extract and insert refs
+		refs := result.ExtractRefs(symbolIDs)
+		if err := db.InsertRefs(ctx, path, refs); err != nil {
+			return nil
 		}
 
 		filesIndexed++
@@ -147,7 +162,7 @@ func IndexFile(ctx context.Context, db *DB, path string) error {
 		return fmt.Errorf("indexfile: stat: %w", err)
 	}
 
-	symbols, err := ParseSource(path, src, lang)
+	result, err := ParseFileComplete(path, src, lang)
 	if err != nil {
 		return fmt.Errorf("indexfile: parse: %w", err)
 	}
@@ -155,13 +170,26 @@ func IndexFile(ctx context.Context, db *DB, path string) error {
 	if err := db.UpsertFile(ctx, path, hash, info.ModTime().Unix()); err != nil {
 		return err
 	}
-	if err := db.ClearSymbols(ctx, path); err != nil {
+	if err := db.ClearFileData(ctx, path); err != nil {
 		return err
 	}
-	for _, sym := range symbols {
-		if err := db.InsertSymbol(ctx, sym); err != nil {
+
+	symbolIDs := make(map[int]int64)
+	for i, sym := range result.Symbols {
+		id, err := db.InsertSymbolReturnID(ctx, sym)
+		if err != nil {
 			return err
 		}
+		symbolIDs[i] = id
+	}
+
+	if err := db.InsertImports(ctx, result.Imports); err != nil {
+		return err
+	}
+
+	refs := result.ExtractRefs(symbolIDs)
+	if err := db.InsertRefs(ctx, path, refs); err != nil {
+		return err
 	}
 	return nil
 }
