@@ -146,6 +146,40 @@ func (d *DB) GetSymbol(ctx context.Context, file, name string) (*SymbolInfo, err
 	return &s, nil
 }
 
+// ResolveSymbol finds a symbol by name across all files. Returns an error if
+// not found or if ambiguous (multiple files contain a symbol with that name).
+func (d *DB) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo, error) {
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT name, type, file, start_line, end_line, start_byte, end_byte
+		FROM symbols WHERE name = ?
+		ORDER BY file
+	`, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []SymbolInfo
+	for rows.Next() {
+		var s SymbolInfo
+		if err := rows.Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte); err != nil {
+			return nil, err
+		}
+		results = append(results, s)
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("symbol %q not found", name)
+	}
+	if len(results) > 1 {
+		files := make([]string, len(results))
+		for i, r := range results {
+			files[i] = r.File
+		}
+		return nil, fmt.Errorf("symbol %q is ambiguous, found in: %v — specify file", name, files)
+	}
+	return &results[0], nil
+}
+
 // GetSymbolsByFile returns all symbols in a file.
 func (d *DB) GetSymbolsByFile(ctx context.Context, file string) ([]SymbolInfo, error) {
 	rows, err := d.db.QueryContext(ctx, `

@@ -54,6 +54,25 @@ func openAndEnsureIndex(cmd *cobra.Command) (*index.DB, error) {
 	return db, nil
 }
 
+// resolveSymbol accepts 1 or 2 args: either "<symbol>" or "<file> <symbol>".
+// With 1 arg, it resolves globally (errors if ambiguous).
+// With 2 args, it looks up in the specific file.
+func resolveSymbol(ctx context.Context, db *index.DB, args []string) (*index.SymbolInfo, error) {
+	root := db.Root()
+	switch len(args) {
+	case 1:
+		return db.ResolveSymbol(ctx, args[0])
+	case 2:
+		file := args[0]
+		if len(file) > 0 && file[0] != '/' {
+			file = root + "/" + file
+		}
+		return db.GetSymbol(ctx, file, args[1])
+	default:
+		return nil, fmt.Errorf("expected 1 or 2 arguments: [file] <symbol>")
+	}
+}
+
 func getRoot(cmd *cobra.Command) string {
 	root, _ := cmd.Flags().GetString("root")
 	if root == "." {

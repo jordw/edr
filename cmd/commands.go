@@ -186,11 +186,10 @@ var symbolsCmd = &cobra.Command{
 // --- read-symbol ---
 
 var readSymbolCmd = &cobra.Command{
-	Use:   "read-symbol <file> <symbol>",
+	Use:   "read-symbol [file] <symbol>",
 	Short: "Read a symbol's source code",
-	Args:  cobra.ExactArgs(2),
+	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root := getRoot(cmd)
 		budget, _ := cmd.Flags().GetInt("budget")
 
 		db, err := openAndEnsureIndex(cmd)
@@ -200,12 +199,7 @@ var readSymbolCmd = &cobra.Command{
 		defer db.Close()
 
 		ctx := context.Background()
-		file := args[0]
-		if file[0] != '/' {
-			file = root + "/" + file
-		}
-
-		sym, err := db.GetSymbol(ctx, file, args[1])
+		sym, err := resolveSymbol(ctx, db, args)
 		if err != nil {
 			return err
 		}
@@ -250,11 +244,10 @@ func init() {
 // --- expand ---
 
 var expandCmd = &cobra.Command{
-	Use:   "expand <file> <symbol>",
+	Use:   "expand [file] <symbol>",
 	Short: "Expand a symbol with optional callers/deps",
-	Args:  cobra.ExactArgs(2),
+	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root := getRoot(cmd)
 		showBody, _ := cmd.Flags().GetBool("body")
 		showCallers, _ := cmd.Flags().GetBool("callers")
 
@@ -265,12 +258,7 @@ var expandCmd = &cobra.Command{
 		defer db.Close()
 
 		ctx := context.Background()
-		file := args[0]
-		if file[0] != '/' {
-			file = root + "/" + file
-		}
-
-		sym, err := db.GetSymbol(ctx, file, args[1])
+		sym, err := resolveSymbol(ctx, db, args)
 		if err != nil {
 			return err
 		}
@@ -296,7 +284,7 @@ var expandCmd = &cobra.Command{
 		}
 
 		if showCallers {
-			refs, err := index.FindReferences(ctx, db, args[1])
+			refs, err := index.FindReferences(ctx, db, sym.Name)
 			if err == nil {
 				allSyms, _ := db.AllSymbols(ctx)
 				symMap := make(map[string][]index.SymbolInfo)
@@ -306,7 +294,7 @@ var expandCmd = &cobra.Command{
 
 				seen := make(map[string]bool)
 				for _, ref := range refs {
-					if ref.File == file && ref.StartLine >= sym.StartLine && ref.EndLine <= sym.EndLine {
+					if ref.File == sym.File && ref.StartLine >= sym.StartLine && ref.EndLine <= sym.EndLine {
 						continue
 					}
 					for _, s := range symMap[ref.File] {
@@ -375,12 +363,11 @@ var xrefsCmd = &cobra.Command{
 // --- replace-symbol ---
 
 var replaceSymbolCmd = &cobra.Command{
-	Use:   "replace-symbol <file> <symbol>",
+	Use:   "replace-symbol [file] <symbol>",
 	Short: "Replace a symbol's body",
 	Long:  "Reads replacement code from stdin",
-	Args:  cobra.ExactArgs(2),
+	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root := getRoot(cmd)
 		expectHash, _ := cmd.Flags().GetString("expect-hash")
 
 		db, err := openAndEnsureIndex(cmd)
@@ -390,12 +377,7 @@ var replaceSymbolCmd = &cobra.Command{
 		defer db.Close()
 
 		ctx := context.Background()
-		file := args[0]
-		if file[0] != '/' {
-			file = root + "/" + file
-		}
-
-		sym, err := db.GetSymbol(ctx, file, args[1])
+		sym, err := resolveSymbol(ctx, db, args)
 		if err != nil {
 			return err
 		}
@@ -412,7 +394,7 @@ var replaceSymbolCmd = &cobra.Command{
 			return nil
 		}
 
-		output.Print(output.EditResult{OK: true, File: sym.File, Message: fmt.Sprintf("replaced symbol %s", args[1])})
+		output.Print(output.EditResult{OK: true, File: sym.File, Message: fmt.Sprintf("replaced symbol %s", sym.Name)})
 		return nil
 	},
 }
@@ -464,11 +446,10 @@ func init() {
 // --- gather ---
 
 var gatherCmd = &cobra.Command{
-	Use:   "gather <file> <symbol>",
+	Use:   "gather [file] <symbol>",
 	Short: "Build minimal context bundle for a symbol",
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root := getRoot(cmd)
 		budget, _ := cmd.Flags().GetInt("budget")
 
 		db, err := openAndEnsureIndex(cmd)
@@ -480,14 +461,15 @@ var gatherCmd = &cobra.Command{
 		ctx := context.Background()
 
 		var result *output.GatherResult
-		if len(args) == 2 {
-			file := args[0]
-			if file[0] != '/' {
-				file = root + "/" + file
-			}
-			result, err = gather.Gather(ctx, db, file, args[1], budget)
-		} else {
+		// Try exact symbol resolution first (works with 1 or 2 args)
+		sym, resolveErr := resolveSymbol(ctx, db, args)
+		if resolveErr == nil {
+			result, err = gather.Gather(ctx, db, sym.File, sym.Name, budget)
+		} else if len(args) == 1 {
+			// Fall back to search-based gather
 			result, err = gather.GatherBySearch(ctx, db, args[0], budget)
+		} else {
+			return resolveErr
 		}
 		if err != nil {
 			return err

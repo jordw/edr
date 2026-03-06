@@ -17,13 +17,11 @@ func init() {
 // --- diff-preview (symbol) ---
 
 var diffPreviewCmd = &cobra.Command{
-	Use:   "diff-preview <file> <symbol>",
+	Use:   "diff-preview [file] <symbol>",
 	Short: "Preview what replace-symbol would do as a unified diff",
 	Long:  "Reads replacement code from stdin and shows the diff WITHOUT applying it.",
-	Args:  cobra.ExactArgs(2),
+	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root := getRoot(cmd)
-
 		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
 			return err
@@ -31,12 +29,7 @@ var diffPreviewCmd = &cobra.Command{
 		defer db.Close()
 
 		ctx := context.Background()
-		file := args[0]
-		if file[0] != '/' {
-			file = root + "/" + file
-		}
-
-		sym, err := db.GetSymbol(ctx, file, args[1])
+		sym, err := resolveSymbol(ctx, db, args)
 		if err != nil {
 			return err
 		}
@@ -56,7 +49,7 @@ var diffPreviewCmd = &cobra.Command{
 
 		output.Print(map[string]any{
 			"file":     sym.File,
-			"symbol":   args[1],
+			"symbol":   sym.Name,
 			"diff":     diff,
 			"old_size": oldSize,
 			"new_size": newSize,

@@ -12,6 +12,24 @@ import (
 	"github.com/jordw/edr/internal/search"
 )
 
+// resolveSymbolArgs resolves 1 or 2 args to a symbol.
+// With 1 arg: global name resolution (errors if ambiguous).
+// With 2 args: file + name lookup.
+func resolveSymbolArgs(ctx context.Context, db *index.DB, root string, args []string) (*index.SymbolInfo, error) {
+	switch len(args) {
+	case 1:
+		return db.ResolveSymbol(ctx, args[0])
+	case 2:
+		file := args[0]
+		if len(file) > 0 && file[0] != '/' {
+			file = root + "/" + file
+		}
+		return db.GetSymbol(ctx, file, args[1])
+	default:
+		return nil, fmt.Errorf("expected 1 or 2 arguments: [file] <symbol>")
+	}
+}
+
 // Dispatch routes a command name to the appropriate internal handler and
 // returns the result. It reuses the same logic as the cobra commands but
 // bypasses the CLI layer so callers can invoke commands programmatically.
@@ -113,17 +131,12 @@ func runSymbols(ctx context.Context, db *index.DB, root string, args []string) (
 }
 
 func runReadSymbol(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
-	if len(args) < 2 {
-		return nil, fmt.Errorf("read-symbol requires 2 arguments: <file> <symbol>")
+	if len(args) < 1 {
+		return nil, fmt.Errorf("read-symbol requires 1-2 arguments: [file] <symbol>")
 	}
 	budget := flagInt(flags, "budget", 0)
 
-	file := args[0]
-	if len(file) > 0 && file[0] != '/' {
-		file = root + "/" + file
-	}
-
-	sym, err := db.GetSymbol(ctx, file, args[1])
+	sym, err := resolveSymbolArgs(ctx, db, root, args)
 	if err != nil {
 		return nil, err
 	}
@@ -158,19 +171,14 @@ func runReadSymbol(ctx context.Context, db *index.DB, root string, args []string
 }
 
 func runExpand(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
-	if len(args) < 2 {
-		return nil, fmt.Errorf("expand requires 2 arguments: <file> <symbol>")
+	if len(args) < 1 {
+		return nil, fmt.Errorf("expand requires 1-2 arguments: [file] <symbol>")
 	}
 
 	showBody := flagBool(flags, "body", false)
 	showCallers := flagBool(flags, "callers", false)
 
-	file := args[0]
-	if len(file) > 0 && file[0] != '/' {
-		file = root + "/" + file
-	}
-
-	sym, err := db.GetSymbol(ctx, file, args[1])
+	sym, err := resolveSymbolArgs(ctx, db, root, args)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +204,7 @@ func runExpand(ctx context.Context, db *index.DB, root string, args []string, fl
 	}
 
 	if showCallers {
-		refs, err := index.FindReferences(ctx, db, args[1])
+		refs, err := index.FindReferences(ctx, db, sym.Name)
 		if err == nil {
 			allSyms, _ := db.AllSymbols(ctx)
 			symMap := make(map[string][]index.SymbolInfo)
@@ -206,7 +214,7 @@ func runExpand(ctx context.Context, db *index.DB, root string, args []string, fl
 
 			seen := make(map[string]bool)
 			for _, ref := range refs {
-				if ref.File == file && ref.StartLine >= sym.StartLine && ref.EndLine <= sym.EndLine {
+				if ref.File == sym.File && ref.StartLine >= sym.StartLine && ref.EndLine <= sym.EndLine {
 					continue
 				}
 				for _, s := range symMap[ref.File] {
@@ -259,14 +267,16 @@ func runGather(ctx context.Context, db *index.DB, root string, args []string, fl
 	}
 	budget := flagInt(flags, "budget", 1500)
 
-	if len(args) >= 2 {
-		file := args[0]
-		if len(file) > 0 && file[0] != '/' {
-			file = root + "/" + file
-		}
-		return gather.Gather(ctx, db, file, args[1], budget)
+	// Try exact symbol resolution first
+	sym, resolveErr := resolveSymbolArgs(ctx, db, root, args)
+	if resolveErr == nil {
+		return gather.Gather(ctx, db, sym.File, sym.Name, budget)
 	}
-	return gather.GatherBySearch(ctx, db, args[0], budget)
+	// Fall back to search-based gather for single arg
+	if len(args) == 1 {
+		return gather.GatherBySearch(ctx, db, args[0], budget)
+	}
+	return nil, resolveErr
 }
 
 // --- flag helpers ---
