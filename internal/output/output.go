@@ -58,12 +58,12 @@ type EditResult struct {
 
 // RenameResult reports the outcome of a cross-file rename.
 type RenameResult struct {
-	OldName      string            `json:"old_name"`
-	NewName      string            `json:"new_name"`
-	FilesChanged []string          `json:"files_changed"`
-	Occurrences  int               `json:"occurrences"`
-	Hashes       map[string]string `json:"hashes,omitempty"` // file -> new hash for chaining
-	DryRun       bool              `json:"dry_run,omitempty"`
+	OldName      string             `json:"old_name"`
+	NewName      string             `json:"new_name"`
+	FilesChanged []string           `json:"files_changed"`
+	Occurrences  int                `json:"occurrences"`
+	Hashes       map[string]string  `json:"hashes,omitempty"` // file -> new hash for chaining
+	DryRun       bool               `json:"dry_run,omitempty"`
 	Preview      []RenameOccurrence `json:"preview,omitempty"`
 }
 

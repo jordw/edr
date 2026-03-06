@@ -140,6 +140,8 @@ var searchTextCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		budget, _ := cmd.Flags().GetInt("budget")
 		useRegex, _ := cmd.Flags().GetBool("regex")
+		include, _ := cmd.Flags().GetStringSlice("include")
+		exclude, _ := cmd.Flags().GetStringSlice("exclude")
 
 		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
@@ -147,8 +149,16 @@ var searchTextCmd = &cobra.Command{
 		}
 		defer db.Close()
 
+		var opts []search.SearchTextOption
+		if len(include) > 0 {
+			opts = append(opts, search.WithInclude(include...))
+		}
+		if len(exclude) > 0 {
+			opts = append(opts, search.WithExclude(exclude...))
+		}
+
 		ctx := context.Background()
-		matches, err := search.SearchText(ctx, db, args[0], budget, useRegex)
+		matches, err := search.SearchText(ctx, db, args[0], budget, useRegex, opts...)
 		if err != nil {
 			return err
 		}
@@ -160,6 +170,8 @@ var searchTextCmd = &cobra.Command{
 func init() {
 	searchTextCmd.Flags().Int("budget", 0, "token budget (0 = unlimited)")
 	searchTextCmd.Flags().Bool("regex", false, "treat pattern as a Go regexp")
+	searchTextCmd.Flags().StringSlice("include", nil, "glob patterns to include (e.g. *.go)")
+	searchTextCmd.Flags().StringSlice("exclude", nil, "glob patterns to exclude (e.g. *_test.go)")
 }
 
 // --- symbols ---
@@ -653,12 +665,14 @@ var readFileCmd = &cobra.Command{
 			size = budget
 		}
 
+		hash, _ := edit.FileHash(file)
 		output.Print(map[string]any{
 			"file":        output.Rel(file),
 			"lines":       [2]int{startLine, endLine},
 			"total_lines": totalLines,
 			"size":        size,
 			"content":     body,
+			"hash":        hash,
 		})
 		return nil
 	},
@@ -1004,11 +1018,13 @@ var smartEditCmd = &cobra.Command{
 
 		_ = index.IndexFile(ctx, db, sym.File)
 
+		newHash, _ := edit.FileHash(sym.File)
 		output.Print(map[string]any{
 			"ok":       true,
 			"file":     output.Rel(sym.File),
 			"symbol":   sym.Name,
 			"diff":     diff,
+			"hash":     newHash,
 			"old_size": len(oldBody) / 4,
 			"new_size": len(replacement) / 4,
 		})

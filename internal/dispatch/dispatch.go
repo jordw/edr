@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/jordw/edr/internal/edit"
@@ -140,7 +141,14 @@ func runSearchText(ctx context.Context, db *index.DB, args []string, flags map[s
 	}
 	budget := flagInt(flags, "budget", 0)
 	useRegex := flagBool(flags, "regex", false)
-	return search.SearchText(ctx, db, args[0], budget, useRegex)
+	var opts []search.SearchTextOption
+	if inc := flagStringSlice(flags, "include"); len(inc) > 0 {
+		opts = append(opts, search.WithInclude(inc...))
+	}
+	if exc := flagStringSlice(flags, "exclude"); len(exc) > 0 {
+		opts = append(opts, search.WithExclude(exc...))
+	}
+	return search.SearchText(ctx, db, args[0], budget, useRegex, opts...)
 }
 
 func runSymbols(ctx context.Context, db *index.DB, root string, args []string) (any, error) {
@@ -396,12 +404,14 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 		size = budget
 	}
 
+	hash, _ := edit.FileHash(file)
 	return map[string]any{
 		"file":        output.Rel(file),
 		"lines":       [2]int{startLine, endLine},
 		"total_lines": totalLines,
 		"size":        size,
 		"content":     body,
+		"hash":        hash,
 	}, nil
 }
 
@@ -433,18 +443,38 @@ func runReplaceText(ctx context.Context, db *index.DB, root string, args []strin
 	}
 
 	content := string(data)
-	if !strings.Contains(content, oldText) {
-		return output.EditResult{OK: false, File: output.Rel(file), Message: "old-text not found in file"}, nil
-	}
+	useRegex := flagBool(flags, "regex", false)
 
 	var result string
 	var count int
-	if replaceAll {
-		count = strings.Count(content, oldText)
-		result = strings.ReplaceAll(content, oldText, newText)
+	if useRegex {
+		re, err := regexp.Compile(oldText)
+		if err != nil {
+			return nil, fmt.Errorf("invalid regex: %w", err)
+		}
+		matches := re.FindAllStringIndex(content, -1)
+		if len(matches) == 0 {
+			return output.EditResult{OK: false, File: output.Rel(file), Message: "pattern not found in file"}, nil
+		}
+		if replaceAll {
+			count = len(matches)
+			result = re.ReplaceAllString(content, newText)
+		} else {
+			count = 1
+			loc := matches[0]
+			result = content[:loc[0]] + re.ReplaceAllString(content[loc[0]:loc[1]], newText) + content[loc[1]:]
+		}
 	} else {
-		count = 1
-		result = strings.Replace(content, oldText, newText, 1)
+		if !strings.Contains(content, oldText) {
+			return output.EditResult{OK: false, File: output.Rel(file), Message: "old-text not found in file"}, nil
+		}
+		if replaceAll {
+			count = strings.Count(content, oldText)
+			result = strings.ReplaceAll(content, oldText, newText)
+		} else {
+			count = 1
+			result = strings.Replace(content, oldText, newText, 1)
+		}
 	}
 
 	info, err := os.Stat(file)
@@ -892,6 +922,32 @@ func flagInt(flags map[string]any, key string, defaultVal int) int {
 		return int(n)
 	default:
 		return defaultVal
+	}
+}
+
+func flagStringSlice(flags map[string]any, key string) []string {
+	if flags == nil {
+		return nil
+	}
+	v, ok := flags[key]
+	if !ok {
+		return nil
+	}
+	switch s := v.(type) {
+	case []string:
+		return s
+	case []any:
+		var out []string
+		for _, item := range s {
+			if str, ok := item.(string); ok {
+				out = append(out, str)
+			}
+		}
+		return out
+	case string:
+		return []string{s}
+	default:
+		return nil
 	}
 }
 

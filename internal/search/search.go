@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -64,11 +65,43 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int,
 	return matches, nil
 }
 
+// searchTextConfig holds optional filters for SearchText.
+type searchTextConfig struct {
+	include []string // glob patterns to include (e.g. "*.go")
+	exclude []string // glob patterns to exclude (e.g. "vendor/*")
+}
+
+// SearchTextOption configures SearchText behavior.
+type SearchTextOption func(*searchTextConfig)
+
+// WithInclude filters results to files matching any of the given glob patterns.
+func WithInclude(patterns ...string) SearchTextOption {
+	return func(c *searchTextConfig) { c.include = append(c.include, patterns...) }
+}
+
+// WithExclude filters out files matching any of the given glob patterns.
+func WithExclude(patterns ...string) SearchTextOption {
+	return func(c *searchTextConfig) { c.exclude = append(c.exclude, patterns...) }
+}
+
+func matchesAny(name string, patterns []string) bool {
+	for _, p := range patterns {
+		if ok, _ := filepath.Match(p, name); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // SearchText searches file contents for a text pattern (like grep).
 // It walks all repo files (not just indexed ones) so it finds matches in
 // YAML, Markdown, Dockerfiles, etc. When useRegex is true, pattern is
 // compiled as a Go regexp.
-func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, useRegex bool) ([]output.Match, error) {
+func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, useRegex bool, opts ...SearchTextOption) ([]output.Match, error) {
+	cfg := searchTextConfig{}
+	for _, o := range opts {
+		o(&cfg)
+	}
 	root := db.Root()
 
 	var re *regexp.Regexp
@@ -89,6 +122,14 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 	err := index.WalkRepoFiles(root, func(file string) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+
+		base := filepath.Base(file)
+		if len(cfg.include) > 0 && !matchesAny(base, cfg.include) {
+			return nil
+		}
+		if len(cfg.exclude) > 0 && matchesAny(base, cfg.exclude) {
+			return nil
 		}
 
 		f, err := os.Open(file)

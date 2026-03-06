@@ -55,6 +55,7 @@ edr search "parseConfig" --body --budget 500
 # Text search — works on ALL files, not just code
 edr search-text "retry backoff" --budget 300
 edr search-text "func.*Config" --regex --budget 300
+edr search-text "TODO" --include "*.go" --exclude "*_test.go"
 
 # List symbols in a file
 edr symbols src/config.go
@@ -74,6 +75,7 @@ edr smart-edit src/config.go parseConfig   # replacement via flags.replacement
 # Find-and-replace in any file type (YAML, Markdown, JSON, code, etc.)
 edr replace-text config.yaml "port: 8080" "port: 9090"
 edr replace-text src/config.go "oldName" "newName" --all
+edr replace-text src/config.go "v[0-9]+" "v2" --regex --all
 
 # Replace a symbol body
 edr replace-symbol src/config.go parseConfig --expect-hash a81d2e
@@ -149,7 +151,7 @@ strings — no shell escaping needed.
 | `init` | Force re-index the repository |
 | `repo-map` | Symbol map of entire repo (`--budget`) |
 | `search <pattern>` | Find symbols by name (`--budget`, `--body`) |
-| `search-text <pattern>` | Text search across ALL files (`--budget`, `--regex`) |
+| `search-text <pattern>` | Text search across ALL files (`--budget`, `--regex`, `--include`, `--exclude`) |
 | `symbols <file>` | List symbols in a file |
 | `read-symbol [file] <sym>` | Read one symbol's source (`--budget`) |
 | `read-file <file> [start] [end]` | Read any file with optional line range (`--budget`) |
@@ -157,7 +159,7 @@ strings — no shell escaping needed.
 | `xrefs <symbol>` | Find all references |
 | `gather [file] <sym>` | Context bundle: target + callers + tests (`--budget`) |
 | `smart-edit [file] <sym>` | Read + diff + replace in one call |
-| `replace-text <file> <old> <new>` | Find-and-replace in any file (`--all`, `--expect-hash`) |
+| `replace-text <file> <old> <new>` | Find-and-replace in any file (`--all`, `--regex`, `--expect-hash`) |
 | `replace-symbol [file] <sym>` | Replace symbol body (`--expect-hash`) |
 | `replace-lines <file> <start> <end>` | Replace line range (`--expect-hash`) |
 | `replace-span <file> <start> <end>` | Replace byte range (`--expect-hash`) |
