@@ -31,7 +31,7 @@ wraps all edr commands. The index database stays open across calls.`,
 		}
 		defer db.Close()
 
-		output.SetRoot(root)
+		output.SetRoot(db.Root())
 
 		// Auto-index if needed
 		ctx := context.Background()
@@ -54,9 +54,9 @@ type jsonRPCRequest struct {
 }
 
 type jsonRPCResponse struct {
-	JSONRPC string `json:"jsonrpc"`
-	ID      any    `json:"id,omitempty"`
-	Result  any    `json:"result,omitempty"`
+	JSONRPC string        `json:"jsonrpc"`
+	ID      any           `json:"id,omitempty"`
+	Result  any           `json:"result,omitempty"`
 	Error   *jsonRPCError `json:"error,omitempty"`
 }
 
@@ -79,15 +79,15 @@ type mcpServerInfo struct {
 }
 
 type mcpTool struct {
-	Name        string     `json:"name"`
-	Description string     `json:"description"`
-	InputSchema mcpSchema  `json:"inputSchema"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	InputSchema mcpSchema `json:"inputSchema"`
 }
 
 type mcpSchema struct {
-	Type       string              `json:"type"`
-	Properties map[string]mcpProp  `json:"properties"`
-	Required   []string            `json:"required"`
+	Type       string             `json:"type"`
+	Properties map[string]mcpProp `json:"properties"`
+	Required   []string           `json:"required"`
 }
 
 type mcpProp struct {
@@ -169,7 +169,7 @@ func serveMCP(db *index.DB) error {
 				Result: map[string]any{
 					"tools": []mcpTool{{
 						Name:        "edr",
-						Description: "Agent-optimized code navigation and editing. Commands: init, repo-map, search, search-text, symbols, read-symbol, expand, xrefs, gather, diff-preview, diff-preview-span, replace-symbol, replace-span, replace-lines, replace-text, read-file, write-file. See CLAUDE.md for usage.",
+						Description: "Your default tool for ALL file operations. Reading: read-file, read-symbol, search (--body), search-text, symbols, repo-map, expand, xrefs, gather. Editing: smart-edit (read+diff+replace in one call), replace-text, replace-symbol, replace-lines, replace-span. Creating: write-file, append-file, insert-after. Refactoring: rename-symbol (--dry-run), diff-preview. All edits return new hash for chaining. See CLAUDE.md for full docs.",
 						InputSchema: mcpSchema{
 							Type: "object",
 							Properties: map[string]mcpProp{

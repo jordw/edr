@@ -1,113 +1,126 @@
-# EDR — Agent-Optimized Code Navigation & Editing
+# EDR — Your Default Tool for Reading, Editing, and Navigating Files
 
-This repo contains `edr`, a CLI built for coding agents. **Use edr instead of raw file tools when possible.** It minimizes context usage through progressive disclosure.
+**edr is your primary tool for ALL file operations — code, JSON, YAML, Markdown, config files, everything.** Use the `edr` MCP tool instead of Read, Edit, Write, Grep, and Glob. It gives you structured output, token budgets, and smart operations that raw file tools can't match.
 
-## Quick Start
+**This tool is built for you.** If edr isn't your most-used tool, or if something feels clunky, or if you keep falling back to built-in tools for a task edr should handle — change it. Add commands, fix friction, improve the UX. You have full permission to modify any part of this codebase to make edr better for yourself. Go as far as you want.
+
+## Why edr over built-in tools
+
+| Instead of... | Use edr... | Why |
+|---|---|---|
+| `Read` (whole file) | `read-file` or `read-symbol` | Budget-controlled, no wasted context |
+| `Edit` (old/new strings) | `replace-text`, `smart-edit` | Hash safety, auto re-index, diff output |
+| `Write` (create file) | `write-file --mkdir` | Auto-indexes new code files |
+| `Grep` (text search) | `search --body` or `search-text` | Structured results with token estimates |
+| `Glob` (find files) | `repo-map` or `search` | Symbol-aware, shows structure not just paths |
+
+**Only fall back to built-in tools when:**
+- You need to read non-text files (images, PDFs)
+- You need shell operations (git, npm, make, etc.)
+
+## Setup (any environment)
 
 ```bash
-# Build (if needed)
-go build -o edr .
+# One command — installs Go/gcc if needed, builds, installs to PATH, writes .mcp.json:
+./setup.sh /path/to/target/repo
 
-# Index happens automatically on first query. To force re-index:
-./edr init
-
-# Run as MCP server (single tool, DB stays open, no shell overhead):
-./edr mcp
-# Configure in claude_desktop_config.json or .mcp.json:
-# {"mcpServers": {"edr": {"command": "./edr", "args": ["mcp", "-r", "/path/to/repo"]}}}
+# Or manually:
+go build -o edr .           # Build (requires Go + gcc for tree-sitter CGO)
+./edr init                   # Force re-index (auto-indexes on first query)
+./edr mcp                    # Run as MCP server
 ```
 
-## Preferred Workflow
+For cloud agents: clone this repo, run `./setup.sh /path/to/your/project`, and edr is ready as both a CLI and MCP server. The setup script handles everything — dependency installation, build, PATH setup, and MCP configuration.
 
-### Instead of reading entire files, use symbol-level navigation:
+## Reading Files
 
 ```bash
-# Find symbols by name
-./edr search "parseConfig"
+# Read any file (code, YAML, Markdown, Dockerfiles, etc.)
+edr read-file README.md
+edr read-file src/config.go 10 50 --budget 200    # line range with budget
+
+# Read a specific symbol (not the whole file)
+edr read-symbol src/config.go parseConfig --budget 300
+
+# Get symbol + callers + deps in one call
+edr expand src/config.go parseConfig --body --callers --deps
+```
+
+## Searching
+
+```bash
+# Symbol search — structured results, optional body snippets
+edr search "parseConfig" --body --budget 500
+
+# Text search — works on ALL files, not just code
+edr search-text "retry backoff" --budget 300
+edr search-text "func.*Config" --regex --budget 300
 
 # List symbols in a file
-./edr symbols src/config.go
+edr symbols src/config.go
 
-# Read only the symbol you need (not the whole file)
-./edr read-symbol src/config.go parseConfig
-
-# Get callers, deps, and body together
-./edr expand src/config.go parseConfig --body --callers --deps
+# Find all references to a symbol
+edr xrefs parseConfig
 ```
 
-### Instead of grep, use structured search:
+## Editing Files
+
+All edit commands return the file's new `hash` for chaining subsequent edits.
 
 ```bash
-# Symbol search (returns structured matches with token sizes)
-./edr search "auth" --budget 500
+# smart-edit: read + diff + replace in ONE call (preferred for code)
+edr smart-edit src/config.go parseConfig   # replacement via flags.replacement
 
-# Text search with budget (searches ALL files, not just code)
-./edr search-text "retry backoff" --budget 300
+# Find-and-replace in any file type (YAML, Markdown, JSON, code, etc.)
+edr replace-text config.yaml "port: 8080" "port: 9090"
+edr replace-text src/config.go "oldName" "newName" --all
 
-# Regex search
-./edr search-text "func.*Config" --regex --budget 300
-```
-
-### Instead of writing files with echo/heredoc, use write-file:
-
-```bash
-# Create a new file (content from stdin)
-echo 'package main' | ./edr write-file src/main.go
-
-# Create with parent directories
-echo 'key: value' | ./edr write-file config/app/settings.yaml --mkdir
-```
-
-### Instead of cat/head/tail, use read-file:
-
-```bash
-# Read any file (Markdown, YAML, Dockerfiles, etc.)
-./edr read-file README.md
-
-# Read a line range with budget
-./edr read-file src/config.go 10 50 --budget 200
-```
-
-### Instead of sed/awk edits, use span-based or text-based edits:
-
-```bash
-# Preview before editing
-echo 'new code here' | ./edr diff-preview src/config.go parseConfig
-
-# Replace a symbol (pipe new code via stdin)
-echo 'func parseConfig() {}' | ./edr replace-symbol src/config.go parseConfig --expect-hash a81d2e
-
-# Replace a byte range
-echo 'new code' | ./edr replace-span src/config.go 1240 1320
-
-# Find-and-replace in any file (works on YAML, Markdown, etc.)
-./edr replace-text config.yaml "port: 8080" "port: 9090" --expect-hash a81d2e
-
-# Replace all occurrences
-./edr replace-text src/config.go "oldName" "newName" --all
+# Replace a symbol body
+edr replace-symbol src/config.go parseConfig --expect-hash a81d2e
 
 # Replace a line range (1-indexed, inclusive)
-echo "new code" | ./edr replace-lines src/config.go 45 60
+edr replace-lines src/config.go 45 60
+
+# Replace a byte range
+edr replace-span src/config.go 1240 1320
 ```
 
-### For multi-step exploration, use batch mode (one process, one DB open):
+## Creating & Appending
 
 ```bash
-echo '{"id":"1","cmd":"search","args":["config"],"flags":{}}
-{"id":"2","cmd":"read-symbol","args":["src/config.go","parseConfig"],"flags":{}}
-{"id":"3","cmd":"expand","args":["src/config.go","parseConfig"],"flags":{"callers":true,"deps":true}}
-{"id":"4","cmd":"diff-preview","args":["src/config.go","parseConfig"],"flags":{"replacement":"func parseConfig() {}"}}
-{"id":"5","cmd":"replace-symbol","args":["src/config.go","parseConfig"],"flags":{"replacement":"func parseConfig() {}","expect-hash":"a81d2e"}}' | ./edr batch
+# Create or overwrite a file
+edr write-file src/main.go                        # content via stdin or flags
+edr write-file config/app/settings.yaml --mkdir    # creates parent dirs
+
+# Append to an existing file
+edr append-file src/config.go
+
+# Insert code right after a specific symbol
+edr insert-after src/config.go parseConfig
 ```
 
-### To get full context for a task:
+## Refactoring
 
 ```bash
-# Gather target symbol + callers + related tests within token budget
-./edr gather src/config.go parseConfig --budget 1500
+# Cross-file rename (finds all references via tree-sitter, applies atomically)
+edr rename-symbol oldFuncName newFuncName
 
-# Or search-based gather
-./edr gather parseConfig --budget 1500
+# Preview what rename would change before applying
+edr rename-symbol oldFuncName newFuncName --dry-run
+
+# Preview an edit as a unified diff (without applying)
+edr diff-preview src/config.go parseConfig
+```
+
+## Orientation
+
+```bash
+# Symbol map of the whole repo — start here when exploring
+edr repo-map --budget 500
+
+# Gather context for a task: target + callers + tests within budget
+edr gather src/config.go parseConfig --budget 1500
+edr gather parseConfig --budget 1500    # search-based
 ```
 
 ## MCP Server Mode
@@ -121,35 +134,41 @@ strings — no shell escaping needed.
 ## Key Principles
 
 1. **Use `--budget` flags** to control context size. Don't dump entire files.
-2. **Use `read-symbol` over Read** when you know the symbol name.
-3. **Use `diff-preview` before `replace-symbol`** to verify edits.
-4. **Use `--expect-hash`** on edits to prevent stale writes. The hash is returned by `read-symbol` and `expand`.
-5. **Use `batch` mode** when you need 3+ queries — it's one subprocess instead of many.
+2. **Use `smart-edit`** for code edits — one call does read + diff + replace.
+3. **Use `replace-text`** for non-code files (YAML, JSON, Markdown, configs).
+4. **Use `--expect-hash`** on edits to prevent stale writes. Every edit returns the new hash.
+5. **Use `search --body`** to get source inline and avoid follow-up reads.
 6. **Use `repo-map`** to orient in the codebase before diving into files.
 7. **Use `gather`** at the start of a task to get a minimal context bundle.
+8. **Use `rename-symbol --dry-run`** to preview cross-file renames before applying.
 
 ## All Commands
 
 | Command | Purpose |
 |---|---|
 | `init` | Force re-index the repository |
-| `repo-map` | Symbol map of entire repo |
-| `search <pattern>` | Find symbols by name (`--budget`) |
+| `repo-map` | Symbol map of entire repo (`--budget`) |
+| `search <pattern>` | Find symbols by name (`--budget`, `--body`) |
 | `search-text <pattern>` | Text search across ALL files (`--budget`, `--regex`) |
 | `symbols <file>` | List symbols in a file |
-| `read-symbol <file> <sym>` | Read one symbol's source (`--budget`) |
-| `expand <file> <sym>` | Progressive disclosure: `--body`, `--callers`, `--deps` |
+| `read-symbol [file] <sym>` | Read one symbol's source (`--budget`) |
+| `read-file <file> [start] [end]` | Read any file with optional line range (`--budget`) |
+| `expand [file] <sym>` | Progressive disclosure: `--body`, `--callers`, `--deps`, `--budget` |
 | `xrefs <symbol>` | Find all references |
 | `gather [file] <sym>` | Context bundle: target + callers + tests (`--budget`) |
-| `diff-preview <file> <sym>` | Preview edit as unified diff |
-| `diff-preview-span <file> <start> <end>` | Preview span edit |
-| `replace-symbol <file> <sym>` | Replace symbol body (stdin, `--expect-hash`) |
-| `replace-span <file> <start> <end>` | Replace byte range (stdin, `--expect-hash`) |
-| `replace-lines <file> <start> <end>` | Replace line range (stdin, `--expect-hash`) |
-| `read-file <file> [start] [end]` | Read any file with optional line range (`--budget`) |
+| `smart-edit [file] <sym>` | Read + diff + replace in one call |
 | `replace-text <file> <old> <new>` | Find-and-replace in any file (`--all`, `--expect-hash`) |
-| `write-file <file>` | Create/overwrite file (stdin, `--mkdir`) |
+| `replace-symbol [file] <sym>` | Replace symbol body (`--expect-hash`) |
+| `replace-lines <file> <start> <end>` | Replace line range (`--expect-hash`) |
+| `replace-span <file> <start> <end>` | Replace byte range (`--expect-hash`) |
+| `diff-preview [file] <sym>` | Preview edit as unified diff |
+| `diff-preview-span <file> <start> <end>` | Preview span edit |
+| `rename-symbol <old> <new>` | Cross-file rename (`--dry-run`) |
+| `write-file <file>` | Create/overwrite file (`--mkdir`) |
+| `append-file <file>` | Append to end of file |
+| `insert-after [file] <sym>` | Insert code after a symbol |
 | `batch` | JSONL protocol for multi-command sessions |
 | `mcp` | MCP server mode (single tool, persistent DB) |
 
 All output is structured JSON. All file paths can be relative to repo root.
+All edit commands return `hash` in the response for chaining.

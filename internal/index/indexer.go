@@ -100,6 +100,11 @@ func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 
 // IndexFile re-indexes a single file, updating the DB with fresh symbols.
 func IndexFile(ctx context.Context, db *DB, path string) error {
+	path, err := db.ResolvePath(path)
+	if err != nil {
+		return err
+	}
+
 	lang := GetLangConfig(path)
 	if lang == nil {
 		return nil // unsupported language, nothing to index
@@ -184,6 +189,9 @@ func RepoMap(ctx context.Context, db *DB) (string, error) {
 	var b strings.Builder
 	root := db.Root()
 	for _, file := range fileOrder {
+		if !IsWithinRoot(root, file) {
+			continue
+		}
 		rel, _ := filepath.Rel(root, file)
 		if rel == "" {
 			rel = file

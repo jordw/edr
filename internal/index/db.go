@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -18,7 +19,12 @@ type DB struct {
 
 // OpenDB opens or creates the index database in the .edr directory.
 func OpenDB(repoRoot string) (*DB, error) {
-	edrDir := filepath.Join(repoRoot, ".edr")
+	root, err := NormalizeRoot(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	edrDir := filepath.Join(root, ".edr")
 	if err := os.MkdirAll(edrDir, 0755); err != nil {
 		return nil, fmt.Errorf("create .edr dir: %w", err)
 	}
@@ -35,8 +41,12 @@ func OpenDB(repoRoot string) (*DB, error) {
 		return nil, err
 	}
 
-	d := &DB{db: sqlDB, root: repoRoot}
+	d := &DB{db: sqlDB, root: root}
 	if err := d.migrate(); err != nil {
+		sqlDB.Close()
+		return nil, err
+	}
+	if err := d.Prune(context.Background()); err != nil {
 		sqlDB.Close()
 		return nil, err
 	}
@@ -138,7 +148,7 @@ func (d *DB) GetSymbol(ctx context.Context, file, name string) (*SymbolInfo, err
 		FROM symbols WHERE file = ? AND name = ?
 	`, file, name).Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("symbol %q not found in %s", name, file)
+		return nil, d.symbolNotFoundError(ctx, name, file)
 	}
 	if err != nil {
 		return nil, err
@@ -168,7 +178,7 @@ func (d *DB) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo, error
 		results = append(results, s)
 	}
 	if len(results) == 0 {
-		return nil, fmt.Errorf("symbol %q not found", name)
+		return nil, d.symbolNotFoundError(ctx, name, "")
 	}
 	if len(results) > 1 {
 		files := make([]string, len(results))
@@ -233,6 +243,94 @@ func (d *DB) Stats(ctx context.Context) (files int, symbols int, err error) {
 	}
 	err = d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM symbols").Scan(&symbols)
 	return
+}
+
+// ResolvePath converts a repo-relative or absolute path to an absolute path
+// under the repository root.
+func (d *DB) ResolvePath(path string) (string, error) {
+	return ResolvePath(d.root, path)
+}
+
+// Prune removes indexed files that are outside the repo root or no longer exist.
+func (d *DB) Prune(ctx context.Context) error {
+	rows, err := d.db.QueryContext(ctx, "SELECT path FROM files")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var stale []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return err
+		}
+		if !IsWithinRoot(d.root, path) {
+			stale = append(stale, path)
+			continue
+		}
+		if _, err := os.Stat(path); err != nil && os.IsNotExist(err) {
+			stale = append(stale, path)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for _, path := range stale {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM symbols WHERE file = ?", path); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM files WHERE path = ?", path); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+// symbolNotFoundError builds a helpful error message with suggestions.
+func (d *DB) symbolNotFoundError(ctx context.Context, name, file string) error {
+	var msg string
+	if file != "" {
+		msg = fmt.Sprintf("symbol %q not found in %s", name, file)
+	} else {
+		msg = fmt.Sprintf("symbol %q not found", name)
+	}
+
+	// Search for similar names
+	suggestions, err := d.SearchSymbols(ctx, name)
+	if err != nil || len(suggestions) == 0 {
+		return fmt.Errorf("%s", msg)
+	}
+
+	// Deduplicate and limit to 5
+	seen := make(map[string]bool)
+	var names []string
+	for _, s := range suggestions {
+		if !seen[s.Name] {
+			seen[s.Name] = true
+			names = append(names, s.Name)
+			if len(names) >= 5 {
+				break
+			}
+		}
+	}
+
+	if len(names) == 0 {
+		return fmt.Errorf("%s", msg)
+	}
+
+	return fmt.Errorf("%s. Did you mean: %s", msg, strings.Join(names, ", "))
 }
 
 // Root returns the repository root.

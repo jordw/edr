@@ -12,7 +12,8 @@ import (
 )
 
 // SearchSymbol searches the index for symbols matching a pattern.
-func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int) ([]output.Match, error) {
+// When showBody is true, each match includes a snippet of the symbol's source.
+func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int, showBody bool) ([]output.Match, error) {
 	symbols, err := db.SearchSymbols(ctx, pattern)
 	if err != nil {
 		return nil, err
@@ -27,7 +28,7 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int)
 		}
 		totalTokens += size
 
-		matches = append(matches, output.Match{
+		m := output.Match{
 			Symbol: output.Symbol{
 				Type:  s.Type,
 				Name:  s.Name,
@@ -35,8 +36,22 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int)
 				Lines: [2]int{int(s.StartLine), int(s.EndLine)},
 				Size:  size,
 			},
-			Score: 1.0, // exact match
-		})
+			Score: 1.0,
+		}
+
+		if showBody {
+			src, err := os.ReadFile(s.File)
+			if err == nil && int(s.EndByte) <= len(src) {
+				body := string(src[s.StartByte:s.EndByte])
+				// Truncate long bodies to keep output manageable
+				if len(body) > 800 {
+					body = body[:800] + "\n... (truncated)"
+				}
+				m.Body = body
+			}
+		}
+
+		matches = append(matches, m)
 	}
 	return matches, nil
 }

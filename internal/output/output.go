@@ -37,6 +37,7 @@ type Symbol struct {
 type Match struct {
 	Symbol Symbol  `json:"symbol"`
 	Score  float64 `json:"score"`
+	Body   string  `json:"body,omitempty"`
 }
 
 // ExpandResult contains the full details of an expanded symbol.
@@ -52,6 +53,24 @@ type EditResult struct {
 	OK      bool   `json:"ok"`
 	File    string `json:"file"`
 	Message string `json:"message"`
+	Hash    string `json:"hash,omitempty"`
+}
+
+// RenameResult reports the outcome of a cross-file rename.
+type RenameResult struct {
+	OldName      string            `json:"old_name"`
+	NewName      string            `json:"new_name"`
+	FilesChanged []string          `json:"files_changed"`
+	Occurrences  int               `json:"occurrences"`
+	DryRun       bool              `json:"dry_run,omitempty"`
+	Preview      []RenameOccurrence `json:"preview,omitempty"`
+}
+
+// RenameOccurrence describes a single reference that would be renamed.
+type RenameOccurrence struct {
+	File string `json:"file"`
+	Line int    `json:"line"`
+	Text string `json:"text"`
 }
 
 // GatherResult aggregates context around a target symbol.

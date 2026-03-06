@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jordw/edr/internal/edit"
+	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -66,11 +67,13 @@ var diffPreviewSpanCmd = &cobra.Command{
 	Long:  "Reads replacement code from stdin and shows the diff WITHOUT applying it.",
 	Args:  cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root := getRoot(cmd)
-
-		file := args[0]
-		if file[0] != '/' {
-			file = root + "/" + file
+		root, err := index.NormalizeRoot(getRoot(cmd))
+		if err != nil {
+			return err
+		}
+		file, err := index.ResolvePath(root, args[0])
+		if err != nil {
+			return err
 		}
 
 		var startByte, endByte uint32

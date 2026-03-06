@@ -52,7 +52,7 @@ func openAndEnsureIndex(cmd *cobra.Command) (*index.DB, error) {
 		fmt.Fprintf(os.Stderr, "edr: indexed %d files, %d symbols\n", filesIndexed, symbolsFound)
 	}
 
-	output.SetRoot(root)
+	output.SetRoot(db.Root())
 	return db, nil
 }
 
@@ -60,14 +60,13 @@ func openAndEnsureIndex(cmd *cobra.Command) (*index.DB, error) {
 // With 1 arg, it resolves globally (errors if ambiguous).
 // With 2 args, it looks up in the specific file.
 func resolveSymbol(ctx context.Context, db *index.DB, args []string) (*index.SymbolInfo, error) {
-	root := db.Root()
 	switch len(args) {
 	case 1:
 		return db.ResolveSymbol(ctx, args[0])
 	case 2:
-		file := args[0]
-		if len(file) > 0 && file[0] != '/' {
-			file = root + "/" + file
+		file, err := db.ResolvePath(args[0])
+		if err != nil {
+			return nil, err
 		}
 		return db.GetSymbol(ctx, file, args[1])
 	default:
