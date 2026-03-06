@@ -23,10 +23,6 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int,
 	totalTokens := 0
 	for _, s := range symbols {
 		size := int(s.EndByte-s.StartByte) / 4 // rough token estimate
-		if budget > 0 && totalTokens+size > budget {
-			break
-		}
-		totalTokens += size
 
 		m := output.Match{
 			Symbol: output.Symbol{
@@ -39,19 +35,31 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int,
 			Score: 1.0,
 		}
 
-		if showBody {
+		if showBody && (budget == 0 || totalTokens+size <= budget) {
 			src, err := os.ReadFile(s.File)
 			if err == nil && int(s.EndByte) <= len(src) {
 				body := string(src[s.StartByte:s.EndByte])
-				// Truncate long bodies to keep output manageable
-				if len(body) > 800 {
-					body = body[:800] + "\n... (truncated)"
+				if budget > 0 {
+					remaining := (budget - totalTokens) * 4
+					if remaining > 0 && remaining < len(body) {
+						body = body[:remaining] + "\n... (trimmed to budget)"
+					}
 				}
 				m.Body = body
+				totalTokens += size
 			}
 		}
 
 		matches = append(matches, m)
+
+		// Budget limits total matches when not showing body
+		if !showBody && budget > 0 && totalTokens+size > budget {
+			// Still include this match (metadata is cheap), but stop after
+			totalTokens += size
+			if totalTokens > budget {
+				break
+			}
+		}
 	}
 	return matches, nil
 }
