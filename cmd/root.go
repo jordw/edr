@@ -50,6 +50,11 @@ func openAndEnsureIndex(cmd *cobra.Command) (*index.DB, error) {
 			return nil, err
 		}
 		fmt.Fprintf(os.Stderr, "edr: indexed %d files, %d symbols\n", filesIndexed, symbolsFound)
+	} else if stale, _ := index.HasStaleFiles(ctx, db); stale {
+		filesIndexed, _, _ := index.IndexRepo(ctx, db)
+		if filesIndexed > 0 {
+			fmt.Fprintf(os.Stderr, "edr: re-indexed %d changed files\n", filesIndexed)
+		}
 	}
 
 	output.SetRoot(db.Root())

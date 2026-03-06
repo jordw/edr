@@ -19,6 +19,32 @@ var DefaultIgnore = []string{
 }
 
 // IndexRepo indexes all supported files in the repository.
+// HasStaleFiles checks if any indexed files have been modified since indexing.
+// Returns true on the first stale file found (fast check).
+func HasStaleFiles(ctx context.Context, db *DB) (bool, error) {
+	rows, err := db.db.QueryContext(ctx, "SELECT path, mtime FROM files LIMIT 100")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var path string
+		var mtime int64
+		if err := rows.Scan(&path, &mtime); err != nil {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return true, nil // file deleted = stale
+		}
+		if info.ModTime().Unix() > mtime {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 	root := db.Root()
 	var filesIndexed, symbolsFound int

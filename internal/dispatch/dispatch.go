@@ -94,14 +94,17 @@ func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flag
 // --- individual command handlers ---
 
 func runInit(ctx context.Context, db *index.DB) (any, error) {
-	files, symbols, err := index.IndexRepo(ctx, db)
+	filesChanged, symbolsChanged, err := index.IndexRepo(ctx, db)
 	if err != nil {
 		return nil, err
 	}
+	totalFiles, totalSymbols, _ := db.Stats(ctx)
 	return map[string]any{
-		"status":  "ok",
-		"files":   files,
-		"symbols": symbols,
+		"status":          "ok",
+		"files_changed":   filesChanged,
+		"symbols_changed": symbolsChanged,
+		"total_files":     totalFiles,
+		"total_symbols":   totalSymbols,
 	}, nil
 }
 

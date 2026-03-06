@@ -42,15 +42,18 @@ var initCmd = &cobra.Command{
 		defer db.Close()
 
 		ctx := context.Background()
-		files, symbols, err := index.IndexRepo(ctx, db)
+		filesChanged, symbolsChanged, err := index.IndexRepo(ctx, db)
 		if err != nil {
 			return err
 		}
+		totalFiles, totalSymbols, _ := db.Stats(ctx)
 
 		output.Print(map[string]any{
-			"status":  "ok",
-			"files":   files,
-			"symbols": symbols,
+			"status":          "ok",
+			"files_changed":   filesChanged,
+			"symbols_changed": symbolsChanged,
+			"total_files":     totalFiles,
+			"total_symbols":   totalSymbols,
 		})
 		return nil
 	},

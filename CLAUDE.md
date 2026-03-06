@@ -26,7 +26,7 @@
 ./setup.sh /path/to/target/repo
 
 # Or manually:
-go build -o edr .           # Build (requires Go + gcc for tree-sitter CGO)
+go build -o edr .           # Build (requires Go; pure Go, no CGO needed)
 ./edr init                   # Force re-index (auto-indexes on first query)
 ./edr mcp                    # Run as MCP server
 ```

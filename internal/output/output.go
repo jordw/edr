@@ -38,6 +38,7 @@ type Match struct {
 	Symbol Symbol  `json:"symbol"`
 	Score  float64 `json:"score"`
 	Body   string  `json:"body,omitempty"`
+	Column int     `json:"column,omitempty"`
 }
 
 // ExpandResult contains the full details of an expanded symbol.

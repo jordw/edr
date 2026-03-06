@@ -20,7 +20,7 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int,
 		return nil, err
 	}
 
-	var matches []output.Match
+	matches := make([]output.Match, 0)
 	totalTokens := 0
 	for _, s := range symbols {
 		size := int(s.EndByte-s.StartByte) / 4 // rough token estimate
@@ -84,10 +84,54 @@ func WithExclude(patterns ...string) SearchTextOption {
 	return func(c *searchTextConfig) { c.exclude = append(c.exclude, patterns...) }
 }
 
-func matchesAny(name string, patterns []string) bool {
+func matchesAnyPath(base, rel string, patterns []string) bool {
 	for _, p := range patterns {
-		if ok, _ := filepath.Match(p, name); ok {
-			return true
+		if strings.Contains(p, "**") {
+			if matchDoublestar(rel, p) {
+				return true
+			}
+			continue
+		}
+		if strings.Contains(p, "/") {
+			if ok, _ := filepath.Match(p, rel); ok {
+				return true
+			}
+		} else {
+			if ok, _ := filepath.Match(p, base); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// matchDoublestar matches a path against a pattern with ** support.
+func matchDoublestar(path, pattern string) bool {
+	parts := strings.SplitN(pattern, "**", 2)
+	if len(parts) == 1 {
+		ok, _ := filepath.Match(pattern, path)
+		return ok
+	}
+	prefix := parts[0]
+	suffix := parts[1]
+	if prefix != "" {
+		prefix = strings.TrimSuffix(prefix, "/")
+		if !strings.HasPrefix(path, prefix+"/") && path != prefix {
+			return false
+		}
+	}
+	suffix = strings.TrimPrefix(suffix, "/")
+	if suffix == "" {
+		return true
+	}
+	if ok, _ := filepath.Match(suffix, filepath.Base(path)); ok {
+		return true
+	}
+	for i := 0; i < len(path); i++ {
+		if path[i] == '/' {
+			if ok, _ := filepath.Match(suffix, path[i+1:]); ok {
+				return true
+			}
 		}
 	}
 	return false
@@ -116,7 +160,7 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 		lowerPattern = strings.ToLower(pattern)
 	}
 
-	var matches []output.Match
+	matches := make([]output.Match, 0)
 	totalTokens := 0
 
 	err := index.WalkRepoFiles(root, func(file string) error {
@@ -124,11 +168,12 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 			return ctx.Err()
 		}
 
+		rel, _ := filepath.Rel(root, file)
 		base := filepath.Base(file)
-		if len(cfg.include) > 0 && !matchesAny(base, cfg.include) {
+		if len(cfg.include) > 0 && !matchesAnyPath(base, rel, cfg.include) {
 			return nil
 		}
-		if len(cfg.exclude) > 0 && matchesAny(base, cfg.exclude) {
+		if len(cfg.exclude) > 0 && matchesAnyPath(base, rel, cfg.exclude) {
 			return nil
 		}
 
@@ -161,16 +206,26 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 				}
 				totalTokens += size
 
+				// Find column offset of match
+				col := 0
+				if re != nil {
+					if loc := re.FindStringIndex(line); loc != nil {
+						col = loc[0] + 1
+					}
+				} else {
+					col = strings.Index(strings.ToLower(line), lowerPattern) + 1
+				}
+
 				matches = append(matches, output.Match{
 					Symbol: output.Symbol{
-						Type:    "text",
-						Name:    strings.TrimSpace(line),
-						File:    output.Rel(file),
-						Lines:   [2]int{lineNum, lineNum},
-						Size:    size,
-						Summary: strings.TrimSpace(line),
+						Type:  "text",
+						Name:  strings.TrimSpace(line),
+						File:  output.Rel(file),
+						Lines: [2]int{lineNum, lineNum},
+						Size:  size,
 					},
-					Score: 0.5,
+					Score:  0.5,
+					Column: col,
 				})
 			}
 		}
