@@ -20,4 +20,5 @@ After building, the binary is at `./edr`. It operates on the current directory b
 ### Notes
 
 - The `.edr/` directory is created at the repo root on first index; it is local state and should be gitignored.
-- All tree-sitter grammars are compiled in via pure-Go bindings (`modernc.org/sqlite`, `go-tree-sitter`); no CGO or native libraries are required.
+- SQLite uses pure-Go bindings (`modernc.org/sqlite`); no CGO needed for DB.
+- Tree-sitter grammars require CGO (C compiler) for parsing.

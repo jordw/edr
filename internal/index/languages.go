@@ -13,6 +13,7 @@ import (
 	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
 	tree_sitter_ruby "github.com/tree-sitter/tree-sitter-ruby/bindings/go"
 	tree_sitter_rust "github.com/tree-sitter/tree-sitter-rust/bindings/go"
+	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
 
 // LangConfig holds the tree-sitter language and the AST node types that
@@ -87,6 +88,34 @@ func GetLangConfig(filename string) *LangConfig {
 				"method_declaration",
 				"class_declaration",
 				"interface_declaration",
+			},
+			NameField: "name",
+		}
+	case ".ts":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_typescript.LanguageTypescript())),
+			SymbolNodes: []string{
+				"function_declaration",
+				"class_declaration",
+				"method_definition",
+				"arrow_function",
+				"interface_declaration",
+				"enum_declaration",
+				"type_alias_declaration",
+			},
+			NameField: "name",
+		}
+	case ".tsx":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_typescript.LanguageTSX())),
+			SymbolNodes: []string{
+				"function_declaration",
+				"class_declaration",
+				"method_definition",
+				"arrow_function",
+				"interface_declaration",
+				"enum_declaration",
+				"type_alias_declaration",
 			},
 			NameField: "name",
 		}
