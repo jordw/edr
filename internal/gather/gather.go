@@ -67,6 +67,20 @@ func Gather(ctx context.Context, db *index.DB, file, symbolName string, budget i
 		}
 	}
 
+	// Find related tests
+	if remaining > 0 {
+		tests := FindRelatedTests(ctx, db, symbolName, file)
+		for _, t := range tests {
+			ts := symbolToOutput(t)
+			if remaining-ts.Size < 0 {
+				continue
+			}
+			remaining -= ts.Size
+			result.Tests = append(result.Tests, ts)
+			result.TotalTokens += ts.Size
+		}
+	}
+
 	return result, nil
 }
 
