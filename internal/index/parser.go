@@ -185,6 +185,81 @@ func FindReferences(ctx context.Context, db *DB, symbolName string) ([]SymbolInf
 	return refs, nil
 }
 
+// FindDeps finds symbols that the given symbol depends on (identifiers within
+// the symbol's body that match known symbols in the index).
+func FindDeps(ctx context.Context, db *DB, sym *SymbolInfo) ([]SymbolInfo, error) {
+	lang := GetLangConfig(sym.File)
+	if lang == nil {
+		return nil, fmt.Errorf("unsupported language for %s", sym.File)
+	}
+
+	src, err := os.ReadFile(sym.File)
+	if err != nil {
+		return nil, err
+	}
+
+	parser := tree_sitter.NewParser()
+	defer parser.Close()
+	if err := parser.SetLanguage(lang.Language); err != nil {
+		return nil, err
+	}
+
+	tree := parser.Parse(src, nil)
+	defer tree.Close()
+
+	// Collect all identifiers within the symbol's byte range
+	var idents []string
+	seen := make(map[string]bool)
+	collectIdentifiers(tree.RootNode(), src, sym.StartByte, sym.EndByte, seen, &idents)
+
+	// Look up each identifier in the index
+	var deps []SymbolInfo
+	depSeen := make(map[string]bool)
+	for _, name := range idents {
+		if name == sym.Name {
+			continue // skip self-references
+		}
+		matches, err := db.SearchSymbols(ctx, name)
+		if err != nil {
+			continue
+		}
+		for _, m := range matches {
+			if m.Name == name {
+				key := m.File + ":" + m.Name
+				if !depSeen[key] {
+					depSeen[key] = true
+					deps = append(deps, m)
+				}
+			}
+		}
+	}
+	return deps, nil
+}
+
+func collectIdentifiers(node *tree_sitter.Node, src []byte, startByte, endByte uint32, seen map[string]bool, out *[]string) {
+	nb := uint32(node.StartByte())
+	ne := uint32(node.EndByte())
+	// Skip nodes entirely outside the range
+	if ne <= startByte || nb >= endByte {
+		return
+	}
+	if node.Kind() == "identifier" || node.Kind() == "type_identifier" {
+		if nb >= startByte && ne <= endByte {
+			text := string(src[nb:ne])
+			if !seen[text] {
+				seen[text] = true
+				*out = append(*out, text)
+			}
+		}
+	}
+	for i := 0; i < int(node.ChildCount()); i++ {
+		child := node.Child(uint(i))
+		if child != nil {
+			collectIdentifiers(child, src, startByte, endByte, seen, out)
+		}
+	}
+}
+
 func findIdentifierRefs(node *tree_sitter.Node, src []byte, file, name string, out *[]SymbolInfo) {
 	if node.Kind() == "identifier" || node.Kind() == "type_identifier" {
 		text := string(src[node.StartByte():node.EndByte()])

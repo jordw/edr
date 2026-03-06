@@ -28,11 +28,19 @@ func DiffPreview(path string, startByte, endByte uint32, replacement string) (st
 	oldLines := splitLines(string(data))
 	newLines := splitLines(string(after))
 
-	// Convert byte offsets to line numbers (0-indexed)
+	// Convert byte offsets to line numbers (0-indexed, exclusive end).
+	// For end offsets we use the last byte of the range so that mid-line
+	// boundaries correctly include the affected line.
 	oldStartLine := byteOffsetToLine(data, startByte)
-	oldEndLine := byteOffsetToLine(data, endByte)
-	// For the new content, figure out how many lines the replacement spans
-	newEndLine := oldStartLine + countLinesInRange(after, startByte, uint32(int(startByte)+len(replacement)))
+	oldEndLine := oldStartLine
+	if endByte > startByte {
+		oldEndLine = byteOffsetToLine(data, endByte-1) + 1
+	}
+	replEnd := uint32(int(startByte) + len(replacement))
+	newEndLine := oldStartLine
+	if len(replacement) > 0 {
+		newEndLine = byteOffsetToLine(after, replEnd-1) + 1
+	}
 
 	// Context lines
 	const contextLines = 3

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/jordw/edr/internal/index"
+	"github.com/jordw/edr/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -51,6 +52,7 @@ func openAndEnsureIndex(cmd *cobra.Command) (*index.DB, error) {
 		fmt.Fprintf(os.Stderr, "edr: indexed %d files, %d symbols\n", filesIndexed, symbolsFound)
 	}
 
+	output.SetRoot(root)
 	return db, nil
 }
 

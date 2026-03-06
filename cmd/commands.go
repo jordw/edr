@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/jordw/edr/internal/edit"
 	"github.com/jordw/edr/internal/gather"
@@ -116,10 +117,11 @@ func init() {
 
 var searchTextCmd = &cobra.Command{
 	Use:   "search-text <pattern>",
-	Short: "Search file contents for text",
+	Short: "Search file contents for text (searches all files, not just indexed)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		budget, _ := cmd.Flags().GetInt("budget")
+		useRegex, _ := cmd.Flags().GetBool("regex")
 
 		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
@@ -128,7 +130,7 @@ var searchTextCmd = &cobra.Command{
 		defer db.Close()
 
 		ctx := context.Background()
-		matches, err := search.SearchText(ctx, db, args[0], budget)
+		matches, err := search.SearchText(ctx, db, args[0], budget, useRegex)
 		if err != nil {
 			return err
 		}
@@ -139,6 +141,7 @@ var searchTextCmd = &cobra.Command{
 
 func init() {
 	searchTextCmd.Flags().Int("budget", 0, "token budget (0 = unlimited)")
+	searchTextCmd.Flags().Bool("regex", false, "treat pattern as a Go regexp")
 }
 
 // --- symbols ---
@@ -173,7 +176,7 @@ var symbolsCmd = &cobra.Command{
 			results = append(results, output.Symbol{
 				Type:  s.Type,
 				Name:  s.Name,
-				File:  s.File,
+				File:  output.Rel(s.File),
 				Lines: [2]int{int(s.StartLine), int(s.EndLine)},
 				Size:  int(s.EndByte-s.StartByte) / 4,
 			})
@@ -226,7 +229,7 @@ var readSymbolCmd = &cobra.Command{
 			Symbol: output.Symbol{
 				Type:  sym.Type,
 				Name:  sym.Name,
-				File:  sym.File,
+				File:  output.Rel(sym.File),
 				Lines: [2]int{int(sym.StartLine), int(sym.EndLine)},
 				Size:  size,
 				Hash:  hash,
@@ -250,6 +253,7 @@ var expandCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		showBody, _ := cmd.Flags().GetBool("body")
 		showCallers, _ := cmd.Flags().GetBool("callers")
+		showDeps, _ := cmd.Flags().GetBool("deps")
 
 		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
@@ -268,7 +272,7 @@ var expandCmd = &cobra.Command{
 			Symbol: output.Symbol{
 				Type:  sym.Type,
 				Name:  sym.Name,
-				File:  sym.File,
+				File:  output.Rel(sym.File),
 				Lines: [2]int{int(sym.StartLine), int(sym.EndLine)},
 				Size:  int(sym.EndByte-sym.StartByte) / 4,
 				Hash:  hash,
@@ -305,13 +309,28 @@ var expandCmd = &cobra.Command{
 								result.Callers = append(result.Callers, output.Symbol{
 									Type:  s.Type,
 									Name:  s.Name,
-									File:  s.File,
+									File:  output.Rel(s.File),
 									Lines: [2]int{int(s.StartLine), int(s.EndLine)},
 									Size:  int(s.EndByte-s.StartByte) / 4,
 								})
 							}
 						}
 					}
+				}
+			}
+		}
+
+		if showDeps {
+			deps, err := index.FindDeps(ctx, db, sym)
+			if err == nil {
+				for _, d := range deps {
+					result.Deps = append(result.Deps, output.Symbol{
+						Type:  d.Type,
+						Name:  d.Name,
+						File:  output.Rel(d.File),
+						Lines: [2]int{int(d.StartLine), int(d.EndLine)},
+						Size:  int(d.EndByte-d.StartByte) / 4,
+					})
 				}
 			}
 		}
@@ -351,7 +370,7 @@ var xrefsCmd = &cobra.Command{
 			results = append(results, output.Symbol{
 				Type:  "reference",
 				Name:  r.Name,
-				File:  r.File,
+				File:  output.Rel(r.File),
 				Lines: [2]int{int(r.StartLine), int(r.EndLine)},
 			})
 		}
@@ -390,11 +409,14 @@ var replaceSymbolCmd = &cobra.Command{
 
 		err = edit.ReplaceSpan(sym.File, sym.StartByte, sym.EndByte, replacement, expectHash)
 		if err != nil {
-			output.Print(output.EditResult{OK: false, File: sym.File, Message: err.Error()})
+			output.Print(output.EditResult{OK: false, File: output.Rel(sym.File), Message: err.Error()})
 			return nil
 		}
 
-		output.Print(output.EditResult{OK: true, File: sym.File, Message: fmt.Sprintf("replaced symbol %s", sym.Name)})
+		// Re-index the modified file
+		_ = index.IndexFile(ctx, db, sym.File)
+
+		output.Print(output.EditResult{OK: true, File: output.Rel(sym.File), Message: fmt.Sprintf("replaced symbol %s", sym.Name)})
 		return nil
 	},
 }
@@ -411,7 +433,13 @@ var replaceSpanCmd = &cobra.Command{
 	Long:  "Reads replacement code from stdin",
 	Args:  cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root := getRoot(cmd)
+		db, err := openAndEnsureIndex(cmd)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+
+		root := db.Root()
 		expectHash, _ := cmd.Flags().GetString("expect-hash")
 
 		file := args[0]
@@ -428,13 +456,17 @@ var replaceSpanCmd = &cobra.Command{
 			return fmt.Errorf("reading replacement from stdin: %w", err)
 		}
 
+		ctx := context.Background()
 		err = edit.ReplaceSpan(file, startByte, endByte, replacement, expectHash)
 		if err != nil {
-			output.Print(output.EditResult{OK: false, File: file, Message: err.Error()})
+			output.Print(output.EditResult{OK: false, File: output.Rel(file), Message: err.Error()})
 			return nil
 		}
 
-		output.Print(output.EditResult{OK: true, File: file, Message: "span replaced"})
+		// Re-index the modified file
+		_ = index.IndexFile(ctx, db, file)
+
+		output.Print(output.EditResult{OK: true, File: output.Rel(file), Message: "span replaced"})
 		return nil
 	},
 }
@@ -482,6 +514,244 @@ var gatherCmd = &cobra.Command{
 
 func init() {
 	gatherCmd.Flags().Int("budget", 1500, "token budget for context")
+}
+
+// --- replace-lines ---
+
+var replaceLinesCmd = &cobra.Command{
+	Use:   "replace-lines <file> <start-line> <end-line>",
+	Short: "Replace a line range in a file",
+	Long:  "Reads replacement code from stdin. Lines are 1-indexed and inclusive.",
+	Args:  cobra.ExactArgs(3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		db, err := openAndEnsureIndex(cmd)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+
+		root := db.Root()
+		expectHash, _ := cmd.Flags().GetString("expect-hash")
+
+		file := args[0]
+		if file[0] != '/' {
+			file = root + "/" + file
+		}
+
+		var startLine, endLine int
+		fmt.Sscanf(args[1], "%d", &startLine)
+		fmt.Sscanf(args[2], "%d", &endLine)
+
+		replacement, err := readStdin()
+		if err != nil {
+			return fmt.Errorf("reading replacement from stdin: %w", err)
+		}
+
+		ctx := context.Background()
+		err = edit.ReplaceLines(file, startLine, endLine, replacement, expectHash)
+		if err != nil {
+			output.Print(output.EditResult{OK: false, File: output.Rel(file), Message: err.Error()})
+			return nil
+		}
+
+		_ = index.IndexFile(ctx, db, file)
+
+		output.Print(output.EditResult{OK: true, File: output.Rel(file), Message: fmt.Sprintf("replaced lines %d-%d", startLine, endLine)})
+		return nil
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(replaceLinesCmd)
+	replaceLinesCmd.Flags().String("expect-hash", "", "expected file hash for safety")
+}
+
+// --- read-file ---
+
+var readFileCmd = &cobra.Command{
+	Use:   "read-file <file> [start-line] [end-line]",
+	Short: "Read a file or line range (works on any file type)",
+	Args:  cobra.RangeArgs(1, 3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		budget, _ := cmd.Flags().GetInt("budget")
+		root := getRoot(cmd)
+
+		file := args[0]
+		if file[0] != '/' {
+			file = root + "/" + file
+		}
+
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return err
+		}
+
+		content := string(data)
+		lines := strings.SplitAfter(content, "\n")
+		totalLines := len(lines)
+
+		startLine := 1
+		endLine := totalLines
+		if len(args) >= 2 {
+			fmt.Sscanf(args[1], "%d", &startLine)
+		}
+		if len(args) >= 3 {
+			fmt.Sscanf(args[2], "%d", &endLine)
+		}
+
+		// Clamp
+		if startLine < 1 {
+			startLine = 1
+		}
+		if endLine > totalLines {
+			endLine = totalLines
+		}
+
+		// Extract the requested lines
+		var body string
+		if startLine <= endLine {
+			body = strings.Join(lines[startLine-1:endLine], "")
+		}
+
+		size := len(body) / 4
+		if budget > 0 && size > budget {
+			chars := budget * 4
+			if chars < len(body) {
+				body = body[:chars] + "\n... (trimmed to budget)"
+			}
+			size = budget
+		}
+
+		output.Print(map[string]any{
+			"file":        output.Rel(file),
+			"lines":       [2]int{startLine, endLine},
+			"total_lines": totalLines,
+			"size":        size,
+			"content":     body,
+		})
+		return nil
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(readFileCmd)
+	readFileCmd.Flags().Int("budget", 0, "token budget (0 = unlimited)")
+}
+
+// --- replace-text ---
+
+var replaceTextCmd = &cobra.Command{
+	Use:   "replace-text <file> <old-text> <new-text>",
+	Short: "Find and replace text in any file",
+	Long:  "Replaces the first occurrence of old-text with new-text. Use --all to replace all occurrences.",
+	Args:  cobra.ExactArgs(3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		root := getRoot(cmd)
+		expectHash, _ := cmd.Flags().GetString("expect-hash")
+		replaceAll, _ := cmd.Flags().GetBool("all")
+
+		file := args[0]
+		if file[0] != '/' {
+			file = root + "/" + file
+		}
+		oldText := args[1]
+		newText := args[2]
+
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return err
+		}
+
+		if expectHash != "" {
+			hash, _ := edit.FileHash(file)
+			if hash != expectHash {
+				output.Print(output.EditResult{OK: false, File: output.Rel(file), Message: fmt.Sprintf("hash mismatch: expected %s, got %s", expectHash, hash)})
+				return nil
+			}
+		}
+
+		content := string(data)
+		if !strings.Contains(content, oldText) {
+			output.Print(output.EditResult{OK: false, File: output.Rel(file), Message: "old-text not found in file"})
+			return nil
+		}
+
+		var result string
+		var count int
+		if replaceAll {
+			count = strings.Count(content, oldText)
+			result = strings.ReplaceAll(content, oldText, newText)
+		} else {
+			count = 1
+			result = strings.Replace(content, oldText, newText, 1)
+		}
+
+		info, err := os.Stat(file)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(file, []byte(result), info.Mode()); err != nil {
+			return err
+		}
+
+		output.Print(output.EditResult{OK: true, File: output.Rel(file), Message: fmt.Sprintf("replaced %d occurrence(s)", count)})
+		return nil
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(replaceTextCmd)
+	replaceTextCmd.Flags().String("expect-hash", "", "expected file hash for safety")
+	replaceTextCmd.Flags().Bool("all", false, "replace all occurrences")
+}
+
+// --- write-file ---
+
+var writeFileCmd = &cobra.Command{
+	Use:   "write-file <file>",
+	Short: "Create or overwrite a file (reads content from stdin)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		root := getRoot(cmd)
+		mkdir, _ := cmd.Flags().GetBool("mkdir")
+
+		file := args[0]
+		if file[0] != '/' {
+			file = root + "/" + file
+		}
+
+		content, err := readStdin()
+		if err != nil {
+			return fmt.Errorf("reading content from stdin: %w", err)
+		}
+
+		if mkdir {
+			dir := file[:strings.LastIndex(file, "/")]
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				return fmt.Errorf("mkdir: %w", err)
+			}
+		}
+
+		if err := os.WriteFile(file, []byte(content), 0644); err != nil {
+			return err
+		}
+
+		// Index if it's a supported language
+		db, dbErr := openAndEnsureIndex(cmd)
+		if dbErr == nil {
+			ctx := context.Background()
+			_ = index.IndexFile(ctx, db, file)
+			db.Close()
+		}
+
+		output.Print(output.EditResult{OK: true, File: output.Rel(file), Message: fmt.Sprintf("wrote %d bytes", len(content))})
+		return nil
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(writeFileCmd)
+	writeFileCmd.Flags().Bool("mkdir", false, "create parent directories if needed")
 }
 
 // --- helpers ---

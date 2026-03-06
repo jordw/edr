@@ -79,6 +79,48 @@ func ReplaceSymbol(path string, symbolName string, startByte, endByte uint32, re
 	return ReplaceSpan(path, startByte, endByte, replacement, expectHash)
 }
 
+// ReplaceLines replaces lines [startLine, endLine] (1-indexed, inclusive) with
+// the replacement string. It converts line numbers to byte offsets and delegates
+// to ReplaceSpan.
+func ReplaceLines(path string, startLine, endLine int, replacement string, expectHash string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("replacelines: read: %w", err)
+	}
+
+	if startLine < 1 || endLine < startLine {
+		return fmt.Errorf("replacelines: invalid line range [%d, %d]", startLine, endLine)
+	}
+
+	// Convert 1-indexed line numbers to byte offsets
+	line := 1
+	var startByte, endByte uint32
+	foundStart := false
+	for i := 0; i <= len(data); i++ {
+		if line == startLine && !foundStart {
+			startByte = uint32(i)
+			foundStart = true
+		}
+		if line == endLine+1 || (line == endLine && i == len(data)) {
+			endByte = uint32(i)
+			break
+		}
+		if i < len(data) && data[i] == '\n' {
+			line++
+		}
+	}
+
+	if !foundStart {
+		return fmt.Errorf("replacelines: start line %d beyond file (%d lines)", startLine, line-1)
+	}
+	if endByte == 0 && endLine >= line {
+		// endLine is at or past EOF — take everything to the end
+		endByte = uint32(len(data))
+	}
+
+	return ReplaceSpan(path, startByte, endByte, replacement, expectHash)
+}
+
 // InsertAfterSpan inserts content into the file at path immediately after the
 // given byte position afterEndByte.
 func InsertAfterSpan(path string, afterEndByte uint32, content string) error {

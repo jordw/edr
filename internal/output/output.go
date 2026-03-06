@@ -4,7 +4,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
+
+var root string
+
+// SetRoot sets the repo root for relative path output.
+func SetRoot(r string) {
+	root = r
+}
+
+// Rel converts an absolute path to a repo-relative path.
+func Rel(abs string) string {
+	if root != "" && strings.HasPrefix(abs, root+"/") {
+		return abs[len(root)+1:]
+	}
+	return abs
+}
 
 // Symbol describes a code symbol (function, type, variable, etc.).
 type Symbol struct {

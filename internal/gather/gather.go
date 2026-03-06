@@ -114,7 +114,7 @@ func symbolToOutput(s index.SymbolInfo) output.Symbol {
 	return output.Symbol{
 		Type:  s.Type,
 		Name:  s.Name,
-		File:  s.File,
+		File:  output.Rel(s.File),
 		Lines: [2]int{int(s.StartLine), int(s.EndLine)},
 		Size:  size,
 	}

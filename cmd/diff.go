@@ -48,7 +48,7 @@ var diffPreviewCmd = &cobra.Command{
 		newSize := len(replacement)
 
 		output.Print(map[string]any{
-			"file":     sym.File,
+			"file":     output.Rel(sym.File),
 			"symbol":   sym.Name,
 			"diff":     diff,
 			"old_size": oldSize,
@@ -91,7 +91,7 @@ var diffPreviewSpanCmd = &cobra.Command{
 		newSize := len(replacement)
 
 		output.Print(map[string]any{
-			"file":     file,
+			"file":     output.Rel(file),
 			"diff":     diff,
 			"old_size": oldSize,
 			"new_size": newSize,

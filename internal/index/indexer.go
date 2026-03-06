@@ -98,6 +98,67 @@ func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 	return filesIndexed, symbolsFound, err
 }
 
+// IndexFile re-indexes a single file, updating the DB with fresh symbols.
+func IndexFile(ctx context.Context, db *DB, path string) error {
+	lang := GetLangConfig(path)
+	if lang == nil {
+		return nil // unsupported language, nothing to index
+	}
+
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("indexfile: read: %w", err)
+	}
+
+	hash := fileHash(src)
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("indexfile: stat: %w", err)
+	}
+
+	symbols, err := ParseSource(path, src, lang)
+	if err != nil {
+		return fmt.Errorf("indexfile: parse: %w", err)
+	}
+
+	if err := db.UpsertFile(ctx, path, hash, info.ModTime().Unix()); err != nil {
+		return err
+	}
+	if err := db.ClearSymbols(ctx, path); err != nil {
+		return err
+	}
+	for _, sym := range symbols {
+		if err := db.InsertSymbol(ctx, sym); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// WalkRepoFiles calls fn for every non-ignored, non-binary file in the repo.
+// It respects the same ignore list as IndexRepo and skips files > 1MB.
+func WalkRepoFiles(root string, fn func(path string) error) error {
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			for _, ign := range DefaultIgnore {
+				if name == ign {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil || info.Size() > 1<<20 {
+			return nil
+		}
+		return fn(path)
+	})
+}
+
 func fileHash(data []byte) string {
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:4]) // first 8 hex chars

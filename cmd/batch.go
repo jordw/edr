@@ -47,7 +47,11 @@ Output format:
   {"id": "2", "ok": true, "result": [...]}
 
 Supported commands: init, repo-map, search, search-text, symbols,
-read-symbol, expand, xrefs, gather.`,
+read-symbol, expand, xrefs, gather, replace-symbol, replace-span,
+diff-preview, diff-preview-span.
+
+For edit commands (replace-symbol, replace-span, diff-preview, diff-preview-span),
+pass the replacement code via the "replacement" flag in the JSON object.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
