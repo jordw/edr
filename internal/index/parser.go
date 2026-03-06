@@ -261,7 +261,8 @@ func collectIdentifiers(node *tree_sitter.Node, src []byte, startByte, endByte u
 }
 
 func findIdentifierRefs(node *tree_sitter.Node, src []byte, file, name string, out *[]SymbolInfo) {
-	if node.Kind() == "identifier" || node.Kind() == "type_identifier" {
+	kind := node.Kind()
+	if kind == "identifier" || kind == "type_identifier" || kind == "field_identifier" {
 		text := string(src[node.StartByte():node.EndByte()])
 		if text == name {
 			*out = append(*out, SymbolInfo{

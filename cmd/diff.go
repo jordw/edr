@@ -13,6 +13,16 @@ import (
 func init() {
 	rootCmd.AddCommand(diffPreviewCmd)
 	rootCmd.AddCommand(diffPreviewSpanCmd)
+	diffPreviewCmd.Flags().String("replacement", "", "replacement content (if omitted, read from stdin)")
+	diffPreviewSpanCmd.Flags().String("replacement", "", "replacement content (if omitted, read from stdin)")
+}
+
+// getReplacement returns replacement from --replacement flag, or stdin if flag is empty.
+func getReplacement(cmd *cobra.Command) (string, error) {
+	if s, _ := cmd.Flags().GetString("replacement"); s != "" {
+		return s, nil
+	}
+	return readStdin()
 }
 
 // --- diff-preview (symbol) ---
@@ -20,7 +30,7 @@ func init() {
 var diffPreviewCmd = &cobra.Command{
 	Use:   "diff-preview [file] <symbol>",
 	Short: "Preview what replace-symbol would do as a unified diff",
-	Long:  "Reads replacement code from stdin and shows the diff WITHOUT applying it.",
+	Long:  "Replacement from --replacement flag or stdin. Shows the diff WITHOUT applying it.",
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		db, err := openAndEnsureIndex(cmd)
@@ -35,9 +45,9 @@ var diffPreviewCmd = &cobra.Command{
 			return err
 		}
 
-		replacement, err := readStdin()
+		replacement, err := getReplacement(cmd)
 		if err != nil {
-			return fmt.Errorf("reading replacement from stdin: %w", err)
+			return err
 		}
 
 		diff, err := edit.DiffPreview(sym.File, sym.StartByte, sym.EndByte, replacement)
@@ -64,7 +74,7 @@ var diffPreviewCmd = &cobra.Command{
 var diffPreviewSpanCmd = &cobra.Command{
 	Use:   "diff-preview-span <file> <start-byte> <end-byte>",
 	Short: "Preview what replace-span would do as a unified diff",
-	Long:  "Reads replacement code from stdin and shows the diff WITHOUT applying it.",
+	Long:  "Replacement from --replacement flag or stdin. Shows the diff WITHOUT applying it.",
 	Args:  cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := index.NormalizeRoot(getRoot(cmd))
@@ -80,9 +90,9 @@ var diffPreviewSpanCmd = &cobra.Command{
 		fmt.Sscanf(args[1], "%d", &startByte)
 		fmt.Sscanf(args[2], "%d", &endByte)
 
-		replacement, err := readStdin()
+		replacement, err := getReplacement(cmd)
 		if err != nil {
-			return fmt.Errorf("reading replacement from stdin: %w", err)
+			return err
 		}
 
 		diff, err := edit.DiffPreview(file, startByte, endByte, replacement)

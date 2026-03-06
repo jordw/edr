@@ -444,7 +444,8 @@ var replaceSymbolCmd = &cobra.Command{
 		// Re-index the modified file
 		_ = index.IndexFile(ctx, db, sym.File)
 
-		output.Print(output.EditResult{OK: true, File: output.Rel(sym.File), Message: fmt.Sprintf("replaced symbol %s", sym.Name)})
+		hash, _ := edit.FileHash(sym.File)
+		output.Print(output.EditResult{OK: true, File: output.Rel(sym.File), Message: fmt.Sprintf("replaced symbol %s", sym.Name), Hash: hash})
 		return nil
 	},
 }
@@ -493,7 +494,8 @@ var replaceSpanCmd = &cobra.Command{
 		// Re-index the modified file
 		_ = index.IndexFile(ctx, db, file)
 
-		output.Print(output.EditResult{OK: true, File: output.Rel(file), Message: "span replaced"})
+		hash, _ := edit.FileHash(file)
+		output.Print(output.EditResult{OK: true, File: output.Rel(file), Message: "span replaced", Hash: hash})
 		return nil
 	},
 }
@@ -582,7 +584,8 @@ var replaceLinesCmd = &cobra.Command{
 
 		_ = index.IndexFile(ctx, db, file)
 
-		output.Print(output.EditResult{OK: true, File: output.Rel(file), Message: fmt.Sprintf("replaced lines %d-%d", startLine, endLine)})
+		hash, _ := edit.FileHash(file)
+		output.Print(output.EditResult{OK: true, File: output.Rel(file), Message: fmt.Sprintf("replaced lines %d-%d", startLine, endLine), Hash: hash})
 		return nil
 	},
 }
@@ -725,7 +728,15 @@ var replaceTextCmd = &cobra.Command{
 			return err
 		}
 
-		output.Print(output.EditResult{OK: true, File: output.Rel(file), Message: fmt.Sprintf("replaced %d occurrence(s)", count)})
+		db, dbErr := openAndEnsureIndex(cmd)
+		if dbErr == nil {
+			ctx := context.Background()
+			_ = index.IndexFile(ctx, db, file)
+			db.Close()
+		}
+
+		hash, _ := edit.FileHash(file)
+		output.Print(output.EditResult{OK: true, File: output.Rel(file), Message: fmt.Sprintf("replaced %d occurrence(s)", count), Hash: hash})
 		return nil
 	},
 }
@@ -778,7 +789,8 @@ var writeFileCmd = &cobra.Command{
 			db.Close()
 		}
 
-		output.Print(output.EditResult{OK: true, File: output.Rel(file), Message: fmt.Sprintf("wrote %d bytes", len(content))})
+		hash, _ := edit.FileHash(file)
+		output.Print(output.EditResult{OK: true, File: output.Rel(file), Message: fmt.Sprintf("wrote %d bytes", len(content)), Hash: hash})
 		return nil
 	},
 }
@@ -837,9 +849,14 @@ var renameSymbolCmd = &cobra.Command{
 		}
 
 		var filesChanged []string
+		hashes := make(map[string]string)
 		for file := range grouped {
 			_ = index.IndexFile(ctx, db, file)
-			filesChanged = append(filesChanged, output.Rel(file))
+			rel := output.Rel(file)
+			filesChanged = append(filesChanged, rel)
+			if h, err := edit.FileHash(file); err == nil {
+				hashes[rel] = h
+			}
 		}
 
 		output.Print(output.RenameResult{
@@ -847,6 +864,7 @@ var renameSymbolCmd = &cobra.Command{
 			NewName:      newName,
 			FilesChanged: filesChanged,
 			Occurrences:  len(refs),
+			Hashes:       hashes,
 		})
 		return nil
 	},
@@ -884,7 +902,8 @@ var insertAfterCmd = &cobra.Command{
 		}
 
 		_ = index.IndexFile(ctx, db, sym.File)
-		output.Print(output.EditResult{OK: true, File: output.Rel(sym.File), Message: fmt.Sprintf("inserted after %s", sym.Name)})
+		hash, _ := edit.FileHash(sym.File)
+		output.Print(output.EditResult{OK: true, File: output.Rel(sym.File), Message: fmt.Sprintf("inserted after %s", sym.Name), Hash: hash})
 		return nil
 	},
 }
@@ -936,7 +955,8 @@ var appendFileCmd = &cobra.Command{
 			db.Close()
 		}
 
-		output.Print(output.EditResult{OK: true, File: output.Rel(file), Message: fmt.Sprintf("appended %d bytes", len(content))})
+		hash, _ := edit.FileHash(file)
+		output.Print(output.EditResult{OK: true, File: output.Rel(file), Message: fmt.Sprintf("appended %d bytes", len(content)), Hash: hash})
 		return nil
 	},
 }

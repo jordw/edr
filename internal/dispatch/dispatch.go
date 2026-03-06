@@ -728,9 +728,14 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 		return nil, fmt.Errorf("rename failed: %w", err)
 	}
 
-	// Re-index all affected files
+	// Re-index all affected files and collect new hashes
+	hashes := make(map[string]string)
 	for file := range grouped {
 		_ = index.IndexFile(ctx, db, file)
+		rel := output.Rel(file)
+		if h, err := edit.FileHash(file); err == nil {
+			hashes[rel] = h
+		}
 	}
 
 	return output.RenameResult{
@@ -738,6 +743,7 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 		NewName:      newName,
 		FilesChanged: filesChanged,
 		Occurrences:  len(refs),
+		Hashes:       hashes,
 	}, nil
 }
 
