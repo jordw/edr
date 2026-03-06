@@ -8,7 +8,6 @@ import (
 	"os"
 
 	"github.com/jordw/edr/internal/dispatch"
-	"github.com/jordw/edr/internal/index"
 	"github.com/spf13/cobra"
 )
 
@@ -50,8 +49,7 @@ Output format:
 Supported commands: init, repo-map, search, search-text, symbols,
 read-symbol, expand, xrefs, gather.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root := getRoot(cmd)
-		db, err := index.OpenDB(root)
+		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
 			return fmt.Errorf("open db: %w", err)
 		}

@@ -61,8 +61,7 @@ var repoMapCmd = &cobra.Command{
 	Use:   "repo-map",
 	Short: "Show repository symbol map",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root := getRoot(cmd)
-		db, err := index.OpenDB(root)
+		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
 			return err
 		}
@@ -91,10 +90,9 @@ var searchCmd = &cobra.Command{
 	Short: "Search symbols by name",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root := getRoot(cmd)
 		budget, _ := cmd.Flags().GetInt("budget")
 
-		db, err := index.OpenDB(root)
+		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
 			return err
 		}
@@ -121,10 +119,9 @@ var searchTextCmd = &cobra.Command{
 	Short: "Search file contents for text",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root := getRoot(cmd)
 		budget, _ := cmd.Flags().GetInt("budget")
 
-		db, err := index.OpenDB(root)
+		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
 			return err
 		}
@@ -152,7 +149,7 @@ var symbolsCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := getRoot(cmd)
-		db, err := index.OpenDB(root)
+		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
 			return err
 		}
@@ -196,7 +193,7 @@ var readSymbolCmd = &cobra.Command{
 		root := getRoot(cmd)
 		budget, _ := cmd.Flags().GetInt("budget")
 
-		db, err := index.OpenDB(root)
+		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
 			return err
 		}
@@ -261,7 +258,7 @@ var expandCmd = &cobra.Command{
 		showBody, _ := cmd.Flags().GetBool("body")
 		showCallers, _ := cmd.Flags().GetBool("callers")
 
-		db, err := index.OpenDB(root)
+		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
 			return err
 		}
@@ -349,8 +346,7 @@ var xrefsCmd = &cobra.Command{
 	Short: "Find cross-references to a symbol",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root := getRoot(cmd)
-		db, err := index.OpenDB(root)
+		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
 			return err
 		}
@@ -387,7 +383,7 @@ var replaceSymbolCmd = &cobra.Command{
 		root := getRoot(cmd)
 		expectHash, _ := cmd.Flags().GetString("expect-hash")
 
-		db, err := index.OpenDB(root)
+		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
 			return err
 		}
@@ -475,7 +471,7 @@ var gatherCmd = &cobra.Command{
 		root := getRoot(cmd)
 		budget, _ := cmd.Flags().GetInt("budget")
 
-		db, err := index.OpenDB(root)
+		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
 			return err
 		}

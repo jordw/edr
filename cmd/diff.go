@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/jordw/edr/internal/edit"
-	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -25,7 +24,7 @@ var diffPreviewCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := getRoot(cmd)
 
-		db, err := index.OpenDB(root)
+		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
 			return err
 		}
