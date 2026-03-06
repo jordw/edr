@@ -666,14 +666,38 @@ var readFileCmd = &cobra.Command{
 		}
 
 		hash, _ := edit.FileHash(file)
-		output.Print(map[string]any{
+		result := map[string]any{
 			"file":        output.Rel(file),
 			"lines":       [2]int{startLine, endLine},
 			"total_lines": totalLines,
 			"size":        size,
 			"content":     body,
 			"hash":        hash,
-		})
+		}
+
+		showSymbols, _ := cmd.Flags().GetBool("symbols")
+		if showSymbols {
+			db, dbErr := openAndEnsureIndex(cmd)
+			if dbErr == nil {
+				ctx := context.Background()
+				syms, err := db.GetSymbolsByFile(ctx, file)
+				db.Close()
+				if err == nil && len(syms) > 0 {
+					var symList []output.Symbol
+					for _, s := range syms {
+						symList = append(symList, output.Symbol{
+							Type:  s.Type,
+							Name:  s.Name,
+							Lines: [2]int{int(s.StartLine), int(s.EndLine)},
+							Size:  int(s.EndByte-s.StartByte) / 4,
+						})
+					}
+					result["symbols"] = symList
+				}
+			}
+		}
+
+		output.Print(result)
 		return nil
 	},
 }
@@ -681,6 +705,7 @@ var readFileCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(readFileCmd)
 	readFileCmd.Flags().Int("budget", 0, "token budget (0 = unlimited)")
+	readFileCmd.Flags().Bool("symbols", false, "include symbol list for code files")
 }
 
 // --- replace-text ---
@@ -1030,6 +1055,36 @@ var smartEditCmd = &cobra.Command{
 		})
 		return nil
 	},
+}
+
+// --- find-files ---
+
+var findFilesCmd = &cobra.Command{
+	Use:   "find-files <pattern>",
+	Short: "Find files by glob pattern (supports **)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		root, err := index.NormalizeRoot(getRoot(cmd))
+		if err != nil {
+			return err
+		}
+		output.SetRoot(root)
+		dir, _ := cmd.Flags().GetString("dir")
+		budget, _ := cmd.Flags().GetInt("budget")
+
+		results, err := search.FindFiles(context.Background(), root, args[0], dir, budget)
+		if err != nil {
+			return err
+		}
+		output.Print(results)
+		return nil
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(findFilesCmd)
+	findFilesCmd.Flags().String("dir", "", "scope search to directory")
+	findFilesCmd.Flags().Int("budget", 0, "limit results by total file size in tokens")
 }
 
 func init() {

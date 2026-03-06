@@ -82,6 +82,10 @@ func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flag
 		return runAppendFile(ctx, db, root, args, flags)
 	case "smart-edit":
 		return runSmartEdit(ctx, db, root, args, flags)
+	case "find-files":
+		return runFindFiles(ctx, db, root, args, flags)
+	case "batch-read":
+		return runBatchRead(ctx, db, root, args, flags)
 	default:
 		return nil, fmt.Errorf("unknown command: %s", cmd)
 	}
@@ -405,14 +409,32 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 	}
 
 	hash, _ := edit.FileHash(file)
-	return map[string]any{
+	result := map[string]any{
 		"file":        output.Rel(file),
 		"lines":       [2]int{startLine, endLine},
 		"total_lines": totalLines,
 		"size":        size,
 		"content":     body,
 		"hash":        hash,
-	}, nil
+	}
+
+	if flagBool(flags, "symbols", false) {
+		syms, err := db.GetSymbolsByFile(ctx, file)
+		if err == nil && len(syms) > 0 {
+			var symList []output.Symbol
+			for _, s := range syms {
+				symList = append(symList, output.Symbol{
+					Type:  s.Type,
+					Name:  s.Name,
+					Lines: [2]int{int(s.StartLine), int(s.EndLine)},
+					Size:  int(s.EndByte-s.StartByte) / 4,
+				})
+			}
+			result["symbols"] = symList
+		}
+	}
+
+	return result, nil
 }
 
 func runReplaceText(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
@@ -895,6 +917,126 @@ func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string,
 		"old_size": len(oldBody) / 4,
 		"new_size": len(replacement) / 4,
 	}, nil
+}
+
+func runFindFiles(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("find-files requires 1 argument: <pattern>")
+	}
+	pattern := args[0]
+	dir := flagString(flags, "dir", "")
+	budget := flagInt(flags, "budget", 0)
+
+	return search.FindFiles(ctx, root, pattern, dir, budget)
+}
+
+func runBatchRead(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("batch-read requires at least 1 argument: <file-or-file:symbol> ...")
+	}
+	budget := flagInt(flags, "budget", 0)
+	perFile := 0
+	if budget > 0 {
+		perFile = budget / len(args)
+		if perFile < 1 {
+			perFile = 1
+		}
+	}
+
+	type batchEntry struct {
+		File    string          `json:"file"`
+		Symbol  string          `json:"symbol,omitempty"`
+		Content string          `json:"content"`
+		Hash    string          `json:"hash"`
+		Lines   [2]int          `json:"lines"`
+		Size    int             `json:"size"`
+		Symbols []output.Symbol `json:"symbols,omitempty"`
+	}
+
+	showSymbols := flagBool(flags, "symbols", false)
+	var results []batchEntry
+
+	for _, arg := range args {
+		var filePath, symName string
+		if idx := strings.LastIndex(arg, ":"); idx > 0 {
+			filePath = arg[:idx]
+			symName = arg[idx+1:]
+		} else {
+			filePath = arg
+		}
+
+		if symName != "" {
+			// Read a specific symbol
+			sym, err := resolveSymbolArgs(ctx, db, root, []string{filePath, symName})
+			if err != nil {
+				continue
+			}
+			src, err := os.ReadFile(sym.File)
+			if err != nil {
+				continue
+			}
+			body := string(src[sym.StartByte:sym.EndByte])
+			size := len(body) / 4
+			if perFile > 0 && size > perFile {
+				chars := perFile * 4
+				if chars < len(body) {
+					body = body[:chars] + "\n... (trimmed to budget)"
+				}
+			}
+			hash, _ := edit.FileHash(sym.File)
+			results = append(results, batchEntry{
+				File:    output.Rel(sym.File),
+				Symbol:  symName,
+				Content: body,
+				Hash:    hash,
+				Lines:   [2]int{int(sym.StartLine), int(sym.EndLine)},
+				Size:    size,
+			})
+		} else {
+			// Read entire file
+			file, err := db.ResolvePath(filePath)
+			if err != nil {
+				continue
+			}
+			data, err := os.ReadFile(file)
+			if err != nil {
+				continue
+			}
+			body := string(data)
+			lines := strings.SplitAfter(body, "\n")
+			size := len(body) / 4
+			if perFile > 0 && size > perFile {
+				chars := perFile * 4
+				if chars < len(body) {
+					body = body[:chars] + "\n... (trimmed to budget)"
+				}
+			}
+			hash, _ := edit.FileHash(file)
+			entry := batchEntry{
+				File:    output.Rel(file),
+				Content: body,
+				Hash:    hash,
+				Lines:   [2]int{1, len(lines)},
+				Size:    size,
+			}
+			if showSymbols {
+				syms, err := db.GetSymbolsByFile(ctx, file)
+				if err == nil {
+					for _, s := range syms {
+						entry.Symbols = append(entry.Symbols, output.Symbol{
+							Type:  s.Type,
+							Name:  s.Name,
+							Lines: [2]int{int(s.StartLine), int(s.EndLine)},
+							Size:  int(s.EndByte-s.StartByte) / 4,
+						})
+					}
+				}
+			}
+			results = append(results, entry)
+		}
+	}
+
+	return results, nil
 }
 
 // editOK builds a successful EditResult with the file's new hash.

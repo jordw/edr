@@ -12,7 +12,8 @@
 | `Edit` (old/new strings) | `replace-text`, `smart-edit` | Hash safety, auto re-index, diff output |
 | `Write` (create file) | `write-file --mkdir` | Auto-indexes new code files |
 | `Grep` (text search) | `search --body` or `search-text` | Structured results with token estimates |
-| `Glob` (find files) | `repo-map` or `search` | Symbol-aware, shows structure not just paths |
+| `Glob` (find files) | `find-files` or `repo-map` | Glob with `**`, file sizes, mod times |
+| Multiple `Read` calls | `batch-read` | Read multiple files/symbols in one call |
 
 **Only fall back to built-in tools when:**
 - You need to read non-text files (images, PDFs)
@@ -38,6 +39,7 @@ For cloud agents: clone this repo, run `./setup.sh /path/to/your/project`, and e
 # Read any file (code, YAML, Markdown, Dockerfiles, etc.)
 edr read-file README.md
 edr read-file src/config.go 10 50 --budget 200    # line range with budget
+edr read-file src/config.go --symbols              # content + symbol list
 
 # Read a specific symbol (not the whole file)
 edr read-symbol src/config.go parseConfig --budget 300
@@ -114,6 +116,28 @@ edr rename-symbol oldFuncName newFuncName --dry-run
 edr diff-preview src/config.go parseConfig
 ```
 
+## Finding Files
+
+```bash
+# Find files by glob pattern (supports **)
+edr find-files "**/*.go"
+edr find-files "*.yaml" --dir config/
+edr find-files "**/test_*" --budget 500
+```
+
+## Batch Reading
+
+```bash
+# Read multiple files in one call
+edr batch-read src/config.go src/main.go README.md --budget 1000
+
+# Mix files and symbols
+edr batch-read src/config.go:parseConfig src/main.go README.md
+
+# Include symbol lists
+edr batch-read src/config.go src/main.go --symbols
+```
+
 ## Orientation
 
 ```bash
@@ -169,6 +193,8 @@ strings — no shell escaping needed.
 | `write-file <file>` | Create/overwrite file (`--mkdir`) |
 | `append-file <file>` | Append to end of file |
 | `insert-after [file] <sym>` | Insert code after a symbol |
+| `find-files <pattern>` | Find files by glob (`--dir`, `--budget`, supports `**`) |
+| `batch-read <file...>` | Read multiple files/symbols in one call (`--budget`, `--symbols`) |
 | `batch` | JSONL protocol for multi-command sessions |
 | `mcp` | MCP server mode (single tool, persistent DB) |
 
