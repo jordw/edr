@@ -11,7 +11,12 @@ import (
 	"strings"
 )
 
-// DefaultIgnore contains directories to skip during indexing.
+// alwaysIgnore contains directories that are always skipped regardless of .gitignore.
+var alwaysIgnore = []string{
+	".git", ".edr",
+}
+
+// DefaultIgnore is the fallback ignore list used when no .gitignore exists.
 var DefaultIgnore = []string{
 	".git", ".edr", "node_modules", "vendor", "__pycache__",
 	".venv", "venv", "target", "build", "dist", ".next",
@@ -47,6 +52,7 @@ func HasStaleFiles(ctx context.Context, db *DB) (bool, error) {
 
 func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 	root := db.Root()
+	gitignore := LoadGitIgnore(root)
 	var filesIndexed, symbolsFound int
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -61,12 +67,18 @@ func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 		// Skip ignored directories
 		if d.IsDir() {
 			name := d.Name()
-			for _, ign := range DefaultIgnore {
-				if name == ign {
-					return filepath.SkipDir
-				}
+			if shouldIgnoreDir(name, path, root, gitignore) {
+				return filepath.SkipDir
 			}
 			return nil
+		}
+
+		// Check .gitignore for files
+		if gitignore != nil {
+			rel, _ := filepath.Rel(root, path)
+			if gitignore.IsIgnored(rel, false) {
+				return nil
+			}
 		}
 
 		// Skip non-supported files
@@ -195,20 +207,24 @@ func IndexFile(ctx context.Context, db *DB, path string) error {
 }
 
 // WalkRepoFiles calls fn for every non-ignored, non-binary file in the repo.
-// It respects the same ignore list as IndexRepo and skips files > 1MB.
+// It respects .gitignore and the always-ignored list, and skips files > 1MB.
 func WalkRepoFiles(root string, fn func(path string) error) error {
+	gitignore := LoadGitIgnore(root)
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
-			name := d.Name()
-			for _, ign := range DefaultIgnore {
-				if name == ign {
-					return filepath.SkipDir
-				}
+			if shouldIgnoreDir(d.Name(), path, root, gitignore) {
+				return filepath.SkipDir
 			}
 			return nil
+		}
+		if gitignore != nil {
+			rel, _ := filepath.Rel(root, path)
+			if gitignore.IsIgnored(rel, false) {
+				return nil
+			}
 		}
 		info, err := d.Info()
 		if err != nil || info.Size() > 1<<20 {
@@ -216,6 +232,31 @@ func WalkRepoFiles(root string, fn func(path string) error) error {
 		}
 		return fn(path)
 	})
+}
+
+// shouldIgnoreDir returns true if a directory should be skipped.
+// Uses .gitignore when available, falls back to DefaultIgnore.
+func shouldIgnoreDir(name, path, root string, gitignore *GitIgnoreMatcher) bool {
+	// Always skip .git and .edr
+	for _, ign := range alwaysIgnore {
+		if name == ign {
+			return true
+		}
+	}
+	if gitignore != nil {
+		rel, _ := filepath.Rel(root, path)
+		if rel != "." && gitignore.IsIgnored(rel, true) {
+			return true
+		}
+	} else {
+		// No .gitignore — use hardcoded fallback
+		for _, ign := range DefaultIgnore {
+			if name == ign {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func fileHash(data []byte) string {

@@ -18,9 +18,16 @@ type FileResult struct {
 	ModTime string `json:"mod_time"` // RFC3339
 }
 
+// FindFilesResult wraps file results with truncation metadata.
+type FindFilesResult struct {
+	Files        []FileResult `json:"files"`
+	TotalMatched int          `json:"total_matched"`
+	Truncated    bool         `json:"truncated"`
+}
+
 // FindFiles walks the repo and returns files matching a glob pattern.
 // Supports ** for recursive matching. Optional dir scopes the search.
-func FindFiles(ctx context.Context, root string, pattern string, dir string, budget int) ([]FileResult, error) {
+func FindFiles(ctx context.Context, root string, pattern string, dir string, budget int) (*FindFilesResult, error) {
 	searchRoot := root
 	if dir != "" {
 		searchRoot = filepath.Join(root, dir)
@@ -34,6 +41,8 @@ func FindFiles(ctx context.Context, root string, pattern string, dir string, bud
 
 	var results []FileResult
 	totalSize := 0
+	totalMatched := 0
+	truncated := false
 
 	err := index.WalkRepoFiles(searchRoot, func(file string) error {
 		if ctx.Err() != nil {
@@ -57,6 +66,8 @@ func FindFiles(ctx context.Context, root string, pattern string, dir string, bud
 			return nil
 		}
 
+		totalMatched++
+
 		info, err := os.Stat(file)
 		if err != nil {
 			return nil
@@ -66,6 +77,7 @@ func FindFiles(ctx context.Context, root string, pattern string, dir string, bud
 		if budget > 0 && totalSize > 0 {
 			tokenEst := totalSize / 4
 			if tokenEst >= budget {
+				truncated = true
 				return nil
 			}
 		}
@@ -80,5 +92,9 @@ func FindFiles(ctx context.Context, root string, pattern string, dir string, bud
 		return nil
 	})
 
-	return results, err
+	return &FindFilesResult{
+		Files:        results,
+		TotalMatched: totalMatched,
+		Truncated:    truncated,
+	}, err
 }

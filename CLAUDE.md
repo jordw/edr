@@ -58,6 +58,7 @@ edr search "parseConfig" --body --budget 500
 edr search-text "retry backoff" --budget 300
 edr search-text "func.*Config" --regex --budget 300
 edr search-text "TODO" --include "*.go" --exclude "*_test.go"
+edr search-text "TODO" --context 3                             # 3 lines of context around matches
 
 # List symbols in a file
 edr symbols src/config.go
@@ -147,6 +148,7 @@ edr repo-map --budget 500
 # Gather context for a task: target + callers + tests within budget
 edr gather src/config.go parseConfig --budget 1500
 edr gather parseConfig --budget 1500    # search-based
+edr gather parseConfig --body --budget 1500  # include source bodies inline
 ```
 
 ## MCP Server Mode
@@ -165,8 +167,9 @@ strings — no shell escaping needed.
 4. **Use `--expect-hash`** on edits to prevent stale writes. Every edit returns the new hash.
 5. **Use `search --body`** to get source inline and avoid follow-up reads.
 6. **Use `repo-map`** to orient in the codebase before diving into files.
-7. **Use `gather`** at the start of a task to get a minimal context bundle.
+7. **Use `gather --body`** at the start of a task to get source bodies inline.
 8. **Use `rename-symbol --dry-run`** to preview cross-file renames before applying.
+9. **Check `truncated`/`total_matches`** in search/find results — budget trimming reports what was cut.
 
 ## All Commands
 
@@ -175,13 +178,13 @@ strings — no shell escaping needed.
 | `init` | Force re-index the repository |
 | `repo-map` | Symbol map of entire repo (`--budget`) |
 | `search <pattern>` | Find symbols by name (`--budget`, `--body`) |
-| `search-text <pattern>` | Text search across ALL files (`--budget`, `--regex`, `--include`, `--exclude`) |
+| `search-text <pattern>` | Text search across ALL files (`--budget`, `--regex`, `--include`, `--exclude`, `--context`) |
 | `symbols <file>` | List symbols in a file |
 | `read-symbol [file] <sym>` | Read one symbol's source (`--budget`) |
 | `read-file <file> [start] [end]` | Read any file with optional line range (`--budget`) |
 | `expand [file] <sym>` | Progressive disclosure: `--body`, `--callers`, `--deps`, `--budget` (import-aware) |
 | `xrefs <symbol>` | Find all references (import-aware, filters false positives) |
-| `gather [file] <sym>` | Context bundle: target + callers + tests (`--budget`) |
+| `gather [file] <sym>` | Context bundle: target + callers + tests (`--budget`, `--body`) |
 | `smart-edit [file] <sym>` | Read + diff + replace in one call |
 | `replace-text <file> <old> <new>` | Find-and-replace in any file (`--all`, `--regex`, `--expect-hash`) |
 | `replace-symbol [file] <sym>` | Replace symbol body (`--expect-hash`) |
@@ -200,3 +203,5 @@ strings — no shell escaping needed.
 
 All output is structured JSON. All file paths can be relative to repo root.
 All edit commands return `hash` in the response for chaining.
+Query commands return `truncated` and `total_matches` when budget limits apply.
+`read-file` output includes line numbers prefixed to each line.

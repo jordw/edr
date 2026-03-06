@@ -9,7 +9,8 @@ import (
 )
 
 // Gather builds a minimal context bundle for a symbol.
-func Gather(ctx context.Context, db *index.DB, file, symbolName string, budget int) (*output.GatherResult, error) {
+// When includeBody is true, inlines source bodies for target, callers, and tests.
+func Gather(ctx context.Context, db *index.DB, file, symbolName string, budget int, includeBody bool) (*output.GatherResult, error) {
 	// Find target symbol
 	sym, err := db.GetSymbol(ctx, file, symbolName)
 	if err != nil {
@@ -23,6 +24,15 @@ func Gather(ctx context.Context, db *index.DB, file, symbolName string, budget i
 	}
 
 	remaining := budget - target.Size
+
+	// Include target body
+	if includeBody {
+		body := readSymbolBody(*sym)
+		if body != "" {
+			result.TargetBody = body
+		}
+	}
+
 	if remaining <= 0 {
 		return result, nil
 	}
@@ -56,6 +66,12 @@ func Gather(ctx context.Context, db *index.DB, file, symbolName string, budget i
 					remaining -= caller.Size
 					result.Callers = append(result.Callers, caller)
 					result.TotalTokens += caller.Size
+					if includeBody {
+						if result.CallerSnips == nil {
+							result.CallerSnips = make(map[string]string)
+						}
+						result.CallerSnips[s.Name] = readSymbolBody(s)
+					}
 				}
 			}
 		}
@@ -68,6 +84,12 @@ func Gather(ctx context.Context, db *index.DB, file, symbolName string, budget i
 			remaining -= caller.Size
 			result.Callers = append(result.Callers, caller)
 			result.TotalTokens += caller.Size
+			if includeBody {
+				if result.CallerSnips == nil {
+					result.CallerSnips = make(map[string]string)
+				}
+				result.CallerSnips[c.Name] = readSymbolBody(c)
+			}
 		}
 	}
 
@@ -82,6 +104,12 @@ func Gather(ctx context.Context, db *index.DB, file, symbolName string, budget i
 			remaining -= ts.Size
 			result.Tests = append(result.Tests, ts)
 			result.TotalTokens += ts.Size
+			if includeBody {
+				if result.TestSnips == nil {
+					result.TestSnips = make(map[string]string)
+				}
+				result.TestSnips[t.Name] = readSymbolBody(t)
+			}
 		}
 	}
 
@@ -89,7 +117,7 @@ func Gather(ctx context.Context, db *index.DB, file, symbolName string, budget i
 }
 
 // GatherBySearch gathers context for a search query.
-func GatherBySearch(ctx context.Context, db *index.DB, query string, budget int) (*output.GatherResult, error) {
+func GatherBySearch(ctx context.Context, db *index.DB, query string, budget int, includeBody bool) (*output.GatherResult, error) {
 	// Search for matching symbols
 	symbols, err := db.SearchSymbols(ctx, query)
 	if err != nil {
@@ -100,7 +128,18 @@ func GatherBySearch(ctx context.Context, db *index.DB, query string, budget int)
 	}
 
 	// Use first match as target
-	return Gather(ctx, db, symbols[0].File, symbols[0].Name, budget)
+	return Gather(ctx, db, symbols[0].File, symbols[0].Name, budget, includeBody)
+}
+
+func readSymbolBody(s index.SymbolInfo) string {
+	data, err := os.ReadFile(s.File)
+	if err != nil {
+		return ""
+	}
+	if int(s.EndByte) <= len(data) {
+		return string(data[s.StartByte:s.EndByte])
+	}
+	return ""
 }
 
 func symbolToOutput(s index.SymbolInfo) output.Symbol {

@@ -155,6 +155,9 @@ func runSearchText(ctx context.Context, db *index.DB, args []string, flags map[s
 	if exc := flagStringSlice(flags, "exclude"); len(exc) > 0 {
 		opts = append(opts, search.WithExclude(exc...))
 	}
+	if ctxLines := flagInt(flags, "context", 0); ctxLines > 0 {
+		opts = append(opts, search.WithContext(ctxLines))
+	}
 	return search.SearchText(ctx, db, args[0], budget, useRegex, opts...)
 }
 
@@ -172,15 +175,25 @@ func runSymbols(ctx context.Context, db *index.DB, root string, args []string) (
 		return nil, err
 	}
 
+	// Detect duplicate names for disambiguation
+	nameCounts := make(map[string]int)
+	for _, s := range syms {
+		nameCounts[s.Name]++
+	}
+
 	var results []output.Symbol
 	for _, s := range syms {
-		results = append(results, output.Symbol{
+		sym := output.Symbol{
 			Type:  s.Type,
 			Name:  s.Name,
 			File:  output.Rel(s.File),
 			Lines: [2]int{int(s.StartLine), int(s.EndLine)},
 			Size:  int(s.EndByte-s.StartByte) / 4,
-		})
+		}
+		if nameCounts[s.Name] > 1 {
+			sym.Qualifier = fmt.Sprintf("line %d", s.StartLine)
+		}
+		results = append(results, sym)
 	}
 	return results, nil
 }
@@ -362,15 +375,16 @@ func runGather(ctx context.Context, db *index.DB, root string, args []string, fl
 		return nil, fmt.Errorf("gather requires at least 1 argument")
 	}
 	budget := flagInt(flags, "budget", 1500)
+	includeBody := flagBool(flags, "body", false)
 
 	// Try exact symbol resolution first
 	sym, resolveErr := resolveSymbolArgs(ctx, db, root, args)
 	if resolveErr == nil {
-		return gather.Gather(ctx, db, sym.File, sym.Name, budget)
+		return gather.Gather(ctx, db, sym.File, sym.Name, budget, includeBody)
 	}
 	// Fall back to search-based gather for single arg
 	if len(args) == 1 {
-		return gather.GatherBySearch(ctx, db, args[0], budget)
+		return gather.GatherBySearch(ctx, db, args[0], budget, includeBody)
 	}
 	return nil, resolveErr
 }
@@ -411,16 +425,26 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 		endLine = totalLines
 	}
 
-	var body string
+	var numbered strings.Builder
 	if startLine <= endLine {
-		body = strings.Join(lines[startLine-1:endLine], "")
+		for i, line := range lines[startLine-1 : endLine] {
+			fmt.Fprintf(&numbered, "%d\t%s", startLine+i, line)
+		}
 	}
+	body := numbered.String()
 
-	size := len(body) / 4
+	// Budget is based on raw content size (line numbers are overhead)
+	rawSize := 0
+	for _, line := range lines[startLine-1 : endLine] {
+		rawSize += len(line)
+	}
+	size := rawSize / 4
+	truncated := false
 	if budget > 0 && size > budget {
 		chars := budget * 4
 		if chars < len(body) {
 			body = body[:chars] + "\n... (trimmed to budget)"
+			truncated = true
 		}
 		size = budget
 	}
@@ -433,6 +457,7 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 		"size":        size,
 		"content":     body,
 		"hash":        hash,
+		"truncated":   truncated,
 	}
 
 	if flagBool(flags, "symbols", false) {

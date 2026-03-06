@@ -24,13 +24,14 @@ func Rel(abs string) string {
 
 // Symbol describes a code symbol (function, type, variable, etc.).
 type Symbol struct {
-	Type    string `json:"type"`
-	Name    string `json:"name"`
-	File    string `json:"file"`
-	Lines   [2]int `json:"lines"`
-	Summary string `json:"summary,omitempty"`
-	Size    int    `json:"size"`
-	Hash    string `json:"hash,omitempty"`
+	Type      string `json:"type"`
+	Name      string `json:"name"`
+	File      string `json:"file,omitempty"`
+	Lines     [2]int `json:"lines"`
+	Summary   string `json:"summary,omitempty"`
+	Qualifier string `json:"qualifier,omitempty"`
+	Size      int    `json:"size"`
+	Hash      string `json:"hash,omitempty"`
 }
 
 // Match pairs a Symbol with a relevance score.
@@ -77,11 +78,14 @@ type RenameOccurrence struct {
 
 // GatherResult aggregates context around a target symbol.
 type GatherResult struct {
-	Target      Symbol   `json:"target"`
-	Deps        []Symbol `json:"deps,omitempty"`
-	Callers     []Symbol `json:"callers,omitempty"`
-	Tests       []Symbol `json:"tests,omitempty"`
-	TotalTokens int      `json:"total_tokens"`
+	Target      Symbol            `json:"target"`
+	TargetBody  string            `json:"target_body,omitempty"`
+	Deps        []Symbol          `json:"deps,omitempty"`
+	Callers     []Symbol          `json:"callers,omitempty"`
+	CallerSnips map[string]string `json:"caller_snippets,omitempty"`
+	Tests       []Symbol          `json:"tests,omitempty"`
+	TestSnips   map[string]string `json:"test_snippets,omitempty"`
+	TotalTokens int               `json:"total_tokens"`
 }
 
 // Print marshals v to indented JSON and writes it to stdout.

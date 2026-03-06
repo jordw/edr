@@ -6,6 +6,9 @@ import (
 	"os"
 	"strings"
 
+	"regexp"
+
+	"github.com/jordw/edr/internal/dispatch"
 	"github.com/jordw/edr/internal/edit"
 	"github.com/jordw/edr/internal/gather"
 	"github.com/jordw/edr/internal/index"
@@ -159,6 +162,10 @@ var searchTextCmd = &cobra.Command{
 		if len(exclude) > 0 {
 			opts = append(opts, search.WithExclude(exclude...))
 		}
+		ctxLines, _ := cmd.Flags().GetInt("context")
+		if ctxLines > 0 {
+			opts = append(opts, search.WithContext(ctxLines))
+		}
 
 		ctx := context.Background()
 		matches, err := search.SearchText(ctx, db, args[0], budget, useRegex, opts...)
@@ -175,6 +182,7 @@ func init() {
 	searchTextCmd.Flags().Bool("regex", false, "treat pattern as a Go regexp")
 	searchTextCmd.Flags().StringSlice("include", nil, "glob patterns to include (e.g. *.go)")
 	searchTextCmd.Flags().StringSlice("exclude", nil, "glob patterns to exclude (e.g. *_test.go)")
+	searchTextCmd.Flags().Int("context", 0, "lines of context around each match")
 }
 
 // --- symbols ---
@@ -202,15 +210,23 @@ var symbolsCmd = &cobra.Command{
 			return err
 		}
 
+		nameCounts := make(map[string]int)
+		for _, s := range syms {
+			nameCounts[s.Name]++
+		}
 		var results []output.Symbol
 		for _, s := range syms {
-			results = append(results, output.Symbol{
+			sym := output.Symbol{
 				Type:  s.Type,
 				Name:  s.Name,
 				File:  output.Rel(s.File),
 				Lines: [2]int{int(s.StartLine), int(s.EndLine)},
 				Size:  int(s.EndByte-s.StartByte) / 4,
-			})
+			}
+			if nameCounts[s.Name] > 1 {
+				sym.Qualifier = fmt.Sprintf("line %d", s.StartLine)
+			}
+			results = append(results, sym)
 		}
 		output.Print(results)
 		return nil
@@ -536,14 +552,16 @@ var gatherCmd = &cobra.Command{
 
 		ctx := context.Background()
 
+		includeBody, _ := cmd.Flags().GetBool("body")
+
 		var result *output.GatherResult
 		// Try exact symbol resolution first (works with 1 or 2 args)
 		sym, resolveErr := resolveSymbol(ctx, db, args)
 		if resolveErr == nil {
-			result, err = gather.Gather(ctx, db, sym.File, sym.Name, budget)
+			result, err = gather.Gather(ctx, db, sym.File, sym.Name, budget, includeBody)
 		} else if len(args) == 1 {
 			// Fall back to search-based gather
-			result, err = gather.GatherBySearch(ctx, db, args[0], budget)
+			result, err = gather.GatherBySearch(ctx, db, args[0], budget, includeBody)
 		} else {
 			return resolveErr
 		}
@@ -558,6 +576,7 @@ var gatherCmd = &cobra.Command{
 
 func init() {
 	gatherCmd.Flags().Int("budget", 1500, "token budget for context")
+	gatherCmd.Flags().Bool("body", false, "include source bodies for target, callers, and tests")
 }
 
 // --- replace-lines ---
@@ -653,17 +672,26 @@ var readFileCmd = &cobra.Command{
 			endLine = totalLines
 		}
 
-		// Extract the requested lines
-		var body string
+		// Extract the requested lines with line numbers
+		var numbered strings.Builder
 		if startLine <= endLine {
-			body = strings.Join(lines[startLine-1:endLine], "")
+			for i, line := range lines[startLine-1 : endLine] {
+				fmt.Fprintf(&numbered, "%d\t%s", startLine+i, line)
+			}
 		}
+		body := numbered.String()
 
-		size := len(body) / 4
+		rawSize := 0
+		for _, line := range lines[startLine-1 : endLine] {
+			rawSize += len(line)
+		}
+		size := rawSize / 4
+		truncated := false
 		if budget > 0 && size > budget {
 			chars := budget * 4
 			if chars < len(body) {
 				body = body[:chars] + "\n... (trimmed to budget)"
+				truncated = true
 			}
 			size = budget
 		}
@@ -676,6 +704,7 @@ var readFileCmd = &cobra.Command{
 			"size":        size,
 			"content":     body,
 			"hash":        hash,
+			"truncated":   truncated,
 		}
 
 		showSymbols, _ := cmd.Flags().GetBool("symbols")
@@ -725,6 +754,7 @@ var replaceTextCmd = &cobra.Command{
 		}
 		expectHash, _ := cmd.Flags().GetString("expect-hash")
 		replaceAll, _ := cmd.Flags().GetBool("all")
+		useRegex, _ := cmd.Flags().GetBool("regex")
 
 		file, err := index.ResolvePath(root, args[0])
 		if err != nil {
@@ -747,19 +777,39 @@ var replaceTextCmd = &cobra.Command{
 		}
 
 		content := string(data)
-		if !strings.Contains(content, oldText) {
-			output.Print(output.EditResult{OK: false, File: output.Rel(file), Message: "old-text not found in file"})
-			return nil
-		}
 
 		var result string
 		var count int
-		if replaceAll {
-			count = strings.Count(content, oldText)
-			result = strings.ReplaceAll(content, oldText, newText)
+		if useRegex {
+			re, err := regexp.Compile(oldText)
+			if err != nil {
+				return fmt.Errorf("invalid regex: %w", err)
+			}
+			matches := re.FindAllStringIndex(content, -1)
+			if len(matches) == 0 {
+				output.Print(output.EditResult{OK: false, File: output.Rel(file), Message: "pattern not found in file"})
+				return nil
+			}
+			if replaceAll {
+				count = len(matches)
+				result = re.ReplaceAllString(content, newText)
+			} else {
+				count = 1
+				loc := matches[0]
+				result = content[:loc[0]] + re.ReplaceAllString(content[loc[0]:loc[1]], newText) + content[loc[1]:]
+			}
 		} else {
-			count = 1
-			result = strings.Replace(content, oldText, newText, 1)
+			if !strings.Contains(content, oldText) {
+				output.Print(output.EditResult{OK: false, File: output.Rel(file), Message: "old-text not found in file"})
+				return nil
+			}
+			if replaceAll {
+				count = strings.Count(content, oldText)
+				result = strings.ReplaceAll(content, oldText, newText)
+			} else {
+				count = 1
+				result = strings.Replace(content, oldText, newText, 1)
+			}
 		}
 
 		info, err := os.Stat(file)
@@ -787,6 +837,7 @@ func init() {
 	rootCmd.AddCommand(replaceTextCmd)
 	replaceTextCmd.Flags().String("expect-hash", "", "expected file hash for safety")
 	replaceTextCmd.Flags().Bool("all", false, "replace all occurrences")
+	replaceTextCmd.Flags().Bool("regex", false, "treat old-text as a Go regexp")
 }
 
 // --- write-file ---
@@ -858,6 +909,7 @@ var renameSymbolCmd = &cobra.Command{
 		ctx := context.Background()
 		oldName := args[0]
 		newName := args[1]
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
 
 		refs, err := index.FindReferences(ctx, db, oldName)
 		if err != nil {
@@ -865,13 +917,48 @@ var renameSymbolCmd = &cobra.Command{
 		}
 
 		if len(refs) == 0 {
-			output.Print(output.RenameResult{OldName: oldName, NewName: newName})
+			output.Print(output.RenameResult{OldName: oldName, NewName: newName, DryRun: dryRun})
 			return nil
 		}
 
 		grouped := make(map[string][]index.SymbolInfo)
 		for _, r := range refs {
 			grouped[r.File] = append(grouped[r.File], r)
+		}
+
+		var filesChanged []string
+		for file := range grouped {
+			filesChanged = append(filesChanged, output.Rel(file))
+		}
+
+		if dryRun {
+			var preview []output.RenameOccurrence
+			for _, r := range refs {
+				src, err := os.ReadFile(r.File)
+				if err != nil {
+					continue
+				}
+				lines := strings.SplitAfter(string(src), "\n")
+				lineIdx := int(r.StartLine) - 1
+				lineText := ""
+				if lineIdx >= 0 && lineIdx < len(lines) {
+					lineText = strings.TrimRight(lines[lineIdx], "\n")
+				}
+				preview = append(preview, output.RenameOccurrence{
+					File: output.Rel(r.File),
+					Line: int(r.StartLine),
+					Text: lineText,
+				})
+			}
+			output.Print(output.RenameResult{
+				OldName:      oldName,
+				NewName:      newName,
+				FilesChanged: filesChanged,
+				Occurrences:  len(refs),
+				DryRun:       true,
+				Preview:      preview,
+			})
+			return nil
 		}
 
 		tx := edit.NewTransaction()
@@ -890,12 +977,10 @@ var renameSymbolCmd = &cobra.Command{
 			return fmt.Errorf("rename failed: %w", err)
 		}
 
-		var filesChanged []string
 		hashes := make(map[string]string)
 		for file := range grouped {
 			_ = index.IndexFile(ctx, db, file)
 			rel := output.Rel(file)
-			filesChanged = append(filesChanged, rel)
 			if h, err := edit.FileHash(file); err == nil {
 				hashes[rel] = h
 			}
@@ -1092,9 +1177,39 @@ func init() {
 
 func init() {
 	rootCmd.AddCommand(renameSymbolCmd)
+	renameSymbolCmd.Flags().Bool("dry-run", false, "preview what would change without applying")
 	rootCmd.AddCommand(insertAfterCmd)
 	rootCmd.AddCommand(appendFileCmd)
 	rootCmd.AddCommand(smartEditCmd)
+	rootCmd.AddCommand(batchReadCmd)
+	batchReadCmd.Flags().Int("budget", 0, "token budget (0 = unlimited)")
+	batchReadCmd.Flags().Bool("symbols", false, "include symbol lists")
+}
+
+// --- batch-read ---
+
+var batchReadCmd = &cobra.Command{
+	Use:   "batch-read <file-or-file:symbol> ...",
+	Short: "Read multiple files/symbols in one call",
+	Args:  cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		db, err := openAndEnsureIndex(cmd)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+
+		budget, _ := cmd.Flags().GetInt("budget")
+		showSymbols, _ := cmd.Flags().GetBool("symbols")
+		flags := map[string]any{"budget": budget, "symbols": showSymbols}
+
+		result, err := dispatch.Dispatch(context.Background(), db, "batch-read", args, flags)
+		if err != nil {
+			return err
+		}
+		output.Print(result)
+		return nil
+	},
 }
 
 // --- helpers ---

@@ -40,6 +40,11 @@ func OpenDB(repoRoot string) (*DB, error) {
 		sqlDB.Close()
 		return nil, err
 	}
+	// Allow up to 5s of busy-waiting so parallel processes don't get SQLITE_BUSY
+	if _, err := sqlDB.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		sqlDB.Close()
+		return nil, err
+	}
 
 	d := &DB{db: sqlDB, root: root}
 	if err := d.migrate(); err != nil {
@@ -568,7 +573,34 @@ func (d *DB) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo, error
 		results = append(results, s)
 	}
 	if len(results) == 0 {
-		return nil, d.symbolNotFoundError(ctx, name, "")
+		// Try case-insensitive fallback
+		ciRows, err := d.db.QueryContext(ctx, `
+			SELECT name, type, file, start_line, end_line, start_byte, end_byte
+			FROM symbols WHERE name = ? COLLATE NOCASE
+			ORDER BY file
+		`, name)
+		if err == nil {
+			defer ciRows.Close()
+			for ciRows.Next() {
+				var s SymbolInfo
+				if err := ciRows.Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte); err != nil {
+					break
+				}
+				results = append(results, s)
+			}
+		}
+		if len(results) == 0 {
+			return nil, d.symbolNotFoundError(ctx, name, "")
+		}
+		if len(results) == 1 {
+			return &results[0], nil
+		}
+		// Multiple case-insensitive matches — still ambiguous
+		files := make([]string, len(results))
+		for i, r := range results {
+			files[i] = fmt.Sprintf("%s (%s)", r.Name, r.File)
+		}
+		return nil, fmt.Errorf("symbol %q not found (case-sensitive). Similar: %v", name, files)
 	}
 	if len(results) > 1 {
 		files := make([]string, len(results))

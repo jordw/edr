@@ -52,6 +52,7 @@ func GetLangConfig(filename string) *LangConfig {
 				"method_declaration",
 				"type_declaration",
 				"type_spec",
+				"var_spec",
 			},
 			NameField: "name",
 			LangID:    "go",

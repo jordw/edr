@@ -1,8 +1,8 @@
 package search
 
 import (
-	"bufio"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,9 +12,16 @@ import (
 	"github.com/jordw/edr/internal/output"
 )
 
+// SearchResult wraps matches with truncation metadata.
+type SearchResult struct {
+	Matches      []output.Match `json:"matches"`
+	TotalMatches int            `json:"total_matches"`
+	Truncated    bool           `json:"truncated"`
+}
+
 // SearchSymbol searches the index for symbols matching a pattern.
 // When showBody is true, each match includes a snippet of the symbol's source.
-func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int, showBody bool) ([]output.Match, error) {
+func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int, showBody bool) (*SearchResult, error) {
 	symbols, err := db.SearchSymbols(ctx, pattern)
 	if err != nil {
 		return nil, err
@@ -22,8 +29,15 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int,
 
 	matches := make([]output.Match, 0)
 	totalTokens := 0
+	truncated := false
 	for _, s := range symbols {
 		size := int(s.EndByte-s.StartByte) / 4 // rough token estimate
+
+		// Budget limits total matches when not showing body
+		if !showBody && budget > 0 && totalTokens+size > budget {
+			truncated = true
+			break
+		}
 
 		m := output.Match{
 			Symbol: output.Symbol{
@@ -49,26 +63,27 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int,
 				m.Body = body
 				totalTokens += size
 			}
+		} else if showBody && budget > 0 && totalTokens+size > budget {
+			// Over budget for body, still include metadata
+			matches = append(matches, m)
+			truncated = true
+			break
 		}
 
 		matches = append(matches, m)
-
-		// Budget limits total matches when not showing body
-		if !showBody && budget > 0 && totalTokens+size > budget {
-			// Still include this match (metadata is cheap), but stop after
-			totalTokens += size
-			if totalTokens > budget {
-				break
-			}
-		}
 	}
-	return matches, nil
+	return &SearchResult{
+		Matches:      matches,
+		TotalMatches: len(symbols),
+		Truncated:    truncated,
+	}, nil
 }
 
 // searchTextConfig holds optional filters for SearchText.
 type searchTextConfig struct {
 	include []string // glob patterns to include (e.g. "*.go")
 	exclude []string // glob patterns to exclude (e.g. "vendor/*")
+	context int      // lines of context around each match
 }
 
 // SearchTextOption configures SearchText behavior.
@@ -82,6 +97,11 @@ func WithInclude(patterns ...string) SearchTextOption {
 // WithExclude filters out files matching any of the given glob patterns.
 func WithExclude(patterns ...string) SearchTextOption {
 	return func(c *searchTextConfig) { c.exclude = append(c.exclude, patterns...) }
+}
+
+// WithContext adds N lines of context around each match.
+func WithContext(n int) SearchTextOption {
+	return func(c *searchTextConfig) { c.context = n }
 }
 
 func matchesAnyPath(base, rel string, patterns []string) bool {
@@ -141,7 +161,7 @@ func matchDoublestar(path, pattern string) bool {
 // It walks all repo files (not just indexed ones) so it finds matches in
 // YAML, Markdown, Dockerfiles, etc. When useRegex is true, pattern is
 // compiled as a Go regexp.
-func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, useRegex bool, opts ...SearchTextOption) ([]output.Match, error) {
+func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, useRegex bool, opts ...SearchTextOption) (*SearchResult, error) {
 	cfg := searchTextConfig{}
 	for _, o := range opts {
 		o(&cfg)
@@ -162,6 +182,8 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 
 	matches := make([]output.Match, 0)
 	totalTokens := 0
+	totalMatches := 0
+	truncated := false
 
 	err := index.WalkRepoFiles(root, func(file string) error {
 		if ctx.Err() != nil {
@@ -177,17 +199,14 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 			return nil
 		}
 
-		f, err := os.Open(file)
+		data, err := os.ReadFile(file)
 		if err != nil {
 			return nil
 		}
-		defer f.Close()
+		allLines := strings.Split(string(data), "\n")
 
-		scanner := bufio.NewScanner(f)
-		lineNum := 0
-		for scanner.Scan() {
-			lineNum++
-			line := scanner.Text()
+		for lineIdx, line := range allLines {
+			lineNum := lineIdx + 1
 
 			var matched bool
 			if re != nil {
@@ -197,12 +216,37 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 			}
 
 			if matched {
-				size := len(line) / 4
+				totalMatches++
+
+				// Build display text with optional context
+				displayName := strings.TrimSpace(line)
+				displayStart := lineNum
+				displayEnd := lineNum
+				if cfg.context > 0 {
+					ctxStart := lineIdx - cfg.context
+					if ctxStart < 0 {
+						ctxStart = 0
+					}
+					ctxEnd := lineIdx + cfg.context + 1
+					if ctxEnd > len(allLines) {
+						ctxEnd = len(allLines)
+					}
+					var ctxLines []string
+					for i := ctxStart; i < ctxEnd; i++ {
+						ctxLines = append(ctxLines, fmt.Sprintf("%d\t%s", i+1, allLines[i]))
+					}
+					displayName = strings.Join(ctxLines, "\n")
+					displayStart = ctxStart + 1
+					displayEnd = ctxEnd
+				}
+
+				size := len(displayName) / 4
 				if size < 1 {
 					size = 1
 				}
 				if budget > 0 && totalTokens+size > budget {
-					return nil
+					truncated = true
+					continue // keep counting total
 				}
 				totalTokens += size
 
@@ -219,9 +263,9 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 				matches = append(matches, output.Match{
 					Symbol: output.Symbol{
 						Type:  "text",
-						Name:  strings.TrimSpace(line),
+						Name:  displayName,
 						File:  output.Rel(file),
-						Lines: [2]int{lineNum, lineNum},
+						Lines: [2]int{displayStart, displayEnd},
 						Size:  size,
 					},
 					Score:  0.5,
@@ -232,5 +276,9 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 		return nil
 	})
 
-	return matches, err
+	return &SearchResult{
+		Matches:      matches,
+		TotalMatches: totalMatches,
+		Truncated:    truncated,
+	}, err
 }

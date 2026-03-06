@@ -193,6 +193,8 @@ func normalizeType(nodeType string) string {
 		return "interface"
 	case strings.Contains(nodeType, "type"):
 		return "type"
+	case strings.Contains(nodeType, "var"):
+		return "variable"
 	case strings.Contains(nodeType, "module"):
 		return "module"
 	default:
@@ -207,10 +209,12 @@ func FindReferences(ctx context.Context, db *DB, symbolName string) ([]SymbolInf
 	if db.HasRefs(ctx) {
 		sym, err := db.ResolveSymbol(ctx, symbolName)
 		if err == nil {
-			return db.FindSemanticReferences(ctx, symbolName, sym.File)
+			results, err := db.FindSemanticReferences(ctx, symbolName, sym.File)
+			if err == nil && len(results) > 0 {
+				return results, nil
+			}
+			// Fall through to text-based if semantic returned empty
 		}
-		// If symbol not uniquely resolved, try by exact name match in refs table
-		// Still use semantic refs but without import filtering (better than nothing)
 	}
 
 	return findReferencesTextBased(ctx, db, symbolName)
@@ -265,7 +269,10 @@ func findReferencesTextBased(ctx context.Context, db *DB, symbolName string) ([]
 // is defined in the given file. Uses semantic filtering.
 func FindReferencesInFile(ctx context.Context, db *DB, symbolName, symbolFile string) ([]SymbolInfo, error) {
 	if db.HasRefs(ctx) {
-		return db.FindSemanticReferences(ctx, symbolName, symbolFile)
+		results, err := db.FindSemanticReferences(ctx, symbolName, symbolFile)
+		if err == nil && len(results) > 0 {
+			return results, nil
+		}
 	}
 	return findReferencesTextBased(ctx, db, symbolName)
 }
@@ -277,7 +284,10 @@ func FindDeps(ctx context.Context, db *DB, sym *SymbolInfo) ([]SymbolInfo, error
 	if db.HasRefs(ctx) {
 		symID, err := db.GetSymbolID(ctx, sym.File, sym.Name)
 		if err == nil {
-			return db.FindSemanticDeps(ctx, symID, sym.File)
+			results, err := db.FindSemanticDeps(ctx, symID, sym.File)
+			if err == nil && len(results) > 0 {
+				return results, nil
+			}
 		}
 	}
 
