@@ -1,2 +1,6 @@
 .edr/
 edr
+.cursor/
+.gocache/
+.gomodcache/
+.mcp.json
