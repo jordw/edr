@@ -313,11 +313,29 @@ func extractLeadingWhitespace(s string) string {
 }
 
 // indentContent applies a base indentation to every line of content.
+// It first strips the common leading whitespace from the input so that
+// pre-indented content doesn't get double-indented.
 func indentContent(content string, indent string) string {
 	lines := strings.Split(content, "\n")
+
+	// Find minimum common leading whitespace across non-empty lines
+	minIndent := ""
+	first := true
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		ws := extractLeadingWhitespace(line)
+		if first || len(ws) < len(minIndent) {
+			minIndent = ws
+			first = false
+		}
+	}
+
+	// Strip common indent, then apply target indent
 	for i, line := range lines {
 		if strings.TrimSpace(line) != "" {
-			lines[i] = indent + line
+			lines[i] = indent + strings.TrimPrefix(line, minIndent)
 		}
 	}
 	return strings.Join(lines, "\n")

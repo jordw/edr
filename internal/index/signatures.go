@@ -210,6 +210,18 @@ func ExtractContainerStub(container SymbolInfo, children []SymbolInfo) string {
 		lines = append(lines, sig)
 	}
 
+	// Go structs/interfaces: fields aren't indexed as symbols.
+	// Fall back to extractGoFields which parses them from source.
+	if ext == ".go" && len(lines) == 1 {
+		body := string(data[container.StartByte:container.EndByte])
+		if idx := strings.Index(body, "{"); idx >= 0 {
+			fields := extractGoFields(body[idx+1:])
+			if fields != "" {
+				lines = append(lines, "    "+fields)
+			}
+		}
+	}
+
 	// Add closing delimiter
 	switch ext {
 	case ".py":

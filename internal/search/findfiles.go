@@ -73,7 +73,8 @@ func FindFiles(ctx context.Context, root string, pattern string, dir string, bud
 			return nil
 		}
 
-		size := int(info.Size())
+		fileSize := int(info.Size())
+		entrySize := len(rel) + 60 // estimated JSON output bytes per FileResult
 		if budget > 0 && totalSize > 0 {
 			tokenEst := totalSize / 4
 			if tokenEst >= budget {
@@ -81,11 +82,11 @@ func FindFiles(ctx context.Context, root string, pattern string, dir string, bud
 				return nil
 			}
 		}
-		totalSize += size
+		totalSize += entrySize
 
 		results = append(results, FileResult{
 			File:    output.Rel(file),
-			Size:    size,
+			Size:    fileSize,
 			ModTime: info.ModTime().Format(time.RFC3339),
 		})
 
