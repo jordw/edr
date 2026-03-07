@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/jordw/edr/internal/edit"
 )
 
 // ContentEntry tracks previously sent content for delta reads.
@@ -55,26 +57,33 @@ var ReadCommands = map[string]bool{
 	"expand": true, "gather": true, "batch-read": true,
 	"repo-map": true, "search": true, "search-text": true,
 	"xrefs": true, "find-files": true,
+	// Unified names
+	"read": true, "map": true, "explore": true, "refs": true, "find": true,
 }
 
 var EditCommands = map[string]bool{
-	"smart-edit": true, "replace-text": true, "replace-symbol": true,
-	"replace-lines": true, "replace-span": true, "write-file": true,
+	"smart-edit": true, "write-file": true,
 	"append-file": true, "insert-after": true, "rename-symbol": true,
 	"edit-plan": true,
+	// Unified names
+	"edit": true, "write": true, "rename": true,
 }
 
 var DiffEditCommands = map[string]bool{
-	"smart-edit": true,
+	"smart-edit": true, "edit": true,
 }
 
 var DeltaReadCommands = map[string]bool{
 	"read-file": true, "read-symbol": true, "expand": true, "batch-read": true,
+	// Unified names
+	"read": true, "explore": true,
 }
 
 var BodyCommands = map[string]bool{
 	"read-symbol": true, "expand": true, "gather": true,
 	"search": true, "batch-read": true,
+	// Unified names
+	"read": true, "explore": true,
 }
 
 // --- Hashing & keys ---
@@ -283,223 +292,10 @@ func ComputeTextDiff(oldText, newText, label string) string {
 	if oldText == newText {
 		return ""
 	}
-	oldLines := strings.Split(oldText, "\n")
-	newLines := strings.Split(newText, "\n")
-	if len(oldLines) > 2000 || len(newLines) > 2000 {
+	if len(strings.Split(oldText, "\n")) > 2000 || len(strings.Split(newText, "\n")) > 2000 {
 		return ""
 	}
-
-	lcs := lcsLines(oldLines, newLines)
-	hunks := buildHunks(oldLines, newLines, lcs, 3)
-	if len(hunks) == 0 {
-		return ""
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "--- a/%s\n", label)
-	fmt.Fprintf(&b, "+++ b/%s\n", label)
-	for _, h := range hunks {
-		b.WriteString(h)
-	}
-	return b.String()
-}
-
-type lcsMatch struct {
-	oldIdx int
-	newIdx int
-}
-
-func lcsLines(old, new []string) []lcsMatch {
-	m, n := len(old), len(new)
-	if m == 0 || n == 0 {
-		return nil
-	}
-	if m*n > 1000000 {
-		return lcsSimple(old, new)
-	}
-
-	dp := make([][]int, m+1)
-	for i := range dp {
-		dp[i] = make([]int, n+1)
-	}
-	for i := 1; i <= m; i++ {
-		for j := 1; j <= n; j++ {
-			if old[i-1] == new[j-1] {
-				dp[i][j] = dp[i-1][j-1] + 1
-			} else if dp[i-1][j] >= dp[i][j-1] {
-				dp[i][j] = dp[i-1][j]
-			} else {
-				dp[i][j] = dp[i][j-1]
-			}
-		}
-	}
-
-	var result []lcsMatch
-	i, j := m, n
-	for i > 0 && j > 0 {
-		if old[i-1] == new[j-1] {
-			result = append(result, lcsMatch{i - 1, j - 1})
-			i--
-			j--
-		} else if dp[i-1][j] >= dp[i][j-1] {
-			i--
-		} else {
-			j--
-		}
-	}
-	for l, r := 0, len(result)-1; l < r; l, r = l+1, r-1 {
-		result[l], result[r] = result[r], result[l]
-	}
-	return result
-}
-
-func lcsSimple(old, new []string) []lcsMatch {
-	var result []lcsMatch
-	m, n := len(old), len(new)
-
-	prefix := 0
-	for prefix < m && prefix < n && old[prefix] == new[prefix] {
-		result = append(result, lcsMatch{prefix, prefix})
-		prefix++
-	}
-
-	suffix := 0
-	for suffix < m-prefix && suffix < n-prefix && old[m-1-suffix] == new[n-1-suffix] {
-		suffix++
-	}
-
-	if prefix < m-suffix && prefix < n-suffix {
-		middle := prefix
-		oi, ni := prefix, prefix
-		for oi < m-suffix && ni < n-suffix {
-			if old[oi] == new[ni] {
-				result = append(result, lcsMatch{oi, ni})
-				oi++
-				ni++
-			} else {
-				_ = middle
-				ni++
-				if ni >= n-suffix {
-					oi++
-					ni = prefix
-				}
-			}
-		}
-	}
-
-	for i := 0; i < suffix; i++ {
-		result = append(result, lcsMatch{m - suffix + i, n - suffix + i})
-	}
-	return result
-}
-
-type diffLine struct {
-	prefix byte
-	text   string
-}
-
-func buildHunks(old, new []string, lcs []lcsMatch, contextLines int) []string {
-	var allLines []diffLine
-	type linePos struct {
-		oldIdx int
-		newIdx int
-	}
-	var positions []linePos
-
-	oi, ni := 0, 0
-	for _, m := range lcs {
-		for oi < m.oldIdx {
-			allLines = append(allLines, diffLine{'-', old[oi]})
-			positions = append(positions, linePos{oi, ni})
-			oi++
-		}
-		for ni < m.newIdx {
-			allLines = append(allLines, diffLine{'+', new[ni]})
-			positions = append(positions, linePos{oi, ni})
-			ni++
-		}
-		allLines = append(allLines, diffLine{' ', old[oi]})
-		positions = append(positions, linePos{oi, ni})
-		oi++
-		ni++
-	}
-	for oi < len(old) {
-		allLines = append(allLines, diffLine{'-', old[oi]})
-		positions = append(positions, linePos{oi, ni})
-		oi++
-	}
-	for ni < len(new) {
-		allLines = append(allLines, diffLine{'+', new[ni]})
-		positions = append(positions, linePos{oi, ni})
-		ni++
-	}
-
-	if len(allLines) == 0 {
-		return nil
-	}
-
-	hasChanges := false
-	for _, dl := range allLines {
-		if dl.prefix != ' ' {
-			hasChanges = true
-			break
-		}
-	}
-	if !hasChanges {
-		return nil
-	}
-
-	var hunks []string
-	inHunk := false
-	hunkStart := 0
-	lastChange := -contextLines - 1
-
-	for i, dl := range allLines {
-		if dl.prefix != ' ' {
-			if !inHunk {
-				hunkStart = i - contextLines
-				if hunkStart < 0 {
-					hunkStart = 0
-				}
-				inHunk = true
-			}
-			lastChange = i
-		} else if inHunk && i-lastChange > contextLines {
-			hunkEnd := lastChange + contextLines + 1
-			if hunkEnd > len(allLines) {
-				hunkEnd = len(allLines)
-			}
-			hunks = append(hunks, formatHunk(allLines[hunkStart:hunkEnd], positions[hunkStart].oldIdx, positions[hunkStart].newIdx))
-			inHunk = false
-		}
-	}
-	if inHunk {
-		hunkEnd := lastChange + contextLines + 1
-		if hunkEnd > len(allLines) {
-			hunkEnd = len(allLines)
-		}
-		hunks = append(hunks, formatHunk(allLines[hunkStart:hunkEnd], positions[hunkStart].oldIdx, positions[hunkStart].newIdx))
-	}
-
-	return hunks
-}
-
-func formatHunk(lines []diffLine, oldStart, newStart int) string {
-	var b strings.Builder
-	oldCount, newCount := 0, 0
-	for _, dl := range lines {
-		if dl.prefix != '+' {
-			oldCount++
-		}
-		if dl.prefix != '-' {
-			newCount++
-		}
-	}
-	fmt.Fprintf(&b, "@@ -%d,%d +%d,%d @@\n", oldStart+1, oldCount, newStart+1, newCount)
-	for _, dl := range lines {
-		fmt.Fprintf(&b, "%c%s\n", dl.prefix, dl.text)
-	}
-	return b.String()
+	return edit.UnifiedDiff(label, []byte(oldText), []byte(newText))
 }
 
 // --- Level 2: Process read results ---

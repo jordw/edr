@@ -1,0 +1,229 @@
+package dispatch
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"regexp"
+	"strings"
+
+	"github.com/jordw/edr/internal/edit"
+	"github.com/jordw/edr/internal/index"
+	"github.com/jordw/edr/internal/output"
+)
+
+func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+	replacement := flagString(flags, "replacement", "")
+	if replacement == "" {
+		return nil, fmt.Errorf("smart-edit requires 'replacement' in flags")
+	}
+
+	dryRun := flagBool(flags, "dry-run", false) || flagBool(flags, "dry_run", false)
+
+	// Determine targeting mode:
+	// 1. --start_line/--end_line: line range (requires file as first arg)
+	// 2. --match <text>: text match (requires file as first arg)
+	// 3. Default: symbol-based
+
+	startLine := flagInt(flags, "start_line", 0)
+	endLine := flagInt(flags, "end_line", 0)
+	matchText := flagString(flags, "match", "")
+
+	if startLine > 0 && endLine > 0 {
+		// Line-range mode
+		if len(args) < 1 {
+			return nil, fmt.Errorf("smart-edit with --start_line/--end_line requires a file argument")
+		}
+		file, err := db.ResolvePath(args[0])
+		if err != nil {
+			return nil, err
+		}
+		return smartEditSpan(ctx, db, file, startLine, endLine, replacement, "", dryRun)
+	}
+
+	if matchText != "" {
+		// Text-match mode
+		if len(args) < 1 {
+			return nil, fmt.Errorf("smart-edit with --match requires a file argument")
+		}
+		file, err := db.ResolvePath(args[0])
+		if err != nil {
+			return nil, err
+		}
+		return smartEditMatch(ctx, db, file, matchText, replacement, flags, dryRun)
+	}
+
+	// Symbol mode
+	if len(args) < 1 {
+		return nil, fmt.Errorf("smart-edit requires: [file] <symbol>, or <file> with --start_line/--end_line/--match")
+	}
+	sym, err := resolveSymbolArgs(ctx, db, root, args)
+	if err != nil {
+		return nil, err
+	}
+	return smartEditByteRange(ctx, db, sym.File, sym.StartByte, sym.EndByte, replacement, sym.Name, dryRun)
+}
+
+// smartEditByteRange applies an edit to a byte range and returns a smart-edit result.
+func smartEditByteRange(ctx context.Context, db *index.DB, file string, startByte, endByte uint32, replacement, label string, dryRun bool) (any, error) {
+	src, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+	oldBody := string(src[startByte:endByte])
+
+	diff, err := edit.DiffPreview(file, startByte, endByte, replacement)
+	if err != nil {
+		return nil, err
+	}
+
+	if dryRun {
+		result := map[string]any{
+			"file":     output.Rel(file),
+			"diff":     diff,
+			"old_size": len(oldBody) / 4,
+			"new_size": len(replacement) / 4,
+			"dry_run":  true,
+		}
+		if label != "" {
+			result["symbol"] = label
+		}
+		return result, nil
+	}
+
+	hash, _ := edit.FileHash(file)
+	err = edit.ReplaceSpan(file, startByte, endByte, replacement, hash)
+	if err != nil {
+		return nil, fmt.Errorf("edit failed: %w", err)
+	}
+
+	_ = index.IndexFile(ctx, db, file)
+	newHash, _ := edit.FileHash(file)
+
+	result := map[string]any{
+		"ok":       true,
+		"file":     output.Rel(file),
+		"diff":     diff,
+		"hash":     newHash,
+		"old_size": len(oldBody) / 4,
+		"new_size": len(replacement) / 4,
+	}
+	if label != "" {
+		result["symbol"] = label
+	}
+	return result, nil
+}
+
+// smartEditSpan applies an edit to a line range.
+func smartEditSpan(ctx context.Context, db *index.DB, file string, startLine, endLine int, replacement, label string, dryRun bool) (any, error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert lines to byte offsets
+	line := 1
+	var startByte, endByte uint32
+	foundStart := false
+	for i := 0; i <= len(data); i++ {
+		if line == startLine && !foundStart {
+			startByte = uint32(i)
+			foundStart = true
+		}
+		if line == endLine+1 || (line == endLine && i == len(data)) {
+			endByte = uint32(i)
+			break
+		}
+		if i < len(data) && data[i] == '\n' {
+			line++
+		}
+	}
+	if !foundStart {
+		return nil, fmt.Errorf("smart-edit: start line %d beyond file (%d lines)", startLine, line-1)
+	}
+	if endByte == 0 && endLine >= line {
+		endByte = uint32(len(data))
+	}
+
+	if label == "" {
+		label = fmt.Sprintf("lines %d-%d", startLine, endLine)
+	}
+	return smartEditByteRange(ctx, db, file, startByte, endByte, replacement, label, dryRun)
+}
+
+// smartEditMatch applies an edit by finding and replacing text.
+func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacement string, flags map[string]any, dryRun bool) (any, error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+
+	content := string(data)
+	useRegex := flagBool(flags, "regex", false)
+	replaceAll := flagBool(flags, "all", false)
+
+	// Find first match and validate
+	var startByte, endByte int
+	if useRegex {
+		re, err := regexp.Compile(matchText)
+		if err != nil {
+			return nil, fmt.Errorf("invalid regex: %w", err)
+		}
+		loc := re.FindStringIndex(content)
+		if loc == nil {
+			return nil, fmt.Errorf("smart-edit: pattern %q not found in %s", matchText, output.Rel(file))
+		}
+		if replaceAll {
+			resultText := re.ReplaceAllString(content, replacement)
+			count := len(re.FindAllStringIndex(content, -1))
+			return applyReplaceAll(ctx, db, file, content, resultText, matchText, count, dryRun)
+		}
+		startByte = loc[0]
+		endByte = loc[1]
+	} else {
+		idx := strings.Index(content, matchText)
+		if idx < 0 {
+			return nil, fmt.Errorf("smart-edit: text %q not found in %s", matchText, output.Rel(file))
+		}
+		if replaceAll {
+			count := strings.Count(content, matchText)
+			resultText := strings.ReplaceAll(content, matchText, replacement)
+			return applyReplaceAll(ctx, db, file, content, resultText, matchText, count, dryRun)
+		}
+		startByte = idx
+		endByte = idx + len(matchText)
+	}
+
+	return smartEditByteRange(ctx, db, file, uint32(startByte), uint32(endByte), replacement, "", dryRun)
+}
+
+// applyReplaceAll handles the shared tail of regex and literal replace-all edits.
+func applyReplaceAll(ctx context.Context, db *index.DB, file, oldContent, newContent, matchText string, count int, dryRun bool) (any, error) {
+	if dryRun {
+		diff, _ := edit.DiffPreviewContent(file, []byte(oldContent), []byte(newContent))
+		return map[string]any{
+			"file":    output.Rel(file),
+			"diff":    diff,
+			"count":   count,
+			"match":   matchText,
+			"dry_run": true,
+		}, nil
+	}
+
+	hash, _ := edit.FileHash(file)
+	info, _ := os.Stat(file)
+	if err := os.WriteFile(file, []byte(newContent), info.Mode()); err != nil {
+		return nil, err
+	}
+	_ = index.IndexFile(ctx, db, file)
+	newHash, _ := edit.FileHash(file)
+
+	return map[string]any{
+		"ok":       true,
+		"file":     output.Rel(file),
+		"hash":     newHash,
+		"old_hash": hash,
+		"count":    count,
+		"match":    matchText,
+	}, nil
+}
