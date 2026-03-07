@@ -8,7 +8,7 @@
 - `batch` mode for multiple JSONL requests over one process
 - `mcp` mode for long-lived Model Context Protocol integrations
 
-The tool is self-contained. It uses a local SQLite database under `.edr/` and does not depend on any external service. It respects `.gitignore` for file walking and supports concurrent access via WAL mode with busy timeouts.
+The tool is self-contained. It uses a local SQLite database under `.edr/` and does not depend on any external service. It respects `.gitignore` for file walking and supports concurrent access via WAL mode with a two-layer writer lock (in-process mutex + cross-process flock on `.edr/writer.lock`).
 
 ## Requirements
 
@@ -258,8 +258,9 @@ edr is designed to minimize context usage for LLM agents:
 
 ## Notes
 
-- The index lives in `.edr/` at the repository root and should not be committed.
+- The index lives in `.edr/` at the repository root and should not be committed. This directory contains `index.db` (SQLite) and `writer.lock` (cross-process flock).
 - `read` and `search --text` work on any text file, not just indexed source files.
+- Edit and write commands reindex the affected file immediately, so new/renamed symbols are queryable right away. If reindexing fails, the edit still succeeds and an `index_error` field is included in the response.
 - `batch` and `mcp` reuse one database connection and are the best fit for long-lived agent sessions.
 - `.gitignore` patterns are respected for file walking; falls back to a built-in ignore list when no `.gitignore` exists.
 - Symbol resolution is case-insensitive as a fallback — `opendb` resolves to `OpenDB`.

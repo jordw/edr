@@ -251,6 +251,7 @@ Legacy command names (`read-file`, `read-symbol`, `batch-read`, `write-file`, `a
 `rename-symbol`, `find-files`) still work as aliases.
 
 All output is structured JSON. All file paths can be relative to repo root.
-All edit commands return `hash` in the response for chaining.
+All edit commands return `hash` in the response for chaining. If post-edit reindexing
+fails, the edit still succeeds and an `index_error` field is included in the response.
 Query commands return `truncated` and `total_matches` when budget limits apply.
 `read` output includes line numbers prefixed to each line.
