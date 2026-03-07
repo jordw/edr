@@ -2,10 +2,16 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"strings"
 
 	"github.com/jordw/edr/internal/dispatch"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
+	"github.com/jordw/edr/internal/session"
 	"github.com/spf13/cobra"
 )
 
@@ -39,41 +45,82 @@ func init() {
 	rootCmd.AddCommand(verifyCmd)
 }
 
-// dispatchCmd is the common pattern: open DB, extract flags, dispatch, print.
-func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
-	db, err := openAndEnsureIndex(cmd)
-	if err != nil {
-		return err
+// dispatchWithSession runs a command through the session post-processing pipeline.
+func dispatchWithSession(db *index.DB, sess *session.Session, cmdName string, args []string, flags map[string]any) error {
+	if session.EditCommands[cmdName] || cmdName == "init" {
+		sess.InvalidateForEdit(cmdName, args)
 	}
-	defer db.Close()
 
-	flags := extractFlags(cmd)
 	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
 	if err != nil {
 		return err
 	}
-	output.Print(result)
+
+	data, _ := json.Marshal(result)
+	text := string(data)
+
+	// Apply session post-processing (slim edits, delta reads, body stripping)
+	text = sess.PostProcess(cmdName, args, flags, result, text)
+
+	// Working-set dedup for read commands
+	if session.ReadCommands[cmdName] {
+		key := sess.CacheKey(cmdName, args, flags)
+		if sess.Check(key, text) {
+			text = fmt.Sprintf(`{"cached":true,"message":"identical to previous response for %s %s"}`, cmdName, strings.Join(args, " "))
+		}
+	}
+
+	// Print the post-processed result
+	var out any
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		output.Print(result)
+	} else {
+		output.Print(out)
+	}
 	return nil
 }
 
-// dispatchCmdWithStdin is like dispatchCmd but reads stdin into a flag first.
-func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, stdinKey string) error {
+// openSessionAndDB opens the DB and a PPID-scoped file session.
+func openSessionAndDB(cmd *cobra.Command) (*index.DB, *session.Session, error) {
 	db, err := openAndEnsureIndex(cmd)
+	if err != nil {
+		return nil, nil, err
+	}
+	sess, err := session.NewFileSession(db.Root())
+	if err != nil {
+		// Fall back to in-memory session if file session fails
+		sess = session.New()
+	}
+	return db, sess, nil
+}
+
+// dispatchCmd is the common pattern: open DB, load session, dispatch, post-process, save session.
+func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
+	db, sess, err := openSessionAndDB(cmd)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
+	defer sess.Save()
+
+	flags := extractFlags(cmd)
+	return dispatchWithSession(db, sess, cmdName, args, flags)
+}
+
+// dispatchCmdWithStdin is like dispatchCmd but reads stdin into a flag first.
+func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, stdinKey string) error {
+	db, sess, err := openSessionAndDB(cmd)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	defer sess.Save()
 
 	flags := extractFlags(cmd)
 	if err := readStdinToFlags(flags, stdinKey); err != nil {
 		return err
 	}
-	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
-	if err != nil {
-		return err
-	}
-	output.Print(result)
-	return nil
+	return dispatchWithSession(db, sess, cmdName, args, flags)
 }
 
 // --- init (index) ---
@@ -82,20 +129,7 @@ var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Index the repository",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root := getRoot(cmd)
-		db, err := index.OpenDB(root)
-		if err != nil {
-			return err
-		}
-		defer db.Close()
-
-		flags := extractFlags(cmd)
-		result, err := dispatch.Dispatch(context.Background(), db, "init", args, flags)
-		if err != nil {
-			return err
-		}
-		output.Print(result)
-		return nil
+		return dispatchCmd(cmd, "init", args)
 	},
 }
 
@@ -188,9 +222,9 @@ func init() {
 // --- xrefs ---
 
 var xrefsCmd = &cobra.Command{
-	Use:   "xrefs <symbol>",
+	Use:   "xrefs [file] <symbol>",
 	Short: "Find cross-references to a symbol",
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.RangeArgs(1, 2),
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "xrefs", args) },
 }
 
@@ -313,6 +347,7 @@ var renameSymbolCmd = &cobra.Command{
 
 func init() {
 	renameSymbolCmd.Flags().Bool("dry-run", false, "preview what would change without applying")
+	renameSymbolCmd.Flags().String("scope", "", "glob pattern to limit rename scope (e.g. \"cmd/*\", \"internal/**\")")
 }
 
 // --- insert-after ---
@@ -340,12 +375,20 @@ var appendFileCmd = &cobra.Command{
 // --- smart-edit ---
 
 var smartEditCmd = &cobra.Command{
-	Use:   "smart-edit [file] <symbol>",
-	Short: "Read, diff-preview, and replace a symbol in one step (reads replacement from stdin)",
+	Use:   "smart-edit <file> [symbol]",
+	Short: "Unified edit: symbol, --lines, or --match targeting (replacement from stdin or --replacement)",
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return dispatchCmdWithStdin(cmd, "smart-edit", args, "replacement")
 	},
+}
+
+func init() {
+	smartEditCmd.Flags().Int("start_line", 0, "start line for line-range mode")
+	smartEditCmd.Flags().Int("end_line", 0, "end line for line-range mode")
+	smartEditCmd.Flags().String("match", "", "text to find and replace")
+	smartEditCmd.Flags().Bool("regex", false, "treat --match as regex")
+	smartEditCmd.Flags().Bool("all", false, "replace all occurrences (with --match)")
 }
 
 // --- diff-preview ---
@@ -402,21 +445,60 @@ func init() {
 
 var editPlanCmd = &cobra.Command{
 	Use:   "edit-plan",
-	Short: "Apply multiple edits atomically (edits via flags.edits JSON array)",
-	Long:  "Each edit can be symbol-based, line-based, or text-based. Supports --dry-run.",
-	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "edit-plan", args) },
+	Short: "Apply multiple edits atomically (edits via --edits JSON or stdin)",
+	Long:  "Each edit can be symbol-based, line-based, or text-based. Supports --dry-run.\nPass edits as --edits '<JSON array>' or pipe JSON via stdin.",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		db, sess, err := openSessionAndDB(cmd)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		defer sess.Save()
+
+		flags := extractFlags(cmd)
+		editsStr, _ := cmd.Flags().GetString("edits")
+		if editsStr != "" {
+			var edits []any
+			if err := json.Unmarshal([]byte(editsStr), &edits); err != nil {
+				return fmt.Errorf("edit-plan: invalid --edits JSON: %w", err)
+			}
+			flags["edits"] = edits
+		} else if flags["edits"] == nil {
+			// Try reading from stdin (only if piped)
+			stat, _ := os.Stdin.Stat()
+			if (stat.Mode() & os.ModeCharDevice) == 0 {
+				data, err := io.ReadAll(os.Stdin)
+				if err != nil {
+					return fmt.Errorf("edit-plan: reading stdin: %w", err)
+				}
+				if len(data) > 0 {
+					var edits []any
+					if err := json.Unmarshal(data, &edits); err != nil {
+						return fmt.Errorf("edit-plan: invalid stdin JSON: %w", err)
+					}
+					flags["edits"] = edits
+				}
+			}
+			if flags["edits"] == nil {
+				return fmt.Errorf("edit-plan: provide edits via --edits flag or pipe JSON to stdin")
+			}
+		}
+
+		return dispatchWithSession(db, sess, "edit-plan", args, flags)
+	},
 }
 
 func init() {
 	editPlanCmd.Flags().Bool("dry-run", false, "preview what would change without applying")
+	editPlanCmd.Flags().String("edits", "", "JSON array of edits")
 }
 
 // --- impact ---
 
 var impactCmd = &cobra.Command{
-	Use:   "impact <symbol>",
+	Use:   "impact [file] <symbol>",
 	Short: "Find all symbols transitively impacted by changes to a symbol",
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.RangeArgs(1, 2),
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "impact", args) },
 }
 

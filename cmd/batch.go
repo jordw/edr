@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/jordw/edr/internal/dispatch"
+	"github.com/jordw/edr/internal/session"
 	"github.com/spf13/cobra"
 )
 
@@ -64,6 +66,7 @@ For edit commands, pass the replacement code via the "replacement" flag
 		ctx := context.Background()
 		enc := json.NewEncoder(os.Stdout)
 		scanner := bufio.NewScanner(os.Stdin)
+		sess := session.New()
 
 		// Increase scanner buffer for large input lines (1 MB).
 		scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
@@ -85,23 +88,42 @@ For edit commands, pass the replacement code via the "replacement" flag
 				continue
 			}
 
-			result, err := dispatch.Dispatch(ctx, db, req.Cmd, req.Args, req.Flags)
-			if err != nil {
-				resp := BatchResponse{
-					ID:    req.ID,
-					OK:    false,
-					Error: err.Error(),
-				}
-				enc.Encode(resp)
+			if req.Flags == nil {
+				req.Flags = map[string]any{}
+			}
+
+			// Session-layer command
+			if req.Cmd == "get-diff" {
+				result := sess.GetDiff(req.Args)
+				enc.Encode(BatchResponse{ID: req.ID, OK: true, Result: result})
 				continue
 			}
 
-			resp := BatchResponse{
-				ID:     req.ID,
-				OK:     true,
-				Result: result,
+			if session.EditCommands[req.Cmd] || req.Cmd == "init" {
+				sess.InvalidateForEdit(req.Cmd, req.Args)
 			}
-			enc.Encode(resp)
+
+			result, err := dispatch.Dispatch(ctx, db, req.Cmd, req.Args, req.Flags)
+			if err != nil {
+				enc.Encode(BatchResponse{ID: req.ID, OK: false, Error: err.Error()})
+				continue
+			}
+
+			// Apply session post-processing
+			data, _ := json.Marshal(result)
+			text := string(data)
+			text = sess.PostProcess(req.Cmd, req.Args, req.Flags, result, text)
+
+			if session.ReadCommands[req.Cmd] {
+				key := sess.CacheKey(req.Cmd, req.Args, req.Flags)
+				if sess.Check(key, text) {
+					text = fmt.Sprintf(`{"cached":true,"message":"identical to previous response for %s %s"}`, req.Cmd, strings.Join(req.Args, " "))
+				}
+			}
+
+			var out any
+			json.Unmarshal([]byte(text), &out)
+			enc.Encode(BatchResponse{ID: req.ID, OK: true, Result: out})
 		}
 
 		if err := scanner.Err(); err != nil {
