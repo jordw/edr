@@ -33,6 +33,10 @@ func init() {
 	rootCmd.AddCommand(batchReadCmd)
 	rootCmd.AddCommand(diffPreviewCmd)
 	rootCmd.AddCommand(diffPreviewSpanCmd)
+	rootCmd.AddCommand(editPlanCmd)
+	rootCmd.AddCommand(impactCmd)
+	rootCmd.AddCommand(callChainCmd)
+	rootCmd.AddCommand(verifyCmd)
 }
 
 // dispatchCmd is the common pattern: open DB, extract flags, dispatch, print.
@@ -105,6 +109,10 @@ var repoMapCmd = &cobra.Command{
 
 func init() {
 	repoMapCmd.Flags().Int("budget", 0, "token budget (0 = unlimited)")
+	repoMapCmd.Flags().String("dir", "", "only show files under this directory")
+	repoMapCmd.Flags().String("glob", "", "only show files matching this glob pattern")
+	repoMapCmd.Flags().String("type", "", "only show symbols of this type (function, type, variable)")
+	repoMapCmd.Flags().String("grep", "", "only show symbols whose name contains this string")
 }
 
 // --- search (symbol search) ---
@@ -174,6 +182,7 @@ func init() {
 	expandCmd.Flags().Bool("callers", false, "include callers")
 	expandCmd.Flags().Bool("deps", false, "include dependencies")
 	expandCmd.Flags().Int("budget", 0, "token budget for body (0 = unlimited)")
+	expandCmd.Flags().Bool("signatures", false, "include extracted signatures on all symbols")
 }
 
 // --- xrefs ---
@@ -229,6 +238,7 @@ var gatherCmd = &cobra.Command{
 func init() {
 	gatherCmd.Flags().Int("budget", 1500, "token budget for context")
 	gatherCmd.Flags().Bool("body", false, "include source bodies for target, callers, and tests")
+	gatherCmd.Flags().Bool("signatures", false, "include extracted signatures on all symbols")
 }
 
 // --- replace-lines ---
@@ -386,4 +396,56 @@ var batchReadCmd = &cobra.Command{
 func init() {
 	batchReadCmd.Flags().Int("budget", 0, "token budget (0 = unlimited)")
 	batchReadCmd.Flags().Bool("symbols", false, "include symbol lists")
+}
+
+// --- edit-plan ---
+
+var editPlanCmd = &cobra.Command{
+	Use:   "edit-plan",
+	Short: "Apply multiple edits atomically (edits via flags.edits JSON array)",
+	Long:  "Each edit can be symbol-based, line-based, or text-based. Supports --dry-run.",
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "edit-plan", args) },
+}
+
+func init() {
+	editPlanCmd.Flags().Bool("dry-run", false, "preview what would change without applying")
+}
+
+// --- impact ---
+
+var impactCmd = &cobra.Command{
+	Use:   "impact <symbol>",
+	Short: "Find all symbols transitively impacted by changes to a symbol",
+	Args:  cobra.ExactArgs(1),
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "impact", args) },
+}
+
+func init() {
+	impactCmd.Flags().Int("depth", 3, "max BFS depth for transitive callers")
+}
+
+// --- call-chain ---
+
+var callChainCmd = &cobra.Command{
+	Use:   "call-chain <from-symbol> <to-symbol>",
+	Short: "Find a call chain between two symbols",
+	Args:  cobra.ExactArgs(2),
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "call-chain", args) },
+}
+
+func init() {
+	callChainCmd.Flags().Int("depth", 5, "max search depth")
+}
+
+// --- verify ---
+
+var verifyCmd = &cobra.Command{
+	Use:   "verify",
+	Short: "Run a verification command (build/typecheck) and return structured result",
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "verify", args) },
+}
+
+func init() {
+	verifyCmd.Flags().String("command", "", "shell command to run (auto-detects if empty)")
+	verifyCmd.Flags().Int("timeout", 30, "timeout in seconds")
 }

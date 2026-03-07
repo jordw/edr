@@ -264,17 +264,123 @@ func fileHash(data []byte) string {
 	return hex.EncodeToString(h[:4]) // first 8 hex chars
 }
 
+// repoMapConfig holds filters for RepoMap.
+type repoMapConfig struct {
+	dir        string // only include files under this directory
+	glob       string // only include files matching this glob
+	symbolType string // filter to this symbol type
+	grep       string // only include symbols whose name contains this
+}
+
+// RepoMapOption configures RepoMap behavior.
+type RepoMapOption func(*repoMapConfig)
+
+// WithDir filters repo-map to files under the given directory.
+func WithDir(dir string) RepoMapOption {
+	return func(c *repoMapConfig) { c.dir = dir }
+}
+
+// WithGlob filters repo-map to files matching the given glob pattern.
+func WithGlob(glob string) RepoMapOption {
+	return func(c *repoMapConfig) { c.glob = glob }
+}
+
+// WithSymbolType filters repo-map to symbols of the given type.
+func WithSymbolType(t string) RepoMapOption {
+	return func(c *repoMapConfig) { c.symbolType = t }
+}
+
+// WithGrep filters repo-map to symbols whose name contains the given string.
+func WithGrep(grep string) RepoMapOption {
+	return func(c *repoMapConfig) { c.grep = grep }
+}
+
+// matchDoublestarPath matches a relative path against a ** glob pattern.
+func matchDoublestarPath(path, pattern string) bool {
+	parts := strings.SplitN(pattern, "**", 2)
+	if len(parts) == 1 {
+		ok, _ := filepath.Match(pattern, path)
+		return ok
+	}
+	prefix := strings.TrimSuffix(parts[0], "/")
+	suffix := strings.TrimPrefix(parts[1], "/")
+	if prefix != "" && !strings.HasPrefix(path, prefix+"/") && path != prefix {
+		return false
+	}
+	if suffix == "" {
+		return true
+	}
+	if ok, _ := filepath.Match(suffix, filepath.Base(path)); ok {
+		return true
+	}
+	for i := 0; i < len(path); i++ {
+		if path[i] == '/' {
+			if ok, _ := filepath.Match(suffix, path[i+1:]); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // RepoMap generates a concise map of the repository structure.
-func RepoMap(ctx context.Context, db *DB) (string, error) {
+func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, error) {
+	cfg := repoMapConfig{}
+	for _, o := range opts {
+		o(&cfg)
+	}
+
 	symbols, err := db.AllSymbols(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	// Group by file
+	root := db.Root()
+
+	// Group by file, applying filters
 	byFile := make(map[string][]SymbolInfo)
 	var fileOrder []string
 	for _, s := range symbols {
+		if !IsWithinRoot(root, s.File) {
+			continue
+		}
+		rel, _ := filepath.Rel(root, s.File)
+		if rel == "" {
+			rel = s.File
+		}
+
+		// Dir filter
+		if cfg.dir != "" {
+			if !strings.HasPrefix(rel, cfg.dir+"/") && rel != cfg.dir {
+				continue
+			}
+		}
+
+		// Glob filter
+		if cfg.glob != "" {
+			matched := false
+			if strings.Contains(cfg.glob, "**") {
+				matched = matchDoublestarPath(rel, cfg.glob)
+			} else if strings.Contains(cfg.glob, "/") {
+				matched, _ = filepath.Match(cfg.glob, rel)
+			} else {
+				matched, _ = filepath.Match(cfg.glob, filepath.Base(rel))
+			}
+			if !matched {
+				continue
+			}
+		}
+
+		// Symbol type filter
+		if cfg.symbolType != "" && s.Type != cfg.symbolType {
+			continue
+		}
+
+		// Grep filter (case-insensitive name match)
+		if cfg.grep != "" && !strings.Contains(strings.ToLower(s.Name), strings.ToLower(cfg.grep)) {
+			continue
+		}
+
 		if _, seen := byFile[s.File]; !seen {
 			fileOrder = append(fileOrder, s.File)
 		}
@@ -282,11 +388,7 @@ func RepoMap(ctx context.Context, db *DB) (string, error) {
 	}
 
 	var b strings.Builder
-	root := db.Root()
 	for _, file := range fileOrder {
-		if !IsWithinRoot(root, file) {
-			continue
-		}
 		rel, _ := filepath.Rel(root, file)
 		if rel == "" {
 			rel = file

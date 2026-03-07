@@ -32,6 +32,7 @@ type Symbol struct {
 	Qualifier string `json:"qualifier,omitempty"`
 	Size      int    `json:"size"`
 	Hash      string `json:"hash,omitempty"`
+	Signature string `json:"signature,omitempty"`
 }
 
 // Match pairs a Symbol with a relevance score.

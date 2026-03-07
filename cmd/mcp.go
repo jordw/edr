@@ -3,9 +3,12 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/jordw/edr/internal/dispatch"
 	"github.com/jordw/edr/internal/index"
@@ -121,6 +124,91 @@ type mcpContent struct {
 	Text string `json:"text"`
 }
 
+// --- working-set tracking ---
+
+// mcpWorkingSet tracks content hashes of previously sent responses to avoid
+// re-sending identical content in the same MCP session. Read-like commands
+// are cached by a canonical key; edit commands invalidate affected files.
+type mcpWorkingSet struct {
+	responses map[string]string // canonical key → SHA-256 prefix of last response
+}
+
+func newMCPWorkingSet() *mcpWorkingSet {
+	return &mcpWorkingSet{responses: make(map[string]string)}
+}
+
+// readCommands are commands whose responses can be cached.
+var readCommands = map[string]bool{
+	"read-file": true, "read-symbol": true, "symbols": true,
+	"expand": true, "gather": true, "batch-read": true,
+	"repo-map": true, "search": true, "search-text": true,
+	"xrefs": true, "find-files": true,
+}
+
+// editCommands are commands that modify files and invalidate cache.
+var editCommands = map[string]bool{
+	"smart-edit": true, "replace-text": true, "replace-symbol": true,
+	"replace-lines": true, "replace-span": true, "write-file": true,
+	"append-file": true, "insert-after": true, "rename-symbol": true,
+	"edit-plan": true,
+}
+
+func (ws *mcpWorkingSet) contentHash(data string) string {
+	h := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(h[:16])
+}
+
+// cacheKey builds a canonical key from a command invocation.
+func (ws *mcpWorkingSet) cacheKey(cmd string, args []string, flags map[string]any) string {
+	// Include cmd + args + sorted budget/body flags that affect output
+	key := cmd + "\x00" + strings.Join(args, "\x00")
+	// Include flags that affect output content
+	for _, f := range []string{"budget", "body", "callers", "deps", "signatures", "context", "regex", "include", "exclude", "dir", "glob", "type", "grep", "symbols"} {
+		if v, ok := flags[f]; ok {
+			key += fmt.Sprintf("\x00%s=%v", f, v)
+		}
+	}
+	return key
+}
+
+// check returns true if this response was already sent identically.
+// If not cached or changed, records the new hash and returns false.
+func (ws *mcpWorkingSet) check(key, responseText string) bool {
+	h := ws.contentHash(responseText)
+	if prev, ok := ws.responses[key]; ok && prev == h {
+		return true // identical to last time
+	}
+	ws.responses[key] = h
+	return false
+}
+
+// invalidateFile removes all cached entries that reference a file path.
+func (ws *mcpWorkingSet) invalidateFile(file string) {
+	for k := range ws.responses {
+		// Cache keys start with "cmd\x00arg1\x00..." — check if file appears as arg
+		if strings.Contains(k, file) {
+			delete(ws.responses, k)
+		}
+	}
+}
+
+// invalidateForEdit handles cache invalidation for edit commands.
+func (ws *mcpWorkingSet) invalidateForEdit(cmd string, args []string) {
+	if cmd == "rename-symbol" {
+		// Rename affects many files — clear everything
+		ws.responses = make(map[string]string)
+		return
+	}
+	// Most edit commands have the file as first arg
+	if len(args) > 0 {
+		ws.invalidateFile(args[0])
+	}
+	// init re-indexes everything
+	if cmd == "init" {
+		ws.responses = make(map[string]string)
+	}
+}
+
 // --- server loop ---
 
 func serveMCP(db *index.DB) error {
@@ -129,6 +217,7 @@ func serveMCP(db *index.DB) error {
 	enc := json.NewEncoder(os.Stdout)
 
 	ctx := context.Background()
+	ws := newMCPWorkingSet()
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -169,7 +258,7 @@ func serveMCP(db *index.DB) error {
 				Result: map[string]any{
 					"tools": []mcpTool{{
 						Name:        "edr",
-						Description: "Your default tool for ALL file operations. Reading: read-file, read-symbol, search (--body), search-text, symbols, repo-map, expand, xrefs, gather. Editing: smart-edit (read+diff+replace in one call), replace-text, replace-symbol, replace-lines, replace-span. Creating: write-file, append-file, insert-after. Refactoring: rename-symbol (--dry-run), diff-preview. All edits return new hash for chaining. See CLAUDE.md for full docs.",
+						Description: "Your default tool for ALL file operations. Use cmd=multi with flags.commands=[{cmd,args,flags},...] to batch multiple commands in ONE call. Reading: read-file, read-symbol, search (--body), search-text, symbols, repo-map (--dir, --grep, --type, --glob), expand (--signatures), xrefs, gather (--signatures). Editing: smart-edit, replace-text, replace-symbol, replace-lines, replace-span, edit-plan (atomic multi-edit via flags.edits array). Creating: write-file, append-file, insert-after. Refactoring: rename-symbol (--dry-run), diff-preview. Analysis: impact (transitive callers), call-chain (path between symbols), verify (run build/typecheck). All edits return hash. See CLAUDE.md.",
 						InputSchema: mcpSchema{
 							Type: "object",
 							Properties: map[string]mcpProp{
@@ -226,14 +315,49 @@ func serveMCP(db *index.DB) error {
 				index.IndexRepo(ctx, db)
 			}
 
-			result, err := dispatch.Dispatch(ctx, db, args.Cmd, args.Args, args.Flags)
-
 			var text string
-			if err != nil {
-				text = fmt.Sprintf(`{"error": %q}`, err.Error())
+			if args.Cmd == "multi" {
+				// Multi-command batch: extract commands from flags
+				var cmds []dispatch.MultiCmd
+				if rawCmds, ok := args.Flags["commands"]; ok {
+					// Re-marshal and unmarshal to get proper typing
+					raw, _ := json.Marshal(rawCmds)
+					json.Unmarshal(raw, &cmds)
+				}
+				if len(cmds) == 0 {
+					text = `{"error": "multi requires flags.commands array"}`
+				} else {
+					results := dispatch.DispatchMulti(ctx, db, cmds)
+					// Invalidate for any edit commands in the batch
+					for _, c := range cmds {
+						if editCommands[c.Cmd] {
+							ws.invalidateForEdit(c.Cmd, c.Args)
+						}
+					}
+					data, _ := json.Marshal(results)
+					text = string(data)
+				}
 			} else {
-				data, _ := json.Marshal(result)
-				text = string(data)
+				// Invalidate cache for edit commands
+				if editCommands[args.Cmd] || args.Cmd == "init" {
+					ws.invalidateForEdit(args.Cmd, args.Args)
+				}
+
+				result, err := dispatch.Dispatch(ctx, db, args.Cmd, args.Args, args.Flags)
+				if err != nil {
+					text = fmt.Sprintf(`{"error": %q}`, err.Error())
+				} else {
+					data, _ := json.Marshal(result)
+					text = string(data)
+
+					// Working-set dedup for read commands
+					if readCommands[args.Cmd] {
+						key := ws.cacheKey(args.Cmd, args.Args, args.Flags)
+						if ws.check(key, text) {
+							text = fmt.Sprintf(`{"cached":true,"message":"identical to previous response for %s %s"}`, args.Cmd, strings.Join(args.Args, " "))
+						}
+					}
+				}
 			}
 
 			enc.Encode(jsonRPCResponse{

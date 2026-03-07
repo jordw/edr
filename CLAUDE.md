@@ -151,6 +151,35 @@ edr gather parseConfig --budget 1500    # search-based
 edr gather parseConfig --body --budget 1500  # include source bodies inline
 ```
 
+## Analysis
+
+```bash
+# Find all symbols transitively impacted by changes to a function
+edr impact src/config.go parseConfig --depth 3
+
+# Find a call path between two symbols
+edr call-chain main parseConfig
+
+# Run project verification (auto-detects go/npm/cargo)
+edr verify
+edr verify --command "go test ./..." --timeout 60
+```
+
+## Atomic Multi-File Edits
+
+```bash
+# edit-plan: apply multiple edits atomically
+# Each edit can be symbol-based, line-based, or text-based
+edr edit-plan --dry-run   # preview with flags.edits JSON array
+
+# Via MCP:
+# {cmd: "edit-plan", flags: {edits: [
+#   {file: "src/config.go", symbol: "parseConfig", replacement: "..."},
+#   {file: "src/main.go", old_text: "oldFunc()", new_text: "newFunc()"},
+#   {file: "src/util.go", start_line: 10, end_line: 20, replacement: "..."}
+# ]}}
+```
+
 ## MCP Server Mode
 
 When running as an MCP server (`./edr mcp`), edr exposes a single `edr` tool.
@@ -170,6 +199,10 @@ strings — no shell escaping needed.
 7. **Use `gather --body`** at the start of a task to get source bodies inline.
 8. **Use `rename-symbol --dry-run`** to preview cross-file renames before applying.
 9. **Check `truncated`/`total_matches`** in search/find results — budget trimming reports what was cut.
+10. **Use `edit-plan`** for multi-file atomic edits — one call, all-or-nothing.
+11. **Use `impact`** before refactoring to understand blast radius.
+12. **Use `verify`** after edits to confirm the build still passes.
+13. **Use `multi`** in MCP to batch independent commands in one call.
 
 ## All Commands
 
@@ -182,24 +215,29 @@ strings — no shell escaping needed.
 | `symbols <file>` | List symbols in a file |
 | `read-symbol [file] <sym>` | Read one symbol's source (`--budget`) |
 | `read-file <file> [start] [end]` | Read any file with optional line range (`--budget`) |
-| `expand [file] <sym>` | Progressive disclosure: `--body`, `--callers`, `--deps`, `--budget` (import-aware) |
+| `expand [file] <sym>` | Progressive disclosure: `--body`, `--callers`, `--deps`, `--budget`, `--signatures` |
 | `xrefs <symbol>` | Find all references (import-aware, filters false positives) |
-| `gather [file] <sym>` | Context bundle: target + callers + tests (`--budget`, `--body`) |
+| `gather [file] <sym>` | Context bundle: target + callers + tests (`--budget`, `--body`, `--signatures`) |
+| `impact [file] <sym>` | Find all symbols transitively impacted by changes (`--depth`) |
+| `call-chain <from> <to>` | Find call path between two symbols (`--depth`) |
 | `smart-edit [file] <sym>` | Read + diff + replace in one call |
 | `replace-text <file> <old> <new>` | Find-and-replace in any file (`--all`, `--regex`, `--expect-hash`) |
 | `replace-symbol [file] <sym>` | Replace symbol body (`--expect-hash`) |
 | `replace-lines <file> <start> <end>` | Replace line range (`--expect-hash`) |
 | `replace-span <file> <start> <end>` | Replace byte range (`--expect-hash`) |
+| `edit-plan` | Atomic multi-file edits via `flags.edits` array (`--dry-run`) |
 | `diff-preview [file] <sym>` | Preview edit as unified diff |
 | `diff-preview-span <file> <start> <end>` | Preview span edit |
 | `rename-symbol <old> <new>` | Cross-file rename, import-aware (`--dry-run`) |
+| `verify` | Run build/typecheck, return structured pass/fail (`--command`, `--timeout`) |
 | `write-file <file>` | Create/overwrite file (`--mkdir`) |
 | `append-file <file>` | Append to end of file |
 | `insert-after [file] <sym>` | Insert code after a symbol |
 | `find-files <pattern>` | Find files by glob (`--dir`, `--budget`, supports `**`) |
 | `batch-read <file...>` | Read multiple files/symbols in one call (`--budget`, `--symbols`) |
+| `multi` | Batch multiple commands in one MCP call via `flags.commands` |
 | `batch` | JSONL protocol for multi-command sessions |
-| `mcp` | MCP server mode (single tool, persistent DB) |
+| `mcp` | MCP server mode (single tool, persistent DB, working-set dedup) |
 
 All output is structured JSON. All file paths can be relative to repo root.
 All edit commands return `hash` in the response for chaining.

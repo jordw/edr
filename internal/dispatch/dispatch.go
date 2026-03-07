@@ -2,10 +2,13 @@ package dispatch
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/jordw/edr/internal/edit"
 	"github.com/jordw/edr/internal/gather"
@@ -86,9 +89,52 @@ func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flag
 		return runFindFiles(ctx, db, root, args, flags)
 	case "batch-read":
 		return runBatchRead(ctx, db, root, args, flags)
+	case "edit-plan":
+		return runEditPlan(ctx, db, root, args, flags)
+	case "impact":
+		return runImpact(ctx, db, root, args, flags)
+	case "call-chain":
+		return runCallChain(ctx, db, root, args, flags)
+	case "verify":
+		return runVerify(ctx, db, root, args, flags)
 	default:
 		return nil, fmt.Errorf("unknown command: %s", cmd)
 	}
+}
+
+// MultiCmd represents a single command in a multi-command batch.
+type MultiCmd struct {
+	Cmd   string         `json:"cmd"`
+	Args  []string       `json:"args"`
+	Flags map[string]any `json:"flags"`
+}
+
+// MultiResult holds the result of a single command in a multi-command batch.
+type MultiResult struct {
+	Cmd    string `json:"cmd"`
+	OK     bool   `json:"ok"`
+	Result any    `json:"result,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+// DispatchMulti runs multiple commands sequentially and returns all results.
+func DispatchMulti(ctx context.Context, db *index.DB, commands []MultiCmd) []MultiResult {
+	results := make([]MultiResult, len(commands))
+	for i, c := range commands {
+		if c.Args == nil {
+			c.Args = []string{}
+		}
+		if c.Flags == nil {
+			c.Flags = map[string]any{}
+		}
+		result, err := Dispatch(ctx, db, c.Cmd, c.Args, c.Flags)
+		if err != nil {
+			results[i] = MultiResult{Cmd: c.Cmd, OK: false, Error: err.Error()}
+		} else {
+			results[i] = MultiResult{Cmd: c.Cmd, OK: true, Result: result}
+		}
+	}
+	return results
 }
 
 // --- individual command handlers ---
@@ -109,7 +155,21 @@ func runInit(ctx context.Context, db *index.DB) (any, error) {
 }
 
 func runRepoMap(ctx context.Context, db *index.DB, flags map[string]any) (any, error) {
-	repoMap, err := index.RepoMap(ctx, db)
+	var opts []index.RepoMapOption
+	if dir := flagString(flags, "dir", ""); dir != "" {
+		opts = append(opts, index.WithDir(dir))
+	}
+	if glob := flagString(flags, "glob", ""); glob != "" {
+		opts = append(opts, index.WithGlob(glob))
+	}
+	if symType := flagString(flags, "type", ""); symType != "" {
+		opts = append(opts, index.WithSymbolType(symType))
+	}
+	if grep := flagString(flags, "grep", ""); grep != "" {
+		opts = append(opts, index.WithGrep(grep))
+	}
+
+	repoMap, err := index.RepoMap(ctx, db, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -246,6 +306,7 @@ func runExpand(ctx context.Context, db *index.DB, root string, args []string, fl
 	showBody := flagBool(flags, "body", false)
 	showCallers := flagBool(flags, "callers", false)
 	showDeps := flagBool(flags, "deps", false)
+	showSigs := flagBool(flags, "signatures", false)
 	budget := flagInt(flags, "budget", 0)
 
 	sym, err := resolveSymbolArgs(ctx, db, root, args)
@@ -263,6 +324,10 @@ func runExpand(ctx context.Context, db *index.DB, root string, args []string, fl
 			Size:  int(sym.EndByte-sym.StartByte) / 4,
 			Hash:  hash,
 		},
+	}
+
+	if showSigs {
+		result.Symbol.Signature = index.ExtractSignature(*sym)
 	}
 
 	if showBody {
@@ -303,13 +368,17 @@ func runExpand(ctx context.Context, db *index.DB, root string, args []string, fl
 							key := s.File + ":" + s.Name
 							if !seen[key] {
 								seen[key] = true
-								result.Callers = append(result.Callers, output.Symbol{
+								csym := output.Symbol{
 									Type:  s.Type,
 									Name:  s.Name,
 									File:  output.Rel(s.File),
 									Lines: [2]int{int(s.StartLine), int(s.EndLine)},
 									Size:  int(s.EndByte-s.StartByte) / 4,
-								})
+								}
+								if showSigs {
+									csym.Signature = index.ExtractSignature(s)
+								}
+								result.Callers = append(result.Callers, csym)
 							}
 						}
 					}
@@ -317,13 +386,17 @@ func runExpand(ctx context.Context, db *index.DB, root string, args []string, fl
 			}
 		} else {
 			for _, c := range callers {
-				result.Callers = append(result.Callers, output.Symbol{
+				csym := output.Symbol{
 					Type:  c.Type,
 					Name:  c.Name,
 					File:  output.Rel(c.File),
 					Lines: [2]int{int(c.StartLine), int(c.EndLine)},
 					Size:  int(c.EndByte-c.StartByte) / 4,
-				})
+				}
+				if showSigs {
+					csym.Signature = index.ExtractSignature(c)
+				}
+				result.Callers = append(result.Callers, csym)
 			}
 		}
 	}
@@ -332,13 +405,17 @@ func runExpand(ctx context.Context, db *index.DB, root string, args []string, fl
 		deps, err := index.FindDeps(ctx, db, sym)
 		if err == nil {
 			for _, d := range deps {
-				result.Deps = append(result.Deps, output.Symbol{
+				dsym := output.Symbol{
 					Type:  d.Type,
 					Name:  d.Name,
 					File:  output.Rel(d.File),
 					Lines: [2]int{int(d.StartLine), int(d.EndLine)},
 					Size:  int(d.EndByte-d.StartByte) / 4,
-				})
+				}
+				if showSigs {
+					dsym.Signature = index.ExtractSignature(d)
+				}
+				result.Deps = append(result.Deps, dsym)
 			}
 		}
 	}
@@ -374,15 +451,16 @@ func runGather(ctx context.Context, db *index.DB, root string, args []string, fl
 	}
 	budget := flagInt(flags, "budget", 1500)
 	includeBody := flagBool(flags, "body", false)
+	includeSigs := flagBool(flags, "signatures", false)
 
 	// Try exact symbol resolution first
 	sym, resolveErr := resolveSymbolArgs(ctx, db, root, args)
 	if resolveErr == nil {
-		return gather.Gather(ctx, db, sym.File, sym.Name, budget, includeBody)
+		return gather.Gather(ctx, db, sym.File, sym.Name, budget, includeBody, includeSigs)
 	}
 	// Fall back to search-based gather for single arg
 	if len(args) == 1 {
-		return gather.GatherBySearch(ctx, db, args[0], budget, includeBody)
+		return gather.GatherBySearch(ctx, db, args[0], budget, includeBody, includeSigs)
 	}
 	return nil, resolveErr
 }
@@ -1070,6 +1148,423 @@ func runBatchRead(ctx context.Context, db *index.DB, root string, args []string,
 	}
 
 	return results, nil
+}
+
+// editPlanEntry describes a single edit within an edit-plan.
+type editPlanEntry struct {
+	File        string `json:"file"`
+	Symbol      string `json:"symbol,omitempty"`      // symbol-based edit
+	StartLine   int    `json:"start_line,omitempty"`  // line-based edit
+	EndLine     int    `json:"end_line,omitempty"`    // line-based edit
+	OldText     string `json:"old_text,omitempty"`    // text-based edit
+	NewText     string `json:"new_text,omitempty"`    // text-based edit (used with old_text)
+	Replacement string `json:"replacement,omitempty"` // replacement for symbol/line edits
+	ExpectHash  string `json:"expect_hash,omitempty"`
+	All         bool   `json:"all,omitempty"` // replace all occurrences (text-based)
+}
+
+func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+	// Edits come from flags.edits as a JSON array
+	rawEdits, ok := flags["edits"]
+	if !ok {
+		return nil, fmt.Errorf("edit-plan requires 'edits' array in flags")
+	}
+
+	// Re-marshal to get proper typing from the any interface
+	var edits []editPlanEntry
+	switch v := rawEdits.(type) {
+	case []any:
+		// JSON came through as []any — need to re-marshal
+		rawJSON, _ := json.Marshal(v)
+		if err := json.Unmarshal(rawJSON, &edits); err != nil {
+			return nil, fmt.Errorf("edit-plan: invalid edits array: %w", err)
+		}
+	default:
+		rawJSON, _ := json.Marshal(v)
+		if err := json.Unmarshal(rawJSON, &edits); err != nil {
+			return nil, fmt.Errorf("edit-plan: invalid edits: %w", err)
+		}
+	}
+
+	if len(edits) == 0 {
+		return nil, fmt.Errorf("edit-plan: edits array is empty")
+	}
+
+	dryRun := flagBool(flags, "dry-run", false)
+
+	// Resolve each edit to byte-level spans
+	type resolvedEdit struct {
+		File        string
+		StartByte   uint32
+		EndByte     uint32
+		Replacement string
+		ExpectHash  string
+		Description string
+	}
+
+	var resolved []resolvedEdit
+
+	for i, e := range edits {
+		if e.File == "" {
+			return nil, fmt.Errorf("edit-plan: edit %d missing 'file'", i)
+		}
+		file, err := db.ResolvePath(e.File)
+		if err != nil {
+			return nil, fmt.Errorf("edit-plan: edit %d: %w", i, err)
+		}
+
+		switch {
+		case e.Symbol != "":
+			// Symbol-based edit
+			sym, err := db.GetSymbol(ctx, file, e.Symbol)
+			if err != nil {
+				return nil, fmt.Errorf("edit-plan: edit %d: symbol %q: %w", i, e.Symbol, err)
+			}
+			resolved = append(resolved, resolvedEdit{
+				File: file, StartByte: sym.StartByte, EndByte: sym.EndByte,
+				Replacement: e.Replacement, ExpectHash: e.ExpectHash,
+				Description: fmt.Sprintf("replace symbol %s in %s", e.Symbol, output.Rel(file)),
+			})
+
+		case e.OldText != "":
+			// Text-based edit — resolve to byte spans
+			data, err := os.ReadFile(file)
+			if err != nil {
+				return nil, fmt.Errorf("edit-plan: edit %d: %w", i, err)
+			}
+			content := string(data)
+			idx := strings.Index(content, e.OldText)
+			if idx < 0 {
+				return nil, fmt.Errorf("edit-plan: edit %d: old_text not found in %s", i, output.Rel(file))
+			}
+			if e.All {
+				// For replace-all, collect all occurrences (reverse order for offset stability)
+				var offsets []int
+				start := 0
+				for {
+					idx := strings.Index(content[start:], e.OldText)
+					if idx < 0 {
+						break
+					}
+					offsets = append(offsets, start+idx)
+					start += idx + len(e.OldText)
+				}
+				for j := len(offsets) - 1; j >= 0; j-- {
+					resolved = append(resolved, resolvedEdit{
+						File: file, StartByte: uint32(offsets[j]), EndByte: uint32(offsets[j] + len(e.OldText)),
+						Replacement: e.NewText, ExpectHash: e.ExpectHash,
+						Description: fmt.Sprintf("replace text in %s (occurrence %d)", output.Rel(file), j+1),
+					})
+				}
+			} else {
+				resolved = append(resolved, resolvedEdit{
+					File: file, StartByte: uint32(idx), EndByte: uint32(idx + len(e.OldText)),
+					Replacement: e.NewText, ExpectHash: e.ExpectHash,
+					Description: fmt.Sprintf("replace text in %s", output.Rel(file)),
+				})
+			}
+
+		case e.StartLine > 0 && e.EndLine > 0:
+			// Line-based edit — convert to byte offsets
+			data, err := os.ReadFile(file)
+			if err != nil {
+				return nil, fmt.Errorf("edit-plan: edit %d: %w", i, err)
+			}
+			var startByte, endByte uint32
+			line := 1
+			foundStart := false
+			for j := 0; j <= len(data); j++ {
+				if line == e.StartLine && !foundStart {
+					startByte = uint32(j)
+					foundStart = true
+				}
+				if line == e.EndLine+1 || (line == e.EndLine && j == len(data)) {
+					endByte = uint32(j)
+					break
+				}
+				if j < len(data) && data[j] == '\n' {
+					line++
+				}
+			}
+			if !foundStart {
+				return nil, fmt.Errorf("edit-plan: edit %d: start line %d beyond file", i, e.StartLine)
+			}
+			resolved = append(resolved, resolvedEdit{
+				File: file, StartByte: startByte, EndByte: endByte,
+				Replacement: e.Replacement, ExpectHash: e.ExpectHash,
+				Description: fmt.Sprintf("replace lines %d-%d in %s", e.StartLine, e.EndLine, output.Rel(file)),
+			})
+
+		default:
+			return nil, fmt.Errorf("edit-plan: edit %d: must specify symbol, old_text, or start_line/end_line", i)
+		}
+	}
+
+	// Dry-run: return what would happen
+	if dryRun {
+		var preview []map[string]any
+		for _, r := range resolved {
+			preview = append(preview, map[string]any{
+				"file":             output.Rel(r.File),
+				"description":      r.Description,
+				"start_byte":       r.StartByte,
+				"end_byte":         r.EndByte,
+				"replacement_size": len(r.Replacement),
+			})
+		}
+		return map[string]any{
+			"dry_run": true,
+			"edits":   preview,
+			"count":   len(preview),
+		}, nil
+	}
+
+	// Apply atomically via Transaction
+	tx := edit.NewTransaction()
+	for _, r := range resolved {
+		tx.Add(r.File, r.StartByte, r.EndByte, r.Replacement, r.ExpectHash)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("edit-plan: %w", err)
+	}
+
+	// Re-index affected files and collect hashes
+	affectedFiles := make(map[string]bool)
+	for _, r := range resolved {
+		affectedFiles[r.File] = true
+	}
+	hashes := make(map[string]string)
+	for file := range affectedFiles {
+		_ = index.IndexFile(ctx, db, file)
+		if h, err := edit.FileHash(file); err == nil {
+			hashes[output.Rel(file)] = h
+		}
+	}
+
+	var descriptions []string
+	for _, r := range resolved {
+		descriptions = append(descriptions, r.Description)
+	}
+
+	return map[string]any{
+		"ok":          true,
+		"edits":       len(resolved),
+		"files":       len(affectedFiles),
+		"hashes":      hashes,
+		"description": descriptions,
+	}, nil
+}
+
+func runImpact(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("impact requires 1-2 arguments: [file] <symbol>")
+	}
+	depth := flagInt(flags, "depth", 3)
+
+	// Resolve to get the file for accurate import filtering
+	sym, err := resolveSymbolArgs(ctx, db, root, args)
+	if err != nil {
+		return nil, err
+	}
+	symbolName := sym.Name
+
+	type impactNode struct {
+		Name  string `json:"name"`
+		File  string `json:"file"`
+		Type  string `json:"type"`
+		Depth int    `json:"depth"`
+	}
+
+	type frontierItem struct {
+		name string
+		file string
+	}
+
+	seen := make(map[string]bool)
+	var results []impactNode
+
+	// BFS through callers
+	frontier := []frontierItem{{name: symbolName, file: sym.File}}
+	for d := 0; d < depth && len(frontier) > 0; d++ {
+		var next []frontierItem
+		for _, item := range frontier {
+			callers, err := db.FindSemanticCallers(ctx, item.name, item.file)
+			if err != nil || len(callers) == 0 {
+				// Fall back to text-based references
+				refs, err2 := index.FindReferencesInFile(ctx, db, item.name, item.file)
+				if err2 == nil {
+					allSyms, _ := db.AllSymbols(ctx)
+					symMap := make(map[string][]index.SymbolInfo)
+					for _, s := range allSyms {
+						symMap[s.File] = append(symMap[s.File], s)
+					}
+					for _, ref := range refs {
+						for _, s := range symMap[ref.File] {
+							if ref.StartLine >= s.StartLine && ref.EndLine <= s.EndLine {
+								key := s.File + ":" + s.Name
+								if !seen[key] && s.Name != item.name {
+									callers = append(callers, s)
+								}
+								break
+							}
+						}
+					}
+				}
+			}
+			for _, c := range callers {
+				key := c.File + ":" + c.Name
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				results = append(results, impactNode{
+					Name:  c.Name,
+					File:  output.Rel(c.File),
+					Type:  c.Type,
+					Depth: d + 1,
+				})
+				next = append(next, frontierItem{name: c.Name, file: c.File})
+			}
+		}
+		frontier = next
+	}
+
+	return map[string]any{
+		"symbol":    symbolName,
+		"max_depth": depth,
+		"impacted":  results,
+		"total":     len(results),
+	}, nil
+}
+
+func runCallChain(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("call-chain requires 2 arguments: <from-symbol> <to-symbol>")
+	}
+	from := args[0]
+	to := args[1]
+	maxDepth := flagInt(flags, "depth", 5)
+
+	// Resolve 'to' to get its file for semantic lookup
+	toSym, err := db.ResolveSymbol(ctx, to)
+	if err != nil {
+		return nil, fmt.Errorf("call-chain: cannot resolve %q: %w", to, err)
+	}
+
+	// BFS from 'to' backwards through callers to find 'from'
+	type pathNode struct {
+		name   string
+		file   string
+		parent int // index in visited
+	}
+
+	visited := []pathNode{{name: to, file: toSym.File, parent: -1}}
+	seen := map[string]bool{to: true}
+	found := -1
+
+	for front := 0; front < len(visited) && found < 0; front++ {
+		current := visited[front]
+		depth := 0
+		for p := front; p >= 0; p = visited[p].parent {
+			depth++
+		}
+		if depth > maxDepth {
+			break
+		}
+
+		callers, err := db.FindSemanticCallers(ctx, current.name, current.file)
+		if err != nil || len(callers) == 0 {
+			// Fall back to text-based
+			refs, _ := index.FindReferencesInFile(ctx, db, current.name, current.file)
+			allSyms, _ := db.AllSymbols(ctx)
+			symMap := make(map[string][]index.SymbolInfo)
+			for _, s := range allSyms {
+				symMap[s.File] = append(symMap[s.File], s)
+			}
+			for _, ref := range refs {
+				for _, s := range symMap[ref.File] {
+					if ref.StartLine >= s.StartLine && ref.EndLine <= s.EndLine {
+						callers = append(callers, s)
+						break
+					}
+				}
+			}
+		}
+		for _, c := range callers {
+			if seen[c.Name] {
+				continue
+			}
+			seen[c.Name] = true
+			idx := len(visited)
+			visited = append(visited, pathNode{name: c.Name, file: c.File, parent: front})
+			if c.Name == from {
+				found = idx
+				break
+			}
+		}
+	}
+
+	if found < 0 {
+		return map[string]any{
+			"from":    from,
+			"to":      to,
+			"found":   false,
+			"message": fmt.Sprintf("no call chain found from %s to %s within depth %d", from, to, maxDepth),
+		}, nil
+	}
+
+	// Reconstruct path: from found (from) back to root (to)
+	// This gives from → intermediate → to (call direction)
+	var chain []string
+	for idx := found; idx >= 0; idx = visited[idx].parent {
+		chain = append(chain, visited[idx].name)
+	}
+
+	return map[string]any{
+		"from":  from,
+		"to":    to,
+		"found": true,
+		"chain": chain,
+		"depth": len(chain) - 1,
+	}, nil
+}
+
+func runVerify(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+	command := flagString(flags, "command", "")
+	if command == "" {
+		// Auto-detect based on project files
+		if _, err := os.Stat(root + "/go.mod"); err == nil {
+			command = "go build ./..."
+		} else if _, err := os.Stat(root + "/package.json"); err == nil {
+			command = "npx tsc --noEmit"
+		} else if _, err := os.Stat(root + "/Cargo.toml"); err == nil {
+			command = "cargo check"
+		} else {
+			return nil, fmt.Errorf("verify: no command specified and could not auto-detect project type")
+		}
+	}
+
+	timeout := flagInt(flags, "timeout", 30)
+	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "sh", "-c", command)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+
+	result := map[string]any{
+		"command": command,
+		"output":  string(out),
+	}
+
+	if err != nil {
+		result["ok"] = false
+		result["error"] = err.Error()
+	} else {
+		result["ok"] = true
+	}
+
+	return result, nil
 }
 
 // editOK builds a successful EditResult with the file's new hash.
