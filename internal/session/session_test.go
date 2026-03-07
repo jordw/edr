@@ -1097,3 +1097,46 @@ func TestCommandMaps_Coverage(t *testing.T) {
 		t.Error("edit-plan should be in EditCommands")
 	}
 }
+
+func TestBatchThenSingleReadDelta(t *testing.T) {
+	s := New()
+	// Batch read stores symbol content via PostProcessNonObject
+	batchText := `[{"content":"func foo() {}","file":"f.go","symbol":"foo","hash":"abc","ok":true}]`
+	s.PostProcessNonObject("read", nil, map[string]any{}, batchText)
+
+	// Single read of same symbol should return unchanged via ProcessReadResult
+	singleResult := map[string]any{
+		"symbol": map[string]any{"file": "f.go", "name": "foo", "type": "function", "lines": []int{1, 3}},
+		"body":   "func foo() {}",
+	}
+	delta := s.ProcessReadResult("read", singleResult, map[string]any{})
+	if delta == nil {
+		t.Fatal("single read after batch should return delta, got nil (full content)")
+	}
+	if delta["unchanged"] != true {
+		t.Errorf("expected unchanged, got %v", delta)
+	}
+}
+
+func TestBatchThenSingleReadDelta_FileLevel(t *testing.T) {
+	s := New()
+	// Batch read stores file content via PostProcessNonObject
+	batchText := `[{"content":"package main\n","file":"f.go","hash":"abc","ok":true,"lines":[1,2]}]`
+	s.PostProcessNonObject("read", nil, map[string]any{}, batchText)
+
+	// Single read of same file should return unchanged via ProcessReadResult
+	singleResult := map[string]any{
+		"file":    "f.go",
+		"content": "package main\n",
+		"hash":    "abc",
+		"lines":   []int{1, 2},
+	}
+	delta := s.ProcessReadResult("read", singleResult, map[string]any{})
+	if delta == nil {
+		t.Fatal("single read after batch should return delta, got nil (full content)")
+	}
+	if delta["unchanged"] != true {
+		t.Errorf("expected unchanged, got %v", delta)
+	}
+}
+

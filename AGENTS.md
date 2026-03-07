@@ -6,14 +6,14 @@ This is a pure Go CLI tool (`edr`) with zero external service dependencies. Go 1
 
 - **Build:** `go build -o edr .`
 - **Lint:** `go vet ./...`
-- **Test:** `go test ./...` (no test files exist yet; the command exits cleanly)
+- **Test:** `go test ./...`
 
 ### Running the CLI
 
 After building, the binary is at `./edr`. It operates on the current directory by default (override with `-r <path>`).
 
 - `./edr init` — indexes the repo into `.edr/index.db` (SQLite, embedded, no external DB needed)
-- `./edr repo-map` — full symbol map
+- `./edr map` — full symbol map
 - `./edr search <pattern>` — symbol search
 - See `CLAUDE.md` for the full command reference.
 

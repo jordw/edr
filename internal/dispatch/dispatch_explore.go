@@ -127,19 +127,38 @@ func runXrefs(ctx context.Context, db *index.DB, root string, args []string) (an
 		return nil, err
 	}
 
+	// Filter out the definition itself from references
+	defFile := output.Rel(sym.File)
+	defLine := int(sym.StartLine)
 	var results []output.Symbol
 	for _, r := range refs {
+		rf := output.Rel(r.File)
+		rl := int(r.StartLine)
+		if rf == defFile && rl == defLine {
+			continue
+		}
 		results = append(results, output.Symbol{
 			Type:  "reference",
 			Name:  r.Name,
-			File:  output.Rel(r.File),
-			Lines: [2]int{int(r.StartLine), int(r.EndLine)},
+			File:  rf,
+			Lines: [2]int{rl, int(r.EndLine)},
 		})
 	}
 	if results == nil {
 		results = []output.Symbol{}
 	}
-	return results, nil
+
+	resp := map[string]any{
+		"symbol": output.Symbol{
+			Type:  sym.Type,
+			Name:  sym.Name,
+			File:  defFile,
+			Lines: [2]int{defLine, int(sym.EndLine)},
+		},
+		"references":    results,
+		"total_refs":    len(results),
+	}
+	return resp, nil
 }
 
 func runGather(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {

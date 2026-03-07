@@ -1,100 +1,240 @@
 # edr
 
-Code navigation and editing CLI for coding agents. Builds a local tree-sitter symbol index, returns structured JSON, and minimizes token usage through progressive disclosure.
+`edr` is a local code navigation and editing CLI built to save tokens during
+agent-driven work. If you are using Codex or Claude Code, it gives the agent a
+structured way to inspect code, search symbols, preview edits, and apply
+changes without falling back to raw file dumps and ad hoc grep.
+
+It indexes the current repo with tree-sitter, stores the index locally in
+`.edr/`, and returns structured JSON so agent wrappers can make smaller, more
+predictable calls.
+
+## Why Use It
+
+Use `edr` when you want an agent to:
+
+- orient in an unfamiliar repo without reading full files
+- read one symbol or a small batch of symbols instead of dumping everything
+- search text and symbols with budget-aware output
+- preview edits and renames before applying them
+- bundle related reads or edits into one operation
+
+Compared to shelling out to `cat`, `grep`, and manual patch logic, `edr`
+provides a more consistent contract for code-oriented workflows.
 
 ## Quick Start
 
+Build and try it on the current repo:
+
 ```bash
 go build -o edr .
-./edr init                    # index the repo
-./edr map --budget 500        # see what's here
-./edr read src/main.go:main   # read a symbol
-./edr mcp                     # start MCP server
+./edr init
+./edr map --budget 400
+./edr search Dispatch --body --budget 300
+./edr read internal/dispatch/dispatch.go:Dispatch
 ```
 
-Bootstrap for another repo:
+Bootstrap another repo:
 
 ```bash
-./setup.sh /path/to/target/repo   # builds, installs, configures MCP, indexes
+./setup.sh /path/to/target/repo
 ```
 
-Requires Go 1.25+, a C compiler (for tree-sitter), and write access to create `.edr/`.
+Requirements:
 
-## What It Does
+- Go 1.25+
+- a C compiler for tree-sitter grammars
+- write access to create `.edr/`
 
-**Read** — files, symbols, line ranges, or batches with budget control:
+## Start Here As A Human
+
+If you are evaluating `edr` for Codex or Claude Code, this is the shortest path
+to understanding what it does well.
+
+1. Orient in the repo:
+
 ```bash
-edr read src/config.go:Scheduler --signatures   # API stubs only (85% smaller)
-edr read src/config.go --depth 2                # blocks collapsed
-edr read a.go b.go c.go:main --budget 500       # batch with budget
+edr map --budget 500
+edr map --dir internal/ --type function --grep dispatch
 ```
 
-**Search** — symbols or text with optional source bodies:
+2. Find and read targeted code:
+
 ```bash
-edr search parseConfig --body --budget 300
-edr search "TODO" --text --include "*.go" --context 3
+edr search Dispatch --body --budget 300
+edr read internal/dispatch/dispatch.go:Dispatch
+edr read cmd/commands.go:dispatchWithSession cmd/mcp.go:routeTool --budget 600
 ```
 
-**Edit** — text match, symbol replacement, or line range:
+3. Understand callers and impact:
+
 ```bash
-edr edit f.go --old_text "old" --new_text "new"
-edr edit f.go parseConfig --new_text "func parseConfig() {}"
+edr refs Dispatch
+edr refs dispatchCmd --chain Dispatch
+edr explore Dispatch --gather --body --budget 700
+```
+
+4. Preview and apply an edit:
+
+```bash
+edr edit internal/dispatch/dispatch.go --old_text "unknown command" --new_text "unsupported command" --dry-run
 edr rename oldName newName --dry-run
 ```
 
-**Write** — create files or insert into containers without reading first:
-```bash
-edr write src/models.go --inside UserStore --content "NewField int"
-```
+5. Verify after changes:
 
-**Navigate** — map, explore, references, call chains:
 ```bash
-edr map --dir internal/ --type function
-edr explore parseConfig --gather --body --budget 700
-edr refs Dispatch --chain editOK
-edr refs parseConfig --impact --depth 3
-```
-
-**Atomic multi-file edits** — batch reads and edits in one call:
-```bash
-# CLI: edit-plan applies edits atomically (all-or-nothing)
-edr edit-plan --dry-run   # preview with edits JSON array
-
-# MCP: edr_plan combines batch reads + atomic edits
-edr_plan(
-  reads: [{file: "a.go"}, {file: "b.go", symbol: "Config"}],
-  edits: [
-    {file: "a.go", old_text: "oldFunc()", new_text: "newFunc()"},
-    {file: "b.go", symbol: "Config", new_text: "type Config struct{}"}
-  ],
-  dry_run: true
-)
-```
-
-**Verify** — run build checks:
-```bash
-edr verify                                # auto-detect
+edr verify
 edr verify --command "go test ./..."
 ```
 
-All commands return structured JSON. Edit commands return a `hash` for chaining. Query commands include `truncated`/`total_matches` when budget-limited.
+## Core Commands
+
+### Read
+
+Read files, line ranges, symbols, or batches:
+
+```bash
+edr read README.md
+edr read src/config.go 10 50 --budget 200
+edr read src/config.go:parseConfig
+edr read src/config.go parseConfig
+edr read a.go b.go c.go:main --budget 500
+edr read src/models.py:UserService --signatures
+edr read src/scheduler.py --depth 2
+```
+
+Important behavior:
+
+- `edr read <single-arg>` treats that argument as a file path
+- if you only know a symbol name, start with `edr search <symbol>` or `edr explore [file] <symbol>`
+- `--signatures` is most useful for container-like symbols
+- `--depth` is for progressive disclosure rather than full source dumps
+
+### Search
+
+Search symbols or text:
+
+```bash
+edr search parseConfig --body --budget 300
+edr search "TODO" --text --include "*.go" --context 3
+edr search "func.*Config" --regex --budget 300
+```
+
+### Map / Explore / Refs
+
+Navigate the indexed code graph:
+
+```bash
+edr map --budget 500
+edr map internal/dispatch/dispatch.go
+edr explore parseConfig --body --callers --deps
+edr explore parseConfig --gather --body --budget 1500
+edr refs parseConfig
+edr refs parseConfig --impact --depth 3
+edr refs main --chain parseConfig
+```
+
+### Edit / Rename / Write
+
+Apply targeted changes with preview support:
+
+```bash
+edr edit f.go --old_text "old" --new_text "new"
+edr edit f.go parseConfig --new_text "func parseConfig() {}"
+edr edit f.go --start_line 45 --end_line 60 --new_text "replacement code"
+edr edit f.go --old_text "old" --new_text "new" --dry-run
+
+edr rename oldName newName --dry-run
+edr rename oldName newName --scope "internal/**"
+
+edr write src/main.go
+edr write src/config.go --append
+edr write src/config.go --after parseConfig
+edr write src/models.py --inside UserService
+```
+
+Go-specific note:
+
+- for Go structs, methods belong after the type, not inside it
+- `write --inside Store` will reject that case and point you to `--after Store`
+
+### Batch And Multi-Step Workflows
+
+For grouped operations, prefer `batch` or MCP over many short-lived CLI
+processes.
+
+```bash
+printf '{"id":"1","cmd":"map","args":["internal/dispatch/dispatch.go"],"flags":{}}\n' | edr batch
+```
+
+Atomic edit plans:
+
+```bash
+edr edit-plan --dry-run
+```
+
+`edit-plan --dry-run` currently previews per-edit diffs, not one final combined
+patch per file.
 
 ## MCP Server
 
-`edr mcp` exposes 13 typed tools over JSON-RPC: `edr_read`, `edr_edit`, `edr_write`, `edr_search`, `edr_map`, `edr_explore`, `edr_refs`, `edr_find`, `edr_rename`, `edr_verify`, `edr_init`, `edr_diff`, `edr_plan`.
+Run `edr` as an MCP server when you want a persistent indexed session for Codex
+or Claude Code:
 
+```bash
+./edr mcp
 ```
+
+Available tools:
+
+- `edr_read`
+- `edr_edit`
+- `edr_write`
+- `edr_search`
+- `edr_map`
+- `edr_explore`
+- `edr_refs`
+- `edr_find`
+- `edr_rename`
+- `edr_verify`
+- `edr_init`
+- `edr_diff`
+- `edr_plan`
+
+Example calls:
+
+```text
 edr_read(files: ["src/main.go:Config"], signatures: true, budget: 300)
 edr_edit(file: "f.go", old_text: "old", new_text: "new")
 edr_plan(reads: [{file: "a.go"}], edits: [{file: "a.go", old_text: "x", new_text: "y"}])
 ```
 
-Session-aware optimizations:
-- **Delta reads** — re-reads return `{unchanged: true}` or a diff
-- **Slim edits** — small diffs inline; large diffs stored (retrieve with `edr_diff`)
-- **Body dedup** — previously-seen bodies replaced with `[in context]`
+Session-aware behavior in MCP mode:
 
-## Token Savings
+- delta reads can return `{unchanged: true}` or a diff
+- small edit diffs are inlined automatically
+- previously seen bodies can be replaced with `[in context]`
+
+## Output And Caveats
+
+All commands return structured JSON.
+
+Current behavior worth knowing:
+
+- edit commands return a `hash` for chaining
+- `search` returns `total_matches`
+- `find` returns `total_matched`
+- separate short-lived CLI processes can still hit `SQLITE_BUSY` / `database is locked` under contention
+- for grouped operations, `batch` or MCP is more reliable than many concurrent one-shot CLI invocations
+- `.gitignore` patterns are respected
+- edits reindex immediately; if reindexing fails, the edit still succeeds and may include `index_error`
+
+## Supported Languages
+
+Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C/H, Ruby
+
+## Benchmarks
 
 Compared to raw Read/Edit/Grep on a mixed-language test corpus:
 
@@ -105,40 +245,31 @@ Compared to raw Read/Edit/Grep on a mixed-language test corpus:
 | Edit a function | **97%** |
 | Add method to class (`--inside`) | **99%** |
 | Multi-file read with budget | **91%** |
-| **Overall (9 workflows, 20→9 calls)** | **89%** |
+| **Overall (9 workflows, 20->9 calls)** | **89%** |
 
-<details>
-<summary>Run benchmarks</summary>
+Run benchmarks:
 
 ```bash
-bash bench/native_comparison.sh     # vs native tools
-bash bench/workflow_benchmark.sh    # progressive vs traditional
-bash bench/insert_benchmark.sh      # --inside vs read+write
-go test -bench=. -count=5 ./bench/  # Go benchmarks
+bash bench/native_comparison.sh
+bash bench/workflow_benchmark.sh
+bash bench/insert_benchmark.sh
+go test -bench=. -count=5 ./bench/
 ```
-</details>
-
-## Supported Languages
-
-Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C/H, Ruby
 
 ## Project Structure
 
-```
+```text
 cmd/           CLI, batch mode, MCP server
 internal/
-  index/       Tree-sitter parsing, SQLite index
-  search/      Symbol and text search
-  edit/        File edits, transactions, diffing
-  dispatch/    Command routing (shared by CLI, batch, MCP)
-  gather/      Context collection with budgets
+  index/       tree-sitter parsing, SQLite index
+  search/      symbol and text search
+  edit/        file edits, transactions, diffing
+  dispatch/    command routing shared by CLI, batch, and MCP
+  gather/      context collection with budgets
   session/     MCP session state (deltas, dedup)
-  output/      Structured JSON formatting
+  output/      structured JSON formatting
 ```
 
-## Notes
+## More Detail
 
-- Index stored in `.edr/` (not committed). SQLite WAL mode with two-layer writer lock.
-- `.gitignore` patterns respected. Case-insensitive symbol resolution as fallback.
-- Edits reindex immediately; failures return `index_error` but don't block the edit.
-- Full agent-oriented docs in `CLAUDE.md`.
+For the longer agent-facing command reference, see [CLAUDE.md](CLAUDE.md).

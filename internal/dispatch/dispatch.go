@@ -3,6 +3,7 @@ package dispatch
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -40,38 +41,60 @@ func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flag
 	root := db.Root()
 	setRootOnce.Do(func() { output.SetRoot(root) })
 
+	var result any
+	var err error
+
 	switch cmd {
 	// --- Unified commands ---
 	case "read":
-		return runReadUnified(ctx, db, root, args, flags)
+		result, err = runReadUnified(ctx, db, root, args, flags)
 	case "write":
-		return runWriteUnified(ctx, db, root, args, flags)
+		result, err = runWriteUnified(ctx, db, root, args, flags)
 	case "edit":
-		return runSmartEdit(ctx, db, root, args, flags)
+		result, err = runSmartEdit(ctx, db, root, args, flags)
 	case "map":
-		return runMapUnified(ctx, db, root, args, flags)
+		result, err = runMapUnified(ctx, db, root, args, flags)
 	case "search":
-		return runSearchUnified(ctx, db, args, flags)
+		result, err = runSearchUnified(ctx, db, args, flags)
 	case "explore":
-		return runExploreUnified(ctx, db, root, args, flags)
+		result, err = runExploreUnified(ctx, db, root, args, flags)
 	case "refs":
-		return runRefsUnified(ctx, db, root, args, flags)
+		result, err = runRefsUnified(ctx, db, root, args, flags)
 
 	case "init":
-		return runInit(ctx, db)
+		result, err = runInit(ctx, db)
 	case "rename":
-		return runRenameSymbol(ctx, db, root, args, flags)
+		result, err = runRenameSymbol(ctx, db, root, args, flags)
 	case "find":
-		return runFindFiles(ctx, db, root, args, flags)
+		result, err = runFindFiles(ctx, db, root, args, flags)
 	case "edit-plan":
-		return runEditPlan(ctx, db, root, args, flags)
+		result, err = runEditPlan(ctx, db, root, args, flags)
 	case "verify":
-		return runVerify(ctx, db, root, args, flags)
+		result, err = runVerify(ctx, db, root, args, flags)
 	case "multi", "get-diff":
 		return nil, fmt.Errorf("%s is only available in MCP mode (edr mcp)", cmd)
 	default:
 		return nil, fmt.Errorf("unknown command: %s", cmd)
 	}
+
+	if err != nil {
+		return nil, relError(root, err)
+	}
+	return result, nil
+}
+
+// relError rewrites absolute repo paths in error messages to relative paths.
+func relError(root string, err error) error {
+	if err == nil || root == "" {
+		return err
+	}
+	msg := err.Error()
+	cleaned := strings.ReplaceAll(msg, root+"/", "")
+	cleaned = strings.ReplaceAll(cleaned, root, "")
+	if cleaned != msg {
+		return fmt.Errorf("%s", cleaned)
+	}
+	return err
 }
 
 // --- Unified command routers ---
@@ -119,7 +142,17 @@ func runReadUnified(ctx context.Context, db *index.DB, root string, args []strin
 		}
 	}
 
-	// Single arg → file read
+	// Single arg: try as file first, fall back to symbol if it doesn't look like a path
+	if !looksLikeFilePath(arg) && !strings.Contains(arg, "/") {
+		// Check if file actually exists on disk before trying symbol resolution
+		resolved, resolveErr := db.ResolvePath(arg)
+		if resolveErr != nil {
+			return runReadSymbol(ctx, db, root, args, flags)
+		}
+		if _, statErr := os.Stat(resolved); statErr != nil {
+			return runReadSymbol(ctx, db, root, args, flags)
+		}
+	}
 	return runReadFile(ctx, db, root, args, flags)
 }
 
@@ -422,17 +455,7 @@ func toOutputSymbol(sym *index.SymbolInfo, hash string) output.Symbol {
 	}
 }
 
-// reindexFile re-indexes a single file under the writer lock.
-// Returns an error string for inclusion in the response; empty on success.
-func reindexFile(ctx context.Context, db *index.DB, file string) string {
-	err := db.WithWriteLock(func() error {
-		return index.IndexFile(ctx, db, file)
-	})
-	if err != nil {
-		return err.Error()
-	}
-	return ""
-}
+
 
 // reindexFiles re-indexes multiple files under a single writer lock acquisition.
 // Returns a map of file→error for any failures; nil if all succeeded.

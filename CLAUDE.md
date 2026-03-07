@@ -60,6 +60,10 @@ edr read src/config.go src/main.go README.md --budget 1000
 edr read src/config.go:parseConfig src/main.go:main --symbols
 ```
 
+`edr read` treats a single positional argument as a file path first. If no file
+exists and the argument doesn't look like a path (no `/`, no extension), it falls
+back to symbol resolution — so `edr read Config` works if `Config` is a known symbol.
+
 ## Searching (`search`)
 
 ```bash
@@ -144,8 +148,8 @@ edr map src/config.go
 # Filter by directory, glob, symbol type, or name
 edr map --dir internal/ --type function --grep parse
 
-# Local variables are hidden by default; pass --locals to include them
-edr map --dir internal/ --locals
+# MCP supports a `locals` parameter on `edr_map`, but the current CLI does not
+# expose a `--locals` flag. File maps may still include some local variables.
 
 # Explore a symbol: body, callers, deps
 edr explore src/config.go parseConfig --body --callers --deps
@@ -183,7 +187,7 @@ edr find "**/test_*" --budget 500
 
 ```bash
 # CLI: edit-plan applies multiple edits atomically
-edr edit-plan --dry-run   # preview with flags.edits JSON array
+edr edit-plan --dry-run   # preview per-edit diffs from flags.edits JSON array
 
 # Via MCP: use edr_plan for batch reads and/or atomic edits
 # edr_plan(edits: [
@@ -223,7 +227,7 @@ These optimizations are automatic and session-scoped (reset on reconnect).
 4. **Use `edr_map`** to orient in the codebase before diving into files.
 5. **Use `edr_explore(gather: true, body: true)`** at the start of a task to get source bodies inline.
 6. **Use `edr_rename(dry_run: true)`** to preview cross-file renames before applying.
-7. **Check `truncated`/`total_matches`** in search/find results — budget trimming reports what was cut.
+7. **Check truncation/count metadata** in search/find results — `search` uses `total_matches`, while `find` currently uses `total_matched`.
 8. **Use `edr_plan(edits: [...])`** for multi-file atomic edits — one call, all-or-nothing.
 9. **Use `edr_refs(impact: true)`** before refactoring to understand blast radius.
 10. **Use `edr_verify`** after edits to confirm the build still passes.
@@ -241,7 +245,7 @@ These optimizations are automatic and session-scoped (reset on reconnect).
 | `edr_edit` | Edit by `old_text`/`new_text` (primary), `symbol`, or `start_line`/`end_line`. `regex`, `all`, `dry_run`. Returns `hash` |
 | `edr_write` | Create/overwrite files. `append`, `after` (symbol), `inside` (container), `mkdir` |
 | `edr_search` | Symbol search (`body: true`). Add `text`/`regex`/`include`/`exclude`/`context` for text search |
-| `edr_map` | Omit `file` = repo symbol map; with `file` = file symbols. `budget`, `dir`, `glob`, `type`, `grep`, `locals` |
+| `edr_map` | Omit `file` = repo symbol map; with `file` = file symbols. `budget`, `dir`, `glob`, `type`, `grep`, `locals` (MCP only; the current CLI does not expose `--locals`) |
 | `edr_explore` | Symbol info with `body`, `callers`, `deps`, `signatures`. `gather` for context bundle with tests |
 | `edr_refs` | Find references. `impact` for transitive callers, `chain` for call path, `depth` |
 | `edr_find` | Find files by glob (`**` supported). `dir`, `budget` |
@@ -254,5 +258,5 @@ These optimizations are automatic and session-scoped (reset on reconnect).
 All output is structured JSON. All file paths can be relative to repo root.
 All edit commands return `hash` in the response for chaining. If post-edit reindexing
 fails, the edit still succeeds and an `index_error` field is included in the response.
-Query commands return `truncated` and `total_matches` when budget limits apply.
+Query commands return truncation metadata, but count-field names are not fully normalized yet: `search` returns `total_matches`, while `find` returns `total_matched`.
 `edr_read` output includes line numbers prefixed to each line.

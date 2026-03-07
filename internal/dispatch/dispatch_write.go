@@ -203,15 +203,16 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 		lang = cfg.LangID
 	}
 
-	// Go structs hold fields, not methods — methods are declared outside with receivers.
-	// Inserting a method inside a struct body is almost always wrong.
+	// Go structs: --inside adds fields (not methods). Warn if content looks like a method.
 	if lang == "go" && (container.Type == "struct" || container.Type == "type") {
-		// Check if this is actually a struct (type decls can be interfaces too)
-		data, err := os.ReadFile(container.File)
-		if err == nil {
+		data, readErr := os.ReadFile(container.File)
+		if readErr == nil {
 			body := string(data[container.StartByte:container.EndByte])
 			if strings.Contains(body, "struct {") || strings.Contains(body, "struct{") {
-				return nil, fmt.Errorf("symbol %q is a Go struct — methods go outside with receivers, not inside. Use 'write %s --after %s' to insert after the struct definition", containerName, output.Rel(container.File), containerName)
+				trimmed := strings.TrimSpace(content)
+				if strings.HasPrefix(trimmed, "func ") || strings.HasPrefix(trimmed, "func(") {
+					return nil, fmt.Errorf("symbol %q is a Go struct — methods go outside with receivers. Use 'write %s --after %s' to insert after the struct definition", containerName, output.Rel(container.File), containerName)
+				}
 			}
 		}
 	}
