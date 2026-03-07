@@ -60,17 +60,28 @@ Navigation and search:
 
 ```bash
 ./edr repo-map --budget 500
+./edr repo-map --dir internal/ --type function       # filtered repo-map
+./edr repo-map --glob "*.go" --grep Config           # glob + name filter
 ./edr symbols internal/edit/edit.go
-./edr read-file setup.sh 1 60 --budget 300        # line-numbered output
+./edr read-file setup.sh 1 60 --budget 300           # line-numbered output
 ./edr read-symbol cmd/root.go openAndEnsureIndex --budget 250
-./edr expand cmd/root.go openAndEnsureIndex --body --deps --budget 600
-./edr gather internal/edit/edit.go ReplaceSpan --budget 700 --body  # inline source
+./edr expand cmd/root.go openAndEnsureIndex --body --deps --signatures --budget 600
+./edr gather internal/edit/edit.go ReplaceSpan --budget 700 --body --signatures
 ./edr search Replace --budget 200
 ./edr search-text "TODO|FIXME" --regex --budget 200
-./edr search-text "func Open" --context 3          # context lines around matches
+./edr search-text "func Open" --context 3            # context lines around matches
 ./edr find-files "**/*.go" --budget 300
 ./edr batch-read cmd/root.go internal/output/output.go --budget 500
-./edr xrefs openAndEnsureIndex                     # import-aware cross-references
+./edr xrefs openAndEnsureIndex                       # import-aware cross-references
+```
+
+Analysis:
+
+```bash
+./edr impact cmd/root.go openAndEnsureIndex --depth 3   # transitive callers
+./edr call-chain Dispatch editOK                         # find call path A→B
+./edr verify                                             # auto-detect build check
+./edr verify --command "go test ./..." --timeout 60      # custom verification
 ```
 
 Editing:
@@ -84,6 +95,16 @@ Editing:
 ./edr smart-edit cmd/root.go openAndEnsureIndex
 ./edr rename-symbol oldName newName --dry-run       # preview before applying
 ./edr diff-preview cmd/root.go openAndEnsureIndex
+```
+
+Atomic multi-file edits (via MCP or batch):
+
+```json
+{"cmd": "edit-plan", "flags": {"edits": [
+  {"file": "src/config.go", "symbol": "parseConfig", "replacement": "..."},
+  {"file": "src/main.go", "old_text": "oldFunc()", "new_text": "newFunc()"},
+  {"file": "src/util.go", "start_line": 10, "end_line": 20, "replacement": "..."}
+], "dry-run": true}}
 ```
 
 Commands that modify file content read replacement content from stdin unless a command-specific flag is provided.
@@ -123,6 +144,22 @@ Example request payload:
   }
 }
 ```
+
+Batch multiple commands in one MCP call with `cmd: "multi"`:
+
+```json
+{
+  "cmd": "multi",
+  "flags": {
+    "commands": [
+      {"cmd": "read-symbol", "args": ["cmd/root.go", "openAndEnsureIndex"]},
+      {"cmd": "symbols", "args": ["internal/edit/edit.go"]}
+    ]
+  }
+}
+```
+
+The MCP server includes working-set dedup — if a read command returns identical content to a previous call in the same session, it returns `{"cached": true}` instead of re-sending the data. Edit commands automatically invalidate the cache for affected files.
 
 ## Repository Layout
 
