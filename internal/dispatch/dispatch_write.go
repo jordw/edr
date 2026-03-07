@@ -11,6 +11,16 @@ import (
 	"github.com/jordw/edr/internal/output"
 )
 
+// writeContent extracts the content string from flags, checking common aliases.
+func writeContent(flags map[string]any) string {
+	for _, key := range []string{"content", "new_text", "body"} {
+		if c := flagString(flags, key, ""); c != "" {
+			return c
+		}
+	}
+	return ""
+}
+
 // writeResult builds an EditResult from a commitResult.
 func writeResult(file string, cr *commitResult, message string) output.EditResult {
 	rel := output.Rel(file)
@@ -25,7 +35,7 @@ func runWriteFile(ctx context.Context, db *index.DB, root string, args []string,
 	if len(args) < 1 {
 		return nil, fmt.Errorf("write-file requires 1 argument: <file>")
 	}
-	content := flagString(flags, "content", "")
+	content := writeContent(flags)
 	mkdir := flagBool(flags, "mkdir", false)
 
 	file := args[0]
@@ -76,9 +86,9 @@ func runAppendFile(ctx context.Context, db *index.DB, root string, args []string
 	if len(args) < 1 {
 		return nil, fmt.Errorf("append-file requires 1 argument: <file>")
 	}
-	content := flagString(flags, "content", "")
+	content := writeContent(flags)
 	if content == "" {
-		return nil, fmt.Errorf("append-file requires 'content' in flags")
+		return nil, fmt.Errorf("append-file requires 'content' (or 'new_text' or 'body') in flags")
 	}
 
 	file := args[0]
@@ -113,9 +123,9 @@ func runInsertAfter(ctx context.Context, db *index.DB, root string, args []strin
 	if len(args) < 1 {
 		return nil, fmt.Errorf("insert-after requires 1-2 arguments: [file] <symbol>")
 	}
-	content := flagString(flags, "content", "")
+	content := writeContent(flags)
 	if content == "" {
-		return nil, fmt.Errorf("insert-after requires 'content' in flags")
+		return nil, fmt.Errorf("insert-after requires 'content' (or 'new_text' or 'body') in flags")
 	}
 
 	sym, err := resolveSymbolArgs(ctx, db, root, args)
@@ -163,9 +173,9 @@ var containerTypes = map[string]bool{
 // just before its closing delimiter. If --after is also set, inserts after that child
 // symbol within the container instead.
 func runInsertInside(ctx context.Context, db *index.DB, root string, file string, containerName string, flags map[string]any) (any, error) {
-	content := flagString(flags, "content", "")
+	content := writeContent(flags)
 	if content == "" {
-		return nil, fmt.Errorf("write --inside requires 'content' in flags")
+		return nil, fmt.Errorf("write --inside requires 'content' (or 'new_text' or 'body') in flags")
 	}
 
 	// Resolve the container symbol

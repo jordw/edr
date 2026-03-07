@@ -274,7 +274,25 @@ func serveMCP(db *index.DB) error {
 				Result: map[string]any{
 					"tools": []mcpTool{{
 						Name:        "edr",
-						Description: "Your default tool for ALL file operations. Use cmd=multi with flags.commands=[{cmd,args,flags},...] to batch multiple commands in ONE call. Reading: read (file, file:symbol, or multiple args for batch), search (--body; --text/--regex for text search), map (no args=repo map, file arg=symbols). Exploring: explore (--body, --callers, --deps; --gather for context bundle with tests). Editing: edit (symbol, --start_line/--end_line, or --match; --dry-run), edit-plan (atomic multi-edit via flags.edits array). Writing: write (--append, --after symbol, --mkdir). Refactoring: rename (--dry-run, --scope). References: refs (default=xrefs, --impact for transitive, --chain symbol for call path). Finding: find (glob patterns with **). Analysis: verify (run build/typecheck). Legacy names (read-file, read-symbol, batch-read, write-file, append-file, insert-after, smart-edit, repo-map, symbols, search-text, expand, gather, xrefs, impact, call-chain, rename-symbol, find-files) still work. Responses are context-aware: small edit diffs (<=20 lines) inline automatically, large diffs stored (use get-diff), re-reads return deltas. Use --verbose on edits or --full on reads to override. All edits return hash. See CLAUDE.md.",
+						Description: "Your default tool for ALL file operations. Use this instead of Read, Edit, Write, Grep, Glob. All commands use {cmd, args, flags}.\n\n" +
+							"COMMANDS AND FLAGS:\n\n" +
+							"read: Read files/symbols. args: [\"file\"] or [\"file:symbol\"] or multiple. flags: {budget, symbols (bool), signatures (bool), depth (int), full (bool)}\n" +
+							"  Ex: {cmd:\"read\", args:[\"src/main.go\"]}  {cmd:\"read\", args:[\"src/main.go:MyFunc\"], flags:{budget:300}}\n\n" +
+							"write: Create/overwrite files. args: [\"file\"]. flags: {content: \"file contents\", mkdir (bool), append (bool), after: \"symbol\", inside: \"Container\"}\n" +
+							"  Ex: {cmd:\"write\", args:[\"foo.yml\"], flags:{content:\"key: value\\n\"}}  {cmd:\"write\", args:[\"f.go\"], flags:{inside:\"MyStruct\", content:\"NewField int\"}}\n\n" +
+							"edit: Edit files. args: [\"file\"] or [\"file\", \"symbol\"]. flags: {old_text, new_text, regex (bool), all (bool), start_line, end_line, dry_run (bool)}\n" +
+							"  Ex: {cmd:\"edit\", args:[\"f.go\"], flags:{old_text:\"old code\", new_text:\"new code\"}}\n\n" +
+							"search: Search symbols or text. args: [\"pattern\"]. flags: {body (bool), text (bool), regex (bool), include, exclude, context (int), budget}\n" +
+							"map: Repo/file symbol map. args: [] or [\"file\"]. flags: {budget, dir, glob, type, grep}\n" +
+							"explore: Symbol info. args: [\"symbol\"] or [\"file\",\"symbol\"]. flags: {body (bool), callers (bool), deps (bool), gather (bool), signatures (bool), budget}\n" +
+							"refs: Find references. args: [\"symbol\"]. flags: {impact (bool), depth (int), chain: \"target\"}\n" +
+							"find: Find files by glob. args: [\"pattern\"]. flags: {dir, budget}\n" +
+							"rename: Cross-file rename. args: [\"oldName\",\"newName\"]. flags: {dry_run (bool), scope: \"glob\"}\n" +
+							"edit-plan: Atomic multi-edit. flags: {edits: [{file, old_text, new_text}, ...], dry_run (bool)}\n" +
+							"verify: Run build/typecheck. flags: {command, timeout}\n" +
+							"multi: Batch commands. flags: {commands: [{cmd, args, flags}, ...]}\n" +
+							"get-diff: Get stored diff from last large edit. args: [\"file\"]\n\n" +
+							"All edits return {ok, file, hash}. Re-reads return deltas if unchanged. Small edit diffs (<=20 lines) inline; large diffs stored (use get-diff).",
 						InputSchema: mcpSchema{
 							Type: "object",
 							Properties: map[string]mcpProp{
@@ -289,7 +307,7 @@ func serveMCP(db *index.DB) error {
 								},
 								"flags": {
 									Type:        "object",
-									Description: "Flags (e.g. {\"budget\": 500, \"body\": true, \"replacement\": \"new code\"})",
+									Description: "Flags (e.g. {\"budget\": 500, \"body\": true, \"content\": \"new file contents\", \"old_text\": \"find\", \"new_text\": \"replace\"})",
 								},
 							},
 							Required: []string{"cmd"},
