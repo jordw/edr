@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -345,42 +346,208 @@ func TestPostProcess_FullFlag(t *testing.T) {
 	}
 }
 
-// These tests stay in cmd because they test MCP-specific UnmarshalJSON
-func TestUnmarshalJSON_ArgsAsString(t *testing.T) {
-	data := []byte(`{"cmd":"read","args":"single.go","flags":{"budget":100}}`)
-	var args edrToolArgs
-	if err := args.UnmarshalJSON(data); err != nil {
+func TestRouteTool_Read(t *testing.T) {
+	raw := json.RawMessage(`{"files":["src/main.go","src/config.go:parseConfig"],"budget":300}`)
+	cmd, args, flags, isSess, err := routeTool("edr_read", raw)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(args.Args) != 1 || args.Args[0] != "single.go" {
-		t.Errorf("args = %v, want [single.go]", args.Args)
+	if cmd != "read" || isSess {
+		t.Errorf("cmd=%s isSess=%v", cmd, isSess)
 	}
-	if args.Flags["budget"] != float64(100) {
-		t.Errorf("flags.budget = %v", args.Flags["budget"])
+	if len(args) != 2 || args[0] != "src/main.go" || args[1] != "src/config.go:parseConfig" {
+		t.Errorf("args = %v", args)
+	}
+	if flags["budget"] != 300 {
+		t.Errorf("budget = %v", flags["budget"])
 	}
 }
 
-func TestUnmarshalJSON_FlagsAsString(t *testing.T) {
-	data := []byte(`{"cmd":"write","args":["f.go"],"flags":"{\"content\":\"hello\"}"}`)
-	var args edrToolArgs
-	if err := args.UnmarshalJSON(data); err != nil {
+func TestRouteTool_ReadLineRange(t *testing.T) {
+	raw := json.RawMessage(`{"files":["f.go"],"start_line":10,"end_line":20}`)
+	cmd, args, _, _, err := routeTool("edr_read", raw)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if args.Flags["content"] != "hello" {
-		t.Errorf("flags.content = %v", args.Flags["content"])
+	if cmd != "read" {
+		t.Errorf("cmd=%s", cmd)
+	}
+	if len(args) != 3 || args[0] != "f.go" || args[1] != "10" || args[2] != "20" {
+		t.Errorf("args = %v, want [f.go 10 20]", args)
 	}
 }
 
-func TestUnmarshalJSON_Normal(t *testing.T) {
-	data := []byte(`{"cmd":"search","args":["pattern"],"flags":{"body":true}}`)
-	var args edrToolArgs
-	if err := args.UnmarshalJSON(data); err != nil {
+func TestRouteTool_Edit(t *testing.T) {
+	raw := json.RawMessage(`{"file":"f.go","old_text":"old","new_text":"new","dry_run":true}`)
+	cmd, args, flags, _, err := routeTool("edr_edit", raw)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if args.Cmd != "search" || len(args.Args) != 1 || args.Args[0] != "pattern" {
-		t.Errorf("cmd=%s args=%v", args.Cmd, args.Args)
+	if cmd != "edit" {
+		t.Errorf("cmd=%s", cmd)
 	}
-	if args.Flags["body"] != true {
-		t.Errorf("flags.body = %v", args.Flags["body"])
+	if len(args) != 1 || args[0] != "f.go" {
+		t.Errorf("args = %v", args)
+	}
+	if flags["old_text"] != "old" || flags["new_text"] != "new" {
+		t.Errorf("flags = %v", flags)
+	}
+	if flags["dry_run"] != true {
+		t.Error("dry_run should be true")
+	}
+}
+
+func TestRouteTool_EditSymbol(t *testing.T) {
+	raw := json.RawMessage(`{"file":"f.go","symbol":"MyFunc","new_text":"func MyFunc() {}"}`)
+	_, args, _, _, err := routeTool("edr_edit", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(args) != 2 || args[1] != "MyFunc" {
+		t.Errorf("args = %v, want [f.go MyFunc]", args)
+	}
+}
+
+func TestRouteTool_Write(t *testing.T) {
+	raw := json.RawMessage(`{"file":"new.go","content":"package main","mkdir":true,"inside":"MyStruct"}`)
+	cmd, args, flags, _, err := routeTool("edr_write", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd != "write" || args[0] != "new.go" {
+		t.Errorf("cmd=%s args=%v", cmd, args)
+	}
+	if flags["content"] != "package main" || flags["mkdir"] != true || flags["inside"] != "MyStruct" {
+		t.Errorf("flags = %v", flags)
+	}
+}
+
+func TestRouteTool_Diff(t *testing.T) {
+	raw := json.RawMessage(`{"file":"f.go","symbol":"foo"}`)
+	cmd, args, _, isSess, err := routeTool("edr_diff", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd != "get-diff" || !isSess {
+		t.Errorf("cmd=%s isSess=%v", cmd, isSess)
+	}
+	if len(args) != 2 || args[0] != "f.go" || args[1] != "foo" {
+		t.Errorf("args = %v", args)
+	}
+}
+
+func TestRouteTool_Explore(t *testing.T) {
+	raw := json.RawMessage(`{"symbol":"MyFunc","file":"src/main.go","body":true,"gather":true}`)
+	cmd, args, flags, _, err := routeTool("edr_explore", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd != "explore" {
+		t.Errorf("cmd=%s", cmd)
+	}
+	if len(args) != 2 || args[0] != "src/main.go" || args[1] != "MyFunc" {
+		t.Errorf("args = %v", args)
+	}
+	if flags["body"] != true || flags["gather"] != true {
+		t.Errorf("flags = %v", flags)
+	}
+}
+
+func TestRouteTool_Rename(t *testing.T) {
+	raw := json.RawMessage(`{"old_name":"Foo","new_name":"Bar","dry_run":true,"scope":"internal/**"}`)
+	cmd, args, flags, _, err := routeTool("edr_rename", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd != "rename" {
+		t.Errorf("cmd=%s", cmd)
+	}
+	if len(args) != 2 || args[0] != "Foo" || args[1] != "Bar" {
+		t.Errorf("args = %v", args)
+	}
+	if flags["dry_run"] != true || flags["scope"] != "internal/**" {
+		t.Errorf("flags = %v", flags)
+	}
+}
+
+func TestRouteTool_Unknown(t *testing.T) {
+	_, _, _, _, err := routeTool("edr_nonexistent", json.RawMessage(`{}`))
+	if err == nil {
+		t.Error("expected error for unknown tool")
+	}
+}
+
+func TestRouteTool_Init(t *testing.T) {
+	cmd, args, flags, _, err := routeTool("edr_init", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd != "init" || len(args) != 0 || len(flags) != 0 {
+		t.Errorf("cmd=%s args=%v flags=%v", cmd, args, flags)
+	}
+}
+
+func TestRouteTool_Search(t *testing.T) {
+	raw := json.RawMessage(`{"pattern":"TODO","text":true,"include":"*.go","context":3}`)
+	cmd, args, flags, _, err := routeTool("edr_search", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd != "search" || args[0] != "TODO" {
+		t.Errorf("cmd=%s args=%v", cmd, args)
+	}
+	if flags["text"] != true || flags["include"] != "*.go" || flags["context"] != 3 {
+		t.Errorf("flags = %v", flags)
+	}
+}
+
+func TestRouteTool_Refs_Chain(t *testing.T) {
+	// When chain is set, file should be omitted from args (runCallChain expects [from, to])
+	raw := json.RawMessage(`{"symbol":"MyFunc","file":"src/main.go","chain":"main","depth":3}`)
+	cmd, args, flags, _, err := routeTool("edr_refs", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd != "refs" {
+		t.Errorf("cmd=%s", cmd)
+	}
+	if len(args) != 1 || args[0] != "MyFunc" {
+		t.Errorf("args = %v, want [MyFunc] (file omitted for chain)", args)
+	}
+	if flags["chain"] != "main" || flags["depth"] != 3 {
+		t.Errorf("flags = %v", flags)
+	}
+}
+
+func TestRouteTool_Refs_FileDisambig(t *testing.T) {
+	// Without chain, file should be included for disambiguation
+	raw := json.RawMessage(`{"symbol":"MyFunc","file":"src/main.go","impact":true}`)
+	_, args, flags, _, err := routeTool("edr_refs", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(args) != 2 || args[0] != "src/main.go" || args[1] != "MyFunc" {
+		t.Errorf("args = %v, want [src/main.go MyFunc]", args)
+	}
+	if flags["impact"] != true {
+		t.Errorf("flags = %v", flags)
+	}
+}
+
+func TestMcpTools_Count(t *testing.T) {
+	tools := mcpTools()
+	if len(tools) != 13 {
+		t.Errorf("expected 13 tools, got %d", len(tools))
+	}
+	names := map[string]bool{}
+	for _, tool := range tools {
+		names[tool.Name] = true
+	}
+	expected := []string{"edr_read", "edr_edit", "edr_write", "edr_search", "edr_map",
+		"edr_explore", "edr_refs", "edr_find", "edr_rename", "edr_verify", "edr_init", "edr_diff", "edr_plan"}
+	for _, name := range expected {
+		if !names[name] {
+			t.Errorf("missing tool: %s", name)
+		}
 	}
 }

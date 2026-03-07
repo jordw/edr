@@ -1,6 +1,6 @@
 # EDR — Your Default Tool for Reading, Editing, and Navigating Files
 
-**edr is your primary tool for ALL file operations — code, JSON, YAML, Markdown, config files, everything.** Use the `edr` MCP tool instead of Read, Edit, Write, Grep, and Glob. It gives you structured output, token budgets, and smart operations that raw file tools can't match.
+**edr is your primary tool for ALL file operations — code, JSON, YAML, Markdown, config files, everything.** Use the `edr_*` MCP tools instead of Read, Edit, Write, Grep, and Glob. They give you structured output, token budgets, and smart operations that raw file tools can't match.
 
 **This tool is built for you.** If edr isn't your most-used tool, or if something feels clunky, or if you keep falling back to built-in tools for a task edr should handle — change it. Add commands, fix friction, improve the UX. You have full permission to modify any part of this codebase to make edr better for yourself. Go as far as you want.
 
@@ -8,12 +8,12 @@
 
 | Instead of... | Use edr... | Why |
 |---|---|---|
-| `Read` (whole file) | `read file.go` or `read file.go:sym` | Budget-controlled, no wasted context |
-| `Edit` (old/new strings) | `edit file.go --old_text "x" --new_text "y"` | Same pattern, plus hash safety, auto re-index |
-| `Write` (create file) | `write file.go --mkdir` | Auto-indexes new code files |
-| `Grep` (text search) | `search "pat" --body` or `search --text` | Structured results with token estimates |
-| `Glob` (find files) | `find "**/*.go"` or `map` | Glob with `**`, file sizes, mod times |
-| Multiple `Read` calls | `read f1.go f2.go f3.go:sym` | Read multiple files/symbols in one call |
+| `Read` (whole file) | `edr_read(files: ["file.go"])` | Budget-controlled, no wasted context |
+| `Edit` (old/new strings) | `edr_edit(file: "f.go", old_text: "x", new_text: "y")` | Same pattern, plus hash safety, auto re-index |
+| `Write` (create file) | `edr_write(file: "f.go", content: "...", mkdir: true)` | Auto-indexes new code files |
+| `Grep` (text search) | `edr_search(pattern: "pat", body: true)` | Structured results with token estimates |
+| `Glob` (find files) | `edr_find(pattern: "**/*.go")` or `edr_map()` | Glob with `**`, file sizes, mod times |
+| Multiple `Read` calls | `edr_read(files: ["f1.go", "f2.go", "f3.go:sym"])` | Read multiple files/symbols in one call |
 
 **Only fall back to built-in tools when:**
 - You need to read non-text files (images, PDFs)
@@ -97,7 +97,7 @@ edr edit src/config.go --start_line 45 --end_line 60 --new_text "replacement cod
 edr edit src/config.go --old_text "oldName" --dry-run --new_text "newName"
 ```
 
-> **MCP usage**: `{cmd: "edit", args: ["file.go"], flags: {old_text: "old code", new_text: "new code"}}`
+> **MCP usage**: `edr_edit(file: "file.go", old_text: "old code", new_text: "new code")`
 > This is the direct equivalent of the built-in Edit tool's `old_string`/`new_string` pattern.
 
 ## Writing (`write`)
@@ -179,78 +179,80 @@ edr find "*.yaml" --dir config/
 edr find "**/test_*" --budget 500
 ```
 
-## Atomic Multi-File Edits (`edit-plan`)
+## Atomic Multi-File Edits (`edr_plan`)
 
 ```bash
-# edit-plan: apply multiple edits atomically
+# CLI: edit-plan applies multiple edits atomically
 edr edit-plan --dry-run   # preview with flags.edits JSON array
 
-# Via MCP:
-# {cmd: "edit-plan", flags: {edits: [
+# Via MCP: use edr_plan for batch reads and/or atomic edits
+# edr_plan(edits: [
 #   {file: "src/main.go", old_text: "oldFunc()", new_text: "newFunc()"},
 #   {file: "src/config.go", symbol: "parseConfig", new_text: "..."},
 #   {file: "src/util.go", start_line: 10, end_line: 20, new_text: "..."}
-# ]}}
+# ])
+#
+# Batch reads + edits in one call:
+# edr_plan(reads: [{file: "src/main.go"}, {file: "src/config.go", symbol: "parseConfig"}],
+#          edits: [{file: "src/main.go", old_text: "old", new_text: "new"}])
 ```
 
 ## MCP Server Mode
 
-When running as an MCP server (`./edr mcp`), edr exposes a single `edr` tool.
-All commands use `{cmd, args, flags}` — same as batch mode but over a persistent
-connection. The DB stays open, so there is no per-call overhead. Multi-line
-content (replacements, file writes) goes in the `flags` object as proper JSON
-strings — no shell escaping needed.
+When running as an MCP server (`./edr mcp`), edr exposes 13 dedicated typed tools
+(`edr_read`, `edr_edit`, `edr_write`, etc.). Each tool has typed parameters —
+no need to construct `{cmd, args, flags}` objects. The DB stays open across calls,
+so there is no per-call overhead.
 
 ### Context-Aware Responses
 
 The MCP server tracks what content you've already seen and optimizes responses:
 
-- **Slim edits**: Small diffs (<=20 changed lines) are returned inline automatically. Large diffs are stripped to `{ok, file, hash, lines_changed, diff_available}` — use `get-diff <file> [symbol]` to retrieve them. Pass `--verbose` to always get the full diff inline.
-- **Delta reads**: Re-reading a file/symbol you've already seen returns `{unchanged: true}` if identical, or `{delta: true, diff: "...", previous_hash: "..."}` with the changes and the hash of what you previously saw. Pass `--full` to force full content.
-- **Body dedup**: `explore --gather --body` and `search --body` replace bodies you've already seen with `"[in context]"` and report `skipped_bodies`. New/changed bodies are returned in full.
+- **Slim edits**: Small diffs (<=20 changed lines) are returned inline automatically. Large diffs are stripped to `{ok, file, hash, lines_changed, diff_available}` — use `edr_diff` to retrieve them.
+- **Delta reads**: Re-reading a file/symbol you've already seen returns `{unchanged: true}` if identical, or `{delta: true, diff: "..."}` with just the changes. Pass `full: true` to force full content.
+- **Body dedup**: `edr_explore(gather: true, body: true)` and `edr_search(body: true)` replace bodies you've already seen with `"[in context]"` and report `skipped_bodies`. New/changed bodies are returned in full.
 
 These optimizations are automatic and session-scoped (reset on reconnect).
-`rename` and `init` clear all tracking state.
+`edr_rename` and `edr_init` clear all tracking state.
 
 ## Key Principles
 
-1. **Use `--budget` flags** to control context size. Don't dump entire files.
-2. **Use `edit` with `old_text`/`new_text`** — same as Edit tool's old_string/new_string, but with auto re-index and hash safety.
-3. **Use `search --body`** to get source inline and avoid follow-up reads.
-4. **Use `map`** to orient in the codebase before diving into files.
-5. **Use `explore --gather --body`** at the start of a task to get source bodies inline.
-6. **Use `rename --dry-run`** to preview cross-file renames before applying.
+1. **Use `budget`** to control context size. Don't dump entire files.
+2. **Use `edr_edit` with `old_text`/`new_text`** — same as Edit tool's old_string/new_string, but with auto re-index and hash safety.
+3. **Use `edr_search(body: true)`** to get source inline and avoid follow-up reads.
+4. **Use `edr_map`** to orient in the codebase before diving into files.
+5. **Use `edr_explore(gather: true, body: true)`** at the start of a task to get source bodies inline.
+6. **Use `edr_rename(dry_run: true)`** to preview cross-file renames before applying.
 7. **Check `truncated`/`total_matches`** in search/find results — budget trimming reports what was cut.
-8. **Use `edit-plan`** for multi-file atomic edits — one call, all-or-nothing.
-9. **Use `refs --impact`** before refactoring to understand blast radius.
-10. **Use `verify`** after edits to confirm the build still passes.
-11. **Use `multi`** in MCP to batch independent commands in one call.
-12. **Small edit diffs are inline** — diffs <=20 lines are included automatically. Large diffs are stored; use `get-diff` to retrieve. Use `--verbose` to always inline.
-13. **Re-reads are delta** — `{unchanged: true}` or `{delta: true, diff: "...", previous_hash: "..."}`. Use `--full` to force full content.
-14. **Use `read file:Class --signatures`** to understand a container's API without reading implementation (75-86% fewer tokens).
-15. **Use `write --inside Container`** to add methods/fields to a class without reading the file first (96% fewer response bytes).
+8. **Use `edr_plan(edits: [...])`** for multi-file atomic edits — one call, all-or-nothing.
+9. **Use `edr_refs(impact: true)`** before refactoring to understand blast radius.
+10. **Use `edr_verify`** after edits to confirm the build still passes.
+11. **Use `edr_plan(reads: [...])`** to batch independent reads in one call.
+12. **Small edit diffs are inline** — diffs <=20 lines are included automatically. Large diffs are stored; use `edr_diff` to retrieve.
+13. **Re-reads are delta** — `{unchanged: true}` or `{delta: true, diff: "..."}`. Use `full: true` to force full content.
+14. **Use `edr_read(files: ["file:Class"], signatures: true)`** to understand a container's API without reading implementation (75-86% fewer tokens).
+15. **Use `edr_write(file: "f.go", inside: "Container", content: "...")`** to add methods/fields to a class without reading the file first (96% fewer response bytes).
 
-## All Commands
+## All MCP Tools
 
-| Command | Purpose |
+| Tool | Purpose |
 |---|---|
-| `read <file> [start] [end]` | Read file, symbol (`file:sym` or `file sym`), or batch (multiple args). `--budget`, `--symbols`, `--signatures`, `--depth N` (progressive: 1=sigs, 2=blocks collapsed, 3+=more) |
-| `search <pattern>` | Symbol search (`--body`). Add `--text`/`--regex`/`--include`/`--exclude`/`--context` for text search |
-| `map [file]` | No args = repo symbol map; with file = file symbols. `--budget`, `--dir`, `--glob`, `--type`, `--grep`. Locals hidden by default (`--locals` to show) |
-| `explore [file] <sym>` | Symbol info with `--body`, `--callers`, `--deps`, `--signatures`. `--gather` for context bundle with tests |
-| `refs [file] <sym>` | Find references. `--impact` for transitive callers, `--chain <sym>` for call path. `--depth` |
-| `edit <file> [sym]` | Edit by `--old_text`/`--new_text` (primary), symbol, or `--start_line`/`--end_line`. `--regex`, `--all`, `--dry-run` |
-| `write <file>` | Create/overwrite. `--append`, `--after <sym>`, `--inside <container>` (+ `--after` for positioning), `--mkdir` |
-| `rename <old> <new>` | Cross-file rename, import-aware. `--dry-run`, `--scope` |
-| `find <pattern>` | Find files by glob (`**` supported). `--dir`, `--budget` |
-| `edit-plan` | Atomic multi-file edits via `flags.edits` array. `--dry-run` |
-| `verify` | Run build/typecheck, return structured pass/fail. `--command`, `--timeout` |
-| `init` | Force re-index the repository |
-| `multi` | Batch multiple commands in one MCP call via `flags.commands`. `--budget` distributes across sub-commands (MCP-only) |
-| `get-diff <file> [sym]` | Retrieve stored diff from last edit (MCP-only) |
+| `edr_read` | Read files, symbols (`file:sym`), or batch. `budget`, `symbols`, `signatures`, `depth` (1=sigs, 2=collapsed), `start_line`/`end_line` |
+| `edr_edit` | Edit by `old_text`/`new_text` (primary), `symbol`, or `start_line`/`end_line`. `regex`, `all`, `dry_run`. Returns `hash` |
+| `edr_write` | Create/overwrite files. `append`, `after` (symbol), `inside` (container), `mkdir` |
+| `edr_search` | Symbol search (`body: true`). Add `text`/`regex`/`include`/`exclude`/`context` for text search |
+| `edr_map` | Omit `file` = repo symbol map; with `file` = file symbols. `budget`, `dir`, `glob`, `type`, `grep`, `locals` |
+| `edr_explore` | Symbol info with `body`, `callers`, `deps`, `signatures`. `gather` for context bundle with tests |
+| `edr_refs` | Find references. `impact` for transitive callers, `chain` for call path, `depth` |
+| `edr_find` | Find files by glob (`**` supported). `dir`, `budget` |
+| `edr_rename` | Cross-file rename, import-aware. `dry_run`, `scope` |
+| `edr_verify` | Run build/typecheck, return structured pass/fail. `command`, `timeout` |
+| `edr_init` | Force re-index the repository |
+| `edr_diff` | Retrieve stored diff from last large edit. `file`, `symbol` |
+| `edr_plan` | Batch `reads` and/or atomic `edits`. `budget` distributes across reads. `dry_run` for edit preview |
 
 All output is structured JSON. All file paths can be relative to repo root.
 All edit commands return `hash` in the response for chaining. If post-edit reindexing
 fails, the edit still succeeds and an `index_error` field is included in the response.
 Query commands return `truncated` and `total_matches` when budget limits apply.
-`read` output includes line numbers prefixed to each line.
+`edr_read` output includes line numbers prefixed to each line.

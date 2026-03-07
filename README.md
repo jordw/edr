@@ -154,49 +154,29 @@ This mode is a good fit for agents and scripts that want multiple sequential ope
 
 ## MCP Mode
 
-`mcp` starts a JSON-RPC server over stdio and exposes a single `edr` tool. The tool accepts:
+`mcp` starts a JSON-RPC server over stdio and exposes 13 dedicated typed tools:
+`edr_read`, `edr_edit`, `edr_write`, `edr_search`, `edr_map`, `edr_explore`,
+`edr_refs`, `edr_find`, `edr_rename`, `edr_verify`, `edr_init`, `edr_diff`, `edr_plan`.
 
-- `cmd`: command name
-- `args`: positional arguments
-- `flags`: command flags as JSON values
+Each tool has typed parameters — no need to construct `{cmd, args, flags}` objects.
 
-Example request payload:
+Example tool calls:
 
-```json
-{
-  "cmd": "search",
-  "args": ["openAndEnsureIndex"],
-  "flags": {
-    "body": true,
-    "budget": 200
-  }
-}
 ```
-
-`multi` and `get-diff` are MCP-only commands (not available in CLI or batch mode).
-
-Batch multiple commands in one MCP call with `cmd: "multi"`:
-
-```json
-{
-  "cmd": "multi",
-  "flags": {
-    "commands": [
-      {"cmd": "read", "args": ["cmd/root.go:openAndEnsureIndex"]},
-      {"cmd": "map", "args": ["internal/edit/edit.go"]}
-    ]
-  }
-}
+edr_search(pattern: "openAndEnsureIndex", body: true, budget: 200)
+edr_read(files: ["cmd/root.go:openAndEnsureIndex", "internal/edit/edit.go"])
+edr_edit(file: "src/main.go", old_text: "oldFunc()", new_text: "newFunc()")
+edr_plan(reads: [{file: "a.go"}, {file: "b.go"}], edits: [{file: "a.go", old_text: "x", new_text: "y"}])
 ```
 
 The MCP server tracks what content the LLM has already seen and shapes responses accordingly:
 
 - **Response dedup**: identical read results return `{"cached": true}`
-- **Slim edits**: `edit` strips the diff from the response (returns `lines_changed` + `diff_available` instead). Use `get-diff <file> [symbol]` to retrieve it, or pass `--verbose` for inline diffs.
-- **Delta reads**: re-reading a file/symbol returns `{unchanged: true}` if identical, or `{delta: true, diff: "..."}` with just the changes. Pass `--full` for full content.
-- **Body dedup**: `explore --gather --body` and `search --body` replace previously-seen bodies with `"[in context]"` and report `skipped_bodies`.
+- **Slim edits**: `edr_edit` strips the diff from the response (returns `lines_changed` + `diff_available` instead). Use `edr_diff` to retrieve it.
+- **Delta reads**: re-reading a file/symbol returns `{unchanged: true}` if identical, or `{delta: true, diff: "..."}` with just the changes. Pass `full: true` for full content.
+- **Body dedup**: `edr_explore(gather: true, body: true)` and `edr_search(body: true)` replace previously-seen bodies with `"[in context]"` and report `skipped_bodies`.
 
-All tracking is session-scoped and resets on reconnect. `rename` and `init` clear all state. Edit commands invalidate the cache for affected files.
+All tracking is session-scoped and resets on reconnect. `edr_rename` and `edr_init` clear all state. Edit commands invalidate the cache for affected files.
 
 ## Repository Layout
 

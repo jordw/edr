@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/jordw/edr/internal/dispatch"
@@ -24,8 +25,8 @@ var mcpCmd = &cobra.Command{
 	Use:   "mcp",
 	Short: "Run as an MCP (Model Context Protocol) server over stdio",
 	Long: `Starts edr as a long-running MCP server that communicates via
-JSON-RPC 2.0 over stdin/stdout. Exposes a single "edr" tool that
-wraps all edr commands. The index database stays open across calls.`,
+JSON-RPC 2.0 over stdin/stdout. Exposes typed tools for file operations.
+The index database stays open across calls.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := getRoot(cmd)
 		db, err := index.OpenDB(root)
@@ -95,11 +96,11 @@ type mcpTool struct {
 type mcpSchema struct {
 	Type       string             `json:"type"`
 	Properties map[string]mcpProp `json:"properties"`
-	Required   []string           `json:"required"`
+	Required   []string           `json:"required,omitempty"`
 }
 
 type mcpProp struct {
-	Type        string `json:"type"`
+	Type        string `json:"type,omitempty"`
 	Description string `json:"description,omitempty"`
 	// For array items
 	Items *mcpPropItems `json:"items,omitempty"`
@@ -114,52 +115,6 @@ type mcpToolCallParams struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
-type edrToolArgs struct {
-	Cmd   string         `json:"cmd"`
-	Args  []string       `json:"args"`
-	Flags map[string]any `json:"flags"`
-}
-
-// UnmarshalJSON handles MCP clients that may send args as a single string
-// instead of an array, or flags as a JSON string instead of an object.
-func (e *edrToolArgs) UnmarshalJSON(data []byte) error {
-	// Use a raw struct to avoid infinite recursion
-	var raw struct {
-		Cmd   string          `json:"cmd"`
-		Args  json.RawMessage `json:"args"`
-		Flags json.RawMessage `json:"flags"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	e.Cmd = raw.Cmd
-
-	// Parse args: accept string or []string
-	if len(raw.Args) > 0 {
-		if raw.Args[0] == '"' {
-			var s string
-			if err := json.Unmarshal(raw.Args, &s); err == nil {
-				e.Args = []string{s}
-			}
-		} else {
-			json.Unmarshal(raw.Args, &e.Args)
-		}
-	}
-
-	// Parse flags: accept string (double-encoded JSON) or object
-	if len(raw.Flags) > 0 {
-		if raw.Flags[0] == '"' {
-			var s string
-			if err := json.Unmarshal(raw.Flags, &s); err == nil {
-				json.Unmarshal([]byte(s), &e.Flags)
-			}
-		} else {
-			json.Unmarshal(raw.Flags, &e.Flags)
-		}
-	}
-	return nil
-}
-
 type mcpToolResult struct {
 	Content []mcpContent `json:"content"`
 }
@@ -167,6 +122,665 @@ type mcpToolResult struct {
 type mcpContent struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+}
+
+// --- Tool definitions ---
+
+func mcpTools() []mcpTool {
+	return []mcpTool{
+		{
+			Name:        "edr_read",
+			Description: "Read files, symbols, or line ranges with budget control.",
+			InputSchema: mcpSchema{
+				Type: "object",
+				Properties: map[string]mcpProp{
+					"files":      {Type: "array", Description: "Paths, file:symbol, or multiple for batch", Items: &mcpPropItems{Type: "string"}},
+					"budget":     {Type: "integer", Description: "Max response tokens"},
+					"start_line": {Type: "integer", Description: "Start line (single file only)"},
+					"end_line":   {Type: "integer", Description: "End line (single file only)"},
+					"symbols":    {Type: "boolean", Description: "Append symbol list"},
+					"signatures": {Type: "boolean", Description: "API surface only (75-86% fewer tokens)"},
+					"depth":      {Type: "integer", Description: "Progressive disclosure (1=sigs, 2=collapsed)"},
+					"full":       {Type: "boolean", Description: "Skip delta optimization"},
+				},
+				Required: []string{"files"},
+			},
+		},
+		{
+			Name:        "edr_edit",
+			Description: "Edit files by text match, symbol, or line range. Returns hash.",
+			InputSchema: mcpSchema{
+				Type: "object",
+				Properties: map[string]mcpProp{
+					"file":       {Type: "string", Description: "File to edit"},
+					"new_text":   {Type: "string", Description: "Replacement content"},
+					"old_text":   {Type: "string", Description: "Text to find and replace"},
+					"symbol":     {Type: "string", Description: "Replace entire symbol body"},
+					"start_line": {Type: "integer", Description: "Start line for range edit"},
+					"end_line":   {Type: "integer", Description: "End line for range edit"},
+					"regex":      {Type: "boolean", Description: "Treat old_text as regex"},
+					"all":        {Type: "boolean", Description: "Replace all matches"},
+					"dry_run":    {Type: "boolean", Description: "Preview as diff"},
+				},
+				Required: []string{"file", "new_text"},
+			},
+		},
+		{
+			Name:        "edr_write",
+			Description: "Create or overwrite files. Auto-indexes new code.",
+			InputSchema: mcpSchema{
+				Type: "object",
+				Properties: map[string]mcpProp{
+					"file":    {Type: "string", Description: "File to create/overwrite"},
+					"content": {Type: "string", Description: "File contents"},
+					"mkdir":   {Type: "boolean", Description: "Create parent dirs"},
+					"append":  {Type: "boolean", Description: "Append instead of overwrite"},
+					"after":   {Type: "string", Description: "Insert after symbol"},
+					"inside":  {Type: "string", Description: "Insert inside container (class/struct)"},
+				},
+				Required: []string{"file", "content"},
+			},
+		},
+		{
+			Name:        "edr_search",
+			Description: "Search symbols or text patterns with optional source bodies.",
+			InputSchema: mcpSchema{
+				Type: "object",
+				Properties: map[string]mcpProp{
+					"pattern": {Type: "string", Description: "Search pattern"},
+					"budget":  {Type: "integer", Description: "Max response tokens"},
+					"body":    {Type: "boolean", Description: "Include source in results"},
+					"text":    {Type: "boolean", Description: "Text search (vs symbol)"},
+					"regex":   {Type: "boolean", Description: "Regex pattern"},
+					"include": {Description: "File glob(s) to include (string or array of strings)"},
+					"exclude": {Description: "File glob(s) to exclude (string or array of strings)"},
+					"context": {Type: "integer", Description: "Lines of context"},
+				},
+				Required: []string{"pattern"},
+			},
+		},
+		{
+			Name:        "edr_map",
+			Description: "Repo or file symbol map. Omit file for repo-wide.",
+			InputSchema: mcpSchema{
+				Type: "object",
+				Properties: map[string]mcpProp{
+					"file":   {Type: "string", Description: "Specific file (omit for repo map). When set, only budget applies; other filters are ignored"},
+					"budget": {Type: "integer", Description: "Max response tokens (repo-wide only)"},
+					"dir":    {Type: "string", Description: "Filter by directory (repo-wide only)"},
+					"glob":   {Type: "string", Description: "Filter by file glob (repo-wide only)"},
+					"type":   {Type: "string", Description: "Filter by symbol type (repo-wide only)"},
+					"grep":   {Type: "string", Description: "Filter by name pattern (repo-wide only)"},
+					"locals": {Type: "boolean", Description: "Include local variables (repo-wide only)"},
+				},
+			},
+		},
+		{
+			Name:        "edr_explore",
+			Description: "Symbol body, callers, deps, or full context bundle.",
+			InputSchema: mcpSchema{
+				Type: "object",
+				Properties: map[string]mcpProp{
+					"symbol":     {Type: "string", Description: "Symbol name"},
+					"file":       {Type: "string", Description: "File to disambiguate"},
+					"budget":     {Type: "integer", Description: "Max response tokens"},
+					"body":       {Type: "boolean", Description: "Include source"},
+					"callers":    {Type: "boolean", Description: "Include callers"},
+					"deps":       {Type: "boolean", Description: "Include dependencies"},
+					"gather":     {Type: "boolean", Description: "Full context with tests"},
+					"signatures": {Type: "boolean", Description: "API surface only"},
+				},
+				Required: []string{"symbol"},
+			},
+		},
+		{
+			Name:        "edr_refs",
+			Description: "Find references, transitive impact, or call chains.",
+			InputSchema: mcpSchema{
+				Type: "object",
+				Properties: map[string]mcpProp{
+					"symbol": {Type: "string", Description: "Symbol name"},
+					"file":   {Type: "string", Description: "File to disambiguate"},
+					"impact": {Type: "boolean", Description: "Transitive callers"},
+					"depth":  {Type: "integer", Description: "Impact depth"},
+					"chain":  {Type: "string", Description: "Find call path to this target"},
+				},
+				Required: []string{"symbol"},
+			},
+		},
+		{
+			Name:        "edr_find",
+			Description: "Find files by glob pattern.",
+			InputSchema: mcpSchema{
+				Type: "object",
+				Properties: map[string]mcpProp{
+					"pattern": {Type: "string", Description: "Glob pattern (supports **)"},
+					"dir":     {Type: "string", Description: "Base directory"},
+					"budget":  {Type: "integer", Description: "Max response tokens"},
+				},
+				Required: []string{"pattern"},
+			},
+		},
+		{
+			Name:        "edr_rename",
+			Description: "Cross-file rename with import-aware references.",
+			InputSchema: mcpSchema{
+				Type: "object",
+				Properties: map[string]mcpProp{
+					"old_name": {Type: "string", Description: "Current name"},
+					"new_name": {Type: "string", Description: "New name"},
+					"dry_run":  {Type: "boolean", Description: "Preview changes"},
+					"scope":    {Type: "string", Description: "Limit to glob pattern"},
+				},
+				Required: []string{"old_name", "new_name"},
+			},
+		},
+		{
+			Name:        "edr_verify",
+			Description: "Run build check, return structured pass/fail.",
+			InputSchema: mcpSchema{
+				Type: "object",
+				Properties: map[string]mcpProp{
+					"command": {Type: "string", Description: "Custom command (auto-detect if omitted)"},
+					"timeout": {Type: "integer", Description: "Timeout in seconds"},
+				},
+			},
+		},
+		{
+			Name:        "edr_init",
+			Description: "Force re-index the repository.",
+			InputSchema: mcpSchema{
+				Type:       "object",
+				Properties: map[string]mcpProp{},
+			},
+		},
+		{
+			Name:        "edr_diff",
+			Description: "Retrieve stored diff from last large edit.",
+			InputSchema: mcpSchema{
+				Type: "object",
+				Properties: map[string]mcpProp{
+					"file":   {Type: "string", Description: "File path"},
+					"symbol": {Type: "string", Description: "Scope to symbol's diff"},
+				},
+				Required: []string{"file"},
+			},
+		},
+		{
+			Name:        "edr_plan",
+			Description: "Batch reads or atomic multi-file edits.",
+			InputSchema: mcpSchema{
+				Type: "object",
+				Properties: map[string]mcpProp{
+					"reads":   {Type: "array", Description: "Batch reads: [{file, symbol?, budget?, signatures?, depth?}]", Items: &mcpPropItems{Type: "object"}},
+					"edits":   {Type: "array", Description: "Atomic edits: [{file, old_text, new_text, symbol?, start_line?, end_line?}]", Items: &mcpPropItems{Type: "object"}},
+					"budget":  {Type: "integer", Description: "Total budget distributed across reads"},
+					"dry_run": {Type: "boolean", Description: "Preview edits as diff"},
+				},
+			},
+		},
+	}
+}
+
+// --- Tool routing ---
+
+// routeTool converts typed tool params into the (cmd, args, flags) tuple for dispatch.
+// Returns isSessionCmd=true for commands handled at the session layer (get-diff).
+func routeTool(toolName string, raw json.RawMessage) (cmd string, args []string, flags map[string]any, isSessionCmd bool, err error) {
+	flags = map[string]any{}
+	args = []string{}
+
+	switch toolName {
+	case "edr_read":
+		var p struct {
+			Files      []string `json:"files"`
+			Budget     *int     `json:"budget"`
+			StartLine  *int     `json:"start_line"`
+			EndLine    *int     `json:"end_line"`
+			Symbols    *bool    `json:"symbols"`
+			Signatures *bool    `json:"signatures"`
+			Depth      *int     `json:"depth"`
+			Full       *bool    `json:"full"`
+		}
+		if err = json.Unmarshal(raw, &p); err != nil {
+			return
+		}
+		cmd = "read"
+		// If single file with start/end lines, fold into args
+		if len(p.Files) == 1 && p.StartLine != nil && p.EndLine != nil {
+			args = []string{p.Files[0], strconv.Itoa(*p.StartLine), strconv.Itoa(*p.EndLine)}
+		} else {
+			args = p.Files
+		}
+		if p.Budget != nil {
+			flags["budget"] = *p.Budget
+		}
+		if p.StartLine != nil && (len(p.Files) != 1 || p.EndLine == nil) {
+			flags["start_line"] = *p.StartLine
+		}
+		if p.EndLine != nil && (len(p.Files) != 1 || p.StartLine == nil) {
+			flags["end_line"] = *p.EndLine
+		}
+		if p.Symbols != nil && *p.Symbols {
+			flags["symbols"] = true
+		}
+		if p.Signatures != nil && *p.Signatures {
+			flags["signatures"] = true
+		}
+		if p.Depth != nil {
+			flags["depth"] = *p.Depth
+		}
+		if p.Full != nil && *p.Full {
+			flags["full"] = true
+		}
+
+	case "edr_edit":
+		var p struct {
+			File      string  `json:"file"`
+			NewText   string  `json:"new_text"`
+			OldText   *string `json:"old_text"`
+			Symbol    *string `json:"symbol"`
+			StartLine *int    `json:"start_line"`
+			EndLine   *int    `json:"end_line"`
+			Regex     *bool   `json:"regex"`
+			All       *bool   `json:"all"`
+			DryRun    *bool   `json:"dry_run"`
+		}
+		if err = json.Unmarshal(raw, &p); err != nil {
+			return
+		}
+		cmd = "edit"
+		if p.Symbol != nil && *p.Symbol != "" {
+			args = []string{p.File, *p.Symbol}
+		} else {
+			args = []string{p.File}
+		}
+		flags["new_text"] = p.NewText
+		if p.OldText != nil {
+			flags["old_text"] = *p.OldText
+		}
+		if p.StartLine != nil {
+			flags["start_line"] = *p.StartLine
+		}
+		if p.EndLine != nil {
+			flags["end_line"] = *p.EndLine
+		}
+		if p.Regex != nil && *p.Regex {
+			flags["regex"] = true
+		}
+		if p.All != nil && *p.All {
+			flags["all"] = true
+		}
+		if p.DryRun != nil && *p.DryRun {
+			flags["dry_run"] = true
+		}
+
+	case "edr_write":
+		var p struct {
+			File    string  `json:"file"`
+			Content string  `json:"content"`
+			Mkdir   *bool   `json:"mkdir"`
+			Append  *bool   `json:"append"`
+			After   *string `json:"after"`
+			Inside  *string `json:"inside"`
+		}
+		if err = json.Unmarshal(raw, &p); err != nil {
+			return
+		}
+		cmd = "write"
+		args = []string{p.File}
+		flags["content"] = p.Content
+		if p.Mkdir != nil && *p.Mkdir {
+			flags["mkdir"] = true
+		}
+		if p.Append != nil && *p.Append {
+			flags["append"] = true
+		}
+		if p.After != nil && *p.After != "" {
+			flags["after"] = *p.After
+		}
+		if p.Inside != nil && *p.Inside != "" {
+			flags["inside"] = *p.Inside
+		}
+
+	case "edr_search":
+		var p struct {
+			Pattern string `json:"pattern"`
+			Budget  *int   `json:"budget"`
+			Body    *bool  `json:"body"`
+			Text    *bool  `json:"text"`
+			Regex   *bool  `json:"regex"`
+			Include any    `json:"include"`
+			Exclude any    `json:"exclude"`
+			Context *int   `json:"context"`
+		}
+		if err = json.Unmarshal(raw, &p); err != nil {
+			return
+		}
+		cmd = "search"
+		args = []string{p.Pattern}
+		if p.Budget != nil {
+			flags["budget"] = *p.Budget
+		}
+		if p.Body != nil && *p.Body {
+			flags["body"] = true
+		}
+		if p.Text != nil && *p.Text {
+			flags["text"] = true
+		}
+		if p.Regex != nil && *p.Regex {
+			flags["regex"] = true
+		}
+		if p.Include != nil {
+			flags["include"] = p.Include
+		}
+		if p.Exclude != nil {
+			flags["exclude"] = p.Exclude
+		}
+		if p.Context != nil {
+			flags["context"] = *p.Context
+		}
+
+	case "edr_map":
+		var p struct {
+			File   *string `json:"file"`
+			Budget *int    `json:"budget"`
+			Dir    *string `json:"dir"`
+			Glob   *string `json:"glob"`
+			Type   *string `json:"type"`
+			Grep   *string `json:"grep"`
+			Locals *bool   `json:"locals"`
+		}
+		if err = json.Unmarshal(raw, &p); err != nil {
+			return
+		}
+		cmd = "map"
+		if p.File != nil && *p.File != "" {
+			args = []string{*p.File}
+		}
+		if p.Budget != nil {
+			flags["budget"] = *p.Budget
+		}
+		if p.Dir != nil && *p.Dir != "" {
+			flags["dir"] = *p.Dir
+		}
+		if p.Glob != nil && *p.Glob != "" {
+			flags["glob"] = *p.Glob
+		}
+		if p.Type != nil && *p.Type != "" {
+			flags["type"] = *p.Type
+		}
+		if p.Grep != nil && *p.Grep != "" {
+			flags["grep"] = *p.Grep
+		}
+		if p.Locals != nil && *p.Locals {
+			flags["locals"] = true
+		}
+
+	case "edr_explore":
+		var p struct {
+			Symbol     string  `json:"symbol"`
+			File       *string `json:"file"`
+			Budget     *int    `json:"budget"`
+			Body       *bool   `json:"body"`
+			Callers    *bool   `json:"callers"`
+			Deps       *bool   `json:"deps"`
+			Gather     *bool   `json:"gather"`
+			Signatures *bool   `json:"signatures"`
+		}
+		if err = json.Unmarshal(raw, &p); err != nil {
+			return
+		}
+		cmd = "explore"
+		if p.File != nil && *p.File != "" {
+			args = []string{*p.File, p.Symbol}
+		} else {
+			args = []string{p.Symbol}
+		}
+		if p.Budget != nil {
+			flags["budget"] = *p.Budget
+		}
+		if p.Body != nil && *p.Body {
+			flags["body"] = true
+		}
+		if p.Callers != nil && *p.Callers {
+			flags["callers"] = true
+		}
+		if p.Deps != nil && *p.Deps {
+			flags["deps"] = true
+		}
+		if p.Gather != nil && *p.Gather {
+			flags["gather"] = true
+		}
+		if p.Signatures != nil && *p.Signatures {
+			flags["signatures"] = true
+		}
+
+	case "edr_refs":
+		var p struct {
+			Symbol string  `json:"symbol"`
+			File   *string `json:"file"`
+			Impact *bool   `json:"impact"`
+			Depth  *int    `json:"depth"`
+			Chain  *string `json:"chain"`
+		}
+		if err = json.Unmarshal(raw, &p); err != nil {
+			return
+		}
+		cmd = "refs"
+		hasChain := p.Chain != nil && *p.Chain != ""
+		if hasChain {
+			// runCallChain expects [fromSymbol, toSymbol] — dispatch appends chain target.
+			// Always pass just [symbol] here; file disambiguation doesn't apply to call chains
+			// since runCallChain resolves symbols by name.
+			args = []string{p.Symbol}
+			flags["chain"] = *p.Chain
+		} else if p.File != nil && *p.File != "" {
+			args = []string{*p.File, p.Symbol}
+		} else {
+			args = []string{p.Symbol}
+		}
+		if p.Impact != nil && *p.Impact {
+			flags["impact"] = true
+		}
+		if p.Depth != nil {
+			flags["depth"] = *p.Depth
+		}
+
+	case "edr_find":
+		var p struct {
+			Pattern string  `json:"pattern"`
+			Dir     *string `json:"dir"`
+			Budget  *int    `json:"budget"`
+		}
+		if err = json.Unmarshal(raw, &p); err != nil {
+			return
+		}
+		cmd = "find"
+		args = []string{p.Pattern}
+		if p.Dir != nil && *p.Dir != "" {
+			flags["dir"] = *p.Dir
+		}
+		if p.Budget != nil {
+			flags["budget"] = *p.Budget
+		}
+
+	case "edr_rename":
+		var p struct {
+			OldName string  `json:"old_name"`
+			NewName string  `json:"new_name"`
+			DryRun  *bool   `json:"dry_run"`
+			Scope   *string `json:"scope"`
+		}
+		if err = json.Unmarshal(raw, &p); err != nil {
+			return
+		}
+		cmd = "rename"
+		args = []string{p.OldName, p.NewName}
+		if p.DryRun != nil && *p.DryRun {
+			flags["dry_run"] = true
+		}
+		if p.Scope != nil && *p.Scope != "" {
+			flags["scope"] = *p.Scope
+		}
+
+	case "edr_verify":
+		var p struct {
+			Command *string `json:"command"`
+			Timeout *int    `json:"timeout"`
+		}
+		if err = json.Unmarshal(raw, &p); err != nil {
+			return
+		}
+		cmd = "verify"
+		if p.Command != nil && *p.Command != "" {
+			flags["command"] = *p.Command
+		}
+		if p.Timeout != nil {
+			flags["timeout"] = *p.Timeout
+		}
+
+	case "edr_init":
+		cmd = "init"
+
+	case "edr_diff":
+		var p struct {
+			File   string  `json:"file"`
+			Symbol *string `json:"symbol"`
+		}
+		if err = json.Unmarshal(raw, &p); err != nil {
+			return
+		}
+		cmd = "get-diff"
+		args = []string{p.File}
+		if p.Symbol != nil && *p.Symbol != "" {
+			args = append(args, *p.Symbol)
+		}
+		isSessionCmd = true
+
+	case "edr_plan":
+		// Handled specially — see handlePlan()
+		cmd = "plan"
+
+	default:
+		err = fmt.Errorf("unknown tool: %s", toolName)
+	}
+	return
+}
+
+// planParams holds the parsed params for edr_plan.
+type planParams struct {
+	Reads  []planRead `json:"reads"`
+	Edits  []planEdit `json:"edits"`
+	Budget *int       `json:"budget"`
+	DryRun *bool      `json:"dry_run"`
+}
+
+type planRead struct {
+	File       string `json:"file"`
+	Symbol     string `json:"symbol,omitempty"`
+	Budget     *int   `json:"budget,omitempty"`
+	Signatures *bool  `json:"signatures,omitempty"`
+	Depth      *int   `json:"depth,omitempty"`
+}
+
+type planEdit struct {
+	File      string `json:"file"`
+	OldText   string `json:"old_text,omitempty"`
+	NewText   string `json:"new_text,omitempty"`
+	Symbol    string `json:"symbol,omitempty"`
+	StartLine *int   `json:"start_line,omitempty"`
+	EndLine   *int   `json:"end_line,omitempty"`
+}
+
+// handlePlan dispatches edr_plan (batch reads + atomic edits).
+func handlePlan(ctx context.Context, db *index.DB, sess *session.Session, raw json.RawMessage) (string, error) {
+	var p planParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return "", err
+	}
+
+	if len(p.Reads) == 0 && len(p.Edits) == 0 {
+		return `{"error": "edr_plan requires reads or edits (or both)"}`, nil
+	}
+
+	var parts []string
+
+	// Dispatch reads via DispatchMulti
+	if len(p.Reads) > 0 {
+		cmds := make([]dispatch.MultiCmd, len(p.Reads))
+		for i, r := range p.Reads {
+			readArgs := []string{r.File}
+			if r.Symbol != "" {
+				readArgs = []string{r.File + ":" + r.Symbol}
+			}
+			readFlags := map[string]any{}
+			if r.Budget != nil {
+				readFlags["budget"] = *r.Budget
+			}
+			if r.Signatures != nil && *r.Signatures {
+				readFlags["signatures"] = true
+			}
+			if r.Depth != nil {
+				readFlags["depth"] = *r.Depth
+			}
+			cmds[i] = dispatch.MultiCmd{Cmd: "read", Args: readArgs, Flags: readFlags}
+		}
+		var budgetOpt []int
+		if p.Budget != nil {
+			budgetOpt = []int{*p.Budget}
+		}
+		results := dispatch.DispatchMulti(ctx, db, cmds, budgetOpt...)
+		text := postProcessMultiResults(sess, cmds, results)
+		parts = append(parts, fmt.Sprintf(`"reads":%s`, text))
+	}
+
+	// Dispatch edits via edit-plan
+	if len(p.Edits) > 0 {
+		editFlags := map[string]any{}
+		editsRaw := make([]map[string]any, len(p.Edits))
+		for i, e := range p.Edits {
+			m := map[string]any{"file": e.File}
+			if e.OldText != "" {
+				m["old_text"] = e.OldText
+			}
+			if e.NewText != "" {
+				m["new_text"] = e.NewText
+			}
+			if e.Symbol != "" {
+				m["symbol"] = e.Symbol
+			}
+			if e.StartLine != nil {
+				m["start_line"] = *e.StartLine
+			}
+			if e.EndLine != nil {
+				m["end_line"] = *e.EndLine
+			}
+			editsRaw[i] = m
+		}
+		editFlags["edits"] = editsRaw
+		if p.DryRun != nil && *p.DryRun {
+			editFlags["dry_run"] = true
+		}
+
+		sess.InvalidateForEdit("edit-plan", []string{})
+
+		result, err := dispatch.Dispatch(ctx, db, "edit-plan", []string{}, editFlags)
+		if err != nil {
+			if ambErr := asAmbiguousError(err); ambErr != nil {
+				data, _ := json.Marshal(ambErr)
+				parts = append(parts, fmt.Sprintf(`"edits":%s`, string(data)))
+			} else {
+				parts = append(parts, fmt.Sprintf(`"edits":{"error":%q}`, err.Error()))
+			}
+		} else {
+			data, _ := json.Marshal(result)
+			text := sess.PostProcess("edit-plan", []string{}, editFlags, result, string(data))
+			parts = append(parts, fmt.Sprintf(`"edits":%s`, text))
+		}
+	}
+
+	return "{" + strings.Join(parts, ",") + "}", nil
 }
 
 // --- Post-process multi results ---
@@ -272,47 +886,7 @@ func serveMCP(db *index.DB) error {
 				JSONRPC: "2.0",
 				ID:      req.ID,
 				Result: map[string]any{
-					"tools": []mcpTool{{
-						Name:        "edr",
-						Description: "Your default tool for ALL file operations. Use this instead of Read, Edit, Write, Grep, Glob. All commands use {cmd, args, flags}.\n\n" +
-							"COMMANDS AND FLAGS:\n\n" +
-							"read: Read files/symbols. args: [\"file\"] or [\"file:symbol\"] or multiple. flags: {budget, symbols (bool), signatures (bool), depth (int), full (bool)}\n" +
-							"  Ex: {cmd:\"read\", args:[\"src/main.go\"]}  {cmd:\"read\", args:[\"src/main.go:MyFunc\"], flags:{budget:300}}\n\n" +
-							"write: Create/overwrite files. args: [\"file\"]. flags: {content: \"file contents\", mkdir (bool), append (bool), after: \"symbol\", inside: \"Container\"}\n" +
-							"  Ex: {cmd:\"write\", args:[\"foo.yml\"], flags:{content:\"key: value\\n\"}}  {cmd:\"write\", args:[\"f.go\"], flags:{inside:\"MyStruct\", content:\"NewField int\"}}\n\n" +
-							"edit: Edit files. args: [\"file\"] or [\"file\", \"symbol\"]. flags: {old_text, new_text, regex (bool), all (bool), start_line, end_line, dry_run (bool)}\n" +
-							"  Ex: {cmd:\"edit\", args:[\"f.go\"], flags:{old_text:\"old code\", new_text:\"new code\"}}\n\n" +
-							"search: Search symbols or text. args: [\"pattern\"]. flags: {body (bool), text (bool), regex (bool), include, exclude, context (int), budget}\n" +
-							"map: Repo/file symbol map. args: [] or [\"file\"]. flags: {budget, dir, glob, type, grep}\n" +
-							"explore: Symbol info. args: [\"symbol\"] or [\"file\",\"symbol\"]. flags: {body (bool), callers (bool), deps (bool), gather (bool), signatures (bool), budget}\n" +
-							"refs: Find references. args: [\"symbol\"]. flags: {impact (bool), depth (int), chain: \"target\"}\n" +
-							"find: Find files by glob. args: [\"pattern\"]. flags: {dir, budget}\n" +
-							"rename: Cross-file rename. args: [\"oldName\",\"newName\"]. flags: {dry_run (bool), scope: \"glob\"}\n" +
-							"edit-plan: Atomic multi-edit. flags: {edits: [{file, old_text, new_text}, ...], dry_run (bool)}\n" +
-							"verify: Run build/typecheck. flags: {command, timeout}\n" +
-							"multi: Batch commands. flags: {commands: [{cmd, args, flags}, ...], budget (int, distributed to sub-commands)}\n" +
-							"get-diff: Get stored diff from last large edit. args: [\"file\"]\n\n" +
-							"All edits return {ok, file, hash}. Re-reads return deltas if unchanged. Small edit diffs (<=20 lines) inline; large diffs stored (use get-diff).",
-						InputSchema: mcpSchema{
-							Type: "object",
-							Properties: map[string]mcpProp{
-								"cmd": {
-									Type:        "string",
-									Description: "Command name (e.g. read, edit, search, map, explore, refs, write, find, rename, verify)",
-								},
-								"args": {
-									Type:        "array",
-									Description: "Positional arguments",
-									Items:       &mcpPropItems{Type: "string"},
-								},
-								"flags": {
-									Type:        "object",
-									Description: "Flags (e.g. {\"budget\": 500, \"body\": true, \"content\": \"new file contents\", \"old_text\": \"find\", \"new_text\": \"replace\"})",
-								},
-							},
-							Required: []string{"cmd"},
-						},
-					}},
+					"tools": mcpTools(),
 				},
 			})
 
@@ -327,8 +901,8 @@ func serveMCP(db *index.DB) error {
 				continue
 			}
 
-			var args edrToolArgs
-			if err := json.Unmarshal(params.Arguments, &args); err != nil {
+			cmd, cmdArgs, flags, isSessionCmd, err := routeTool(params.Name, params.Arguments)
+			if err != nil {
 				enc.Encode(jsonRPCResponse{
 					JSONRPC: "2.0",
 					ID:      req.ID,
@@ -337,16 +911,9 @@ func serveMCP(db *index.DB) error {
 				continue
 			}
 
-			if args.Args == nil {
-				args.Args = []string{}
-			}
-			if args.Flags == nil {
-				args.Flags = map[string]any{}
-			}
-
-			// Session-layer commands (handled before dispatch)
-			if args.Cmd == "get-diff" {
-				result := sess.GetDiff(args.Args)
+			// Session-layer commands (get-diff)
+			if isSessionCmd {
+				result := sess.GetDiff(cmdArgs)
 				data, _ := json.Marshal(result)
 				enc.Encode(jsonRPCResponse{
 					JSONRPC: "2.0",
@@ -369,39 +936,21 @@ func serveMCP(db *index.DB) error {
 			}
 
 			var text string
-			if args.Cmd == "multi" {
-				var cmds []dispatch.MultiCmd
-				if rawCmds, ok := args.Flags["commands"]; ok {
-					raw, _ := json.Marshal(rawCmds)
-					json.Unmarshal(raw, &cmds)
-				}
-				if len(cmds) == 0 {
-					text = `{"error": "multi requires flags.commands array"}`
+
+			// Handle edr_plan specially
+			if cmd == "plan" {
+				planText, planErr := handlePlan(ctx, db, sess, params.Arguments)
+				if planErr != nil {
+					text = fmt.Sprintf(`{"error": %q}`, planErr.Error())
 				} else {
-					// Pass top-level budget to distribute among sub-commands
-				var multiBudget []int
-				if b, ok := args.Flags["budget"]; ok {
-					switch v := b.(type) {
-					case float64:
-						multiBudget = append(multiBudget, int(v))
-					case int:
-						multiBudget = append(multiBudget, v)
-					}
-				}
-				results := dispatch.DispatchMulti(ctx, db, cmds, multiBudget...)
-					for _, c := range cmds {
-						if session.EditCommands[c.Cmd] {
-							sess.InvalidateForEdit(c.Cmd, c.Args)
-						}
-					}
-					text = postProcessMultiResults(sess, cmds, results)
+					text = planText
 				}
 			} else {
-				if session.EditCommands[args.Cmd] || args.Cmd == "init" {
-					sess.InvalidateForEdit(args.Cmd, args.Args)
+				if session.EditCommands[cmd] || cmd == "init" {
+					sess.InvalidateForEdit(cmd, cmdArgs)
 				}
 
-				result, err := dispatch.Dispatch(ctx, db, args.Cmd, args.Args, args.Flags)
+				result, err := dispatch.Dispatch(ctx, db, cmd, cmdArgs, flags)
 				if err != nil {
 					if ambErr := asAmbiguousError(err); ambErr != nil {
 						data, _ := json.Marshal(ambErr)
@@ -414,13 +963,13 @@ func serveMCP(db *index.DB) error {
 					text = string(data)
 
 					// Apply post-processing pipeline (slim edits, delta reads, body stripping)
-					text = sess.PostProcess(args.Cmd, args.Args, args.Flags, result, text)
+					text = sess.PostProcess(cmd, cmdArgs, flags, result, text)
 
 					// Working-set dedup for read commands (after post-processing)
-					if session.ReadCommands[args.Cmd] {
-						key := sess.CacheKey(args.Cmd, args.Args, args.Flags)
+					if session.ReadCommands[cmd] {
+						key := sess.CacheKey(cmd, cmdArgs, flags)
 						if sess.Check(key, text) {
-							text = fmt.Sprintf(`{"cached":true,"message":"identical to previous response for %s %s"}`, args.Cmd, strings.Join(args.Args, " "))
+							text = fmt.Sprintf(`{"cached":true,"message":"identical to previous response for %s %s"}`, cmd, strings.Join(cmdArgs, " "))
 						}
 					}
 				}
@@ -470,7 +1019,7 @@ func asAmbiguousError(err error) *ambiguousResult {
 	r := &ambiguousResult{
 		Error:  "ambiguous",
 		Symbol: ambErr.Name,
-		Hint:   "use [file] <symbol> to disambiguate",
+		Hint:   "use file param to disambiguate",
 	}
 	for _, c := range ambErr.Candidates {
 		r.Candidates = append(r.Candidates, ambiguousCandidate{
