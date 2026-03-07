@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -14,10 +16,11 @@ import (
 
 // DB is the persistent index database.
 type DB struct {
-	db         *retryDB
-	raw        *sql.DB // underlying sql.DB for Close and pragmas
-	root       string
-	dirtyFiles map[string]bool // files needing re-index (lazy indexing)
+	db       *retryDB
+	raw      *sql.DB // underlying sql.DB for Close and pragmas
+	root     string
+	writeMu  sync.Mutex // in-process writer serialization (for MCP goroutines)
+	lockFile *os.File   // cross-process writer lock (.edr/writer.lock)
 }
 
 // retryDB wraps sql.DB to automatically retry on SQLITE_BUSY errors.
@@ -111,51 +114,49 @@ func OpenDB(repoRoot string) (*DB, error) {
 	// negligible while the locking risk is real.
 	sqlDB.SetMaxOpenConns(1)
 
-	d := &DB{db: &retryDB{db: sqlDB}, raw: sqlDB, root: root, dirtyFiles: make(map[string]bool)}
+	// Open a persistent lock file for cross-process writer serialization.
+	// The file stays open for the lifetime of the DB; flock is acquired/released
+	// per write operation via WithWriteLock.
+	lockPath := filepath.Join(edrDir, "writer.lock")
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("open writer lock: %w", err)
+	}
+
+	d := &DB{db: &retryDB{db: sqlDB}, raw: sqlDB, root: root, lockFile: lockFile}
 	if err := d.migrate(); err != nil {
+		lockFile.Close()
 		sqlDB.Close()
 		return nil, err
 	}
 	return d, nil
 }
 
-// MarkDirty records a file as needing re-indexing. The actual re-index
-// is deferred until FlushDirty is called (typically at the start of the
-// next query). This makes edit commands return instantly.
-func (d *DB) MarkDirty(path string) {
-	d.dirtyFiles[path] = true
-}
+// WithWriteLock serializes index mutations across goroutines (sync.Mutex) and
+// across OS processes (flock on .edr/writer.lock). All IndexFile / IndexRepo
+// calls should run inside this lock.
+func (d *DB) WithWriteLock(fn func() error) error {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
 
-// FlushDirty re-indexes any files marked dirty and clears the dirty set.
-// Call this before commands that need up-to-date symbol data.
-func (d *DB) FlushDirty(ctx context.Context) error {
-	if len(d.dirtyFiles) == 0 {
-		return nil
+	if err := syscall.Flock(int(d.lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("acquire writer lock: %w", err)
 	}
-	for path := range d.dirtyFiles {
-		if err := IndexFile(ctx, d, path); err != nil {
-			// Best-effort: log and continue
-			continue
-		}
-	}
-	d.dirtyFiles = make(map[string]bool)
-	return nil
-}
+	defer syscall.Flock(int(d.lockFile.Fd()), syscall.LOCK_UN)
 
-// HasDirty returns true if any files are pending re-index.
-func (d *DB) HasDirty() bool {
-	return len(d.dirtyFiles) > 0
+	return fn()
 }
 
 func (d *DB) Close() error {
-	// Flush any pending dirty files before closing.
-	if d.HasDirty() {
-		d.FlushDirty(context.Background())
+	if d.lockFile != nil {
+		d.lockFile.Close()
 	}
-	// Force a WAL checkpoint so all data is visible to the next process
-	// that opens this database. Without this, short-lived CLI processes
-	// can exit with data still in the WAL that the next process may miss.
-	d.raw.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	// Passive checkpoint: move committed WAL pages to the main DB file without
+	// blocking concurrent readers. Short-lived CLI processes benefit from this
+	// to keep the WAL from growing unbounded, but we avoid TRUNCATE which is a
+	// high-contention write operation.
+	d.raw.Exec("PRAGMA wal_checkpoint(PASSIVE)")
 	return d.raw.Close()
 }
 

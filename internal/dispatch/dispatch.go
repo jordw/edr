@@ -40,13 +40,6 @@ func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flag
 	root := db.Root()
 	setRootOnce.Do(func() { output.SetRoot(root) })
 
-	// Flush any dirty files before commands that need the index.
-	// Write commands (edit, write, rename, edit-plan) are excluded — they
-	// produce dirty files but don't need to flush first.
-	if db.HasDirty() && !isWriteCommand(cmd) {
-		db.FlushDirty(ctx)
-	}
-
 	switch cmd {
 	// --- Unified commands ---
 	case "read":
@@ -355,17 +348,6 @@ func dispatchSequential(ctx context.Context, db *index.DB, commands []MultiCmd, 
 	}
 }
 
-// isWriteCommand returns true for commands that modify files and produce
-// dirty entries rather than needing to flush them.
-func isWriteCommand(cmd string) bool {
-	switch cmd {
-	case "edit", "smart-edit", "write", "write-file", "append-file",
-		"insert-after", "edit-plan", "rename", "rename-symbol":
-		return true
-	}
-	return false
-}
-
 // isGlobalMutating returns true for commands that mutate global state
 // (index, multiple files) and cannot safely run alongside anything else.
 func isGlobalMutating(cmd string) bool {
@@ -401,7 +383,12 @@ func commandFileKey(cmd string, args []string) string {
 
 func runInit(ctx context.Context, db *index.DB) (any, error) {
 	index.ClearTreeCache()
-	filesChanged, symbolsChanged, err := index.IndexRepo(ctx, db)
+	var filesChanged, symbolsChanged int
+	err := db.WithWriteLock(func() error {
+		var e error
+		filesChanged, symbolsChanged, e = index.IndexRepo(ctx, db)
+		return e
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -453,10 +440,41 @@ func toOutputSymbol(sym *index.SymbolInfo, hash string) output.Symbol {
 	}
 }
 
-// editOK builds a successful EditResult with the file's new hash.
-func editOK(file string, message string) output.EditResult {
+// reindexFile re-indexes a single file under the writer lock.
+// Returns an error string for inclusion in the response; empty on success.
+func reindexFile(ctx context.Context, db *index.DB, file string) string {
+	err := db.WithWriteLock(func() error {
+		return index.IndexFile(ctx, db, file)
+	})
+	if err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// reindexFiles re-indexes multiple files under a single writer lock acquisition.
+// Returns a map of file→error for any failures; nil if all succeeded.
+func reindexFiles(ctx context.Context, db *index.DB, files []string) map[string]string {
+	var errs map[string]string
+	db.WithWriteLock(func() error {
+		for _, file := range files {
+			if err := index.IndexFile(ctx, db, file); err != nil {
+				if errs == nil {
+					errs = make(map[string]string)
+				}
+				errs[output.Rel(file)] = err.Error()
+			}
+		}
+		return nil
+	})
+	return errs
+}
+
+// editOKReindex re-indexes the file and builds an EditResult, surfacing any index error.
+func editOKReindex(ctx context.Context, db *index.DB, file string, message string) output.EditResult {
+	indexErr := reindexFile(ctx, db, file)
 	hash, _ := edit.FileHash(file)
-	return output.EditResult{OK: true, File: output.Rel(file), Message: message, Hash: hash}
+	return output.EditResult{OK: true, File: output.Rel(file), Message: message, Hash: hash, IndexError: indexErr}
 }
 
 // --- flag helpers ---

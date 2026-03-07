@@ -103,7 +103,7 @@ func smartEditByteRange(ctx context.Context, db *index.DB, file string, startByt
 		return nil, fmt.Errorf("edit failed: %w", err)
 	}
 
-	db.MarkDirty(file)
+	indexErr := reindexFile(ctx, db, file)
 	newHash, _ := edit.FileHash(file)
 
 	result := map[string]any{
@@ -116,6 +116,9 @@ func smartEditByteRange(ctx context.Context, db *index.DB, file string, startByt
 	}
 	if label != "" {
 		result["symbol"] = label
+	}
+	if indexErr != "" {
+		result["index_error"] = indexErr
 	}
 	return result, nil
 }
@@ -221,15 +224,19 @@ func applyReplaceAll(ctx context.Context, db *index.DB, file, oldContent, newCon
 	if err := os.WriteFile(file, []byte(newContent), info.Mode()); err != nil {
 		return nil, err
 	}
-	db.MarkDirty(file)
+	indexErr := reindexFile(ctx, db, file)
 	newHash, _ := edit.FileHash(file)
 
-	return map[string]any{
+	result := map[string]any{
 		"ok":       true,
 		"file":     output.Rel(file),
 		"hash":     newHash,
 		"old_hash": hash,
 		"count":    count,
 		"match":    matchText,
-	}, nil
+	}
+	if indexErr != "" {
+		result["index_error"] = indexErr
+	}
+	return result, nil
 }

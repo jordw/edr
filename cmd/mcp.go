@@ -40,7 +40,12 @@ wraps all edr commands. The index database stays open across calls.`,
 		ctx := context.Background()
 		files, _, _ := db.Stats(ctx)
 		if files == 0 {
-			index.IndexRepo(ctx, db)
+			if err := db.WithWriteLock(func() error {
+				_, _, err := index.IndexRepo(ctx, db)
+				return err
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "edr: initial indexing failed: %v\n", err)
+			}
 		}
 
 		return serveMCP(db)
@@ -337,7 +342,12 @@ func serveMCP(db *index.DB) error {
 
 			// Check for stale files before dispatching
 			if stale, _ := index.HasStaleFiles(ctx, db); stale {
-				index.IndexRepo(ctx, db)
+				if err := db.WithWriteLock(func() error {
+					_, _, err := index.IndexRepo(ctx, db)
+					return err
+				}); err != nil {
+					fmt.Fprintf(os.Stderr, "edr: re-index failed: %v\n", err)
+				}
 			}
 
 			var text string

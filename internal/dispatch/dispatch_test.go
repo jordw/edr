@@ -10,6 +10,7 @@ import (
 
 	"github.com/jordw/edr/internal/dispatch"
 	"github.com/jordw/edr/internal/index"
+	"github.com/jordw/edr/internal/output"
 )
 
 func TestBatchReadErrorEntries(t *testing.T) {
@@ -299,6 +300,157 @@ func TestDispatchMulti_PreservesResultOrder(t *testing.T) {
 		if !strings.Contains(string(raw), strings.TrimSuffix(commands[i].Args[0], ".go")+".go") {
 			t.Errorf("result %d: expected file reference to %s, got %s", i, commands[i].Args[0], string(raw))
 		}
+	}
+}
+
+func TestEditReindexesImmediately(t *testing.T) {
+	// After an edit, the new symbol should be immediately queryable
+	// without any separate flush or reindex step.
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	if err := os.WriteFile(goFile, []byte("package main\n\nfunc oldName() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Edit: rename oldName to newName via old_text/new_text
+	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+		"old_text": "func oldName()",
+		"new_text": "func newName()",
+	})
+	if err != nil {
+		t.Fatalf("edit dispatch: %v", err)
+	}
+
+	// Verify the edit response has ok=true and no index_error
+	raw, _ := json.Marshal(result)
+	var editOut map[string]any
+	json.Unmarshal(raw, &editOut)
+	if editOut["ok"] != true {
+		t.Fatalf("expected ok=true, got: %s", string(raw))
+	}
+	if ie, ok := editOut["index_error"]; ok && ie != "" {
+		t.Errorf("unexpected index_error: %v", ie)
+	}
+
+	// Immediately read the new symbol — should work without any flush
+	result, err = dispatch.Dispatch(ctx, db, "read", []string{"main.go", "newName"}, map[string]any{})
+	if err != nil {
+		t.Fatalf("read newName after edit: %v", err)
+	}
+	raw, _ = json.Marshal(result)
+	if !strings.Contains(string(raw), "newName") {
+		t.Fatalf("expected newName to be queryable immediately after edit, got: %s", string(raw))
+	}
+}
+
+func TestWriteReindexesImmediately(t *testing.T) {
+	// After a write, the new symbols should be immediately queryable.
+	tmp := t.TempDir()
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Write a new Go file with a function
+	_, err = dispatch.Dispatch(ctx, db, "write", []string{"hello.go"}, map[string]any{
+		"content": "package main\n\nfunc Hello() {\n\tprintln(\"hello\")\n}\n",
+	})
+	if err != nil {
+		t.Fatalf("write dispatch: %v", err)
+	}
+
+	// Immediately read the symbol — should work without any flush
+	result, err := dispatch.Dispatch(ctx, db, "read", []string{"hello.go", "Hello"}, map[string]any{})
+	if err != nil {
+		t.Fatalf("read Hello after write: %v", err)
+	}
+	raw, _ := json.Marshal(result)
+	if !strings.Contains(string(raw), "Hello") {
+		t.Fatalf("expected Hello to be queryable immediately after write, got: %s", string(raw))
+	}
+}
+
+func TestEditNoIndexErrorOnSuccess(t *testing.T) {
+	// Verify that a normal edit returns no index_error field.
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, "main.go"),
+		[]byte("package main\n\nfunc foo() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+		"old_text": "func foo()",
+		"new_text": "func bar()",
+	})
+	if err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+
+	raw, _ := json.Marshal(result)
+	var out map[string]any
+	json.Unmarshal(raw, &out)
+
+	if ie, exists := out["index_error"]; exists {
+		t.Errorf("expected no index_error field on success, got: %v", ie)
+	}
+}
+
+func TestWriteIndexErrorIsSurfaced(t *testing.T) {
+	// Verify that the EditResult struct includes IndexError when present.
+	// We can't easily trigger a real IndexFile failure, but we can verify
+	// the struct serializes the field correctly.
+	r := output.EditResult{
+		OK:         true,
+		File:       "test.go",
+		Message:    "wrote 100 bytes",
+		Hash:       "abcd1234",
+		IndexError: "simulated index failure",
+	}
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var out map[string]any
+	json.Unmarshal(raw, &out)
+
+	if out["index_error"] != "simulated index failure" {
+		t.Errorf("expected index_error to be serialized, got: %s", string(raw))
+	}
+
+	// Verify omitempty: no index_error when empty
+	r.IndexError = ""
+	raw, _ = json.Marshal(r)
+	var out2 map[string]any
+	json.Unmarshal(raw, &out2)
+	if _, exists := out2["index_error"]; exists {
+		t.Errorf("expected index_error to be omitted when empty, got: %s", string(raw))
 	}
 }
 

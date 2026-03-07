@@ -206,11 +206,14 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 	for _, r := range resolved {
 		affectedFiles[r.File] = true
 	}
+	var fileList []string
+	for file := range affectedFiles {
+		fileList = append(fileList, file)
+	}
+	indexErrors := reindexFiles(ctx, db, fileList)
+
 	hashes := make(map[string]string)
 	for file := range affectedFiles {
-		if err := index.IndexFile(ctx, db, file); err != nil {
-			return nil, fmt.Errorf("edit-plan applied but re-index failed for %s: %w", output.Rel(file), err)
-		}
 		if h, err := edit.FileHash(file); err == nil {
 			hashes[output.Rel(file)] = h
 		}
@@ -221,13 +224,17 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 		descriptions = append(descriptions, r.Description)
 	}
 
-	return map[string]any{
+	result := map[string]any{
 		"ok":          true,
 		"edits":       len(resolved),
 		"files":       len(affectedFiles),
 		"hashes":      hashes,
 		"description": descriptions,
-	}, nil
+	}
+	if len(indexErrors) > 0 {
+		result["index_errors"] = indexErrors
+	}
+	return result, nil
 }
 
 func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
@@ -324,20 +331,25 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 	}
 
 	// Re-index all affected files so renamed symbols are immediately queryable.
-	hashes := make(map[string]string)
-	var indexErrors []string
+	var fileList []string
 	for file := range grouped {
-		if err := index.IndexFile(ctx, db, file); err != nil {
-			indexErrors = append(indexErrors, fmt.Sprintf("%s: %v", output.Rel(file), err))
-		}
-		rel := output.Rel(file)
+		fileList = append(fileList, file)
+	}
+	indexErrors := reindexFiles(ctx, db, fileList)
+
+	hashes := make(map[string]string)
+	for file := range grouped {
 		if h, err := edit.FileHash(file); err == nil {
-			hashes[rel] = h
+			hashes[output.Rel(file)] = h
 		}
 	}
 
 	if len(indexErrors) > 0 {
-		return nil, fmt.Errorf("rename applied but re-index failed: %s", strings.Join(indexErrors, "; "))
+		var parts []string
+		for file, errMsg := range indexErrors {
+			parts = append(parts, file+": "+errMsg)
+		}
+		return nil, fmt.Errorf("rename applied but re-index failed: %s", strings.Join(parts, "; "))
 	}
 
 	// Verify the new symbol is queryable — if not, the index is stale despite
