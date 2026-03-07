@@ -2,14 +2,24 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
-	"github.com/jordw/edr/internal/edit"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 )
+
+// writeResult builds an EditResult from a commitResult.
+func writeResult(file string, cr *commitResult, message string) output.EditResult {
+	rel := output.Rel(file)
+	indexErr := ""
+	if len(cr.IndexErrors) > 0 {
+		indexErr = cr.IndexErrors[rel]
+	}
+	return output.EditResult{OK: true, File: rel, Message: message, Hash: cr.Hashes[rel], IndexError: indexErr}
+}
 
 func runWriteFile(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {
@@ -31,11 +41,35 @@ func runWriteFile(ctx context.Context, db *index.DB, root string, args []string,
 		}
 	}
 
-	if err := os.WriteFile(file, []byte(content), 0644); err != nil {
-		return nil, err
+	// Check if file exists to determine write strategy
+	existingData, readErr := os.ReadFile(file)
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return nil, readErr
 	}
 
-	return editOKReindex(ctx, db, file, fmt.Sprintf("wrote %d bytes", len(content))), nil
+	if errors.Is(readErr, os.ErrNotExist) {
+		// New file: create empty, then commit content as insertion
+		if err := os.WriteFile(file, nil, 0644); err != nil {
+			return nil, err
+		}
+		cr, err := commitEdits(ctx, db, []resolvedEdit{{
+			File: file, StartByte: 0, EndByte: 0, Replacement: content,
+		}})
+		if err != nil {
+			os.Remove(file) // cleanup the empty file we just created
+			return nil, err
+		}
+		return writeResult(file, cr, fmt.Sprintf("wrote %d bytes", len(content))), nil
+	}
+
+	// Overwrite existing: replace all content
+	cr, err := commitEdits(ctx, db, []resolvedEdit{{
+		File: file, StartByte: 0, EndByte: uint32(len(existingData)), Replacement: content,
+	}})
+	if err != nil {
+		return nil, err
+	}
+	return writeResult(file, cr, fmt.Sprintf("wrote %d bytes", len(content))), nil
 }
 
 func runAppendFile(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
@@ -63,18 +97,16 @@ func runAppendFile(ctx context.Context, db *index.DB, root string, args []string
 	if len(data) > 0 && data[len(data)-1] == '\n' {
 		sep = ""
 	}
+	insertion := sep + content + "\n"
 
-	newData := append(data, []byte(sep+content+"\n")...)
-
-	info, err := os.Stat(file)
+	cr, err := commitEdits(ctx, db, []resolvedEdit{{
+		File: file, StartByte: uint32(len(data)), EndByte: uint32(len(data)),
+		Replacement: insertion,
+	}})
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(file, newData, info.Mode()); err != nil {
-		return nil, err
-	}
-
-	return editOKReindex(ctx, db, file, fmt.Sprintf("appended %d bytes", len(content))), nil
+	return writeResult(file, cr, fmt.Sprintf("appended %d bytes", len(content))), nil
 }
 
 func runInsertAfter(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
@@ -93,12 +125,14 @@ func runInsertAfter(ctx context.Context, db *index.DB, root string, args []strin
 
 	// Insert content after the symbol, with a blank line separator
 	insertion := "\n\n" + content
-	err = edit.InsertAfterSpan(sym.File, sym.EndByte, insertion)
+	cr, err := commitEdits(ctx, db, []resolvedEdit{{
+		File: sym.File, StartByte: sym.EndByte, EndByte: sym.EndByte,
+		Replacement: insertion,
+	}})
 	if err != nil {
 		return output.EditResult{OK: false, File: output.Rel(sym.File), Message: err.Error()}, nil
 	}
-
-	return editOKReindex(ctx, db, sym.File, fmt.Sprintf("inserted after %s", sym.Name)), nil
+	return writeResult(sym.File, cr, fmt.Sprintf("inserted after %s", sym.Name)), nil
 }
 
 // containerClosingDelimiters maps language IDs to the byte that closes a container body.
@@ -183,12 +217,14 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 		insertion = "\n" + indentedContent + "\n"
 	}
 
-	err = edit.InsertAfterSpan(container.File, uint32(insertByte), insertion)
+	cr, err := commitEdits(ctx, db, []resolvedEdit{{
+		File: container.File, StartByte: uint32(insertByte), EndByte: uint32(insertByte),
+		Replacement: insertion,
+	}})
 	if err != nil {
 		return output.EditResult{OK: false, File: output.Rel(container.File), Message: err.Error()}, nil
 	}
-
-	return editOKReindex(ctx, db, container.File, fmt.Sprintf("inserted inside %s", container.Name)), nil
+	return writeResult(container.File, cr, fmt.Sprintf("inserted inside %s", container.Name)), nil
 }
 
 // insertInsideAfterChild inserts content after a specific child symbol within a container.
@@ -210,12 +246,14 @@ func insertInsideAfterChild(ctx context.Context, db *index.DB, container *index.
 	indentedContent := indentContent(content, indent)
 	insertion := "\n\n" + indentedContent
 
-	err = edit.InsertAfterSpan(container.File, child.EndByte, insertion)
+	cr, err := commitEdits(ctx, db, []resolvedEdit{{
+		File: container.File, StartByte: child.EndByte, EndByte: child.EndByte,
+		Replacement: insertion,
+	}})
 	if err != nil {
 		return output.EditResult{OK: false, File: output.Rel(container.File), Message: err.Error()}, nil
 	}
-
-	return editOKReindex(ctx, db, container.File, fmt.Sprintf("inserted inside %s after %s", container.Name, childName)), nil
+	return writeResult(container.File, cr, fmt.Sprintf("inserted inside %s after %s", container.Name, childName)), nil
 }
 
 // findContainerInsertionPoint finds the byte offset just before the closing delimiter

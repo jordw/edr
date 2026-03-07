@@ -98,27 +98,27 @@ func smartEditByteRange(ctx context.Context, db *index.DB, file string, startByt
 	}
 
 	hash, _ := edit.FileHash(file)
-	err = edit.ReplaceSpan(file, startByte, endByte, replacement, hash)
+	cr, err := commitEdits(ctx, db, []resolvedEdit{{
+		File: file, StartByte: startByte, EndByte: endByte,
+		Replacement: replacement, ExpectHash: hash,
+	}})
 	if err != nil {
 		return nil, fmt.Errorf("edit failed: %w", err)
 	}
-
-	indexErr := reindexFile(ctx, db, file)
-	newHash, _ := edit.FileHash(file)
 
 	result := map[string]any{
 		"ok":       true,
 		"file":     output.Rel(file),
 		"diff":     diff,
-		"hash":     newHash,
+		"hash":     cr.Hashes[output.Rel(file)],
 		"old_size": len(oldBody) / 4,
 		"new_size": len(replacement) / 4,
 	}
 	if label != "" {
 		result["symbol"] = label
 	}
-	if indexErr != "" {
-		result["index_error"] = indexErr
+	if len(cr.IndexErrors) > 0 {
+		result["index_error"] = cr.IndexErrors[output.Rel(file)]
 	}
 	return result, nil
 }
@@ -219,24 +219,26 @@ func applyReplaceAll(ctx context.Context, db *index.DB, file, oldContent, newCon
 		}, nil
 	}
 
-	hash, _ := edit.FileHash(file)
-	info, _ := os.Stat(file)
-	if err := os.WriteFile(file, []byte(newContent), info.Mode()); err != nil {
+	oldHash, _ := edit.FileHash(file)
+	// Replace-all: replace entire file content as a single span
+	cr, err := commitEdits(ctx, db, []resolvedEdit{{
+		File: file, StartByte: 0, EndByte: uint32(len(oldContent)),
+		Replacement: newContent, ExpectHash: oldHash,
+	}})
+	if err != nil {
 		return nil, err
 	}
-	indexErr := reindexFile(ctx, db, file)
-	newHash, _ := edit.FileHash(file)
 
 	result := map[string]any{
 		"ok":       true,
 		"file":     output.Rel(file),
-		"hash":     newHash,
-		"old_hash": hash,
+		"hash":     cr.Hashes[output.Rel(file)],
+		"old_hash": oldHash,
 		"count":    count,
 		"match":    matchText,
 	}
-	if indexErr != "" {
-		result["index_error"] = indexErr
+	if len(cr.IndexErrors) > 0 {
+		result["index_error"] = cr.IndexErrors[output.Rel(file)]
 	}
 	return result, nil
 }

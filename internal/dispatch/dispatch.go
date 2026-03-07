@@ -456,7 +456,7 @@ func reindexFile(ctx context.Context, db *index.DB, file string) string {
 // Returns a map of file→error for any failures; nil if all succeeded.
 func reindexFiles(ctx context.Context, db *index.DB, files []string) map[string]string {
 	var errs map[string]string
-	db.WithWriteLock(func() error {
+	if lockErr := db.WithWriteLock(func() error {
 		for _, file := range files {
 			if err := index.IndexFile(ctx, db, file); err != nil {
 				if errs == nil {
@@ -466,15 +466,68 @@ func reindexFiles(ctx context.Context, db *index.DB, files []string) map[string]
 			}
 		}
 		return nil
-	})
+	}); lockErr != nil {
+		if errs == nil {
+			errs = make(map[string]string)
+		}
+		for _, file := range files {
+			errs[output.Rel(file)] = lockErr.Error()
+		}
+	}
 	return errs
 }
 
-// editOKReindex re-indexes the file and builds an EditResult, surfacing any index error.
-func editOKReindex(ctx context.Context, db *index.DB, file string, message string) output.EditResult {
-	indexErr := reindexFile(ctx, db, file)
-	hash, _ := edit.FileHash(file)
-	return output.EditResult{OK: true, File: output.Rel(file), Message: message, Hash: hash, IndexError: indexErr}
+type resolvedEdit struct {
+	File        string
+	StartByte   uint32
+	EndByte     uint32
+	Replacement string
+	ExpectHash  string
+	Description string
+}
+
+type commitResult struct {
+	Hashes      map[string]string
+	IndexErrors map[string]string
+	FileCount   int
+	EditCount   int
+}
+
+// commitEdits applies edits via Transaction and reindexes all affected files.
+// NOT atomic — earlier files are not rolled back on mid-commit failure.
+func commitEdits(ctx context.Context, db *index.DB, edits []resolvedEdit) (*commitResult, error) {
+	tx := edit.NewTransaction()
+	for _, r := range edits {
+		tx.Add(r.File, r.StartByte, r.EndByte, r.Replacement, r.ExpectHash)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	fileSet := make(map[string]bool)
+	for _, r := range edits {
+		fileSet[r.File] = true
+	}
+	var fileList []string
+	for f := range fileSet {
+		fileList = append(fileList, f)
+	}
+
+	indexErrors := reindexFiles(ctx, db, fileList)
+
+	hashes := make(map[string]string)
+	for f := range fileSet {
+		if h, err := edit.FileHash(f); err == nil {
+			hashes[output.Rel(f)] = h
+		}
+	}
+
+	return &commitResult{
+		Hashes:      hashes,
+		IndexErrors: indexErrors,
+		FileCount:   len(fileSet),
+		EditCount:   len(edits),
+	}, nil
 }
 
 // --- flag helpers ---

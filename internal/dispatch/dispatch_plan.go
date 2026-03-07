@@ -63,16 +63,6 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 
 	dryRun := flagBool(flags, "dry-run", false)
 
-	// Resolve each edit to byte-level spans
-	type resolvedEdit struct {
-		File        string
-		StartByte   uint32
-		EndByte     uint32
-		Replacement string
-		ExpectHash  string
-		Description string
-	}
-
 	var resolved []resolvedEdit
 
 	for i, e := range edits {
@@ -192,31 +182,9 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 		}, nil
 	}
 
-	// Apply atomically via Transaction
-	tx := edit.NewTransaction()
-	for _, r := range resolved {
-		tx.Add(r.File, r.StartByte, r.EndByte, r.Replacement, r.ExpectHash)
-	}
-	if err := tx.Commit(); err != nil {
+	cr, err := commitEdits(ctx, db, resolved)
+	if err != nil {
 		return nil, fmt.Errorf("edit-plan: %w", err)
-	}
-
-	// Re-index affected files so edits are immediately queryable.
-	affectedFiles := make(map[string]bool)
-	for _, r := range resolved {
-		affectedFiles[r.File] = true
-	}
-	var fileList []string
-	for file := range affectedFiles {
-		fileList = append(fileList, file)
-	}
-	indexErrors := reindexFiles(ctx, db, fileList)
-
-	hashes := make(map[string]string)
-	for file := range affectedFiles {
-		if h, err := edit.FileHash(file); err == nil {
-			hashes[output.Rel(file)] = h
-		}
 	}
 
 	var descriptions []string
@@ -226,13 +194,13 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 
 	result := map[string]any{
 		"ok":          true,
-		"edits":       len(resolved),
-		"files":       len(affectedFiles),
-		"hashes":      hashes,
+		"edits":       cr.EditCount,
+		"files":       cr.FileCount,
+		"hashes":      cr.Hashes,
 		"description": descriptions,
 	}
-	if len(indexErrors) > 0 {
-		result["index_errors"] = indexErrors
+	if len(cr.IndexErrors) > 0 {
+		result["index_errors"] = cr.IndexErrors
 	}
 	return result, nil
 }
@@ -314,7 +282,7 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 		}, nil
 	}
 
-	tx := edit.NewTransaction()
+	var edits []resolvedEdit
 	for file, fileRefs := range grouped {
 		hash, _ := edit.FileHash(file)
 		for i, r := range fileRefs {
@@ -322,31 +290,21 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 			if i == 0 {
 				h = hash
 			}
-			tx.Add(file, r.StartByte, r.EndByte, newName, h)
+			edits = append(edits, resolvedEdit{
+				File: file, StartByte: r.StartByte, EndByte: r.EndByte,
+				Replacement: newName, ExpectHash: h,
+			})
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
+	cr, err := commitEdits(ctx, db, edits)
+	if err != nil {
 		return nil, fmt.Errorf("rename failed: %w", err)
 	}
 
-	// Re-index all affected files so renamed symbols are immediately queryable.
-	var fileList []string
-	for file := range grouped {
-		fileList = append(fileList, file)
-	}
-	indexErrors := reindexFiles(ctx, db, fileList)
-
-	hashes := make(map[string]string)
-	for file := range grouped {
-		if h, err := edit.FileHash(file); err == nil {
-			hashes[output.Rel(file)] = h
-		}
-	}
-
-	if len(indexErrors) > 0 {
+	if len(cr.IndexErrors) > 0 {
 		var parts []string
-		for file, errMsg := range indexErrors {
+		for file, errMsg := range cr.IndexErrors {
 			parts = append(parts, file+": "+errMsg)
 		}
 		return nil, fmt.Errorf("rename applied but re-index failed: %s", strings.Join(parts, "; "))
@@ -363,6 +321,6 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 		NewName:      newName,
 		FilesChanged: filesChanged,
 		Occurrences:  len(refs),
-		Hashes:       hashes,
+		Hashes:       cr.Hashes,
 	}, nil
 }
