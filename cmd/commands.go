@@ -88,8 +88,11 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 
 	sess := session.New()
 	flags := extractFlags(cmd)
-	if err := readStdinToFlags(flags, stdinKey); err != nil {
-		return err
+	// If the content flag was provided on CLI, skip stdin
+	if v, ok := flags[stdinKey]; !ok || v == nil || v == "" {
+		if err := readStdinToFlags(flags, stdinKey); err != nil {
+			return err
+		}
 	}
 	return dispatchWithSession(db, sess, cmdName, args, flags)
 }
@@ -159,6 +162,7 @@ func init() {
 	editCmd.Flags().Int("start_line", 0, "start line for line-range mode")
 	editCmd.Flags().Int("end_line", 0, "end line for line-range mode")
 	editCmd.Flags().String("old_text", "", "text to find and replace")
+	editCmd.Flags().String("new_text", "", "replacement text (alternative to stdin)")
 	editCmd.Flags().Bool("regex", false, "treat --old_text as regex")
 	editCmd.Flags().Bool("all", false, "replace all occurrences (with --old_text)")
 	editCmd.Flags().Bool("dry-run", false, "preview changes as a diff without applying")

@@ -8,6 +8,12 @@ import (
 	"github.com/jordw/edr/internal/output"
 )
 
+// containerTypes lists symbol types that are valid containers.
+var containerTypes = map[string]bool{
+	"class": true, "struct": true, "enum": true, "impl": true,
+	"interface": true, "type": true, "module": true,
+}
+
 // Gather builds a minimal context bundle for a symbol.
 // When includeBody is true, inlines source bodies for target, callers, and tests.
 // When includeSigs is true, includes extracted signatures on all symbols.
@@ -26,6 +32,24 @@ func Gather(ctx context.Context, db *index.DB, file, symbolName string, budget i
 	}
 
 	remaining := budget - target.Size
+
+	// Find container (class/struct/impl) for the target symbol
+	allFileSyms, _ := db.GetSymbolsByFile(ctx, sym.File)
+	for _, candidate := range allFileSyms {
+		if containerTypes[candidate.Type] &&
+			candidate.StartLine <= sym.StartLine &&
+			candidate.EndLine >= sym.EndLine &&
+			candidate.Name != sym.Name {
+			csym := symbolToOutputSig(candidate, showSigs)
+			result.Container = &csym
+			stub := index.ExtractContainerStub(candidate, allFileSyms)
+			result.ContainerStub = stub
+			stubTokens := len(stub) / 4
+			result.TotalTokens += stubTokens
+			remaining -= stubTokens
+			break
+		}
+	}
 
 	// Include target body
 	if includeBody {

@@ -82,7 +82,7 @@ func ContentHash(data string) string {
 
 func (s *Session) CacheKey(cmd string, args []string, flags map[string]any) string {
 	key := cmd + "\x00" + strings.Join(args, "\x00")
-	for _, f := range []string{"budget", "body", "callers", "deps", "signatures", "context", "regex", "include", "exclude", "dir", "glob", "type", "grep", "symbols", "full", "verbose"} {
+	for _, f := range []string{"budget", "body", "callers", "deps", "depth", "signatures", "context", "regex", "include", "exclude", "dir", "glob", "type", "grep", "symbols", "full", "verbose"} {
 		if v, ok := flags[f]; ok {
 			key += fmt.Sprintf("\x00%s=%v", f, v)
 		}
@@ -308,8 +308,18 @@ func (s *Session) ProcessReadResult(cmd string, result map[string]any, flags map
 		file, _ := sym["file"].(string)
 		name, _ := sym["name"].(string)
 		key = file + ":" + name
+		// Depth-specific reads produce different content for the same symbol;
+		// track them under separate keys so depth=2 doesn't return "unchanged"
+		// when the caller previously saw the full body (or vice versa).
+		if d, ok := flags["depth"]; ok {
+			if di, isNum := d.(float64); isNum && di > 0 {
+				key += fmt.Sprintf(":depth=%d", int(di))
+			} else if di, isInt := d.(int); isInt && di > 0 {
+				key += fmt.Sprintf(":depth=%d", di)
+			}
+		}
 		label = key
-		s.SeenBodies[key] = ContentHash(content)
+		s.SeenBodies[file+":"+name] = ContentHash(content)
 	} else if c, ok := result["content"].(string); ok && c != "" {
 		// File-shaped result (read file)
 		content = c

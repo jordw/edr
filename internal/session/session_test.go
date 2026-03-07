@@ -88,6 +88,50 @@ func TestCacheKey_DifferentCmds(t *testing.T) {
 	}
 }
 
+func TestCacheKey_DepthIncluded(t *testing.T) {
+	s := New()
+	k1 := s.CacheKey("read", []string{"f.go:sym"}, map[string]any{})
+	k2 := s.CacheKey("read", []string{"f.go:sym"}, map[string]any{"depth": 2})
+	if k1 == k2 {
+		t.Error("depth flag should produce a different cache key")
+	}
+}
+
+func TestProcessReadResult_DepthAffectsKey(t *testing.T) {
+	s := New()
+
+	// First: store full body (no depth)
+	result1 := map[string]any{
+		"body":   "func foo() { full body }",
+		"symbol": map[string]any{"file": "f.go", "name": "foo", "hash": "abc"},
+	}
+	if delta := s.ProcessReadResult("read", result1, map[string]any{}); delta != nil {
+		t.Error("first read should return nil (new)")
+	}
+
+	// Second: read with depth=2 and different content
+	result2 := map[string]any{
+		"body":   "func foo() { ... }",
+		"symbol": map[string]any{"file": "f.go", "name": "foo", "hash": "abc"},
+	}
+	delta := s.ProcessReadResult("read", result2, map[string]any{"depth": 2})
+	if delta != nil {
+		// depth=2 should be a separate key, so this is "new" content, not "unchanged"
+		if delta["unchanged"] == true {
+			t.Error("depth=2 read should NOT return unchanged when full body was stored")
+		}
+	}
+
+	// Third: re-read with depth=2 and same content → should be unchanged
+	delta = s.ProcessReadResult("read", result2, map[string]any{"depth": 2})
+	if delta == nil {
+		t.Error("re-read at same depth should return delta")
+	}
+	if delta["unchanged"] != true {
+		t.Errorf("expected unchanged, got: %v", delta)
+	}
+}
+
 // --- Check ---
 
 func TestCheck_FirstCall(t *testing.T) {

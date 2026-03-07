@@ -290,7 +290,7 @@ func serveMCP(db *index.DB) error {
 							"rename: Cross-file rename. args: [\"oldName\",\"newName\"]. flags: {dry_run (bool), scope: \"glob\"}\n" +
 							"edit-plan: Atomic multi-edit. flags: {edits: [{file, old_text, new_text}, ...], dry_run (bool)}\n" +
 							"verify: Run build/typecheck. flags: {command, timeout}\n" +
-							"multi: Batch commands. flags: {commands: [{cmd, args, flags}, ...]}\n" +
+							"multi: Batch commands. flags: {commands: [{cmd, args, flags}, ...], budget (int, distributed to sub-commands)}\n" +
 							"get-diff: Get stored diff from last large edit. args: [\"file\"]\n\n" +
 							"All edits return {ok, file, hash}. Re-reads return deltas if unchanged. Small edit diffs (<=20 lines) inline; large diffs stored (use get-diff).",
 						InputSchema: mcpSchema{
@@ -378,7 +378,17 @@ func serveMCP(db *index.DB) error {
 				if len(cmds) == 0 {
 					text = `{"error": "multi requires flags.commands array"}`
 				} else {
-					results := dispatch.DispatchMulti(ctx, db, cmds)
+					// Pass top-level budget to distribute among sub-commands
+				var multiBudget []int
+				if b, ok := args.Flags["budget"]; ok {
+					switch v := b.(type) {
+					case float64:
+						multiBudget = append(multiBudget, int(v))
+					case int:
+						multiBudget = append(multiBudget, v)
+					}
+				}
+				results := dispatch.DispatchMulti(ctx, db, cmds, multiBudget...)
 					for _, c := range cmds {
 						if session.EditCommands[c.Cmd] {
 							sess.InvalidateForEdit(c.Cmd, c.Args)

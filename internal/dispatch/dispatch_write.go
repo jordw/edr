@@ -72,6 +72,11 @@ func runWriteFile(ctx context.Context, db *index.DB, root string, args []string,
 		return writeResult(file, cr, fmt.Sprintf("wrote %d bytes", len(content))), nil
 	}
 
+	// Guard: refuse to overwrite a non-empty file with empty content
+	if content == "" && len(existingData) > 0 && !flagBool(flags, "force", false) {
+		return nil, fmt.Errorf("refusing to overwrite non-empty file with empty content (use --force to override)")
+	}
+
 	// Overwrite existing: replace all content
 	cr, err := commitEdits(ctx, db, []resolvedEdit{{
 		File: file, StartByte: 0, EndByte: uint32(len(existingData)), Replacement: content,
@@ -192,16 +197,29 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 		return nil, fmt.Errorf("symbol %q is a %s, not a container type (class/struct/impl/module)", containerName, container.Type)
 	}
 
-	// Read the file
-	data, err := os.ReadFile(container.File)
-	if err != nil {
-		return nil, err
-	}
-
 	// Determine language
 	lang := ""
 	if cfg := index.GetLangConfig(container.File); cfg != nil {
 		lang = cfg.LangID
+	}
+
+	// Go structs hold fields, not methods — methods are declared outside with receivers.
+	// Inserting a method inside a struct body is almost always wrong.
+	if lang == "go" && (container.Type == "struct" || container.Type == "type") {
+		// Check if this is actually a struct (type decls can be interfaces too)
+		data, err := os.ReadFile(container.File)
+		if err == nil {
+			body := string(data[container.StartByte:container.EndByte])
+			if strings.Contains(body, "struct {") || strings.Contains(body, "struct{") {
+				return nil, fmt.Errorf("symbol %q is a Go struct — methods go outside with receivers, not inside. Use 'write %s --after %s' to insert after the struct definition", containerName, output.Rel(container.File), containerName)
+			}
+		}
+	}
+
+	// Read the file
+	data, err := os.ReadFile(container.File)
+	if err != nil {
+		return nil, err
 	}
 
 	// If --after is set, find the child symbol and insert after it

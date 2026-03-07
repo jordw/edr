@@ -229,7 +229,7 @@ type MultiResult struct {
 // Commands targeting different files run in parallel. Commands targeting
 // the same file run sequentially in their original order. Global-mutating
 // commands (init, rename, edit-plan) force fully sequential execution.
-func DispatchMulti(ctx context.Context, db *index.DB, commands []MultiCmd) []MultiResult {
+func DispatchMulti(ctx context.Context, db *index.DB, commands []MultiCmd, topBudget ...int) []MultiResult {
 	results := make([]MultiResult, len(commands))
 
 	// Normalize nil args/flags
@@ -239,6 +239,19 @@ func DispatchMulti(ctx context.Context, db *index.DB, commands []MultiCmd) []Mul
 		}
 		if commands[i].Flags == nil {
 			commands[i].Flags = map[string]any{}
+		}
+	}
+
+	// Distribute top-level budget to sub-commands that don't have one
+	if len(topBudget) > 0 && topBudget[0] > 0 && len(commands) > 0 {
+		perCmd := topBudget[0] / len(commands)
+		if perCmd < 50 {
+			perCmd = 50
+		}
+		for i := range commands {
+			if _, has := commands[i].Flags["budget"]; !has {
+				commands[i].Flags["budget"] = perCmd
+			}
 		}
 	}
 

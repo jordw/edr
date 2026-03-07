@@ -58,7 +58,7 @@ Install it for another repository with the bootstrap script:
 
 ## Commands
 
-edr has 12 primary commands.
+edr has 14 primary commands.
 
 ### Reading & Navigation
 
@@ -96,10 +96,10 @@ edr has 12 primary commands.
 ### Editing
 
 ```bash
-./edr edit cmd/root.go openAndEnsureIndex         # replace symbol (stdin)
+./edr edit cmd/root.go openAndEnsureIndex         # replace symbol (stdin or --new_text)
 ./edr edit cmd/root.go --start_line 31 --end_line 62   # replace line range
-./edr edit src/main.go --match "v[0-9]+" --regex --all  # find-and-replace
-./edr edit src/main.go --match "old" --dry-run    # preview without applying
+./edr edit src/main.go --old_text "v[0-9]+" --regex --all --new_text "v2"  # find-and-replace
+./edr edit src/main.go --old_text "old" --new_text "new" --dry-run       # preview without applying
 ./edr rename oldName newName --dry-run            # preview cross-file rename
 ./edr rename oldName newName --scope "internal/**"
 ```
@@ -172,6 +172,8 @@ Example request payload:
   }
 }
 ```
+
+`multi` and `get-diff` are MCP-only commands (not available in CLI or batch mode).
 
 Batch multiple commands in one MCP call with `cmd: "multi"`:
 
@@ -249,9 +251,9 @@ All shell benchmarks accept `ITERS=N` for iteration count (default 5), include w
 
 edr is designed to minimize context usage for LLM agents:
 
-- **`--signatures`**: Read a class/struct/impl as just method signatures — 75–86% fewer tokens than reading the full body.
+- **`--signatures`**: Read a class/struct/impl as just method signatures — 75–86% fewer tokens than reading the full body. For Go files, receiver methods are grouped under their types.
 - **`--depth N`**: Progressive disclosure via tree-sitter AST. `--depth 2` shows method bodies with control flow blocks collapsed to `...`. Each depth level reveals one more nesting layer.
-- **`--inside`**: Add a method to a class without reading the file first — 96% fewer response bytes vs read+edit.
+- **`--inside`**: Add a method to a class without reading the file first — 96% fewer response bytes vs read+edit. Go structs are rejected (methods go outside with receivers).
 - **Delta reads**: Re-reading a file returns only what changed (`{delta: true, diff: "..."}`).
 - **Slim edits**: Small diffs inline automatically; large diffs stored for retrieval via `get-diff`.
 - **Body dedup**: `search --body` and `explore --gather --body` replace already-seen bodies with `[in context]`.

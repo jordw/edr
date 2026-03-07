@@ -23,6 +23,10 @@ func runRepoMap(ctx context.Context, db *index.DB, flags map[string]any) (any, e
 	if grep := flagString(flags, "grep", ""); grep != "" {
 		opts = append(opts, index.WithGrep(grep))
 	}
+	// Hide locals by default; pass --locals to include them
+	if !flagBool(flags, "locals", false) {
+		opts = append(opts, index.WithHideLocals())
+	}
 
 	repoMap, err := index.RepoMap(ctx, db, opts...)
 	if err != nil {

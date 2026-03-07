@@ -288,6 +288,7 @@ type repoMapConfig struct {
 	glob       string // only include files matching this glob
 	symbolType string // filter to this symbol type
 	grep       string // only include symbols whose name contains this
+	hideLocals bool   // hide symbols nested inside functions/methods
 }
 
 // RepoMapOption configures RepoMap behavior.
@@ -311,6 +312,11 @@ func WithSymbolType(t string) RepoMapOption {
 // WithGrep filters repo-map to symbols whose name contains the given string.
 func WithGrep(grep string) RepoMapOption {
 	return func(c *repoMapConfig) { c.grep = grep }
+}
+
+// WithHideLocals filters out symbols that are nested inside functions/methods.
+func WithHideLocals() RepoMapOption {
+	return func(c *repoMapConfig) { c.hideLocals = true }
 }
 
 // matchDoublestarPath matches a relative path against a ** glob pattern.
@@ -405,14 +411,53 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, error)
 		byFile[s.File] = append(byFile[s.File], s)
 	}
 
+	// Filter out locals (symbols nested inside functions/methods)
+	if cfg.hideLocals {
+		for file, syms := range byFile {
+			// Collect function/method ranges
+			type span struct{ start, end uint32 }
+			var funcSpans []span
+			for _, s := range syms {
+				if s.Type == "function" || s.Type == "method" {
+					funcSpans = append(funcSpans, span{s.StartLine, s.EndLine})
+				}
+			}
+			// Filter: keep symbols not contained inside any function/method
+			filtered := syms[:0]
+			for _, s := range syms {
+				isLocal := false
+				if s.Type != "function" && s.Type != "method" {
+					for _, fs := range funcSpans {
+						if s.StartLine > fs.start && s.EndLine <= fs.end {
+							isLocal = true
+							break
+						}
+					}
+				}
+				if !isLocal {
+					filtered = append(filtered, s)
+				}
+			}
+			if len(filtered) == 0 {
+				delete(byFile, file)
+			} else {
+				byFile[file] = filtered
+			}
+		}
+	}
+
 	var b strings.Builder
 	for _, file := range fileOrder {
+		syms := byFile[file]
+		if len(syms) == 0 {
+			continue
+		}
 		rel, _ := filepath.Rel(root, file)
 		if rel == "" {
 			rel = file
 		}
 		fmt.Fprintf(&b, "\n%s\n", rel)
-		for _, sym := range byFile[file] {
+		for _, sym := range syms {
 			fmt.Fprintf(&b, "  %s %s [%d-%d]\n", sym.Type, sym.Name, sym.StartLine, sym.EndLine)
 		}
 	}

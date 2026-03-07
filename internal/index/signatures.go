@@ -288,6 +288,139 @@ func extractPythonDocstring(body string) string {
 	return ""
 }
 
+// GoFileSignatures produces a signatures view of a Go file that groups
+// receiver methods under their type definitions. Non-Go files return "".
+func GoFileSignatures(file string, syms []SymbolInfo) string {
+	if filepath.Ext(file) != ".go" {
+		return ""
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return ""
+	}
+
+	// Separate types, methods, and other top-level symbols
+	type typeEntry struct {
+		sig     string
+		methods []string
+		line    uint32
+	}
+	types := make(map[string]*typeEntry) // receiver name → entry
+	var typeOrder []string
+	var other []struct {
+		sig  string
+		line uint32
+	}
+
+	// Collect function/method spans to filter out locals
+	type span struct{ start, end uint32 }
+	var funcSpans []span
+	for _, s := range syms {
+		if s.File == file && (s.Type == "function" || s.Type == "method") {
+			funcSpans = append(funcSpans, span{s.StartLine, s.EndLine})
+		}
+	}
+	isLocal := func(s SymbolInfo) bool {
+		if s.Type == "function" || s.Type == "method" || s.Type == "type" {
+			return false
+		}
+		for _, fs := range funcSpans {
+			if s.StartLine > fs.start && s.EndLine <= fs.end {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, s := range syms {
+		if s.File != file || isLocal(s) {
+			continue
+		}
+		sig := ExtractSignatureFromSource(s, data)
+		switch s.Type {
+		case "type":
+			types[s.Name] = &typeEntry{sig: sig, line: s.StartLine}
+			typeOrder = append(typeOrder, s.Name)
+		case "function":
+			// Go methods are typed "function" — check for receiver
+			recv := extractGoReceiver(data, s)
+			if recv != "" {
+				if te, ok := types[recv]; ok {
+					te.methods = append(te.methods, sig)
+				} else {
+					types[recv] = &typeEntry{sig: "// type " + recv, methods: []string{sig}, line: s.StartLine}
+					typeOrder = append(typeOrder, recv)
+				}
+			} else {
+				other = append(other, struct {
+					sig  string
+					line uint32
+				}{sig, s.StartLine})
+			}
+		default:
+			other = append(other, struct {
+				sig  string
+				line uint32
+			}{sig, s.StartLine})
+		}
+	}
+
+	var lines []string
+	// Output types with their methods grouped
+	for _, name := range typeOrder {
+		te := types[name]
+		lines = append(lines, te.sig)
+		for _, m := range te.methods {
+			lines = append(lines, "  "+m)
+		}
+		if len(te.methods) > 0 {
+			lines = append(lines, "")
+		}
+	}
+	// Output other top-level symbols
+	for _, o := range other {
+		lines = append(lines, o.sig)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// extractGoReceiver extracts the receiver type name from a Go method symbol.
+// e.g. "func (s *Server) Handle()" → "Server"
+func extractGoReceiver(src []byte, sym SymbolInfo) string {
+	if int(sym.EndByte) > len(src) {
+		return ""
+	}
+	body := string(src[sym.StartByte:sym.EndByte])
+	// Find "func (" then extract receiver type
+	idx := strings.Index(body, "func (")
+	if idx < 0 {
+		idx = strings.Index(body, "func(")
+		if idx < 0 {
+			return ""
+		}
+	}
+	// Find closing paren of receiver
+	start := strings.Index(body[idx:], "(")
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(body[idx+start:], ")")
+	if end < 0 {
+		return ""
+	}
+	recv := body[idx+start+1 : idx+start+end]
+	// recv is like "s *Server" or "s Server" or "*Server"
+	recv = strings.TrimSpace(recv)
+	// Remove pointer star and variable name
+	recv = strings.TrimPrefix(recv, "*")
+	parts := strings.Fields(recv)
+	if len(parts) == 0 {
+		return ""
+	}
+	last := parts[len(parts)-1]
+	return strings.TrimPrefix(last, "*")
+}
+
 // firstLine returns the first line of s.
 func firstLine(s string) string {
 	if idx := strings.Index(s, "\n"); idx >= 0 {

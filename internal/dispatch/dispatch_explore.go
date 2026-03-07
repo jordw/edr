@@ -122,7 +122,7 @@ func runXrefs(ctx context.Context, db *index.DB, root string, args []string) (an
 		return nil, err
 	}
 
-	refs, err := index.FindReferences(ctx, db, sym.Name)
+	refs, err := index.FindReferencesInFile(ctx, db, sym.Name, sym.File)
 	if err != nil {
 		return nil, err
 	}

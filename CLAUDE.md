@@ -103,8 +103,8 @@ edr edit src/config.go --old_text "oldName" --dry-run --new_text "newName"
 ## Writing (`write`)
 
 ```bash
-# Create or overwrite a file
-edr write src/main.go                        # content via stdin or flags
+# Create or overwrite a file (CLI reads content from stdin; MCP uses content/new_text flag)
+edr write src/main.go                        # CLI: content from stdin
 edr write config/app/settings.yaml --mkdir   # creates parent dirs
 
 # Append to an existing file
@@ -143,6 +143,9 @@ edr map src/config.go
 
 # Filter by directory, glob, symbol type, or name
 edr map --dir internal/ --type function --grep parse
+
+# Local variables are hidden by default; pass --locals to include them
+edr map --dir internal/ --locals
 
 # Explore a symbol: body, callers, deps
 edr explore src/config.go parseConfig --body --callers --deps
@@ -233,7 +236,7 @@ These optimizations are automatic and session-scoped (reset on reconnect).
 |---|---|
 | `read <file> [start] [end]` | Read file, symbol (`file:sym` or `file sym`), or batch (multiple args). `--budget`, `--symbols`, `--signatures`, `--depth N` (progressive: 1=sigs, 2=blocks collapsed, 3+=more) |
 | `search <pattern>` | Symbol search (`--body`). Add `--text`/`--regex`/`--include`/`--exclude`/`--context` for text search |
-| `map [file]` | No args = repo symbol map; with file = file symbols. `--budget`, `--dir`, `--glob`, `--type`, `--grep` |
+| `map [file]` | No args = repo symbol map; with file = file symbols. `--budget`, `--dir`, `--glob`, `--type`, `--grep`. Locals hidden by default (`--locals` to show) |
 | `explore [file] <sym>` | Symbol info with `--body`, `--callers`, `--deps`, `--signatures`. `--gather` for context bundle with tests |
 | `refs [file] <sym>` | Find references. `--impact` for transitive callers, `--chain <sym>` for call path. `--depth` |
 | `edit <file> [sym]` | Edit by `--old_text`/`--new_text` (primary), symbol, or `--start_line`/`--end_line`. `--regex`, `--all`, `--dry-run` |
@@ -243,7 +246,7 @@ These optimizations are automatic and session-scoped (reset on reconnect).
 | `edit-plan` | Atomic multi-file edits via `flags.edits` array. `--dry-run` |
 | `verify` | Run build/typecheck, return structured pass/fail. `--command`, `--timeout` |
 | `init` | Force re-index the repository |
-| `multi` | Batch multiple commands in one MCP call via `flags.commands` |
+| `multi` | Batch multiple commands in one MCP call via `flags.commands`. `--budget` distributes across sub-commands (MCP-only) |
 | `get-diff <file> [sym]` | Retrieve stored diff from last edit (MCP-only) |
 
 All output is structured JSON. All file paths can be relative to repo root.

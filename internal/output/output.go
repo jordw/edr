@@ -84,6 +84,8 @@ type RenameOccurrence struct {
 type GatherResult struct {
 	Target         Symbol            `json:"target"`
 	TargetBody     string            `json:"target_body,omitempty"`
+	Container      *Symbol           `json:"container,omitempty"`
+	ContainerStub  string            `json:"container_stub,omitempty"`
 	Deps           []Symbol          `json:"deps,omitempty"`
 	Callers        []Symbol          `json:"callers,omitempty"`
 	CallerSnips    map[string]string `json:"caller_snippets,omitempty"`

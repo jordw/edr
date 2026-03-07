@@ -203,7 +203,27 @@ func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacem
 		endByte = idx + len(matchText)
 	}
 
-	return smartEditByteRange(ctx, db, file, uint32(startByte), uint32(endByte), replacement, "", dryRun)
+	result, err := smartEditByteRange(ctx, db, file, uint32(startByte), uint32(endByte), replacement, "", dryRun)
+	if err != nil {
+		return nil, err
+	}
+
+	// Report total occurrences so the caller knows if more remain
+	if m, ok := result.(map[string]any); ok {
+		var totalMatches int
+		if useRegex {
+			re, _ := regexp.Compile(matchText)
+			if re != nil {
+				totalMatches = len(re.FindAllStringIndex(content, -1))
+			}
+		} else {
+			totalMatches = strings.Count(content, matchText)
+		}
+		if totalMatches > 1 {
+			m["total_matches"] = totalMatches
+		}
+	}
+	return result, nil
 }
 
 // applyReplaceAll handles the shared tail of regex and literal replace-all edits.

@@ -3,6 +3,7 @@ package dispatch_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -303,6 +304,48 @@ func TestDispatchMulti_PreservesResultOrder(t *testing.T) {
 	}
 }
 
+func TestDispatchMulti_BudgetDistribution(t *testing.T) {
+	tmp := t.TempDir()
+	// Create a file with enough content to exceed a small budget
+	var big strings.Builder
+	big.WriteString("package main\n\n")
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&big, "func f%d() { println(%d) }\n", i, i)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "big.go"), []byte(big.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without budget: full content
+	cmdsNoBudget := []dispatch.MultiCmd{
+		{Cmd: "read", Args: []string{"big.go"}},
+	}
+	resultsNoBudget := dispatch.DispatchMulti(ctx, db, cmdsNoBudget)
+	noBudgetRaw, _ := json.Marshal(resultsNoBudget[0].Result)
+
+	// With budget: truncated content
+	cmdsWithBudget := []dispatch.MultiCmd{
+		{Cmd: "read", Args: []string{"big.go"}},
+	}
+	resultsWithBudget := dispatch.DispatchMulti(ctx, db, cmdsWithBudget, 100)
+	withBudgetRaw, _ := json.Marshal(resultsWithBudget[0].Result)
+
+	if len(withBudgetRaw) >= len(noBudgetRaw) {
+		t.Errorf("budget should reduce output: no_budget=%d, with_budget=%d", len(noBudgetRaw), len(withBudgetRaw))
+	}
+}
+
 func TestEditReindexesImmediately(t *testing.T) {
 	// After an edit, the new symbol should be immediately queryable
 	// without any separate flush or reindex step.
@@ -518,6 +561,151 @@ func TestFlagNormalization_DryRunUnderscore(t *testing.T) {
 	data, _ = os.ReadFile(goFile)
 	if string(data) != original {
 		t.Fatalf("edit dry_run modified file!\nexpected: %q\ngot:     %q", original, string(data))
+	}
+}
+
+func TestWriteRefusesEmptyOverwrite(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	if err := os.WriteFile(goFile, []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Write with empty content should be refused
+	_, err = dispatch.Dispatch(ctx, db, "write", []string{"main.go"}, map[string]any{})
+	if err == nil {
+		t.Fatal("expected error for empty overwrite, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to overwrite") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify file was not clobbered
+	data, _ := os.ReadFile(goFile)
+	if string(data) != "package main\n" {
+		t.Fatalf("file was clobbered: %q", string(data))
+	}
+
+	// With --force, should succeed
+	_, err = dispatch.Dispatch(ctx, db, "write", []string{"main.go"}, map[string]any{
+		"force": true,
+	})
+	if err != nil {
+		t.Fatalf("write with --force should succeed: %v", err)
+	}
+	data, _ = os.ReadFile(goFile)
+	if string(data) != "" {
+		t.Fatalf("expected empty file with --force, got: %q", string(data))
+	}
+}
+
+func TestEditSingleMatchReportsTotalCount(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	if err := os.WriteFile(goFile, []byte("package main\n\nvar x = \"Hello\"\nvar y = \"Hello\"\nvar z = \"Hello\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+		"old_text": "Hello",
+		"new_text": "World",
+	})
+	if err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+
+	raw, _ := json.Marshal(result)
+	var out map[string]any
+	json.Unmarshal(raw, &out)
+
+	total, ok := out["total_matches"]
+	if !ok {
+		t.Fatalf("expected total_matches in response, got: %s", string(raw))
+	}
+	if total != float64(3) {
+		t.Errorf("expected total_matches=3, got %v", total)
+	}
+}
+
+func TestReadFileSignatures(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	if err := os.WriteFile(goFile, []byte(`package main
+
+func hello() {
+	println("hello")
+	if true {
+		println("nested")
+	}
+}
+
+func world() {
+	println("world")
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read with --signatures
+	result, err := dispatch.Dispatch(ctx, db, "read", []string{"main.go"}, map[string]any{
+		"signatures": true,
+	})
+	if err != nil {
+		t.Fatalf("read --signatures: %v", err)
+	}
+
+	raw, _ := json.Marshal(result)
+	var out map[string]any
+	json.Unmarshal(raw, &out)
+
+	if out["signatures"] != true {
+		t.Errorf("expected signatures=true, got: %s", string(raw))
+	}
+
+	content, _ := out["content"].(string)
+	if content == "" {
+		t.Fatal("expected non-empty content")
+	}
+
+	// Full read for comparison
+	fullResult, _ := dispatch.Dispatch(ctx, db, "read", []string{"main.go"}, map[string]any{})
+	fullRaw, _ := json.Marshal(fullResult)
+	var fullOut map[string]any
+	json.Unmarshal(fullRaw, &fullOut)
+	fullContent, _ := fullOut["content"].(string)
+
+	if len(content) >= len(fullContent) {
+		t.Errorf("signatures content (%d) should be smaller than full content (%d)", len(content), len(fullContent))
 	}
 }
 

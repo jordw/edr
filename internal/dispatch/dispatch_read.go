@@ -23,6 +23,41 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 		return nil, err
 	}
 
+	// --signatures: file-level signatures view
+	if flagBool(flags, "signatures", false) {
+		// For Go files, use grouped signatures (types + receiver methods)
+		var body string
+		var sigErr error
+		allSyms, symErr := db.GetSymbolsByFile(ctx, file)
+		if symErr == nil && len(allSyms) > 0 {
+			if grouped := index.GoFileSignatures(file, allSyms); grouped != "" {
+				body = grouped
+			}
+		}
+		if body == "" {
+			body, sigErr = index.OutlineFile(file, 1)
+		}
+		if sigErr == nil {
+			size := len(body) / 4
+			truncated := false
+			if budget > 0 && size > budget {
+				chars := budget * 4
+				body, truncated = output.TruncateAtLine(body, chars)
+				size = budget
+			}
+			hash, _ := edit.FileHash(file)
+			return map[string]any{
+				"file":       output.Rel(file),
+				"signatures": true,
+				"size":       size,
+				"content":    body,
+				"hash":       hash,
+				"truncated":  truncated,
+			}, nil
+		}
+		// Fall through to normal read for non-code files
+	}
+
 	// --depth N: AST-aware progressive disclosure for the whole file
 	depth := flagInt(flags, "depth", 0)
 	if depth > 0 {
