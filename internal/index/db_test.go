@@ -24,7 +24,34 @@ func TestResolvePathRejectsOutsideRoot(t *testing.T) {
 	}
 }
 
-func TestOpenDBPrunesOutOfRootEntries(t *testing.T) {
+func TestOpenDBConcurrencySettings(t *testing.T) {
+	root := t.TempDir()
+	db, err := OpenDB(root)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	// Verify WAL mode is enabled
+	var journalMode string
+	if err := db.db.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		t.Fatalf("query journal_mode: %v", err)
+	}
+	if journalMode != "wal" {
+		t.Errorf("journal_mode = %q, want wal", journalMode)
+	}
+
+	// Verify busy_timeout is set to 10s
+	var timeout int
+	if err := db.db.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
+		t.Fatalf("query busy_timeout: %v", err)
+	}
+	if timeout != 10000 {
+		t.Errorf("busy_timeout = %d, want 10000", timeout)
+	}
+}
+
+func TestIndexRepoPrunesOutOfRootEntries(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	outsideDir := t.TempDir()
@@ -66,7 +93,19 @@ func TestOpenDBPrunesOutOfRootEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stats: %v", err)
 	}
+	if files != 1 || symbols != 1 {
+		t.Fatalf("expected reopen to preserve entries until indexing, got files=%d symbols=%d", files, symbols)
+	}
+
+	if _, _, err := IndexRepo(ctx, db); err != nil {
+		t.Fatalf("IndexRepo: %v", err)
+	}
+
+	files, symbols, err = db.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats after IndexRepo: %v", err)
+	}
 	if files != 0 || symbols != 0 {
-		t.Fatalf("expected prune to remove outside entries, got files=%d symbols=%d", files, symbols)
+		t.Fatalf("expected IndexRepo prune to remove outside entries, got files=%d symbols=%d", files, symbols)
 	}
 }

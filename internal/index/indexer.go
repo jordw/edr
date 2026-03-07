@@ -24,9 +24,24 @@ var DefaultIgnore = []string{
 }
 
 // IndexRepo indexes all supported files in the repository.
-// HasStaleFiles checks if any indexed files have been modified since indexing.
-// Returns true on the first stale file found (fast check).
+// HasStaleFiles checks whether the current repo snapshot differs from the
+// snapshot persisted after indexing. If no snapshot exists yet, it falls back
+// to the legacy mtime-based check.
 func HasStaleFiles(ctx context.Context, db *DB) (bool, error) {
+	if snap, ok, err := ReadIndexedSnapshot(db.Root()); err != nil {
+		return false, err
+	} else if ok {
+		current, err := ComputeRepoSnapshot(ctx, db.Root())
+		if err != nil {
+			return false, err
+		}
+		return current.RootHash != snap.RootHash || current.FileCount != snap.FileCount, nil
+	}
+
+	return hasStaleFilesByMtime(ctx, db)
+}
+
+func hasStaleFilesByMtime(ctx context.Context, db *DB) (bool, error) {
 	rows, err := db.db.QueryContext(ctx, "SELECT path, mtime FROM files LIMIT 100")
 	if err != nil {
 		return false, err
@@ -54,6 +69,10 @@ func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 	root := db.Root()
 	gitignore := LoadGitIgnore(root)
 	var filesIndexed, symbolsFound int
+
+	if err := db.Prune(ctx); err != nil {
+		return 0, 0, err
+	}
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -148,7 +167,14 @@ func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 		return nil
 	})
 
-	return filesIndexed, symbolsFound, err
+	if err != nil {
+		return filesIndexed, symbolsFound, err
+	}
+	if err := updateIndexedSnapshot(ctx, root); err != nil {
+		return filesIndexed, symbolsFound, err
+	}
+
+	return filesIndexed, symbolsFound, nil
 }
 
 // IndexFile re-indexes a single file, updating the DB with fresh symbols.
@@ -203,7 +229,8 @@ func IndexFile(ctx context.Context, db *DB, path string) error {
 	if err := db.InsertRefs(ctx, path, refs); err != nil {
 		return err
 	}
-	return nil
+
+	return RemoveIndexedSnapshot(db.Root())
 }
 
 // WalkRepoFiles calls fn for every non-ignored, non-binary file in the repo.

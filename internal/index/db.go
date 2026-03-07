@@ -40,18 +40,17 @@ func OpenDB(repoRoot string) (*DB, error) {
 		sqlDB.Close()
 		return nil, err
 	}
-	// Allow up to 5s of busy-waiting so parallel processes don't get SQLITE_BUSY
-	if _, err := sqlDB.Exec("PRAGMA busy_timeout=5000"); err != nil {
+	// Allow up to 10s of busy-waiting so parallel processes don't get SQLITE_BUSY
+	if _, err := sqlDB.Exec("PRAGMA busy_timeout=10000"); err != nil {
 		sqlDB.Close()
 		return nil, err
 	}
 
+	// Limit connection pool to reduce contention from Go's sql.DB opening multiple conns
+	sqlDB.SetMaxOpenConns(1)
+
 	d := &DB{db: sqlDB, root: root}
 	if err := d.migrate(); err != nil {
-		sqlDB.Close()
-		return nil, err
-	}
-	if err := d.Prune(context.Background()); err != nil {
 		sqlDB.Close()
 		return nil, err
 	}
@@ -80,6 +79,10 @@ func (d *DB) migrate() error {
 		if count > 0 {
 			version = 1 // existing DB without version tracking
 		}
+	}
+
+	if version >= currentSchemaVersion {
+		return nil
 	}
 
 	if version < 1 {
@@ -596,18 +599,10 @@ func (d *DB) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo, error
 			return &results[0], nil
 		}
 		// Multiple case-insensitive matches — still ambiguous
-		files := make([]string, len(results))
-		for i, r := range results {
-			files[i] = fmt.Sprintf("%s (%s)", r.Name, r.File)
-		}
-		return nil, fmt.Errorf("symbol %q not found (case-sensitive). Similar: %v", name, files)
+		return nil, &AmbiguousSymbolError{Name: name, Root: d.root, Candidates: results}
 	}
 	if len(results) > 1 {
-		files := make([]string, len(results))
-		for i, r := range results {
-			files[i] = r.File
-		}
-		return nil, fmt.Errorf("symbol %q is ambiguous, found in: %v — specify file", name, files)
+		return nil, &AmbiguousSymbolError{Name: name, Root: d.root, Candidates: results}
 	}
 	return &results[0], nil
 }
@@ -759,6 +754,27 @@ func (d *DB) symbolNotFoundError(ctx context.Context, name, file string) error {
 	}
 
 	return fmt.Errorf("%s. Did you mean: %s", msg, strings.Join(names, ", "))
+}
+
+// AmbiguousSymbolError is returned when a symbol name resolves to multiple definitions.
+// It carries structured candidate information so callers can present choices.
+type AmbiguousSymbolError struct {
+	Name       string
+	Root       string // repo root for computing relative paths
+	Candidates []SymbolInfo
+}
+
+func (e *AmbiguousSymbolError) Error() string {
+	var parts []string
+	for _, c := range e.Candidates {
+		rel := c.File
+		if e.Root != "" && strings.HasPrefix(rel, e.Root+"/") {
+			rel = rel[len(e.Root)+1:]
+		}
+		parts = append(parts, fmt.Sprintf("%s:%d (%s)", rel, c.StartLine, c.Type))
+	}
+	return fmt.Sprintf("symbol %q is ambiguous (%d definitions): %s — use [file] <symbol> to disambiguate",
+		e.Name, len(e.Candidates), strings.Join(parts, ", "))
 }
 
 // Root returns the repository root.
