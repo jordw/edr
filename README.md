@@ -55,6 +55,22 @@ edr refs Dispatch --chain editOK
 edr refs parseConfig --impact --depth 3
 ```
 
+**Atomic multi-file edits** — batch reads and edits in one call:
+```bash
+# CLI: edit-plan applies edits atomically (all-or-nothing)
+edr edit-plan --dry-run   # preview with edits JSON array
+
+# MCP: edr_plan combines batch reads + atomic edits
+edr_plan(
+  reads: [{file: "a.go"}, {file: "b.go", symbol: "Config"}],
+  edits: [
+    {file: "a.go", old_text: "oldFunc()", new_text: "newFunc()"},
+    {file: "b.go", symbol: "Config", new_text: "type Config struct{}"}
+  ],
+  dry_run: true
+)
+```
+
 **Verify** — run build checks:
 ```bash
 edr verify                                # auto-detect
