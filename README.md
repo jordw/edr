@@ -58,7 +58,7 @@ Install it for another repository with the bootstrap script:
 
 ## Commands
 
-edr has 12 primary commands. Legacy names (25+) still work as hidden aliases.
+edr has 12 primary commands.
 
 ### Reading & Navigation
 

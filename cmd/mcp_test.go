@@ -275,7 +275,7 @@ func TestInvalidateForEdit_RenameClears(t *testing.T) {
 	sess.StoreContent("f.go:[1 10]", "c", false)
 	sess.SeenBodies["f.go:foo"] = "h"
 
-	sess.InvalidateForEdit("rename-symbol", []string{"old", "new"})
+	sess.InvalidateForEdit("rename", []string{"old", "new"})
 	if len(sess.Responses)+len(sess.Diffs)+len(sess.FileContent)+len(sess.SeenBodies) != 0 {
 		t.Error("rename should clear all")
 	}
@@ -296,7 +296,7 @@ func TestPostProcess_SmallEditInline(t *testing.T) {
 	sess := session.New()
 	text := `{"ok":true,"file":"f.go","symbol":"foo","diff":"-old\n+new\n","hash":"abc","old_size":1,"new_size":1}`
 
-	result := sess.PostProcess("smart-edit", []string{"f.go", "foo"}, map[string]any{}, nil, text)
+	result := sess.PostProcess("edit", []string{"f.go", "foo"}, map[string]any{}, nil, text)
 	if !strings.Contains(result, `"diff"`) {
 		t.Error("small diff should stay inline")
 	}
@@ -316,8 +316,8 @@ func TestPostProcess_DeltaRead_Unchanged(t *testing.T) {
 	sess := session.New()
 	text := `{"file":"f.go","lines":[1,10],"content":"hello","hash":"abc"}`
 
-	sess.PostProcess("read-file", []string{"f.go"}, map[string]any{}, nil, text)
-	result := sess.PostProcess("read-file", []string{"f.go"}, map[string]any{}, nil, text)
+	sess.PostProcess("read", []string{"f.go"}, map[string]any{}, nil, text)
+	result := sess.PostProcess("read", []string{"f.go"}, map[string]any{}, nil, text)
 	if !strings.Contains(result, "unchanged") {
 		t.Errorf("should be unchanged, got: %s", result)
 	}
@@ -328,8 +328,8 @@ func TestPostProcess_DeltaRead_Changed(t *testing.T) {
 	t1 := `{"file":"f.go","lines":[1,10],"content":"line1\nline2\nline3","hash":"abc"}`
 	t2 := `{"file":"f.go","lines":[1,10],"content":"line1\nmod\nline3","hash":"def"}`
 
-	sess.PostProcess("read-file", []string{"f.go"}, map[string]any{}, nil, t1)
-	result := sess.PostProcess("read-file", []string{"f.go"}, map[string]any{}, nil, t2)
+	sess.PostProcess("read", []string{"f.go"}, map[string]any{}, nil, t1)
+	result := sess.PostProcess("read", []string{"f.go"}, map[string]any{}, nil, t2)
 	if !strings.Contains(result, "delta") {
 		t.Errorf("should be delta, got: %s", result)
 	}
@@ -338,8 +338,8 @@ func TestPostProcess_DeltaRead_Changed(t *testing.T) {
 func TestPostProcess_FullFlag(t *testing.T) {
 	sess := session.New()
 	text := `{"file":"f.go","lines":[1,10],"content":"hello","hash":"abc"}`
-	sess.PostProcess("read-file", []string{"f.go"}, map[string]any{}, nil, text)
-	result := sess.PostProcess("read-file", []string{"f.go"}, map[string]any{"full": true}, nil, text)
+	sess.PostProcess("read", []string{"f.go"}, map[string]any{}, nil, text)
+	result := sess.PostProcess("read", []string{"f.go"}, map[string]any{"full": true}, nil, text)
 	if strings.Contains(result, "unchanged") {
 		t.Error("--full should bypass delta")
 	}
@@ -347,7 +347,7 @@ func TestPostProcess_FullFlag(t *testing.T) {
 
 // These tests stay in cmd because they test MCP-specific UnmarshalJSON
 func TestUnmarshalJSON_ArgsAsString(t *testing.T) {
-	data := []byte(`{"cmd":"read-file","args":"single.go","flags":{"budget":100}}`)
+	data := []byte(`{"cmd":"read","args":"single.go","flags":{"budget":100}}`)
 	var args edrToolArgs
 	if err := args.UnmarshalJSON(data); err != nil {
 		t.Fatal(err)
@@ -361,7 +361,7 @@ func TestUnmarshalJSON_ArgsAsString(t *testing.T) {
 }
 
 func TestUnmarshalJSON_FlagsAsString(t *testing.T) {
-	data := []byte(`{"cmd":"write-file","args":["f.go"],"flags":"{\"content\":\"hello\"}"}`)
+	data := []byte(`{"cmd":"write","args":["f.go"],"flags":"{\"content\":\"hello\"}"}`)
 	var args edrToolArgs
 	if err := args.UnmarshalJSON(data); err != nil {
 		t.Fatal(err)

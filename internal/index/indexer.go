@@ -295,7 +295,7 @@ type RepoMapOption func(*repoMapConfig)
 
 // WithDir filters repo-map to files under the given directory.
 func WithDir(dir string) RepoMapOption {
-	return func(c *repoMapConfig) { c.dir = dir }
+	return func(c *repoMapConfig) { c.dir = strings.TrimRight(dir, "/") }
 }
 
 // WithGlob filters repo-map to files matching the given glob pattern.

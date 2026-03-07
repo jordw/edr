@@ -45,7 +45,7 @@ func hello() {
 		"main.go:hello",        // valid symbol
 		"main.go:nosuchsymbol", // invalid symbol
 	}
-	result, err := dispatch.Dispatch(ctx, db, "batch-read", args, map[string]any{})
+	result, err := dispatch.Dispatch(ctx, db, "read", args, map[string]any{})
 	if err != nil {
 		t.Fatalf("Dispatch returned error: %v", err)
 	}
@@ -451,6 +451,101 @@ func TestWriteIndexErrorIsSurfaced(t *testing.T) {
 	json.Unmarshal(raw, &out2)
 	if _, exists := out2["index_error"]; exists {
 		t.Errorf("expected index_error to be omitted when empty, got: %s", string(raw))
+	}
+}
+
+func TestFlagNormalization_DryRunUnderscore(t *testing.T) {
+	// dry_run (underscore) must work the same as dry-run (hyphen)
+	// for all commands. Regression test: edit-plan and rename only
+	// checked "dry-run" but MCP passes "dry_run".
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	original := "package main\n\nfunc hello() {}\n"
+	if err := os.WriteFile(goFile, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Test edit-plan with dry_run (underscore)
+	edits := []map[string]any{{
+		"file":     "main.go",
+		"old_text": "func hello()",
+		"new_text": "func goodbye()",
+	}}
+	_, err = dispatch.Dispatch(ctx, db, "edit-plan", nil, map[string]any{
+		"dry_run": true,
+		"edits":   edits,
+	})
+	if err != nil {
+		t.Fatalf("edit-plan with dry_run: %v", err)
+	}
+	data, _ := os.ReadFile(goFile)
+	if string(data) != original {
+		t.Fatalf("edit-plan dry_run modified file!\nexpected: %q\ngot:     %q", original, string(data))
+	}
+
+	// Test rename with dry_run (underscore)
+	_, err = dispatch.Dispatch(ctx, db, "rename", []string{"hello", "goodbye"}, map[string]any{
+		"dry_run": true,
+	})
+	if err != nil {
+		t.Fatalf("rename with dry_run: %v", err)
+	}
+	data, _ = os.ReadFile(goFile)
+	if string(data) != original {
+		t.Fatalf("rename dry_run modified file!\nexpected: %q\ngot:     %q", original, string(data))
+	}
+
+	// Test edit with dry_run (underscore)
+	_, err = dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+		"old_text": "func hello()",
+		"new_text": "func goodbye()",
+		"dry_run":  true,
+	})
+	if err != nil {
+		t.Fatalf("edit with dry_run: %v", err)
+	}
+	data, _ = os.ReadFile(goFile)
+	if string(data) != original {
+		t.Fatalf("edit dry_run modified file!\nexpected: %q\ngot:     %q", original, string(data))
+	}
+}
+
+func TestWriteAcceptsNewTextFlag(t *testing.T) {
+	// write should accept new_text as an alias for content.
+	tmp := t.TempDir()
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	_, err = dispatch.Dispatch(ctx, db, "write", []string{"test.go"}, map[string]any{
+		"new_text": "package main\n\nfunc foo() {}\n",
+	})
+	if err != nil {
+		t.Fatalf("write with new_text: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tmp, "test.go"))
+	if err != nil {
+		t.Fatalf("read written file: %v", err)
+	}
+	if !strings.Contains(string(data), "func foo()") {
+		t.Fatalf("expected file to contain func foo(), got: %q", string(data))
 	}
 }
 

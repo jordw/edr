@@ -246,10 +246,6 @@ These optimizations are automatic and session-scoped (reset on reconnect).
 | `multi` | Batch multiple commands in one MCP call via `flags.commands` |
 | `get-diff <file> [sym]` | Retrieve stored diff from last edit (MCP-only) |
 
-Legacy command names (`read-file`, `read-symbol`, `batch-read`, `write-file`, `append-file`, `insert-after`,
-`smart-edit`, `repo-map`, `symbols`, `search-text`, `expand`, `gather`, `xrefs`, `impact`, `call-chain`,
-`rename-symbol`, `find-files`) still work as aliases.
-
 All output is structured JSON. All file paths can be relative to repo root.
 All edit commands return `hash` in the response for chaining. If post-edit reindexing
 fails, the edit still succeeds and an `index_error` field is included in the response.

@@ -42,19 +42,17 @@ reused across all commands in the batch.
 
 Input format:
   {"id": "1", "cmd": "search", "args": ["Parse"], "flags": {"budget": 500}}
-  {"id": "2", "cmd": "symbols", "args": ["internal/edit/edit.go"], "flags": {}}
+  {"id": "2", "cmd": "map", "args": ["internal/edit/edit.go"], "flags": {}}
 
 Output format:
   {"id": "1", "ok": true, "result": [...]}
   {"id": "2", "ok": true, "result": [...]}
 
-Supported commands: init, repo-map, search, search-text, symbols,
-read-symbol, read-file, expand, xrefs, gather, find-files, batch-read,
-write-file, append-file, insert-after, smart-edit, rename-symbol,
-edit-plan, impact, call-chain, verify.
+Supported commands: read, write, edit, map, search, explore, refs, rename,
+find, edit-plan, verify, init.
 
-For edit commands, pass the replacement code via the "replacement" flag
-(or "content" for write-file/append-file/insert-after) in the JSON object.`,
+For edit commands, pass replacement code via "new_text" in flags.
+For write commands, pass file content via "content" or "new_text" in flags.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		db, err := openAndEnsureIndexQuiet(cmd)
 		if err != nil {

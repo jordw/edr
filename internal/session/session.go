@@ -53,37 +53,24 @@ func New() *Session {
 
 // Command category maps.
 var ReadCommands = map[string]bool{
-	"read-file": true, "read-symbol": true, "symbols": true,
-	"expand": true, "gather": true, "batch-read": true,
-	"repo-map": true, "search": true, "search-text": true,
-	"xrefs": true, "find-files": true,
-	// Unified names
-	"read": true, "map": true, "explore": true, "refs": true, "find": true,
+	"read": true, "map": true, "search": true, "explore": true,
+	"refs": true, "find": true,
 }
 
 var EditCommands = map[string]bool{
-	"smart-edit": true, "write-file": true,
-	"append-file": true, "insert-after": true, "rename-symbol": true,
-	"edit-plan": true,
-	// Unified names
-	"edit": true, "write": true, "rename": true,
+	"edit": true, "write": true, "rename": true, "edit-plan": true,
 }
 
 var DiffEditCommands = map[string]bool{
-	"smart-edit": true, "edit": true,
+	"edit": true,
 }
 
 var DeltaReadCommands = map[string]bool{
-	"read-file": true, "read-symbol": true, "expand": true, "batch-read": true,
-	// Unified names
 	"read": true, "explore": true,
 }
 
 var BodyCommands = map[string]bool{
-	"read-symbol": true, "expand": true, "gather": true,
-	"search": true, "batch-read": true,
-	// Unified names
-	"read": true, "explore": true,
+	"read": true, "explore": true, "search": true,
 }
 
 // --- Hashing & keys ---
@@ -124,7 +111,7 @@ func (s *Session) InvalidateFile(file string) {
 }
 
 func (s *Session) InvalidateForEdit(cmd string, args []string) {
-	if cmd == "rename-symbol" || cmd == "init" {
+	if cmd == "rename" || cmd == "init" {
 		s.Responses = make(map[string]string)
 		s.Diffs = make(map[string]string)
 		s.FileContent = make(map[string]ContentEntry)
@@ -309,53 +296,28 @@ func (s *Session) ProcessReadResult(cmd string, result map[string]any, flags map
 	var content, key, label string
 	var isSymbol bool
 
-	switch cmd {
-	case "read-file":
-		c, ok := result["content"].(string)
-		if !ok || c == "" {
+	// Detect whether this is a file read or symbol read by result shape
+	if c, ok := result["body"].(string); ok && c != "" {
+		// Symbol-shaped result (read symbol, explore)
+		content = c
+		isSymbol = true
+		sym, _ := result["symbol"].(map[string]any)
+		if sym == nil {
 			return nil
 		}
+		file, _ := sym["file"].(string)
+		name, _ := sym["name"].(string)
+		key = file + ":" + name
+		label = key
+		s.SeenBodies[key] = ContentHash(content)
+	} else if c, ok := result["content"].(string); ok && c != "" {
+		// File-shaped result (read file)
 		content = c
 		file, _ := result["file"].(string)
 		lines, _ := result["lines"]
 		key = fmt.Sprintf("%s:%v", file, lines)
 		label = file
-
-	case "read-symbol":
-		c, ok := result["body"].(string)
-		if !ok || c == "" {
-			return nil
-		}
-		content = c
-		isSymbol = true
-		sym, _ := result["symbol"].(map[string]any)
-		if sym == nil {
-			return nil
-		}
-		file, _ := sym["file"].(string)
-		name, _ := sym["name"].(string)
-		key = file + ":" + name
-		label = key
-		s.SeenBodies[key] = ContentHash(content)
-
-	case "expand":
-		c, ok := result["body"].(string)
-		if !ok || c == "" {
-			return nil
-		}
-		content = c
-		isSymbol = true
-		sym, _ := result["symbol"].(map[string]any)
-		if sym == nil {
-			return nil
-		}
-		file, _ := sym["file"].(string)
-		name, _ := sym["name"].(string)
-		key = file + ":" + name
-		label = key
-		s.SeenBodies[key] = ContentHash(content)
-
-	default:
+	} else {
 		return nil
 	}
 
@@ -404,69 +366,62 @@ func ExtractFileHash(result map[string]any) (file, hash string) {
 
 // StoreReadContent stores content from a read result for future delta tracking.
 func (s *Session) StoreReadContent(cmd string, result map[string]any) {
-	switch cmd {
-	case "read-file":
-		if c, ok := result["content"].(string); ok && c != "" {
-			file, _ := result["file"].(string)
-			lines, _ := result["lines"]
-			key := fmt.Sprintf("%s:%v", file, lines)
-			s.StoreContent(key, c, false)
+	if c, ok := result["body"].(string); ok && c != "" {
+		sym, _ := result["symbol"].(map[string]any)
+		if sym != nil {
+			file, _ := sym["file"].(string)
+			name, _ := sym["name"].(string)
+			key := file + ":" + name
+			s.StoreContent(key, c, true)
+			s.SeenBodies[key] = ContentHash(c)
 		}
-	case "read-symbol", "expand":
-		if c, ok := result["body"].(string); ok && c != "" {
-			sym, _ := result["symbol"].(map[string]any)
-			if sym != nil {
-				file, _ := sym["file"].(string)
-				name, _ := sym["name"].(string)
-				key := file + ":" + name
-				s.StoreContent(key, c, true)
-				s.SeenBodies[key] = ContentHash(c)
-			}
-		}
+	} else if c, ok := result["content"].(string); ok && c != "" {
+		file, _ := result["file"].(string)
+		lines, _ := result["lines"]
+		key := fmt.Sprintf("%s:%v", file, lines)
+		s.StoreContent(key, c, false)
 	}
 }
 
 // --- Level 3: Body tracking ---
 
 func (s *Session) TrackBodies(result map[string]any, cmd string) {
-	switch cmd {
-	case "read-symbol", "expand":
-		if body, ok := result["body"].(string); ok && body != "" {
-			sym, _ := result["symbol"].(map[string]any)
-			if sym != nil {
+	// Symbol body (read symbol, explore)
+	if body, ok := result["body"].(string); ok && body != "" {
+		sym, _ := result["symbol"].(map[string]any)
+		if sym != nil {
+			file, _ := sym["file"].(string)
+			name, _ := sym["name"].(string)
+			s.SeenBodies[file+":"+name] = ContentHash(body)
+		}
+	}
+	// Gather target body
+	if body, ok := result["target_body"].(string); ok && body != "" {
+		if target, ok := result["target"].(map[string]any); ok {
+			file, _ := target["file"].(string)
+			name, _ := target["name"].(string)
+			s.SeenBodies[file+":"+name] = ContentHash(body)
+		}
+	}
+	// Search matches
+	if matchesAny, ok := result["matches"]; ok {
+		if matches, ok := matchesAny.([]any); ok {
+			for _, mAny := range matches {
+				m, ok := mAny.(map[string]any)
+				if !ok {
+					continue
+				}
+				body, ok := m["body"].(string)
+				if !ok || body == "" {
+					continue
+				}
+				sym, _ := m["symbol"].(map[string]any)
+				if sym == nil {
+					continue
+				}
 				file, _ := sym["file"].(string)
 				name, _ := sym["name"].(string)
 				s.SeenBodies[file+":"+name] = ContentHash(body)
-			}
-		}
-	case "gather":
-		if body, ok := result["target_body"].(string); ok && body != "" {
-			if target, ok := result["target"].(map[string]any); ok {
-				file, _ := target["file"].(string)
-				name, _ := target["name"].(string)
-				s.SeenBodies[file+":"+name] = ContentHash(body)
-			}
-		}
-	case "search":
-		if matchesAny, ok := result["matches"]; ok {
-			if matches, ok := matchesAny.([]any); ok {
-				for _, mAny := range matches {
-					m, ok := mAny.(map[string]any)
-					if !ok {
-						continue
-					}
-					body, ok := m["body"].(string)
-					if !ok || body == "" {
-						continue
-					}
-					sym, _ := m["symbol"].(map[string]any)
-					if sym == nil {
-						continue
-					}
-					file, _ := sym["file"].(string)
-					name, _ := sym["name"].(string)
-					s.SeenBodies[file+":"+name] = ContentHash(body)
-				}
 			}
 		}
 	}
@@ -594,7 +549,7 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 	}
 
 	// Level 2: Delta reads
-	if DeltaReadCommands[cmd] && cmd != "batch-read" {
+	if DeltaReadCommands[cmd] {
 		if delta := s.ProcessReadResult(cmd, m, flags); delta != nil {
 			data, _ := json.Marshal(delta)
 			return string(data)
@@ -606,7 +561,7 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 	// tracking new ones, so we must NOT call TrackBodies first for these
 	// commands (that would mark current results as "seen" before stripping).
 	willStrip := cmd == "gather" || (cmd == "search" && FlagIsTruthy(flags, "body"))
-	if BodyCommands[cmd] && cmd != "batch-read" && !willStrip {
+	if BodyCommands[cmd] && !willStrip {
 		s.TrackBodies(m, cmd)
 	}
 	if willStrip {
@@ -618,9 +573,9 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 	return text
 }
 
-// PostProcessNonObject handles array results (batch-read).
+// PostProcessNonObject handles array results (batch read).
 func (s *Session) PostProcessNonObject(cmd string, args []string, flags map[string]any, text string) string {
-	if cmd != "batch-read" {
+	if cmd != "read" {
 		return text
 	}
 

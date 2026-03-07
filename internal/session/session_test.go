@@ -164,7 +164,7 @@ func TestInvalidateForEdit_RenameClears(t *testing.T) {
 	s.SymbolContent["f.go:foo"] = ContentEntry{Hash: "h"}
 	s.SeenBodies["f.go:foo"] = "h"
 
-	s.InvalidateForEdit("rename-symbol", []string{"old", "new"})
+	s.InvalidateForEdit("rename", []string{"old", "new"})
 
 	if len(s.Responses) != 0 || len(s.Diffs) != 0 || len(s.FileContent) != 0 || len(s.SymbolContent) != 0 || len(s.SeenBodies) != 0 {
 		t.Error("rename should clear all state")
@@ -509,7 +509,7 @@ func TestProcessReadResult_NewFile(t *testing.T) {
 		"content": "hello\n", "file": "f.go", "hash": "abc",
 		"lines": []int{1, 5},
 	}
-	if delta := s.ProcessReadResult("read-file", result, map[string]any{}); delta != nil {
+	if delta := s.ProcessReadResult("read", result, map[string]any{}); delta != nil {
 		t.Error("new content should return nil")
 	}
 	if len(s.FileContent) != 1 {
@@ -523,8 +523,8 @@ func TestProcessReadResult_UnchangedFile(t *testing.T) {
 		"content": "hello\n", "file": "f.go", "hash": "abc",
 		"lines": []int{1, 5},
 	}
-	s.ProcessReadResult("read-file", result, map[string]any{})
-	delta := s.ProcessReadResult("read-file", result, map[string]any{})
+	s.ProcessReadResult("read", result, map[string]any{})
+	delta := s.ProcessReadResult("read", result, map[string]any{})
 	if delta == nil {
 		t.Fatal("unchanged should return delta")
 	}
@@ -539,13 +539,13 @@ func TestProcessReadResult_ChangedFile(t *testing.T) {
 		"content": "line1\nline2\n", "file": "f.go", "hash": "h1",
 		"lines": []int{1, 2},
 	}
-	s.ProcessReadResult("read-file", result1, map[string]any{})
+	s.ProcessReadResult("read", result1, map[string]any{})
 
 	result2 := map[string]any{
 		"content": "line1\nchanged\n", "file": "f.go", "hash": "h2",
 		"lines": []int{1, 2},
 	}
-	delta := s.ProcessReadResult("read-file", result2, map[string]any{})
+	delta := s.ProcessReadResult("read", result2, map[string]any{})
 	if delta == nil {
 		t.Fatal("changed should return delta")
 	}
@@ -566,8 +566,8 @@ func TestProcessReadResult_FullFlag(t *testing.T) {
 		"content": "hello\n", "file": "f.go", "hash": "abc",
 		"lines": []int{1, 5},
 	}
-	s.ProcessReadResult("read-file", result, map[string]any{})
-	delta := s.ProcessReadResult("read-file", result, map[string]any{"full": true})
+	s.ProcessReadResult("read", result, map[string]any{})
+	delta := s.ProcessReadResult("read", result, map[string]any{"full": true})
 	if delta != nil {
 		t.Error("--full should bypass delta and return nil")
 	}
@@ -579,7 +579,7 @@ func TestProcessReadResult_Symbol(t *testing.T) {
 		"body": "func foo() {}",
 		"symbol": map[string]any{"file": "f.go", "name": "foo", "hash": "abc"},
 	}
-	if delta := s.ProcessReadResult("read-symbol", result, map[string]any{}); delta != nil {
+	if delta := s.ProcessReadResult("read", result, map[string]any{}); delta != nil {
 		t.Error("new symbol should return nil")
 	}
 	if len(s.SymbolContent) != 1 {
@@ -596,7 +596,7 @@ func TestProcessReadResult_ExpandTracksBody(t *testing.T) {
 		"body": "func bar() {}",
 		"symbol": map[string]any{"file": "f.go", "name": "bar"},
 	}
-	s.ProcessReadResult("expand", result, map[string]any{})
+	s.ProcessReadResult("explore", result, map[string]any{})
 	if _, ok := s.SeenBodies["f.go:bar"]; !ok {
 		t.Error("expand should track body")
 	}
@@ -605,7 +605,7 @@ func TestProcessReadResult_ExpandTracksBody(t *testing.T) {
 func TestProcessReadResult_EmptyContent(t *testing.T) {
 	s := New()
 	result := map[string]any{"content": "", "file": "f.go"}
-	if s.ProcessReadResult("read-file", result, map[string]any{}) != nil {
+	if s.ProcessReadResult("read", result, map[string]any{}) != nil {
 		t.Error("empty content should return nil")
 	}
 }
@@ -647,7 +647,7 @@ func TestExtractFileHash_Empty(t *testing.T) {
 
 func TestStoreReadContent_ReadFile(t *testing.T) {
 	s := New()
-	s.StoreReadContent("read-file", map[string]any{
+	s.StoreReadContent("read", map[string]any{
 		"content": "hello", "file": "f.go", "lines": []int{1, 5},
 	})
 	if len(s.FileContent) != 1 {
@@ -657,7 +657,7 @@ func TestStoreReadContent_ReadFile(t *testing.T) {
 
 func TestStoreReadContent_ReadSymbol(t *testing.T) {
 	s := New()
-	s.StoreReadContent("read-symbol", map[string]any{
+	s.StoreReadContent("read", map[string]any{
 		"body": "func foo() {}",
 		"symbol": map[string]any{"file": "f.go", "name": "foo"},
 	})
@@ -671,7 +671,7 @@ func TestStoreReadContent_ReadSymbol(t *testing.T) {
 
 func TestStoreReadContent_ExpandTracksBody(t *testing.T) {
 	s := New()
-	s.StoreReadContent("expand", map[string]any{
+	s.StoreReadContent("explore", map[string]any{
 		"body": "func bar() {}",
 		"symbol": map[string]any{"file": "f.go", "name": "bar"},
 	})
@@ -682,7 +682,7 @@ func TestStoreReadContent_ExpandTracksBody(t *testing.T) {
 
 func TestStoreReadContent_SkipsEmptyBody(t *testing.T) {
 	s := New()
-	s.StoreReadContent("read-symbol", map[string]any{
+	s.StoreReadContent("read", map[string]any{
 		"body":   "",
 		"symbol": map[string]any{"file": "f.go", "name": "foo"},
 	})
@@ -698,7 +698,7 @@ func TestTrackBodies_ReadSymbol(t *testing.T) {
 	s.TrackBodies(map[string]any{
 		"body":   "func foo() {}",
 		"symbol": map[string]any{"file": "f.go", "name": "foo"},
-	}, "read-symbol")
+	}, "read")
 	if _, ok := s.SeenBodies["f.go:foo"]; !ok {
 		t.Error("should track")
 	}
@@ -739,7 +739,7 @@ func TestTrackBodies_SkipsEmptyBody(t *testing.T) {
 	s.TrackBodies(map[string]any{
 		"body":   "",
 		"symbol": map[string]any{"file": "f.go", "name": "foo"},
-	}, "read-symbol")
+	}, "read")
 	if len(s.SeenBodies) != 0 {
 		t.Error("should not track empty body")
 	}
@@ -749,7 +749,7 @@ func TestTrackBodies_SkipsNoSymbol(t *testing.T) {
 	s := New()
 	s.TrackBodies(map[string]any{
 		"body": "func foo() {}",
-	}, "read-symbol")
+	}, "read")
 	if len(s.SeenBodies) != 0 {
 		t.Error("should not track without symbol")
 	}
@@ -910,8 +910,8 @@ func TestPostProcess_EditLargeDiff(t *testing.T) {
 func TestPostProcess_DeltaReadUnchanged(t *testing.T) {
 	s := New()
 	text := `{"content":"hello","file":"f.go","hash":"abc","lines":[1,5]}`
-	s.PostProcess("read-file", []string{"f.go"}, map[string]any{}, nil, text)
-	result := s.PostProcess("read-file", []string{"f.go"}, map[string]any{}, nil, text)
+	s.PostProcess("read", []string{"f.go"}, map[string]any{}, nil, text)
+	result := s.PostProcess("read", []string{"f.go"}, map[string]any{}, nil, text)
 	if !strings.Contains(result, "unchanged") {
 		t.Error("re-read should return unchanged")
 	}
@@ -957,19 +957,19 @@ func TestPostProcess_NonJSON(t *testing.T) {
 
 // --- PostProcessNonObject ---
 
-func TestPostProcessNonObject_NotBatchRead(t *testing.T) {
+func TestPostProcessNonObject_NotRead(t *testing.T) {
 	s := New()
-	result := s.PostProcessNonObject("read", nil, map[string]any{}, "[1,2,3]")
+	result := s.PostProcessNonObject("search", nil, map[string]any{}, "[1,2,3]")
 	if result != "[1,2,3]" {
-		t.Error("non-batch-read should pass through")
+		t.Error("non-read should pass through")
 	}
 }
 
 func TestPostProcessNonObject_BatchReadUnchanged(t *testing.T) {
 	s := New()
 	text := `[{"content":"hello","file":"f.go","hash":"abc","lines":[1,5]}]`
-	s.PostProcessNonObject("batch-read", nil, map[string]any{}, text)
-	result := s.PostProcessNonObject("batch-read", nil, map[string]any{}, text)
+	s.PostProcessNonObject("read", nil, map[string]any{}, text)
+	result := s.PostProcessNonObject("read", nil, map[string]any{}, text)
 	if !strings.Contains(result, "unchanged") {
 		t.Error("re-read should return unchanged")
 	}
@@ -978,8 +978,8 @@ func TestPostProcessNonObject_BatchReadUnchanged(t *testing.T) {
 func TestPostProcessNonObject_BatchReadFull(t *testing.T) {
 	s := New()
 	text := `[{"content":"hello","file":"f.go","hash":"abc","lines":[1,5]}]`
-	s.PostProcessNonObject("batch-read", nil, map[string]any{}, text)
-	result := s.PostProcessNonObject("batch-read", nil, map[string]any{"full": true}, text)
+	s.PostProcessNonObject("read", nil, map[string]any{}, text)
+	result := s.PostProcessNonObject("read", nil, map[string]any{"full": true}, text)
 	if strings.Contains(result, "unchanged") {
 		t.Error("--full should not return unchanged")
 	}
@@ -988,15 +988,15 @@ func TestPostProcessNonObject_BatchReadFull(t *testing.T) {
 func TestPostProcessNonObject_BatchReadSymbol(t *testing.T) {
 	s := New()
 	text := `[{"content":"func foo() {}","file":"f.go","symbol":"foo","hash":"abc"}]`
-	s.PostProcessNonObject("batch-read", nil, map[string]any{}, text)
+	s.PostProcessNonObject("read", nil, map[string]any{}, text)
 	if _, ok := s.SeenBodies["f.go:foo"]; !ok {
-		t.Error("batch-read symbol should track body")
+		t.Error("batch read symbol should track body")
 	}
 }
 
 func TestPostProcessNonObject_InvalidJSON(t *testing.T) {
 	s := New()
-	result := s.PostProcessNonObject("batch-read", nil, map[string]any{}, "not json")
+	result := s.PostProcessNonObject("read", nil, map[string]any{}, "not json")
 	if result != "not json" {
 		t.Error("invalid JSON should pass through")
 	}
@@ -1046,10 +1046,10 @@ func TestCommandMaps_Coverage(t *testing.T) {
 	if !BodyCommands["read"] {
 		t.Error("read should be in BodyCommands")
 	}
-	if !ReadCommands["read-file"] {
-		t.Error("read-file should be in ReadCommands")
+	if !ReadCommands["find"] {
+		t.Error("find should be in ReadCommands")
 	}
-	if !EditCommands["smart-edit"] {
-		t.Error("smart-edit should be in EditCommands")
+	if !EditCommands["edit-plan"] {
+		t.Error("edit-plan should be in EditCommands")
 	}
 }

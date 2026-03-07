@@ -57,45 +57,14 @@ func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flag
 	case "refs":
 		return runRefsUnified(ctx, db, root, args, flags)
 
-	// --- Legacy aliases (still supported) ---
 	case "init":
 		return runInit(ctx, db)
-	case "repo-map":
-		return runRepoMap(ctx, db, flags)
-	case "search-text":
-		return runSearchText(ctx, db, args, flags)
-	case "symbols":
-		return runSymbols(ctx, db, root, args)
-	case "read-symbol":
-		return runReadSymbol(ctx, db, root, args, flags)
-	case "read-file":
-		return runReadFile(ctx, db, root, args, flags)
-	case "expand":
-		return runExpand(ctx, db, root, args, flags)
-	case "xrefs":
-		return runXrefs(ctx, db, root, args)
-	case "gather":
-		return runGather(ctx, db, root, args, flags)
-	case "write-file":
-		return runWriteFile(ctx, db, root, args, flags)
-	case "rename-symbol", "rename":
+	case "rename":
 		return runRenameSymbol(ctx, db, root, args, flags)
-	case "insert-after":
-		return runInsertAfter(ctx, db, root, args, flags)
-	case "append-file":
-		return runAppendFile(ctx, db, root, args, flags)
-	case "smart-edit":
-		return runSmartEdit(ctx, db, root, args, flags)
-	case "find-files", "find":
+	case "find":
 		return runFindFiles(ctx, db, root, args, flags)
-	case "batch-read":
-		return runBatchRead(ctx, db, root, args, flags)
 	case "edit-plan":
 		return runEditPlan(ctx, db, root, args, flags)
-	case "impact":
-		return runImpact(ctx, db, root, args, flags)
-	case "call-chain":
-		return runCallChain(ctx, db, root, args, flags)
 	case "verify":
 		return runVerify(ctx, db, root, args, flags)
 	case "multi", "get-diff":
@@ -201,8 +170,8 @@ func runMapUnified(ctx context.Context, db *index.DB, root string, args []string
 func runSearchUnified(ctx context.Context, db *index.DB, args []string, flags map[string]any) (any, error) {
 	isText := flagBool(flags, "text", false) ||
 		flagBool(flags, "regex", false) ||
-		flagString(flags, "include", "") != "" ||
-		flagString(flags, "exclude", "") != "" ||
+		flagString(flags, "include", "") != "" || len(flagStringSlice(flags, "include")) > 0 ||
+		flagString(flags, "exclude", "") != "" || len(flagStringSlice(flags, "exclude")) > 0 ||
 		flagInt(flags, "context", 0) > 0
 
 	if isText {
@@ -532,11 +501,33 @@ func commitEdits(ctx context.Context, db *index.DB, edits []resolvedEdit) (*comm
 
 // --- flag helpers ---
 
-func flagString(flags map[string]any, key string, defaultVal string) string {
+// flagLookup finds a value in the flags map, trying the given key first,
+// then the alternate form (hyphens ↔ underscores). This lets callers use
+// either "dry-run" or "dry_run", "old_text" or "old-text", etc.
+func flagLookup(flags map[string]any, key string) (any, bool) {
 	if flags == nil {
-		return defaultVal
+		return nil, false
 	}
-	v, ok := flags[key]
+	if v, ok := flags[key]; ok {
+		return v, true
+	}
+	// Try alternate form: swap hyphens and underscores
+	var alt string
+	if strings.Contains(key, "-") {
+		alt = strings.ReplaceAll(key, "-", "_")
+	} else if strings.Contains(key, "_") {
+		alt = strings.ReplaceAll(key, "_", "-")
+	} else {
+		return nil, false
+	}
+	if v, ok := flags[alt]; ok {
+		return v, true
+	}
+	return nil, false
+}
+
+func flagString(flags map[string]any, key string, defaultVal string) string {
+	v, ok := flagLookup(flags, key)
 	if !ok {
 		return defaultVal
 	}
@@ -547,10 +538,7 @@ func flagString(flags map[string]any, key string, defaultVal string) string {
 }
 
 func flagInt(flags map[string]any, key string, defaultVal int) int {
-	if flags == nil {
-		return defaultVal
-	}
-	v, ok := flags[key]
+	v, ok := flagLookup(flags, key)
 	if !ok {
 		return defaultVal
 	}
@@ -567,10 +555,7 @@ func flagInt(flags map[string]any, key string, defaultVal int) int {
 }
 
 func flagStringSlice(flags map[string]any, key string) []string {
-	if flags == nil {
-		return nil
-	}
-	v, ok := flags[key]
+	v, ok := flagLookup(flags, key)
 	if !ok {
 		return nil
 	}
@@ -593,10 +578,7 @@ func flagStringSlice(flags map[string]any, key string) []string {
 }
 
 func flagBool(flags map[string]any, key string, defaultVal bool) bool {
-	if flags == nil {
-		return defaultVal
-	}
-	v, ok := flags[key]
+	v, ok := flagLookup(flags, key)
 	if !ok {
 		return defaultVal
 	}

@@ -22,7 +22,7 @@ func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string,
 		return nil, fmt.Errorf("edit requires 'new_text' in flags")
 	}
 
-	dryRun := flagBool(flags, "dry-run", false) || flagBool(flags, "dry_run", false)
+	dryRun := flagBool(flags, "dry-run", false)
 
 	// Determine targeting mode:
 	// 1. --start_line/--end_line: line range (requires file as first arg)
