@@ -269,13 +269,13 @@ func serveMCP(db *index.DB) error {
 				Result: map[string]any{
 					"tools": []mcpTool{{
 						Name:        "edr",
-						Description: "Your default tool for ALL file operations. Use cmd=multi with flags.commands=[{cmd,args,flags},...] to batch multiple commands in ONE call. Reading: read-file, read-symbol, search (--body), search-text, symbols, repo-map (--dir, --grep, --type, --glob), expand (--signatures), xrefs, gather (--signatures). Editing: smart-edit, replace-text, replace-symbol, replace-lines, replace-span, edit-plan (atomic multi-edit via flags.edits array). Creating: write-file, append-file, insert-after. Refactoring: rename-symbol (--dry-run), diff-preview. Analysis: impact (transitive callers), call-chain (path between symbols), verify (run build/typecheck). Responses are context-aware: small edit diffs (<=20 lines) inline automatically, large diffs stored (use get-diff), re-reads return deltas with previous_hash, gather/search skip bodies already in context. Use --verbose on edits or --full on reads to override. All edits return hash. See CLAUDE.md.",
+						Description: "Your default tool for ALL file operations. Use cmd=multi with flags.commands=[{cmd,args,flags},...] to batch multiple commands in ONE call. Reading: read (file, file:symbol, or multiple args for batch), search (--body; --text/--regex for text search), map (no args=repo map, file arg=symbols). Exploring: explore (--body, --callers, --deps; --gather for context bundle with tests). Editing: edit (symbol, --start_line/--end_line, or --match; --dry-run), edit-plan (atomic multi-edit via flags.edits array). Writing: write (--append, --after symbol, --mkdir). Refactoring: rename (--dry-run, --scope). References: refs (default=xrefs, --impact for transitive, --chain symbol for call path). Finding: find (glob patterns with **). Analysis: verify (run build/typecheck). Legacy names (read-file, read-symbol, batch-read, write-file, append-file, insert-after, smart-edit, repo-map, symbols, search-text, expand, gather, xrefs, impact, call-chain, rename-symbol, find-files) still work. Responses are context-aware: small edit diffs (<=20 lines) inline automatically, large diffs stored (use get-diff), re-reads return deltas. Use --verbose on edits or --full on reads to override. All edits return hash. See CLAUDE.md.",
 						InputSchema: mcpSchema{
 							Type: "object",
 							Properties: map[string]mcpProp{
 								"cmd": {
 									Type:        "string",
-									Description: "Command name (e.g. search, expand, replace-symbol, get-diff)",
+									Description: "Command name (e.g. read, edit, search, map, explore, refs, write, find, rename, verify)",
 								},
 								"args": {
 									Type:        "array",

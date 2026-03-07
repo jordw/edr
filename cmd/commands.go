@@ -16,34 +16,34 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(initCmd)
-	rootCmd.AddCommand(repoMapCmd)
-	rootCmd.AddCommand(searchCmd)
-	rootCmd.AddCommand(symbolsCmd)
-	rootCmd.AddCommand(readSymbolCmd)
-	rootCmd.AddCommand(expandCmd)
-	rootCmd.AddCommand(xrefsCmd)
-	rootCmd.AddCommand(replaceSymbolCmd)
-	rootCmd.AddCommand(replaceSpanCmd)
-	rootCmd.AddCommand(gatherCmd)
-	rootCmd.AddCommand(searchTextCmd)
-	rootCmd.AddCommand(replaceLinesCmd)
-	rootCmd.AddCommand(readFileCmd)
-	rootCmd.AddCommand(replaceTextCmd)
-	rootCmd.AddCommand(writeFileCmd)
-	rootCmd.AddCommand(renameSymbolCmd)
-	rootCmd.AddCommand(insertAfterCmd)
-	rootCmd.AddCommand(appendFileCmd)
-	rootCmd.AddCommand(smartEditCmd)
-	rootCmd.AddCommand(findFilesCmd)
-	rootCmd.AddCommand(batchReadCmd)
-	rootCmd.AddCommand(diffPreviewCmd)
-	rootCmd.AddCommand(diffPreviewSpanCmd)
-	rootCmd.AddCommand(editPlanCmd)
-	rootCmd.AddCommand(impactCmd)
-	rootCmd.AddCommand(callChainCmd)
+	// Unified commands (preferred)
+	rootCmd.AddCommand(readCmd)
+	rootCmd.AddCommand(writeCmd)
+	rootCmd.AddCommand(editCmd)
+	rootCmd.AddCommand(mapCmd)
+	rootCmd.AddCommand(exploreCmd)
+	rootCmd.AddCommand(refsCmd)
+	rootCmd.AddCommand(renameCmd)
+	rootCmd.AddCommand(findCmd)
 	rootCmd.AddCommand(verifyCmd)
-	rootCmd.AddCommand(getDiffCmd)
+	rootCmd.AddCommand(editPlanCmd)
+	rootCmd.AddCommand(initCmd)
+
+	// search is both unified and legacy (same name), add with text flags
+	rootCmd.AddCommand(searchCmd)
+
+	// Legacy commands (hidden, still work)
+	for _, cmd := range []*cobra.Command{
+		repoMapCmd, symbolsCmd, readSymbolCmd,
+		expandCmd, xrefsCmd, gatherCmd, searchTextCmd,
+		readFileCmd, writeFileCmd, renameSymbolCmd,
+		insertAfterCmd, appendFileCmd, smartEditCmd,
+		findFilesCmd, batchReadCmd, impactCmd, callChainCmd,
+		getDiffCmd,
+	} {
+		cmd.Hidden = true
+		rootCmd.AddCommand(cmd)
+	}
 }
 
 // dispatchWithSession runs a command through the session post-processing pipeline.
@@ -81,17 +81,16 @@ func dispatchWithSession(db *index.DB, sess *session.Session, cmdName string, ar
 	return nil
 }
 
-// openSessionAndDB opens the DB and a PPID-scoped file session.
+// openSessionAndDB opens the DB and a session.
+// Plain CLI calls use a stateless in-memory session so separate invocations
+// are self-contained. File-backed sessions are only used by batch and MCP modes,
+// or when the user passes --session explicitly.
 func openSessionAndDB(cmd *cobra.Command) (*index.DB, *session.Session, error) {
 	db, err := openAndEnsureIndex(cmd)
 	if err != nil {
 		return nil, nil, err
 	}
-	sess, err := session.NewFileSession(db.Root())
-	if err != nil {
-		// Fall back to in-memory session if file session fails
-		sess = session.New()
-	}
+	sess := session.New() // stateless by default for CLI
 	return db, sess, nil
 }
 
@@ -124,6 +123,181 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	return dispatchWithSession(db, sess, cmdName, args, flags)
 }
 
+// =====================================================================
+// Unified commands — the primary interface
+// =====================================================================
+
+// --- read: read-file + read-symbol + batch-read ---
+
+var readCmd = &cobra.Command{
+	Use:   "read <file> [start] [end] | <file> <symbol> | <file>:<symbol> ...",
+	Short: "Read files, symbols, or batches",
+	Long: `Unified read command:
+  read file.go                     Read entire file
+  read file.go 10 50               Read line range
+  read file.go parseConfig         Read a symbol
+  read file.go:parseConfig         Read a symbol (colon syntax)
+  read f1.go f2.go f3.go:sym       Batch read multiple files/symbols`,
+	Args: cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "read", args) },
+}
+
+func init() {
+	readCmd.Flags().Int("budget", 0, "token budget (0 = unlimited)")
+	readCmd.Flags().Bool("symbols", false, "include symbol list for code files")
+	readCmd.Flags().Bool("signatures", false, "for containers: return method signatures only (no bodies)")
+	readCmd.Flags().Int("depth", 0, "progressive disclosure depth (1=signatures, 2=bodies with blocks collapsed, 3+=more)")
+}
+
+// --- write: write-file + append-file + insert-after ---
+
+var writeCmd = &cobra.Command{
+	Use:   "write <file>",
+	Short: "Create, overwrite, append, or insert into containers",
+	Long: `Unified write command:
+  write file.go                          Create or overwrite (content from stdin)
+  write file.go --append                 Append to file
+  write file.go --after symbol           Insert after a symbol
+  write file.go --inside MyClass         Insert inside a class/struct/impl
+  write file.go --inside MyClass --after existingMethod   Insert after a method within a class
+  write file.go --mkdir                  Create parent directories`,
+	Args: cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return dispatchCmdWithStdin(cmd, "write", args, "content")
+	},
+}
+
+func init() {
+	writeCmd.Flags().Bool("mkdir", false, "create parent directories if needed")
+	writeCmd.Flags().Bool("append", false, "append to existing file instead of overwriting")
+	writeCmd.Flags().String("after", "", "insert content after this symbol (or position within --inside)")
+	writeCmd.Flags().String("inside", "", "insert content inside a container symbol (class/struct/impl)")
+}
+
+// --- edit: smart-edit ---
+
+var editCmd = &cobra.Command{
+	Use:   "edit <file> [symbol]",
+	Short: "Edit by text match, symbol, or line range",
+	Long: `Unified edit command:
+  edit file.go --old_text "old code"   Find and replace (new_text from stdin)
+  edit file.go --old_text "x" --all    Replace all occurrences
+  edit file.go parseConfig             Replace entire symbol body
+  edit file.go --start_line 10 --end_line 20   Replace line range`,
+	Args: cobra.RangeArgs(1, 2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return dispatchCmdWithStdin(cmd, "edit", args, "new_text")
+	},
+}
+
+func init() {
+	editCmd.Flags().Int("start_line", 0, "start line for line-range mode")
+	editCmd.Flags().Int("end_line", 0, "end line for line-range mode")
+	editCmd.Flags().String("old_text", "", "text to find and replace")
+	editCmd.Flags().Bool("regex", false, "treat --old_text as regex")
+	editCmd.Flags().Bool("all", false, "replace all occurrences (with --old_text)")
+	editCmd.Flags().Bool("dry-run", false, "preview changes as a diff without applying")
+}
+
+// --- map: repo-map + symbols ---
+
+var mapCmd = &cobra.Command{
+	Use:   "map [file]",
+	Short: "Symbol map of repo or file",
+	Long: `Unified map command:
+  map                              Repo-wide symbol map
+  map file.go                      Symbols in a specific file
+  map --dir internal/ --type func  Filtered repo map`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "map", args) },
+}
+
+func init() {
+	mapCmd.Flags().Int("budget", 0, "token budget (0 = unlimited)")
+	mapCmd.Flags().String("dir", "", "only show files under this directory")
+	mapCmd.Flags().String("glob", "", "only show files matching this glob pattern")
+	mapCmd.Flags().String("type", "", "only show symbols of this type (function, type, variable)")
+	mapCmd.Flags().String("grep", "", "only show symbols whose name contains this string")
+}
+
+// --- search: symbol search + text search ---
+
+// Note: the legacy "search" Cobra command is renamed to searchCmd (hidden).
+// The unified search goes through Dispatch as "search" which calls runSearchUnified.
+
+// --- explore: expand + gather ---
+
+var exploreCmd = &cobra.Command{
+	Use:   "explore [file] <symbol>",
+	Short: "Explore a symbol: body, callers, deps, or full context gather",
+	Long: `Unified explore command:
+  explore sym --body --callers     Expand with body and callers
+  explore sym --gather             Full context bundle (callers + tests)
+  explore sym --body --deps        Show body and dependencies`,
+	Args: cobra.RangeArgs(1, 2),
+	RunE: func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "explore", args) },
+}
+
+func init() {
+	exploreCmd.Flags().Bool("body", false, "include symbol body")
+	exploreCmd.Flags().Bool("callers", false, "include callers")
+	exploreCmd.Flags().Bool("deps", false, "include dependencies")
+	exploreCmd.Flags().Bool("gather", false, "gather mode: callers + tests within budget")
+	exploreCmd.Flags().Bool("signatures", false, "include extracted signatures")
+	exploreCmd.Flags().Int("budget", 0, "token budget (0 = unlimited)")
+}
+
+// --- refs: xrefs + impact + call-chain ---
+
+var refsCmd = &cobra.Command{
+	Use:   "refs [file] <symbol>",
+	Short: "Find references, impact, or call chains",
+	Long: `Unified refs command:
+  refs parseConfig                 Find all references
+  refs parseConfig --impact        Transitive impact analysis
+  refs parseConfig --chain main    Find call path to another symbol`,
+	Args: cobra.RangeArgs(1, 2),
+	RunE: func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "refs", args) },
+}
+
+func init() {
+	refsCmd.Flags().Bool("impact", false, "transitive impact analysis (BFS through callers)")
+	refsCmd.Flags().String("chain", "", "find call chain from this symbol to target")
+	refsCmd.Flags().Int("depth", 3, "max depth for --impact or --chain")
+}
+
+// --- rename: rename-symbol ---
+
+var renameCmd = &cobra.Command{
+	Use:   "rename <old-name> <new-name>",
+	Short: "Rename a symbol across all files",
+	Args:  cobra.ExactArgs(2),
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "rename", args) },
+}
+
+func init() {
+	renameCmd.Flags().Bool("dry-run", false, "preview what would change without applying")
+	renameCmd.Flags().String("scope", "", "glob pattern to limit rename scope")
+}
+
+// --- find: find-files ---
+
+var findCmd = &cobra.Command{
+	Use:   "find <pattern>",
+	Short: "Find files by glob pattern (supports **)",
+	Args:  cobra.ExactArgs(1),
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "find", args) },
+}
+
+func init() {
+	findCmd.Flags().String("dir", "", "scope search to directory")
+	findCmd.Flags().Int("budget", 0, "limit results by total file size in tokens")
+}
+
+// =====================================================================
+// Legacy commands (hidden, still supported)
+// =====================================================================
+
 // --- init (index) ---
 
 var initCmd = &cobra.Command{
@@ -150,18 +324,30 @@ func init() {
 	repoMapCmd.Flags().String("grep", "", "only show symbols whose name contains this string")
 }
 
-// --- search (symbol search) ---
+// --- search (unified: symbol + text) ---
 
 var searchCmd = &cobra.Command{
 	Use:   "search <pattern>",
-	Short: "Search symbols by name",
-	Args:  cobra.ExactArgs(1),
-	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "search", args) },
+	Short: "Search symbols or text (use --text, --regex, --include for text mode)",
+	Long: `Unified search command:
+  search parseConfig               Symbol search
+  search parseConfig --body        Symbol search with body snippets
+  search "TODO" --text             Text search across all files
+  search "func.*" --regex          Text search with regex
+  search "err" --include "*.go"    Text search filtered by glob`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "search", args) },
 }
 
 func init() {
 	searchCmd.Flags().Int("budget", 0, "token budget (0 = unlimited)")
 	searchCmd.Flags().Bool("body", false, "include symbol body snippets")
+	// Text-search flags (auto-detected: presence triggers text mode)
+	searchCmd.Flags().Bool("text", false, "force text search mode")
+	searchCmd.Flags().Bool("regex", false, "treat pattern as regex (implies --text)")
+	searchCmd.Flags().StringSlice("include", nil, "glob patterns to include (implies --text)")
+	searchCmd.Flags().StringSlice("exclude", nil, "glob patterns to exclude (implies --text)")
+	searchCmd.Flags().Int("context", 0, "lines of context around matches (implies --text)")
 }
 
 // --- search-text ---
@@ -229,38 +415,6 @@ var xrefsCmd = &cobra.Command{
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "xrefs", args) },
 }
 
-// --- replace-symbol ---
-
-var replaceSymbolCmd = &cobra.Command{
-	Use:   "replace-symbol [file] <symbol>",
-	Short: "Replace a symbol's body",
-	Long:  "Reads replacement code from stdin",
-	Args:  cobra.RangeArgs(1, 2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return dispatchCmdWithStdin(cmd, "replace-symbol", args, "replacement")
-	},
-}
-
-func init() {
-	replaceSymbolCmd.Flags().String("expect-hash", "", "expected file hash for safety")
-}
-
-// --- replace-span ---
-
-var replaceSpanCmd = &cobra.Command{
-	Use:   "replace-span <file> <start-byte> <end-byte>",
-	Short: "Replace a byte range in a file",
-	Long:  "Reads replacement code from stdin",
-	Args:  cobra.ExactArgs(3),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return dispatchCmdWithStdin(cmd, "replace-span", args, "replacement")
-	},
-}
-
-func init() {
-	replaceSpanCmd.Flags().String("expect-hash", "", "expected file hash for safety")
-}
-
 // --- gather ---
 
 var gatherCmd = &cobra.Command{
@@ -276,22 +430,6 @@ func init() {
 	gatherCmd.Flags().Bool("signatures", false, "include extracted signatures on all symbols")
 }
 
-// --- replace-lines ---
-
-var replaceLinesCmd = &cobra.Command{
-	Use:   "replace-lines <file> <start-line> <end-line>",
-	Short: "Replace a line range in a file",
-	Long:  "Reads replacement code from stdin. Lines are 1-indexed and inclusive.",
-	Args:  cobra.ExactArgs(3),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return dispatchCmdWithStdin(cmd, "replace-lines", args, "replacement")
-	},
-}
-
-func init() {
-	replaceLinesCmd.Flags().String("expect-hash", "", "expected file hash for safety")
-}
-
 // --- read-file ---
 
 var readFileCmd = &cobra.Command{
@@ -304,22 +442,6 @@ var readFileCmd = &cobra.Command{
 func init() {
 	readFileCmd.Flags().Int("budget", 0, "token budget (0 = unlimited)")
 	readFileCmd.Flags().Bool("symbols", false, "include symbol list for code files")
-}
-
-// --- replace-text ---
-
-var replaceTextCmd = &cobra.Command{
-	Use:   "replace-text <file> <old-text> <new-text>",
-	Short: "Find and replace text in any file",
-	Long:  "Replaces the first occurrence of old-text with new-text. Use --all to replace all occurrences.",
-	Args:  cobra.ExactArgs(3),
-	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "replace-text", args) },
-}
-
-func init() {
-	replaceTextCmd.Flags().String("expect-hash", "", "expected file hash for safety")
-	replaceTextCmd.Flags().Bool("all", false, "replace all occurrences")
-	replaceTextCmd.Flags().Bool("regex", false, "treat old-text as a Go regexp")
 }
 
 // --- write-file ---
@@ -377,41 +499,20 @@ var appendFileCmd = &cobra.Command{
 
 var smartEditCmd = &cobra.Command{
 	Use:   "smart-edit <file> [symbol]",
-	Short: "Unified edit: symbol, --start_line/--end_line, or --match targeting (replacement from stdin)",
+	Short: "Legacy alias for edit",
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return dispatchCmdWithStdin(cmd, "smart-edit", args, "replacement")
+		return dispatchCmdWithStdin(cmd, "smart-edit", args, "new_text")
 	},
 }
 
 func init() {
 	smartEditCmd.Flags().Int("start_line", 0, "start line for line-range mode")
 	smartEditCmd.Flags().Int("end_line", 0, "end line for line-range mode")
-	smartEditCmd.Flags().String("match", "", "text to find and replace")
-	smartEditCmd.Flags().Bool("regex", false, "treat --match as regex")
-	smartEditCmd.Flags().Bool("all", false, "replace all occurrences (with --match)")
-}
-
-// --- diff-preview ---
-
-var diffPreviewCmd = &cobra.Command{
-	Use:   "diff-preview [file] <symbol>",
-	Short: "Preview an edit as a unified diff",
-	Args:  cobra.RangeArgs(1, 2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return dispatchCmdWithStdin(cmd, "diff-preview", args, "replacement")
-	},
-}
-
-// --- diff-preview-span ---
-
-var diffPreviewSpanCmd = &cobra.Command{
-	Use:   "diff-preview-span <file> <start-byte> <end-byte>",
-	Short: "Preview a span edit as a unified diff",
-	Args:  cobra.ExactArgs(3),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return dispatchCmdWithStdin(cmd, "diff-preview-span", args, "replacement")
-	},
+	smartEditCmd.Flags().String("old_text", "", "text to find and replace")
+	smartEditCmd.Flags().Bool("regex", false, "treat --old_text as regex")
+	smartEditCmd.Flags().Bool("all", false, "replace all occurrences")
+	smartEditCmd.Flags().Bool("dry-run", false, "preview changes without applying")
 }
 
 // --- find-files ---
@@ -533,12 +634,13 @@ func init() {
 	verifyCmd.Flags().Int("timeout", 30, "timeout in seconds")
 }
 
-// --- get-diff ---
+// --- get-diff (MCP-only plumbing, hidden from CLI help) ---
 
 var getDiffCmd = &cobra.Command{
-	Use:   "get-diff <file> [symbol]",
-	Short: "Retrieve stored diff from last edit (session-scoped)",
-	Args:  cobra.RangeArgs(1, 2),
+	Use:    "get-diff <file> [symbol]",
+	Short:  "Retrieve stored diff from last edit (session-scoped)",
+	Hidden: true,
+	Args:   cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		db, sess, err := openSessionAndDB(cmd)
 		if err != nil {

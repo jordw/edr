@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"syscall"
 
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
@@ -40,6 +42,27 @@ func openAndEnsureIndexQuiet(cmd *cobra.Command) (*index.DB, error) {
 
 func openDB(cmd *cobra.Command, quiet bool) (*index.DB, error) {
 	root := getRoot(cmd)
+
+	// Serialize DB open + migration + initial indexing across parallel CLI
+	// processes using a file lock. This prevents SQLITE_BUSY errors during
+	// first-use bootstrap when agents fire multiple writes in parallel.
+	edrDir := filepath.Join(index.NormalizeRootOrDefault(root), ".edr")
+	os.MkdirAll(edrDir, 0755)
+	lockPath := filepath.Join(edrDir, "index.lock")
+	lockFile, lockErr := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	if lockErr == nil {
+		if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+			// Flock not supported (e.g., network FS) — fall through without lock
+			lockFile.Close()
+			lockFile = nil
+		} else {
+			defer func() {
+				syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+				lockFile.Close()
+			}()
+		}
+	}
+
 	db, err := index.OpenDB(root)
 	if err != nil {
 		return nil, err

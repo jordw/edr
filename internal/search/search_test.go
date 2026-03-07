@@ -82,5 +82,78 @@ func TestMatchesAnyPath(t *testing.T) {
 	}
 }
 
+func TestScoreSymbolMatch(t *testing.T) {
+	tests := []struct {
+		name    string
+		symbol  string
+		pattern string
+		want    float64
+	}{
+		{"exact match", "Config", "Config", 1.0},
+		{"case-insensitive exact", "config", "Config", 0.95},
+		{"prefix match", "ConfigParser", "Config", 0.8},
+		{"case-insensitive prefix", "configParser", "Config", 0.75},
+		{"suffix match", "parseConfig", "Config", 0.7},
+		{"case-insensitive suffix", "parseconfig", "Config", 0.65},
+		{"contains", "MyConfigParser", "Config", 0.5},
+		{"contains case-insensitive", "myconfigparser", "Config", 0.5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := scoreSymbolMatch(tt.symbol, tt.pattern)
+			if got != tt.want {
+				t.Errorf("scoreSymbolMatch(%q, %q) = %v, want %v", tt.symbol, tt.pattern, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestScoreSymbolMatch_ExactBeatsAll(t *testing.T) {
+	exact := scoreSymbolMatch("Config", "Config")
+	ciExact := scoreSymbolMatch("config", "Config")
+	prefix := scoreSymbolMatch("ConfigParser", "Config")
+	ciPrefix := scoreSymbolMatch("configParser", "Config")
+	suffix := scoreSymbolMatch("parseConfig", "Config")
+	ciSuffix := scoreSymbolMatch("parseconfig", "Config")
+	contains := scoreSymbolMatch("MyConfigParser", "Config")
+
+	if exact <= ciExact {
+		t.Error("exact should beat case-insensitive exact")
+	}
+	if ciExact <= prefix {
+		t.Error("case-insensitive exact should beat prefix")
+	}
+	if prefix <= ciPrefix {
+		t.Error("prefix should beat case-insensitive prefix")
+	}
+	if ciPrefix <= suffix {
+		t.Error("case-insensitive prefix should beat suffix")
+	}
+	if suffix <= ciSuffix {
+		t.Error("suffix should beat case-insensitive suffix")
+	}
+	if ciSuffix <= contains {
+		t.Error("case-insensitive suffix should beat contains")
+	}
+}
+
+func TestScoreSymbolMatch_SuffixBeatsContains(t *testing.T) {
+	// This is important for method name searches like searching "Config"
+	// and wanting "parseConfig" to rank above "MyConfigParser"
+	suffix := scoreSymbolMatch("parseConfig", "Config")
+	contains := scoreSymbolMatch("MyConfigParser", "Config")
+	if suffix <= contains {
+		t.Errorf("suffix score (%v) should beat contains score (%v)", suffix, contains)
+	}
+}
+
+func TestScoreSymbolMatch_PrefixBeatsContains(t *testing.T) {
+	prefix := scoreSymbolMatch("ConfigDSL", "Config")
+	contains := scoreSymbolMatch("RetryConfigDSL", "Config")
+	if prefix <= contains {
+		t.Errorf("prefix score (%v) should beat contains score (%v)", prefix, contains)
+	}
+}
+
 // Ensure filepath is used (it's needed for isSourceFile via filepath.Ext)
 var _ = filepath.Ext

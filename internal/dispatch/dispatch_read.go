@@ -344,5 +344,8 @@ func runSymbols(ctx context.Context, db *index.DB, root string, args []string) (
 		}
 		results = append(results, sym)
 	}
-	return results, nil
+	return map[string]any{
+		"file":    output.Rel(file),
+		"symbols": results,
+	}, nil
 }

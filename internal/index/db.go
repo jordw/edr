@@ -7,14 +7,72 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
 
 // DB is the persistent index database.
 type DB struct {
-	db   *sql.DB
-	root string
+	db         *retryDB
+	raw        *sql.DB // underlying sql.DB for Close and pragmas
+	root       string
+	dirtyFiles map[string]bool // files needing re-index (lazy indexing)
+}
+
+// retryDB wraps sql.DB to automatically retry on SQLITE_BUSY errors.
+// modernc.org/sqlite's PRAGMA busy_timeout doesn't reliably work across
+// separate OS processes, so we implement retry at the Go level.
+type retryDB struct {
+	db *sql.DB
+}
+
+func (r *retryDB) Exec(query string, args ...any) (sql.Result, error) {
+	var res sql.Result
+	err := retryBusy(func() error {
+		var e error
+		res, e = r.db.Exec(query, args...)
+		return e
+	})
+	return res, err
+}
+
+func (r *retryDB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	var res sql.Result
+	err := retryBusy(func() error {
+		var e error
+		res, e = r.db.ExecContext(ctx, query, args...)
+		return e
+	})
+	return res, err
+}
+
+func (r *retryDB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	var rows *sql.Rows
+	err := retryBusy(func() error {
+		var e error
+		rows, e = r.db.QueryContext(ctx, query, args...)
+		return e
+	})
+	return rows, err
+}
+
+func (r *retryDB) QueryRow(query string, args ...any) *sql.Row {
+	return r.db.QueryRow(query, args...)
+}
+
+func (r *retryDB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return r.db.QueryRowContext(ctx, query, args...)
+}
+
+func (r *retryDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+	var tx *sql.Tx
+	err := retryBusy(func() error {
+		var e error
+		tx, e = r.db.BeginTx(ctx, opts)
+		return e
+	})
+	return tx, err
 }
 
 // OpenDB opens or creates the index database in the .edr directory.
@@ -40,16 +98,20 @@ func OpenDB(repoRoot string) (*DB, error) {
 		sqlDB.Close()
 		return nil, err
 	}
-	// Allow up to 10s of busy-waiting so parallel processes don't get SQLITE_BUSY
-	if _, err := sqlDB.Exec("PRAGMA busy_timeout=10000"); err != nil {
+	// Set busy_timeout as a hint (works within a single process).
+	// Cross-process busy handling is done by retryDB wrapper.
+	if _, err := sqlDB.Exec("PRAGMA busy_timeout=5000"); err != nil {
 		sqlDB.Close()
 		return nil, err
 	}
 
-	// Limit connection pool to reduce contention from Go's sql.DB opening multiple conns
+	// Single connection avoids cross-connection locking issues within the same
+	// process. SQLite serializes writes anyway; a pool only helps concurrent
+	// readers, but with WAL + single short-lived CLI calls the benefit is
+	// negligible while the locking risk is real.
 	sqlDB.SetMaxOpenConns(1)
 
-	d := &DB{db: sqlDB, root: root}
+	d := &DB{db: &retryDB{db: sqlDB}, raw: sqlDB, root: root, dirtyFiles: make(map[string]bool)}
 	if err := d.migrate(); err != nil {
 		sqlDB.Close()
 		return nil, err
@@ -57,11 +119,77 @@ func OpenDB(repoRoot string) (*DB, error) {
 	return d, nil
 }
 
-func (d *DB) Close() error {
-	return d.db.Close()
+// MarkDirty records a file as needing re-indexing. The actual re-index
+// is deferred until FlushDirty is called (typically at the start of the
+// next query). This makes edit commands return instantly.
+func (d *DB) MarkDirty(path string) {
+	d.dirtyFiles[path] = true
 }
 
-const currentSchemaVersion = 2
+// FlushDirty re-indexes any files marked dirty and clears the dirty set.
+// Call this before commands that need up-to-date symbol data.
+func (d *DB) FlushDirty(ctx context.Context) error {
+	if len(d.dirtyFiles) == 0 {
+		return nil
+	}
+	for path := range d.dirtyFiles {
+		if err := IndexFile(ctx, d, path); err != nil {
+			// Best-effort: log and continue
+			continue
+		}
+	}
+	d.dirtyFiles = make(map[string]bool)
+	return nil
+}
+
+// HasDirty returns true if any files are pending re-index.
+func (d *DB) HasDirty() bool {
+	return len(d.dirtyFiles) > 0
+}
+
+func (d *DB) Close() error {
+	// Flush any pending dirty files before closing.
+	if d.HasDirty() {
+		d.FlushDirty(context.Background())
+	}
+	// Force a WAL checkpoint so all data is visible to the next process
+	// that opens this database. Without this, short-lived CLI processes
+	// can exit with data still in the WAL that the next process may miss.
+	d.raw.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	return d.raw.Close()
+}
+
+// isSQLiteBusy returns true if the error is a SQLite busy/locked error.
+func isSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "SQLITE_BUSY") || strings.Contains(s, "database is locked")
+}
+
+// retryBusy retries a function up to ~30s on SQLite busy errors.
+// modernc.org/sqlite's busy_timeout PRAGMA doesn't reliably work across
+// separate OS processes, so we implement retry at the Go level.
+func retryBusy(fn func() error) error {
+	var err error
+	backoff := 10 * time.Millisecond
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		err = fn()
+		if err == nil || !isSQLiteBusy(err) || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(backoff)
+		backoff = backoff * 2
+		if backoff > 500*time.Millisecond {
+			backoff = 500 * time.Millisecond
+		}
+	}
+}
+
+
+const currentSchemaVersion = 4
 
 func (d *DB) migrate() error {
 	// Create schema_version table if it doesn't exist
@@ -95,6 +223,16 @@ func (d *DB) migrate() error {
 			return err
 		}
 	}
+	if version < 3 {
+		if err := d.migrateV3(); err != nil {
+			return err
+		}
+	}
+	if version < 4 {
+		if err := d.migrateV4(); err != nil {
+			return err
+		}
+	}
 
 	// Upsert version
 	_, err = d.db.Exec(`DELETE FROM schema_version`)
@@ -121,7 +259,7 @@ func (d *DB) migrateV1() error {
 			end_line INTEGER NOT NULL,
 			start_byte INTEGER NOT NULL,
 			end_byte INTEGER NOT NULL,
-			summary TEXT DEFAULT '',
+			parent_id INTEGER DEFAULT NULL,
 			FOREIGN KEY (file) REFERENCES files(path)
 		);
 		CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
@@ -156,6 +294,51 @@ func (d *DB) migrateV2() error {
 	}
 	// Force full re-index so imports and refs get populated
 	_, err = d.db.Exec(`UPDATE files SET hash = ''`)
+	return err
+}
+
+func (d *DB) migrateV3() error {
+	// Add parent_id column — idempotent: ignore error if column already exists
+	_, err := d.db.Exec(`ALTER TABLE symbols ADD COLUMN parent_id INTEGER DEFAULT NULL REFERENCES symbols(id)`)
+	if err != nil {
+		// Check if column already exists (SQLite returns "duplicate column name" error)
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+	_, err = d.db.Exec(`CREATE INDEX IF NOT EXISTS idx_symbols_parent ON symbols(parent_id)`)
+	if err != nil {
+		return err
+	}
+	// Force full re-index so parent_id gets populated
+	_, err = d.db.Exec(`UPDATE files SET hash = ''`)
+	return err
+}
+
+func (d *DB) migrateV4() error {
+	// Rebuild symbols table: drop unused 'summary' column, ensure clean schema.
+	_, err := d.db.Exec(`
+		CREATE TABLE IF NOT EXISTS symbols_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			type TEXT NOT NULL,
+			file TEXT NOT NULL,
+			start_line INTEGER NOT NULL,
+			end_line INTEGER NOT NULL,
+			start_byte INTEGER NOT NULL,
+			end_byte INTEGER NOT NULL,
+			parent_id INTEGER DEFAULT NULL REFERENCES symbols_new(id),
+			FOREIGN KEY (file) REFERENCES files(path)
+		);
+		INSERT INTO symbols_new (id, name, type, file, start_line, end_line, start_byte, end_byte, parent_id)
+			SELECT id, name, type, file, start_line, end_line, start_byte, end_byte, parent_id FROM symbols;
+		DROP TABLE symbols;
+		ALTER TABLE symbols_new RENAME TO symbols;
+		CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+		CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file);
+		CREATE INDEX IF NOT EXISTS idx_symbols_type ON symbols(type);
+		CREATE INDEX IF NOT EXISTS idx_symbols_parent ON symbols(parent_id);
+	`)
 	return err
 }
 
@@ -208,15 +391,66 @@ func (d *DB) InsertSymbol(ctx context.Context, s SymbolInfo) error {
 }
 
 // InsertSymbolReturnID adds a symbol and returns its rowid.
-func (d *DB) InsertSymbolReturnID(ctx context.Context, s SymbolInfo) (int64, error) {
+// parentID is optional — pass nil for top-level symbols.
+func (d *DB) InsertSymbolReturnID(ctx context.Context, s SymbolInfo, parentID *int64) (int64, error) {
 	res, err := d.db.ExecContext(ctx, `
-		INSERT INTO symbols (name, type, file, start_line, end_line, start_byte, end_byte)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, s.Name, s.Type, s.File, s.StartLine, s.EndLine, s.StartByte, s.EndByte)
+		INSERT INTO symbols (name, type, file, start_line, end_line, start_byte, end_byte, parent_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, s.Name, s.Type, s.File, s.StartLine, s.EndLine, s.StartByte, s.EndByte, parentID)
 	if err != nil {
 		return 0, err
 	}
 	return res.LastInsertId()
+}
+
+// UpdateSymbolParent sets the parent_id for a symbol.
+func (d *DB) UpdateSymbolParent(ctx context.Context, symbolID, parentID int64) error {
+	_, err := d.db.ExecContext(ctx, `UPDATE symbols SET parent_id = ? WHERE id = ?`, parentID, symbolID)
+	return err
+}
+
+// InsertSymbolsBatch inserts all symbols for a file in a single transaction,
+// resolving parent_id using ParentIndex (pre-order guarantees parents first).
+// Returns a map of parse-time index → DB ID for ref extraction.
+func (d *DB) InsertSymbolsBatch(ctx context.Context, symbols []SymbolInfo) (map[int]int64, error) {
+	ids := make(map[int]int64, len(symbols))
+	if len(symbols) == 0 {
+		return ids, nil
+	}
+
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO symbols (name, type, file, start_line, end_line, start_byte, end_byte, parent_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Close()
+
+	for i, s := range symbols {
+		var parentID *int64
+		if s.ParentIndex >= 0 {
+			pid := ids[s.ParentIndex]
+			parentID = &pid
+		}
+		res, err := stmt.ExecContext(ctx, s.Name, s.Type, s.File, s.StartLine, s.EndLine, s.StartByte, s.EndByte, parentID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			return nil, err
+		}
+		ids[i] = id
+	}
+
+	return ids, tx.Commit()
 }
 
 // ImportInfo represents an import statement extracted from a source file.
@@ -775,6 +1009,51 @@ func (e *AmbiguousSymbolError) Error() string {
 	}
 	return fmt.Sprintf("symbol %q is ambiguous (%d definitions): %s — use [file] <symbol> to disambiguate",
 		e.Name, len(e.Candidates), strings.Join(parts, ", "))
+}
+
+// GetChildSymbols returns symbols whose parent_id matches the given symbol's DB id.
+func (d *DB) GetChildSymbols(ctx context.Context, parentID int64) ([]SymbolInfo, error) {
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT name, type, file, start_line, end_line, start_byte, end_byte
+		FROM symbols WHERE parent_id = ?
+		ORDER BY start_line
+	`, parentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []SymbolInfo
+	for rows.Next() {
+		var s SymbolInfo
+		if err := rows.Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte); err != nil {
+			return nil, err
+		}
+		results = append(results, s)
+	}
+	return results, nil
+}
+
+// GetContainerAt returns the innermost container symbol that spans the given line.
+func (d *DB) GetContainerAt(ctx context.Context, file string, line int) (*SymbolInfo, error) {
+	// Find the innermost symbol (smallest span) that contains the given line.
+	// Containers are types like class, struct, impl, interface, module.
+	var s SymbolInfo
+	err := d.db.QueryRowContext(ctx, `
+		SELECT name, type, file, start_line, end_line, start_byte, end_byte
+		FROM symbols
+		WHERE file = ? AND start_line <= ? AND end_line >= ?
+		  AND type IN ('class', 'struct', 'impl', 'interface', 'module', 'enum')
+		ORDER BY (end_line - start_line) ASC
+		LIMIT 1
+	`, file, line, line).Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("no container symbol at %s:%d", file, line)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
 }
 
 // Root returns the repository root.

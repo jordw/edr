@@ -3,13 +3,17 @@ package dispatch
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/jordw/edr/internal/edit"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 )
+
+var setRootOnce sync.Once
 
 // resolveSymbolArgs resolves 1 or 2 args to a symbol.
 // With 1 arg: global name resolution (errors if ambiguous).
@@ -34,7 +38,14 @@ func resolveSymbolArgs(ctx context.Context, db *index.DB, root string, args []st
 // bypasses the CLI layer so callers can invoke commands programmatically.
 func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flags map[string]any) (any, error) {
 	root := db.Root()
-	output.SetRoot(root)
+	setRootOnce.Do(func() { output.SetRoot(root) })
+
+	// Flush any dirty files before commands that need the index.
+	// Write commands (edit, write, rename, edit-plan) are excluded — they
+	// produce dirty files but don't need to flush first.
+	if db.HasDirty() && !isWriteCommand(cmd) {
+		db.FlushDirty(ctx)
+	}
 
 	switch cmd {
 	// --- Unified commands ---
@@ -122,8 +133,13 @@ func runReadUnified(ctx context.Context, db *index.DB, root string, args []strin
 		if _, err := strconv.Atoi(args[1]); err == nil {
 			return runReadFile(ctx, db, root, args, flags)
 		}
-		// 2 args, second non-numeric, no colons → file + symbol
+		// 2 args, second non-numeric, no colons → file+symbol or batch?
+		// If the second arg looks like a file path (has a path separator or
+		// a recognized file extension), treat both as batch read.
 		if len(args) == 2 && !strings.Contains(args[0], ":") && !strings.Contains(args[1], ":") {
+			if looksLikeFilePath(args[1]) {
+				return runBatchRead(ctx, db, root, args, flags)
+			}
 			return runReadSymbol(ctx, db, root, args, flags)
 		}
 		// Multiple args → batch read
@@ -247,16 +263,89 @@ type MultiResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// DispatchMulti runs multiple commands sequentially and returns all results.
+// DispatchMulti runs multiple commands concurrently where safe.
+// Commands targeting different files run in parallel. Commands targeting
+// the same file run sequentially in their original order. Global-mutating
+// commands (init, rename, edit-plan) force fully sequential execution.
 func DispatchMulti(ctx context.Context, db *index.DB, commands []MultiCmd) []MultiResult {
 	results := make([]MultiResult, len(commands))
+
+	// Normalize nil args/flags
+	for i := range commands {
+		if commands[i].Args == nil {
+			commands[i].Args = []string{}
+		}
+		if commands[i].Flags == nil {
+			commands[i].Flags = map[string]any{}
+		}
+	}
+
+	// If any command is global-mutating, fall back to fully sequential
+	for _, c := range commands {
+		if isGlobalMutating(c.Cmd) {
+			dispatchSequential(ctx, db, commands, results)
+			return results
+		}
+	}
+
+	// Group commands by target file. Commands with no file target (global reads
+	// like map, search) get an empty key and can all run in parallel.
+	type indexedCmd struct {
+		index int
+		cmd   MultiCmd
+	}
+	groups := make(map[string][]indexedCmd)
 	for i, c := range commands {
-		if c.Args == nil {
-			c.Args = []string{}
+		key := commandFileKey(c.Cmd, c.Args)
+		groups[key] = append(groups[key], indexedCmd{index: i, cmd: c})
+	}
+
+	// If everything lands in one group, no benefit from parallelism
+	if len(groups) == 1 {
+		dispatchSequential(ctx, db, commands, results)
+		return results
+	}
+
+	// Run each file-group as a goroutine; within a group, commands run sequentially.
+	// Global-read commands (empty key) each get their own goroutine.
+	var wg sync.WaitGroup
+	for key, group := range groups {
+		if key == "" {
+			// Global reads are independent — fan out individually
+			for _, ic := range group {
+				wg.Add(1)
+				go func(ic indexedCmd) {
+					defer wg.Done()
+					result, err := Dispatch(ctx, db, ic.cmd.Cmd, ic.cmd.Args, ic.cmd.Flags)
+					if err != nil {
+						results[ic.index] = MultiResult{Cmd: ic.cmd.Cmd, OK: false, Error: err.Error()}
+					} else {
+						results[ic.index] = MultiResult{Cmd: ic.cmd.Cmd, OK: true, Result: result}
+					}
+				}(ic)
+			}
+		} else {
+			// Same-file commands run sequentially within their goroutine
+			wg.Add(1)
+			go func(group []indexedCmd) {
+				defer wg.Done()
+				for _, ic := range group {
+					result, err := Dispatch(ctx, db, ic.cmd.Cmd, ic.cmd.Args, ic.cmd.Flags)
+					if err != nil {
+						results[ic.index] = MultiResult{Cmd: ic.cmd.Cmd, OK: false, Error: err.Error()}
+					} else {
+						results[ic.index] = MultiResult{Cmd: ic.cmd.Cmd, OK: true, Result: result}
+					}
+				}
+			}(group)
 		}
-		if c.Flags == nil {
-			c.Flags = map[string]any{}
-		}
+	}
+	wg.Wait()
+	return results
+}
+
+func dispatchSequential(ctx context.Context, db *index.DB, commands []MultiCmd, results []MultiResult) {
+	for i, c := range commands {
 		result, err := Dispatch(ctx, db, c.Cmd, c.Args, c.Flags)
 		if err != nil {
 			results[i] = MultiResult{Cmd: c.Cmd, OK: false, Error: err.Error()}
@@ -264,12 +353,54 @@ func DispatchMulti(ctx context.Context, db *index.DB, commands []MultiCmd) []Mul
 			results[i] = MultiResult{Cmd: c.Cmd, OK: true, Result: result}
 		}
 	}
-	return results
+}
+
+// isWriteCommand returns true for commands that modify files and produce
+// dirty entries rather than needing to flush them.
+func isWriteCommand(cmd string) bool {
+	switch cmd {
+	case "edit", "smart-edit", "write", "write-file", "append-file",
+		"insert-after", "edit-plan", "rename", "rename-symbol":
+		return true
+	}
+	return false
+}
+
+// isGlobalMutating returns true for commands that mutate global state
+// (index, multiple files) and cannot safely run alongside anything else.
+func isGlobalMutating(cmd string) bool {
+	switch cmd {
+	case "init", "rename", "rename-symbol", "edit-plan":
+		return true
+	}
+	return false
+}
+
+// commandFileKey extracts the target file from a command's args.
+// Returns "" for global/fileless commands (map, search, repo-map, etc.)
+// so they can run fully in parallel.
+func commandFileKey(cmd string, args []string) string {
+	switch cmd {
+	// Global reads — no file target
+	case "map", "repo-map", "search", "search-text", "find", "find-files",
+		"verify", "init", "rename", "rename-symbol", "edit-plan":
+		return ""
+	}
+	// Most commands take file as first arg (possibly with :symbol suffix)
+	if len(args) > 0 {
+		file := args[0]
+		if idx := strings.IndexByte(file, ':'); idx > 0 {
+			file = file[:idx]
+		}
+		return file
+	}
+	return ""
 }
 
 // --- individual command handlers ---
 
 func runInit(ctx context.Context, db *index.DB) (any, error) {
+	index.ClearTreeCache()
 	filesChanged, symbolsChanged, err := index.IndexRepo(ctx, db)
 	if err != nil {
 		return nil, err
@@ -285,6 +416,30 @@ func runInit(ctx context.Context, db *index.DB) (any, error) {
 }
 
 // --- helpers ---
+
+// looksLikeFilePath returns true if the argument looks like a file path
+// rather than a symbol name (has path separators or a file extension).
+func looksLikeFilePath(arg string) bool {
+	if strings.Contains(arg, "/") || strings.Contains(arg, string(filepath.Separator)) {
+		return true
+	}
+	ext := filepath.Ext(arg)
+	if ext == "" {
+		return false
+	}
+	// Common source/config file extensions
+	switch strings.ToLower(ext) {
+	case ".go", ".py", ".js", ".jsx", ".ts", ".tsx", ".c", ".h", ".rs", ".java",
+		".rb", ".yaml", ".yml", ".json", ".toml", ".md", ".txt", ".css", ".html",
+		".xml", ".sh", ".bash", ".zsh", ".sql", ".proto", ".graphql", ".vue",
+		".svelte", ".swift", ".kt", ".scala", ".php", ".lua", ".zig", ".cs",
+		".cpp", ".cc", ".hpp", ".hh", ".m", ".mm", ".r", ".jl", ".ex", ".exs",
+		".erl", ".hs", ".ml", ".mli", ".clj", ".cljs", ".dart", ".groovy",
+		".tf", ".cfg", ".ini", ".env", ".lock", ".sum", ".mod":
+		return true
+	}
+	return false
+}
 
 // toOutputSymbol converts an index.SymbolInfo to output.Symbol.
 func toOutputSymbol(sym *index.SymbolInfo, hash string) output.Symbol {

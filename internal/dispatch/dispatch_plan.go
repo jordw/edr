@@ -19,11 +19,19 @@ type editPlanEntry struct {
 	Symbol      string `json:"symbol,omitempty"`      // symbol-based edit
 	StartLine   int    `json:"start_line,omitempty"`  // line-based edit
 	EndLine     int    `json:"end_line,omitempty"`    // line-based edit
-	OldText     string `json:"old_text,omitempty"`    // text-based edit
-	NewText     string `json:"new_text,omitempty"`    // text-based edit (used with old_text)
-	Replacement string `json:"replacement,omitempty"` // replacement for symbol/line edits
+	OldText     string `json:"old_text,omitempty"`    // text-based edit (find this text)
+	NewText     string `json:"new_text,omitempty"`    // the replacement content (all modes)
+	Replacement string `json:"replacement,omitempty"` // legacy alias for new_text
 	ExpectHash  string `json:"expect_hash,omitempty"`
 	All         bool   `json:"all,omitempty"` // replace all occurrences (text-based)
+}
+
+// resolvedNewText returns the effective replacement text, preferring new_text over replacement.
+func (e editPlanEntry) resolvedNewText() string {
+	if e.NewText != "" {
+		return e.NewText
+	}
+	return e.Replacement
 }
 
 func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
@@ -85,7 +93,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 			}
 			resolved = append(resolved, resolvedEdit{
 				File: file, StartByte: sym.StartByte, EndByte: sym.EndByte,
-				Replacement: e.Replacement, ExpectHash: e.ExpectHash,
+				Replacement: e.resolvedNewText(), ExpectHash: e.ExpectHash,
 				Description: fmt.Sprintf("replace symbol %s in %s", e.Symbol, output.Rel(file)),
 			})
 
@@ -115,14 +123,14 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 				for j := len(offsets) - 1; j >= 0; j-- {
 					resolved = append(resolved, resolvedEdit{
 						File: file, StartByte: uint32(offsets[j]), EndByte: uint32(offsets[j] + len(e.OldText)),
-						Replacement: e.NewText, ExpectHash: e.ExpectHash,
+						Replacement: e.resolvedNewText(), ExpectHash: e.ExpectHash,
 						Description: fmt.Sprintf("replace text in %s (occurrence %d)", output.Rel(file), j+1),
 					})
 				}
 			} else {
 				resolved = append(resolved, resolvedEdit{
 					File: file, StartByte: uint32(idx), EndByte: uint32(idx + len(e.OldText)),
-					Replacement: e.NewText, ExpectHash: e.ExpectHash,
+					Replacement: e.resolvedNewText(), ExpectHash: e.ExpectHash,
 					Description: fmt.Sprintf("replace text in %s", output.Rel(file)),
 				})
 			}
@@ -154,7 +162,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 			}
 			resolved = append(resolved, resolvedEdit{
 				File: file, StartByte: startByte, EndByte: endByte,
-				Replacement: e.Replacement, ExpectHash: e.ExpectHash,
+				Replacement: e.resolvedNewText(), ExpectHash: e.ExpectHash,
 				Description: fmt.Sprintf("replace lines %d-%d in %s", e.StartLine, e.EndLine, output.Rel(file)),
 			})
 
@@ -193,14 +201,16 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 		return nil, fmt.Errorf("edit-plan: %w", err)
 	}
 
-	// Re-index affected files and collect hashes
+	// Re-index affected files so edits are immediately queryable.
 	affectedFiles := make(map[string]bool)
 	for _, r := range resolved {
 		affectedFiles[r.File] = true
 	}
 	hashes := make(map[string]string)
 	for file := range affectedFiles {
-		_ = index.IndexFile(ctx, db, file)
+		if err := index.IndexFile(ctx, db, file); err != nil {
+			return nil, fmt.Errorf("edit-plan applied but re-index failed for %s: %w", output.Rel(file), err)
+		}
 		if h, err := edit.FileHash(file); err == nil {
 			hashes[output.Rel(file)] = h
 		}
@@ -313,14 +323,27 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 		return nil, fmt.Errorf("rename failed: %w", err)
 	}
 
-	// Re-index all affected files and collect new hashes
+	// Re-index all affected files so renamed symbols are immediately queryable.
 	hashes := make(map[string]string)
+	var indexErrors []string
 	for file := range grouped {
-		_ = index.IndexFile(ctx, db, file)
+		if err := index.IndexFile(ctx, db, file); err != nil {
+			indexErrors = append(indexErrors, fmt.Sprintf("%s: %v", output.Rel(file), err))
+		}
 		rel := output.Rel(file)
 		if h, err := edit.FileHash(file); err == nil {
 			hashes[rel] = h
 		}
+	}
+
+	if len(indexErrors) > 0 {
+		return nil, fmt.Errorf("rename applied but re-index failed: %s", strings.Join(indexErrors, "; "))
+	}
+
+	// Verify the new symbol is queryable — if not, the index is stale despite
+	// IndexFile succeeding (e.g., WAL visibility issue).
+	if _, err := db.ResolveSymbol(ctx, newName); err != nil {
+		return nil, fmt.Errorf("rename applied and re-indexed, but new symbol %q not found in index — try 'edr init'", newName)
 	}
 
 	return output.RenameResult{

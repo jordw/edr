@@ -8,12 +8,12 @@
 
 | Instead of... | Use edr... | Why |
 |---|---|---|
-| `Read` (whole file) | `read-file` or `read-symbol` | Budget-controlled, no wasted context |
-| `Edit` (old/new strings) | `replace-text`, `smart-edit` | Hash safety, auto re-index, diff output |
-| `Write` (create file) | `write-file --mkdir` | Auto-indexes new code files |
-| `Grep` (text search) | `search --body` or `search-text` | Structured results with token estimates |
-| `Glob` (find files) | `find-files` or `repo-map` | Glob with `**`, file sizes, mod times |
-| Multiple `Read` calls | `batch-read` | Read multiple files/symbols in one call |
+| `Read` (whole file) | `read file.go` or `read file.go:sym` | Budget-controlled, no wasted context |
+| `Edit` (old/new strings) | `edit file.go --old_text "x" --new_text "y"` | Same pattern, plus hash safety, auto re-index |
+| `Write` (create file) | `write file.go --mkdir` | Auto-indexes new code files |
+| `Grep` (text search) | `search "pat" --body` or `search --text` | Structured results with token estimates |
+| `Glob` (find files) | `find "**/*.go"` or `map` | Glob with `**`, file sizes, mod times |
+| Multiple `Read` calls | `read f1.go f2.go f3.go:sym` | Read multiple files/symbols in one call |
 
 **Only fall back to built-in tools when:**
 - You need to read non-text files (images, PDFs)
@@ -33,150 +33,160 @@ go build -o edr .           # Build (requires Go + C compiler for tree-sitter)
 
 For cloud agents: clone this repo, run `./setup.sh /path/to/your/project`, and edr is ready as both a CLI and MCP server. The setup script handles everything — dependency installation, build, PATH setup, and MCP configuration.
 
-## Reading Files
+## Reading (`read`)
 
 ```bash
 # Read any file (code, YAML, Markdown, Dockerfiles, etc.)
-edr read-file README.md
-edr read-file src/config.go 10 50 --budget 200    # line range with budget
-edr read-file src/config.go --symbols              # content + symbol list
+edr read README.md
+edr read src/config.go 10 50 --budget 200    # line range with budget
+edr read src/config.go --symbols              # content + symbol list
 
 # Read a specific symbol (not the whole file)
-edr read-symbol src/config.go parseConfig --budget 300
+edr read src/config.go parseConfig --budget 300
+edr read src/config.go:parseConfig            # colon syntax
 
-# Get symbol + callers + deps in one call
-edr expand src/config.go parseConfig --body --callers --deps
+# Read a container's API without implementation (75-86% fewer tokens)
+edr read src/models.py:UserService --signatures
+edr read src/processor.java:TaskProcessor --signatures
+
+# Progressive disclosure: drill down the tree level by level
+edr read src/scheduler.py:Scheduler --signatures      # just the API
+edr read src/scheduler.py _execute_task --depth 2      # skeleton: blocks collapsed
+edr read src/scheduler.py _execute_task --depth 3      # one more level of nesting
+edr read src/scheduler.py --depth 2                    # whole file, blocks collapsed
+
+# Read multiple files/symbols in one call
+edr read src/config.go src/main.go README.md --budget 1000
+edr read src/config.go:parseConfig src/main.go:main --symbols
 ```
 
-## Searching
+## Searching (`search`)
 
 ```bash
 # Symbol search — structured results, optional body snippets
 edr search "parseConfig" --body --budget 500
 
-# Text search — works on ALL files, not just code
-edr search-text "retry backoff" --budget 300
-edr search-text "func.*Config" --regex --budget 300
-edr search-text "TODO" --include "*.go" --exclude "*_test.go"
-edr search-text "TODO" --context 3                             # 3 lines of context around matches
-
-# List symbols in a file
-edr symbols src/config.go
+# Text search — use --text, or auto-detected with --regex/--include/--exclude/--context
+edr search "retry backoff" --text --budget 300
+edr search "func.*Config" --regex --budget 300
+edr search "TODO" --include "*.go" --exclude "*_test.go"
+edr search "TODO" --text --context 3
 
 # Find all references to a symbol (import-aware, filters false positives)
-edr xrefs parseConfig
+edr refs parseConfig
+edr refs src/config.go parseConfig    # scoped to a specific file's symbol
 ```
 
-## Editing Files
+## Editing (`edit`)
 
 All edit commands return the file's new `hash` for chaining subsequent edits.
 
 ```bash
-# smart-edit: read + diff + replace in ONE call (preferred for code)
-edr smart-edit src/config.go parseConfig   # replacement via flags.replacement
+# edit: unified edit command — old_text/new_text is the primary mode
+# Text match: find old_text and replace with new_text (like Edit tool's old_string/new_string)
+edr edit src/config.go --old_text "oldName" --new_text "newName"
+edr edit src/config.go --old_text "v[0-9]+" --regex --all --new_text "v2"
 
-# Find-and-replace in any file type (YAML, Markdown, JSON, code, etc.)
-edr replace-text config.yaml "port: 8080" "port: 9090"
-edr replace-text src/config.go "oldName" "newName" --all
-edr replace-text src/config.go "v[0-9]+" "v2" --regex --all
+# Symbol replacement: replace an entire symbol body with new_text
+edr edit src/config.go parseConfig --new_text "func parseConfig() { ... }"
 
-# Replace a symbol body
-edr replace-symbol src/config.go parseConfig --expect-hash a81d2e
+# Line-range: replace lines with new_text
+edr edit src/config.go --start_line 45 --end_line 60 --new_text "replacement code"
 
-# Replace a line range (1-indexed, inclusive)
-edr replace-lines src/config.go 45 60
-
-# Replace a byte range
-edr replace-span src/config.go 1240 1320
+# Preview changes without applying
+edr edit src/config.go --old_text "oldName" --dry-run --new_text "newName"
 ```
 
-## Creating & Appending
+> **MCP usage**: `{cmd: "edit", args: ["file.go"], flags: {old_text: "old code", new_text: "new code"}}`
+> This is the direct equivalent of the built-in Edit tool's `old_string`/`new_string` pattern.
+
+## Writing (`write`)
 
 ```bash
 # Create or overwrite a file
-edr write-file src/main.go                        # content via stdin or flags
-edr write-file config/app/settings.yaml --mkdir    # creates parent dirs
+edr write src/main.go                        # content via stdin or flags
+edr write config/app/settings.yaml --mkdir   # creates parent dirs
 
 # Append to an existing file
-edr append-file src/config.go
+edr write src/config.go --append
 
 # Insert code right after a specific symbol
-edr insert-after src/config.go parseConfig
+edr write src/config.go --after parseConfig
+
+# Insert inside a container (class/struct/impl) — no need to read the file first
+edr write src/models.go --inside UserStore     # adds before closing }
+edr write src/models.py --inside UserService   # correct Python indentation
+edr write src/models.go --inside UserStore --after Get  # insert after specific method
 ```
 
-## Refactoring
+## Refactoring (`rename`)
 
 ```bash
 # Cross-file rename (import-aware refs via tree-sitter, applies atomically)
-edr rename-symbol oldFuncName newFuncName
+edr rename oldFuncName newFuncName
 
 # Preview what rename would change before applying
-edr rename-symbol oldFuncName newFuncName --dry-run
+edr rename oldFuncName newFuncName --dry-run
 
-# Preview an edit as a unified diff (without applying)
-edr diff-preview src/config.go parseConfig
+# Limit rename scope with a glob pattern
+edr rename oldFuncName newFuncName --scope "internal/**"
 ```
 
-## Finding Files
-
-```bash
-# Find files by glob pattern (supports **)
-edr find-files "**/*.go"
-edr find-files "*.yaml" --dir config/
-edr find-files "**/test_*" --budget 500
-```
-
-## Batch Reading
-
-```bash
-# Read multiple files in one call
-edr batch-read src/config.go src/main.go README.md --budget 1000
-
-# Mix files and symbols
-edr batch-read src/config.go:parseConfig src/main.go README.md
-
-# Include symbol lists
-edr batch-read src/config.go src/main.go --symbols
-```
-
-## Orientation
+## Orientation (`map`, `explore`)
 
 ```bash
 # Symbol map of the whole repo — start here when exploring
-edr repo-map --budget 500
+edr map --budget 500
 
-# Gather context for a task: target + callers + tests within budget
-edr gather src/config.go parseConfig --budget 1500
-edr gather parseConfig --budget 1500    # search-based
-edr gather parseConfig --body --budget 1500  # include source bodies inline
+# Symbols in a specific file
+edr map src/config.go
+
+# Filter by directory, glob, symbol type, or name
+edr map --dir internal/ --type function --grep parse
+
+# Explore a symbol: body, callers, deps
+edr explore src/config.go parseConfig --body --callers --deps
+
+# Full context gather: target + callers + tests within budget
+edr explore parseConfig --gather --body --budget 1500
 ```
 
-## Analysis
+## References & Analysis (`refs`, `verify`)
 
 ```bash
-# Find all symbols transitively impacted by changes to a function
-edr impact src/config.go parseConfig --depth 3
+# Find all references
+edr refs parseConfig
+
+# Transitive impact analysis
+edr refs parseConfig --impact --depth 3
 
 # Find a call path between two symbols
-edr call-chain main parseConfig
+edr refs main --chain parseConfig
 
 # Run project verification (auto-detects go/npm/cargo)
 edr verify
 edr verify --command "go test ./..." --timeout 60
 ```
 
-## Atomic Multi-File Edits
+## Finding Files (`find`)
+
+```bash
+edr find "**/*.go"
+edr find "*.yaml" --dir config/
+edr find "**/test_*" --budget 500
+```
+
+## Atomic Multi-File Edits (`edit-plan`)
 
 ```bash
 # edit-plan: apply multiple edits atomically
-# Each edit can be symbol-based, line-based, or text-based
 edr edit-plan --dry-run   # preview with flags.edits JSON array
 
 # Via MCP:
 # {cmd: "edit-plan", flags: {edits: [
-#   {file: "src/config.go", symbol: "parseConfig", replacement: "..."},
 #   {file: "src/main.go", old_text: "oldFunc()", new_text: "newFunc()"},
-#   {file: "src/util.go", start_line: 10, end_line: 20, replacement: "..."}
+#   {file: "src/config.go", symbol: "parseConfig", new_text: "..."},
+#   {file: "src/util.go", start_line: 10, end_line: 20, new_text: "..."}
 # ]}}
 ```
 
@@ -188,58 +198,59 @@ connection. The DB stays open, so there is no per-call overhead. Multi-line
 content (replacements, file writes) goes in the `flags` object as proper JSON
 strings — no shell escaping needed.
 
+### Context-Aware Responses
+
+The MCP server tracks what content you've already seen and optimizes responses:
+
+- **Slim edits**: Small diffs (<=20 changed lines) are returned inline automatically. Large diffs are stripped to `{ok, file, hash, lines_changed, diff_available}` — use `get-diff <file> [symbol]` to retrieve them. Pass `--verbose` to always get the full diff inline.
+- **Delta reads**: Re-reading a file/symbol you've already seen returns `{unchanged: true}` if identical, or `{delta: true, diff: "...", previous_hash: "..."}` with the changes and the hash of what you previously saw. Pass `--full` to force full content.
+- **Body dedup**: `explore --gather --body` and `search --body` replace bodies you've already seen with `"[in context]"` and report `skipped_bodies`. New/changed bodies are returned in full.
+
+These optimizations are automatic and session-scoped (reset on reconnect).
+`rename` and `init` clear all tracking state.
+
 ## Key Principles
 
 1. **Use `--budget` flags** to control context size. Don't dump entire files.
-2. **Use `smart-edit`** for code edits — one call does read + diff + replace.
-3. **Use `replace-text`** for non-code files (YAML, JSON, Markdown, configs).
-4. **Use `--expect-hash`** on edits to prevent stale writes. Every edit returns the new hash.
-5. **Use `search --body`** to get source inline and avoid follow-up reads.
-6. **Use `repo-map`** to orient in the codebase before diving into files.
-7. **Use `gather --body`** at the start of a task to get source bodies inline.
-8. **Use `rename-symbol --dry-run`** to preview cross-file renames before applying.
-9. **Check `truncated`/`total_matches`** in search/find results — budget trimming reports what was cut.
-10. **Use `edit-plan`** for multi-file atomic edits — one call, all-or-nothing.
-11. **Use `impact`** before refactoring to understand blast radius.
-12. **Use `verify`** after edits to confirm the build still passes.
-13. **Use `multi`** in MCP to batch independent commands in one call.
+2. **Use `edit` with `old_text`/`new_text`** — same as Edit tool's old_string/new_string, but with auto re-index and hash safety.
+3. **Use `search --body`** to get source inline and avoid follow-up reads.
+4. **Use `map`** to orient in the codebase before diving into files.
+5. **Use `explore --gather --body`** at the start of a task to get source bodies inline.
+6. **Use `rename --dry-run`** to preview cross-file renames before applying.
+7. **Check `truncated`/`total_matches`** in search/find results — budget trimming reports what was cut.
+8. **Use `edit-plan`** for multi-file atomic edits — one call, all-or-nothing.
+9. **Use `refs --impact`** before refactoring to understand blast radius.
+10. **Use `verify`** after edits to confirm the build still passes.
+11. **Use `multi`** in MCP to batch independent commands in one call.
+12. **Small edit diffs are inline** — diffs <=20 lines are included automatically. Large diffs are stored; use `get-diff` to retrieve. Use `--verbose` to always inline.
+13. **Re-reads are delta** — `{unchanged: true}` or `{delta: true, diff: "...", previous_hash: "..."}`. Use `--full` to force full content.
+14. **Use `read file:Class --signatures`** to understand a container's API without reading implementation (75-86% fewer tokens).
+15. **Use `write --inside Container`** to add methods/fields to a class without reading the file first (96% fewer response bytes).
 
 ## All Commands
 
 | Command | Purpose |
 |---|---|
+| `read <file> [start] [end]` | Read file, symbol (`file:sym` or `file sym`), or batch (multiple args). `--budget`, `--symbols`, `--signatures`, `--depth N` (progressive: 1=sigs, 2=blocks collapsed, 3+=more) |
+| `search <pattern>` | Symbol search (`--body`). Add `--text`/`--regex`/`--include`/`--exclude`/`--context` for text search |
+| `map [file]` | No args = repo symbol map; with file = file symbols. `--budget`, `--dir`, `--glob`, `--type`, `--grep` |
+| `explore [file] <sym>` | Symbol info with `--body`, `--callers`, `--deps`, `--signatures`. `--gather` for context bundle with tests |
+| `refs [file] <sym>` | Find references. `--impact` for transitive callers, `--chain <sym>` for call path. `--depth` |
+| `edit <file> [sym]` | Edit by `--old_text`/`--new_text` (primary), symbol, or `--start_line`/`--end_line`. `--regex`, `--all`, `--dry-run` |
+| `write <file>` | Create/overwrite. `--append`, `--after <sym>`, `--inside <container>` (+ `--after` for positioning), `--mkdir` |
+| `rename <old> <new>` | Cross-file rename, import-aware. `--dry-run`, `--scope` |
+| `find <pattern>` | Find files by glob (`**` supported). `--dir`, `--budget` |
+| `edit-plan` | Atomic multi-file edits via `flags.edits` array. `--dry-run` |
+| `verify` | Run build/typecheck, return structured pass/fail. `--command`, `--timeout` |
 | `init` | Force re-index the repository |
-| `repo-map` | Symbol map of entire repo (`--budget`) |
-| `search <pattern>` | Find symbols by name (`--budget`, `--body`) |
-| `search-text <pattern>` | Text search across ALL files (`--budget`, `--regex`, `--include`, `--exclude`, `--context`) |
-| `symbols <file>` | List symbols in a file |
-| `read-symbol [file] <sym>` | Read one symbol's source (`--budget`) |
-| `read-file <file> [start] [end]` | Read any file with optional line range (`--budget`) |
-| `expand [file] <sym>` | Progressive disclosure: `--body`, `--callers`, `--deps`, `--budget`, `--signatures` |
-| `xrefs <symbol>` | Find all references (import-aware, filters false positives) |
-| `gather [file] <sym>` | Context bundle: target + callers + tests (`--budget`, `--body`, `--signatures`) |
-| `impact [file] <sym>` | Find all symbols transitively impacted by changes (`--depth`) |
-| `call-chain <from> <to>` | Find call path between two symbols (`--depth`) |
-| `smart-edit [file] <sym>` | Read + diff + replace in one call |
-| `replace-text <file> <old> <new>` | Find-and-replace in any file (`--all`, `--regex`, `--expect-hash`) |
-| `replace-symbol [file] <sym>` | Replace symbol body (`--expect-hash`) |
-| `replace-lines <file> <start> <end>` | Replace line range (`--expect-hash`) |
-| `replace-span <file> <start> <end>` | Replace byte range (`--expect-hash`) |
-| `edit-plan` | Atomic multi-file edits via `flags.edits` array (`--dry-run`) |
-| `diff-preview [file] <sym>` | Preview edit as unified diff |
-| `diff-preview-span <file> <start> <end>` | Preview span edit |
-| `rename-symbol <old> <new>` | Cross-file rename, import-aware (`--dry-run`) |
-| `verify` | Run build/typecheck, return structured pass/fail (`--command`, `--timeout`) |
-| `write-file <file>` | Create/overwrite file (`--mkdir`) |
-| `append-file <file>` | Append to end of file |
-| `insert-after [file] <sym>` | Insert code after a symbol |
-| `find-files <pattern>` | Find files by glob (`--dir`, `--budget`, supports `**`) |
-| `batch-read <file...>` | Read multiple files/symbols in one call (`--budget`, `--symbols`) |
 | `multi` | Batch multiple commands in one MCP call via `flags.commands` |
-| `batch` | JSONL protocol for multi-command sessions |
-| `mcp` | MCP server mode (single tool, persistent DB, working-set dedup) |
+| `get-diff <file> [sym]` | Retrieve stored diff from last edit (MCP-only) |
+
+Legacy command names (`read-file`, `read-symbol`, `batch-read`, `write-file`, `append-file`, `insert-after`,
+`smart-edit`, `repo-map`, `symbols`, `search-text`, `expand`, `gather`, `xrefs`, `impact`, `call-chain`,
+`rename-symbol`, `find-files`) still work as aliases.
 
 All output is structured JSON. All file paths can be relative to repo root.
 All edit commands return `hash` in the response for chaining.
 Query commands return `truncated` and `total_matches` when budget limits apply.
-`read-file` output includes line numbers prefixed to each line.
+`read` output includes line numbers prefixed to each line.

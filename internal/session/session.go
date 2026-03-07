@@ -601,13 +601,15 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 		}
 	}
 
-	// Level 3: Track seen bodies
-	if BodyCommands[cmd] && cmd != "batch-read" {
+	// Level 3: Strip seen bodies from gather/search.
+	// StripSeenBodies handles both stripping previously-seen bodies and
+	// tracking new ones, so we must NOT call TrackBodies first for these
+	// commands (that would mark current results as "seen" before stripping).
+	willStrip := cmd == "gather" || (cmd == "search" && FlagIsTruthy(flags, "body"))
+	if BodyCommands[cmd] && cmd != "batch-read" && !willStrip {
 		s.TrackBodies(m, cmd)
 	}
-
-	// Level 3: Strip seen bodies from gather/search
-	if cmd == "gather" || (cmd == "search" && FlagIsTruthy(flags, "body")) {
+	if willStrip {
 		s.StripSeenBodies(m, cmd)
 		data, _ := json.Marshal(m)
 		return string(data)

@@ -14,7 +14,16 @@ func ExtractSignature(sym SymbolInfo) string {
 	if err != nil || int(sym.EndByte) > len(data) {
 		return sym.Type + " " + sym.Name
 	}
-	body := string(data[sym.StartByte:sym.EndByte])
+	return ExtractSignatureFromSource(sym, data)
+}
+
+// ExtractSignatureFromSource is like ExtractSignature but takes pre-loaded source bytes,
+// avoiding redundant file reads when processing multiple symbols from the same file.
+func ExtractSignatureFromSource(sym SymbolInfo, src []byte) string {
+	if int(sym.EndByte) > len(src) {
+		return sym.Type + " " + sym.Name
+	}
+	body := string(src[sym.StartByte:sym.EndByte])
 
 	ext := filepath.Ext(sym.File)
 	switch ext {
@@ -153,6 +162,118 @@ func cSignature(body string) string {
 		return strings.TrimRight(body[:idx], " \t\n")
 	}
 	return firstLine(body)
+}
+
+// ExtractContainerStub generates a compact "interface view" of a container symbol.
+// It returns the container header + each child's signature, without implementation bodies.
+// This is dramatically cheaper than reading the full container body.
+func ExtractContainerStub(container SymbolInfo, children []SymbolInfo) string {
+	data, err := os.ReadFile(container.File)
+	if err != nil {
+		return container.Type + " " + container.Name
+	}
+
+	// Get the container's header line (up to and including the opening delimiter).
+	// We don't use ExtractSignatureFromSource here because for types it returns
+	// a compact single-line form that already includes "}", causing a dangling brace.
+	ext := filepath.Ext(container.File)
+	header := containerHeader(container, data, ext)
+
+	var lines []string
+	lines = append(lines, header)
+
+	for _, child := range children {
+		// Only include direct children (within the container's byte range)
+		if child.StartByte < container.StartByte || child.EndByte > container.EndByte {
+			continue
+		}
+		// Skip the container itself
+		if child.Name == container.Name && child.StartByte == container.StartByte {
+			continue
+		}
+
+		sig := ExtractSignatureFromSource(child, data)
+
+		switch ext {
+		case ".py":
+			// Python: include docstring if present
+			body := string(data[child.StartByte:child.EndByte])
+			if doc := extractPythonDocstring(body); doc != "" {
+				sig += "\n" + doc
+			} else {
+				sig += " ..."
+			}
+		case ".rb":
+			sig += "\n    end"
+		}
+
+		lines = append(lines, sig)
+	}
+
+	// Add closing delimiter
+	switch ext {
+	case ".py":
+		// No closing delimiter needed
+	case ".rb":
+		lines = append(lines, "end")
+	default:
+		body := string(data[container.StartByte:container.EndByte])
+		if strings.Contains(body, "{") {
+			lines = append(lines, "}")
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// containerHeader returns just the opening line of a container (up to and including
+// the opening brace/colon), suitable for use as a stub header.
+func containerHeader(sym SymbolInfo, src []byte, ext string) string {
+	if int(sym.EndByte) > len(src) {
+		return sym.Type + " " + sym.Name
+	}
+	body := string(src[sym.StartByte:sym.EndByte])
+
+	switch ext {
+	case ".py":
+		// Python: first line (class Foo:) or up to the colon
+		return pythonSignature(body)
+	case ".rb":
+		return rubySignature(body)
+	default:
+		// Brace-delimited languages: everything up to and including "{"
+		if idx := strings.Index(body, "{"); idx >= 0 {
+			return strings.TrimRight(body[:idx+1], " \t\n")
+		}
+		return firstLine(body)
+	}
+}
+
+// extractPythonDocstring returns the docstring from a Python function body, if present.
+func extractPythonDocstring(body string) string {
+	bodyLines := strings.Split(body, "\n")
+	for i := 1; i < len(bodyLines); i++ {
+		trimmed := strings.TrimSpace(bodyLines[i])
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, `"""`) || strings.HasPrefix(trimmed, `'''`) {
+			quote := trimmed[:3]
+			if strings.Count(trimmed, quote) >= 2 {
+				return "    " + trimmed
+			}
+			doc := []string{"    " + trimmed}
+			for j := i + 1; j < len(bodyLines); j++ {
+				doc = append(doc, bodyLines[j])
+				if strings.Contains(bodyLines[j], quote) {
+					break
+				}
+			}
+			return strings.Join(doc, "\n")
+		}
+		break
+	}
+	return ""
 }
 
 // firstLine returns the first line of s.

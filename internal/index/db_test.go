@@ -41,13 +41,13 @@ func TestOpenDBConcurrencySettings(t *testing.T) {
 		t.Errorf("journal_mode = %q, want wal", journalMode)
 	}
 
-	// Verify busy_timeout is set to 10s
+	// Verify busy_timeout is set (in-process hint; cross-process retry is in retryDB)
 	var timeout int
 	if err := db.db.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
 		t.Fatalf("query busy_timeout: %v", err)
 	}
-	if timeout != 10000 {
-		t.Errorf("busy_timeout = %d, want 10000", timeout)
+	if timeout != 5000 {
+		t.Errorf("busy_timeout = %d, want 5000", timeout)
 	}
 }
 

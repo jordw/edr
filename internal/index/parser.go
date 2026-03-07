@@ -5,9 +5,46 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 )
+
+// parserPools holds a sync.Pool per language ID for reusing tree-sitter parsers.
+var parserPools sync.Map // langID -> *sync.Pool
+
+// getParser retrieves a reusable parser for the given language from the pool,
+// or creates a new one if the pool is empty.
+func getParser(lang *LangConfig) *tree_sitter.Parser {
+	pool, _ := parserPools.LoadOrStore(lang.LangID, &sync.Pool{
+		New: func() any {
+			p := tree_sitter.NewParser()
+			p.SetLanguage(lang.Language)
+			return p
+		},
+	})
+	return pool.(*sync.Pool).Get().(*tree_sitter.Parser)
+}
+
+// putParser returns a parser to the pool for reuse.
+func putParser(lang *LangConfig, p *tree_sitter.Parser) {
+	pool, ok := parserPools.Load(lang.LangID)
+	if ok {
+		pool.(*sync.Pool).Put(p)
+	}
+}
+
+// parseWith gets a pooled parser, parses src, calls fn with the tree root,
+// then cleans up and returns the parser to the pool. Safe against panics.
+func parseWith(lang *LangConfig, src []byte, fn func(root *tree_sitter.Node)) {
+	parser := getParser(lang)
+	tree := parser.Parse(src, nil)
+	defer func() {
+		tree.Close()
+		putParser(lang, parser)
+	}()
+	fn(tree.RootNode())
+}
 
 // SymbolInfo represents an extracted symbol from source code.
 type SymbolInfo struct {
@@ -17,8 +54,9 @@ type SymbolInfo struct {
 	StartLine uint32
 	EndLine   uint32
 	StartByte uint32
-	EndByte   uint32
-	Body      string // raw source text of the symbol
+	EndByte     uint32
+	Body        string // raw source text of the symbol
+	ParentIndex int    // index into symbols slice at parse time; -1 = no parent
 }
 
 // ParseFile extracts symbols from a single file using tree-sitter.
@@ -33,35 +71,19 @@ func ParseFile(path string) ([]SymbolInfo, error) {
 		return nil, err
 	}
 
-	parser := tree_sitter.NewParser()
-	defer parser.Close()
-	if err := parser.SetLanguage(lang.Language); err != nil {
-		return nil, fmt.Errorf("set language: %w", err)
-	}
-
-	tree := parser.Parse(src, nil)
-	defer tree.Close()
-
-	root := tree.RootNode()
 	var symbols []SymbolInfo
-	extractSymbols(root, src, path, lang, &symbols)
+	parseWith(lang, src, func(root *tree_sitter.Node) {
+		extractSymbols(root, src, path, lang, &symbols, -1)
+	})
 	return symbols, nil
 }
 
 // ParseSource parses source code from bytes (used during indexing when source is already loaded).
 func ParseSource(path string, src []byte, lang *LangConfig) ([]SymbolInfo, error) {
-	parser := tree_sitter.NewParser()
-	defer parser.Close()
-	if err := parser.SetLanguage(lang.Language); err != nil {
-		return nil, fmt.Errorf("set language: %w", err)
-	}
-
-	tree := parser.Parse(src, nil)
-	defer tree.Close()
-
-	root := tree.RootNode()
 	var symbols []SymbolInfo
-	extractSymbols(root, src, path, lang, &symbols)
+	parseWith(lang, src, func(root *tree_sitter.Node) {
+		extractSymbols(root, src, path, lang, &symbols, -1)
+	})
 	return symbols, nil
 }
 
@@ -75,33 +97,23 @@ type ParseResult struct {
 
 // ParseFileComplete parses a file and returns symbols, imports, and a deferred ref extractor.
 func ParseFileComplete(path string, src []byte, lang *LangConfig) (*ParseResult, error) {
-	parser := tree_sitter.NewParser()
-	defer parser.Close()
-	if err := parser.SetLanguage(lang.Language); err != nil {
-		return nil, fmt.Errorf("set language: %w", err)
-	}
-
-	tree := parser.Parse(src, nil)
-	defer tree.Close()
-
-	root := tree.RootNode()
-
-	// Extract symbols
 	var symbols []SymbolInfo
-	extractSymbols(root, src, path, lang, &symbols)
-
-	// Extract imports
 	var imports []ImportInfo
-	if lang.Imports != nil {
-		imports = extractImports(root, src, path, lang)
-	}
-
-	// Extract raw ref data while tree is still alive.
-	// Symbol IDs come later, so we store indices and resolve in ExtractRefs.
 	var rawRefs []rawRef
-	for i, sym := range symbols {
-		extractRefsFromSymbol(root, src, &sym, i, &rawRefs)
-	}
+
+	parseWith(lang, src, func(root *tree_sitter.Node) {
+		extractSymbols(root, src, path, lang, &symbols, -1)
+
+		if lang.Imports != nil {
+			imports = extractImports(root, src, path, lang)
+		}
+
+		// Extract raw ref data while tree is still alive.
+		// Symbol IDs come later, so we store indices and resolve in ExtractRefs.
+		for i, sym := range symbols {
+			extractRefsFromSymbol(root, src, &sym, i, &rawRefs)
+		}
+	})
 
 	result := &ParseResult{
 		Symbols: symbols,
@@ -127,9 +139,10 @@ func ParseFileComplete(path string, src []byte, lang *LangConfig) (*ParseResult,
 	return result, nil
 }
 
-func extractSymbols(node *tree_sitter.Node, src []byte, path string, lang *LangConfig, out *[]SymbolInfo) {
+func extractSymbols(node *tree_sitter.Node, src []byte, path string, lang *LangConfig, out *[]SymbolInfo, parentIdx int) {
 	nodeType := node.Kind()
 
+	thisIdx := -1
 	for _, symType := range lang.SymbolNodes {
 		if nodeType == symType {
 			name := extractName(node, src, lang)
@@ -137,24 +150,32 @@ func extractSymbols(node *tree_sitter.Node, src []byte, path string, lang *LangC
 				startLine := uint32(node.StartPosition().Row + 1)
 				endLine := uint32(node.EndPosition().Row + 1)
 				*out = append(*out, SymbolInfo{
-					Type:      normalizeType(nodeType),
-					Name:      name,
-					File:      path,
-					StartLine: startLine,
-					EndLine:   endLine,
-					StartByte: uint32(node.StartByte()),
-					EndByte:   uint32(node.EndByte()),
-					Body:      string(src[node.StartByte():node.EndByte()]),
+					Type:        normalizeType(nodeType),
+					Name:        name,
+					File:        path,
+					StartLine:   startLine,
+					EndLine:     endLine,
+					StartByte:   uint32(node.StartByte()),
+					EndByte:     uint32(node.EndByte()),
+					Body:        string(src[node.StartByte():node.EndByte()]),
+					ParentIndex: parentIdx,
 				})
+				thisIdx = len(*out) - 1
 			}
 			break
 		}
 	}
 
+	// For children, use thisIdx as parent if this node was a symbol, otherwise pass through parentIdx
+	childParent := parentIdx
+	if thisIdx >= 0 {
+		childParent = thisIdx
+	}
+
 	for i := 0; i < int(node.ChildCount()); i++ {
 		child := node.Child(uint(i))
 		if child != nil {
-			extractSymbols(child, src, path, lang, out)
+			extractSymbols(child, src, path, lang, out, childParent)
 		}
 	}
 }
@@ -257,17 +278,9 @@ func findReferencesTextBased(ctx context.Context, db *DB, symbolName string) ([]
 			continue
 		}
 
-		parser := tree_sitter.NewParser()
-		if err := parser.SetLanguage(lang.Language); err != nil {
-			parser.Close()
-			continue
-		}
-
-		tree := parser.Parse(src, nil)
-		root := tree.RootNode()
-		findIdentifierRefs(root, src, file, symbolName, &refs)
-		tree.Close()
-		parser.Close()
+		cachedParseWith(lang, src, func(root *tree_sitter.Node) {
+			findIdentifierRefs(root, src, file, symbolName, &refs)
+		})
 	}
 
 	return refs, nil
@@ -314,18 +327,11 @@ func findDepsTextBased(ctx context.Context, db *DB, sym *SymbolInfo) ([]SymbolIn
 		return nil, err
 	}
 
-	parser := tree_sitter.NewParser()
-	defer parser.Close()
-	if err := parser.SetLanguage(lang.Language); err != nil {
-		return nil, err
-	}
-
-	tree := parser.Parse(src, nil)
-	defer tree.Close()
-
 	var idents []string
 	seen := make(map[string]bool)
-	collectIdentifiers(tree.RootNode(), src, sym.StartByte, sym.EndByte, seen, &idents)
+	cachedParseWith(lang, src, func(root *tree_sitter.Node) {
+		collectIdentifiers(root, src, sym.StartByte, sym.EndByte, seen, &idents)
+	})
 
 	var deps []SymbolInfo
 	depSeen := make(map[string]bool)

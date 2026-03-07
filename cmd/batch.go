@@ -50,9 +50,8 @@ Output format:
 
 Supported commands: init, repo-map, search, search-text, symbols,
 read-symbol, read-file, expand, xrefs, gather, find-files, batch-read,
-replace-symbol, replace-span, replace-text, replace-lines, write-file,
-append-file, insert-after, smart-edit, rename-symbol,
-diff-preview, diff-preview-span.
+write-file, append-file, insert-after, smart-edit, rename-symbol,
+edit-plan, impact, call-chain, verify.
 
 For edit commands, pass the replacement code via the "replacement" flag
 (or "content" for write-file/append-file/insert-after) in the JSON object.`,

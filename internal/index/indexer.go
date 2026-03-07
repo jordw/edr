@@ -141,16 +141,11 @@ func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 			return nil
 		}
 
-		// Insert symbols and collect IDs
-		symbolIDs := make(map[int]int64)
-		for i, sym := range result.Symbols {
-			id, err := db.InsertSymbolReturnID(ctx, sym)
-			if err != nil {
-				return nil
-			}
-			symbolIDs[i] = id
-			symbolsFound++
+		symbolIDs, err := db.InsertSymbolsBatch(ctx, result.Symbols)
+		if err != nil {
+			return nil
 		}
+		symbolsFound += len(result.Symbols)
 
 		// Insert imports
 		if err := db.InsertImports(ctx, result.Imports); err != nil {
@@ -212,13 +207,9 @@ func IndexFile(ctx context.Context, db *DB, path string) error {
 		return err
 	}
 
-	symbolIDs := make(map[int]int64)
-	for i, sym := range result.Symbols {
-		id, err := db.InsertSymbolReturnID(ctx, sym)
-		if err != nil {
-			return err
-		}
-		symbolIDs[i] = id
+	symbolIDs, err := db.InsertSymbolsBatch(ctx, result.Symbols)
+	if err != nil {
+		return err
 	}
 
 	if err := db.InsertImports(ctx, result.Imports); err != nil {

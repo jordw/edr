@@ -19,6 +19,20 @@ func NormalizeRoot(root string) (string, error) {
 	return filepath.Clean(abs), nil
 }
 
+// NormalizeRootOrDefault is like NormalizeRoot but returns a best-effort
+// path on error (for use in non-critical contexts like lock file paths).
+func NormalizeRootOrDefault(root string) string {
+	r, err := NormalizeRoot(root)
+	if err != nil {
+		if root == "" || root == "." {
+			wd, _ := os.Getwd()
+			return wd
+		}
+		return root
+	}
+	return r
+}
+
 // IsWithinRoot reports whether path is inside root.
 func IsWithinRoot(root, path string) bool {
 	root = filepath.Clean(root)

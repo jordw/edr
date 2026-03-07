@@ -15,9 +15,44 @@ import (
 
 // SearchResult wraps matches with truncation metadata.
 type SearchResult struct {
+	Kind         string         `json:"kind"` // "symbol" or "text"
 	Matches      []output.Match `json:"matches"`
 	TotalMatches int            `json:"total_matches"`
 	Truncated    bool           `json:"truncated"`
+}
+
+// scoreSymbolMatch scores how well a symbol name matches a search pattern.
+// Higher scores indicate better matches.
+func scoreSymbolMatch(symbolName, pattern string) float64 {
+	lowerName := strings.ToLower(symbolName)
+	lowerPattern := strings.ToLower(pattern)
+
+	// Exact match
+	if symbolName == pattern {
+		return 1.0
+	}
+	// Case-insensitive exact match
+	if lowerName == lowerPattern {
+		return 0.95
+	}
+	// Prefix match (case-sensitive)
+	if strings.HasPrefix(symbolName, pattern) {
+		return 0.8
+	}
+	// Case-insensitive prefix
+	if strings.HasPrefix(lowerName, lowerPattern) {
+		return 0.75
+	}
+	// Suffix match (case-sensitive) — catches "parseConfig" when searching "Config"
+	if strings.HasSuffix(symbolName, pattern) {
+		return 0.7
+	}
+	// Case-insensitive suffix
+	if strings.HasSuffix(lowerName, lowerPattern) {
+		return 0.65
+	}
+	// Contains (already filtered by DB query, so this is the fallback)
+	return 0.5
 }
 
 // SearchSymbol searches the index for symbols matching a pattern.
@@ -28,14 +63,29 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int,
 		return nil, err
 	}
 
+	// Build scored matches for sorting before budget trimming
+	type scoredSymbol struct {
+		sym   index.SymbolInfo
+		score float64
+	}
+	scored := make([]scoredSymbol, len(symbols))
+	for i, s := range symbols {
+		scored[i] = scoredSymbol{sym: s, score: scoreSymbolMatch(s.Name, pattern)}
+	}
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
+
 	matches := make([]output.Match, 0)
 	totalTokens := 0
 	truncated := false
-	for _, s := range symbols {
+	for _, ss := range scored {
+		s := ss.sym
 		size := int(s.EndByte-s.StartByte) / 4 // rough token estimate
 
 		// Budget limits total matches when not showing body
-		if !showBody && budget > 0 && totalTokens+size > budget {
+		// Always include at least the first match so low-budget queries aren't empty
+		if !showBody && budget > 0 && totalTokens+size > budget && len(matches) > 0 {
 			truncated = true
 			break
 		}
@@ -48,7 +98,7 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int,
 				Lines: [2]int{int(s.StartLine), int(s.EndLine)},
 				Size:  size,
 			},
-			Score: 1.0,
+			Score: ss.score,
 		}
 
 		if showBody {
@@ -69,10 +119,11 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int,
 		if showBody && budget > 0 && totalTokens >= budget {
 			truncated = true
 			// Continue adding metadata-only matches until we've added a reasonable count
-			for _, s2 := range symbols[len(matches):] {
-				if len(matches) >= len(symbols) || len(matches) >= 20 {
+			for _, ss2 := range scored[len(matches):] {
+				if len(matches) >= len(scored) || len(matches) >= 20 {
 					break
 				}
+				s2 := ss2.sym
 				matches = append(matches, output.Match{
 					Symbol: output.Symbol{
 						Type:  s2.Type,
@@ -81,13 +132,14 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int,
 						Lines: [2]int{int(s2.StartLine), int(s2.EndLine)},
 						Size:  int(s2.EndByte-s2.StartByte) / 4,
 					},
-					Score: 1.0,
+					Score: ss2.score,
 				})
 			}
 			break
 		}
 	}
 	return &SearchResult{
+		Kind:         "symbol",
 		Matches:      matches,
 		TotalMatches: len(symbols),
 		Truncated:    truncated,
@@ -305,7 +357,7 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 	var result []output.Match
 	totalTokens := 0
 	for _, m := range allMatches {
-		if budget > 0 && totalTokens+m.Symbol.Size > budget {
+		if budget > 0 && totalTokens+m.Symbol.Size > budget && len(result) > 0 {
 			truncated = true
 			continue
 		}
@@ -313,7 +365,11 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 		result = append(result, m)
 	}
 
+	if result == nil {
+		result = []output.Match{}
+	}
 	return &SearchResult{
+		Kind:         "text",
 		Matches:      result,
 		TotalMatches: totalMatches,
 		Truncated:    truncated,

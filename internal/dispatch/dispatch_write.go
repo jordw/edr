@@ -35,7 +35,7 @@ func runWriteFile(ctx context.Context, db *index.DB, root string, args []string,
 		return nil, err
 	}
 
-	_ = index.IndexFile(ctx, db, file)
+	db.MarkDirty(file)
 
 	return editOK(file, fmt.Sprintf("wrote %d bytes", len(content))), nil
 }
@@ -76,7 +76,7 @@ func runAppendFile(ctx context.Context, db *index.DB, root string, args []string
 		return nil, err
 	}
 
-	_ = index.IndexFile(ctx, db, file)
+	db.MarkDirty(file)
 
 	return editOK(file, fmt.Sprintf("appended %d bytes", len(content))), nil
 }
@@ -102,7 +102,7 @@ func runInsertAfter(ctx context.Context, db *index.DB, root string, args []strin
 		return output.EditResult{OK: false, File: output.Rel(sym.File), Message: err.Error()}, nil
 	}
 
-	_ = index.IndexFile(ctx, db, sym.File)
+	db.MarkDirty(sym.File)
 
 	return editOK(sym.File, fmt.Sprintf("inserted after %s", sym.Name)), nil
 }
@@ -194,7 +194,7 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 		return output.EditResult{OK: false, File: output.Rel(container.File), Message: err.Error()}, nil
 	}
 
-	_ = index.IndexFile(ctx, db, container.File)
+	db.MarkDirty(container.File)
 	return editOK(container.File, fmt.Sprintf("inserted inside %s", container.Name)), nil
 }
 
@@ -222,7 +222,7 @@ func insertInsideAfterChild(ctx context.Context, db *index.DB, container *index.
 		return output.EditResult{OK: false, File: output.Rel(container.File), Message: err.Error()}, nil
 	}
 
-	_ = index.IndexFile(ctx, db, container.File)
+	db.MarkDirty(container.File)
 	return editOK(container.File, fmt.Sprintf("inserted inside %s after %s", container.Name, childName)), nil
 }
 

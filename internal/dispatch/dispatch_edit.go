@@ -13,55 +13,61 @@ import (
 )
 
 func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
-	replacement := flagString(flags, "replacement", "")
-	if replacement == "" {
-		return nil, fmt.Errorf("smart-edit requires 'replacement' in flags")
+	// new_text is the primary flag name; replacement is accepted as a legacy alias.
+	newText := flagString(flags, "new_text", "")
+	if newText == "" {
+		newText = flagString(flags, "replacement", "")
+	}
+	if newText == "" {
+		return nil, fmt.Errorf("edit requires 'new_text' in flags")
 	}
 
 	dryRun := flagBool(flags, "dry-run", false) || flagBool(flags, "dry_run", false)
 
 	// Determine targeting mode:
 	// 1. --start_line/--end_line: line range (requires file as first arg)
-	// 2. --match <text>: text match (requires file as first arg)
-	// 3. Default: symbol-based
+	// 2. --old_text: find and replace text (requires file as first arg)
+	// 3. Default: symbol-based (replace entire symbol body)
 
 	startLine := flagInt(flags, "start_line", 0)
 	endLine := flagInt(flags, "end_line", 0)
-	matchText := flagString(flags, "match", "")
-
-	if startLine > 0 && endLine > 0 {
-		// Line-range mode
-		if len(args) < 1 {
-			return nil, fmt.Errorf("smart-edit with --start_line/--end_line requires a file argument")
-		}
-		file, err := db.ResolvePath(args[0])
-		if err != nil {
-			return nil, err
-		}
-		return smartEditSpan(ctx, db, file, startLine, endLine, replacement, "", dryRun)
+	// old_text is the primary flag name; match is accepted as a legacy alias.
+	oldText := flagString(flags, "old_text", "")
+	if oldText == "" {
+		oldText = flagString(flags, "match", "")
 	}
 
-	if matchText != "" {
-		// Text-match mode
+	if startLine > 0 && endLine > 0 {
 		if len(args) < 1 {
-			return nil, fmt.Errorf("smart-edit with --match requires a file argument")
+			return nil, fmt.Errorf("edit with --start_line/--end_line requires a file argument")
 		}
 		file, err := db.ResolvePath(args[0])
 		if err != nil {
 			return nil, err
 		}
-		return smartEditMatch(ctx, db, file, matchText, replacement, flags, dryRun)
+		return smartEditSpan(ctx, db, file, startLine, endLine, newText, "", dryRun)
+	}
+
+	if oldText != "" {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("edit with --old_text requires a file argument")
+		}
+		file, err := db.ResolvePath(args[0])
+		if err != nil {
+			return nil, err
+		}
+		return smartEditMatch(ctx, db, file, oldText, newText, flags, dryRun)
 	}
 
 	// Symbol mode
 	if len(args) < 1 {
-		return nil, fmt.Errorf("smart-edit requires: [file] <symbol>, or <file> with --start_line/--end_line/--match")
+		return nil, fmt.Errorf("edit requires: [file] <symbol>, or <file> with --old_text/--start_line/--end_line")
 	}
 	sym, err := resolveSymbolArgs(ctx, db, root, args)
 	if err != nil {
 		return nil, err
 	}
-	return smartEditByteRange(ctx, db, sym.File, sym.StartByte, sym.EndByte, replacement, sym.Name, dryRun)
+	return smartEditByteRange(ctx, db, sym.File, sym.StartByte, sym.EndByte, newText, sym.Name, dryRun)
 }
 
 // smartEditByteRange applies an edit to a byte range and returns a smart-edit result.
@@ -97,7 +103,7 @@ func smartEditByteRange(ctx context.Context, db *index.DB, file string, startByt
 		return nil, fmt.Errorf("edit failed: %w", err)
 	}
 
-	_ = index.IndexFile(ctx, db, file)
+	db.MarkDirty(file)
 	newHash, _ := edit.FileHash(file)
 
 	result := map[string]any{
@@ -215,7 +221,7 @@ func applyReplaceAll(ctx context.Context, db *index.DB, file, oldContent, newCon
 	if err := os.WriteFile(file, []byte(newContent), info.Mode()); err != nil {
 		return nil, err
 	}
-	_ = index.IndexFile(ctx, db, file)
+	db.MarkDirty(file)
 	newHash, _ := edit.FileHash(file)
 
 	return map[string]any{
