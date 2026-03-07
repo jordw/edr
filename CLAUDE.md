@@ -183,22 +183,32 @@ edr find "*.yaml" --dir config/
 edr find "**/test_*" --budget 500
 ```
 
-## Atomic Multi-File Edits (`edr_plan`)
+## Unified Agent Tool (`edr_plan`)
+
+`edr_plan` is the single tool that handles complete agent workflows in minimal round trips.
+It supports five operation types, all in one call:
 
 ```bash
-# CLI: edit-plan applies multiple edits atomically
-edr edit-plan --dry-run   # preview per-edit diffs from flags.edits JSON array
-
-# Via MCP: use edr_plan for batch reads and/or atomic edits
-# edr_plan(edits: [
-#   {file: "src/main.go", old_text: "oldFunc()", new_text: "newFunc()"},
-#   {file: "src/config.go", symbol: "parseConfig", new_text: "..."},
-#   {file: "src/util.go", start_line: 10, end_line: 20, new_text: "..."}
-# ])
+# Via MCP: gather context + make changes + verify in one call
+# edr_plan(
+#   reads: [{file: "src/main.go"}, {file: "src/config.go", symbol: "parseConfig"}],
+#   queries: [
+#     {cmd: "search", pattern: "handleRequest", body: true},
+#     {cmd: "explore", symbol: "Server", gather: true, body: true},
+#     {cmd: "map", dir: "internal/", type: "function"},
+#     {cmd: "refs", symbol: "Config", impact: true}
+#   ],
+#   edits: [
+#     {file: "src/main.go", old_text: "oldFunc()", new_text: "newFunc()"},
+#     {file: "src/config.go", symbol: "parseConfig", new_text: "..."}
+#   ],
+#   writes: [{file: "src/new.go", content: "package main\n...", mkdir: true}],
+#   verify: true
+# )
 #
-# Batch reads + edits in one call:
-# edr_plan(reads: [{file: "src/main.go"}, {file: "src/config.go", symbol: "parseConfig"}],
-#          edits: [{file: "src/main.go", old_text: "old", new_text: "new"}])
+# Typical 2-call workflow:
+# Call 1: edr_plan(reads: [...], queries: [...])     — gather ALL context
+# Call 2: edr_plan(edits: [...], writes: [...], verify: true)  — ALL mutations + verify
 ```
 
 ## MCP Server Mode
@@ -228,10 +238,10 @@ These optimizations are automatic and session-scoped (reset on reconnect).
 5. **Use `edr_explore(gather: true, body: true)`** at the start of a task to get source bodies inline.
 6. **Use `edr_rename(dry_run: true)`** to preview cross-file renames before applying.
 7. **Check truncation/count metadata** in search/find results — `search` uses `total_matches`, while `find` currently uses `total_matched`.
-8. **Use `edr_plan(edits: [...])`** for multi-file atomic edits — one call, all-or-nothing.
+8. **Use `edr_plan`** as your primary tool — batch reads, queries, edits, writes, and verify in one call.
 9. **Use `edr_refs(impact: true)`** before refactoring to understand blast radius.
 10. **Use `edr_verify`** after edits to confirm the build still passes.
-11. **Use `edr_plan(reads: [...])`** to batch independent reads in one call.
+11. **Use `edr_plan(queries: [...])`** to mix search, explore, refs, map, and reads in one call.
 12. **Small edit diffs are inline** — diffs <=20 lines are included automatically. Large diffs are stored; use `edr_diff` to retrieve.
 13. **Re-reads are delta** — `{unchanged: true}` or `{delta: true, diff: "..."}`. Use `full: true` to force full content.
 14. **Use `edr_read(files: ["file:Class"], signatures: true)`** to understand a container's API without reading implementation (75-86% fewer tokens).
@@ -253,7 +263,7 @@ These optimizations are automatic and session-scoped (reset on reconnect).
 | `edr_verify` | Run build/typecheck, return structured pass/fail. `command`, `timeout` |
 | `edr_init` | Force re-index the repository |
 | `edr_diff` | Retrieve stored diff from last large edit. `file`, `symbol` |
-| `edr_plan` | Batch `reads` and/or atomic `edits`. `budget` distributes across reads. `dry_run` for edit preview |
+| `edr_plan` | **Primary agent tool.** `reads`, `queries` (search/explore/refs/map/find), `edits`, `writes`, `verify`. All in one call. |
 
 All output is structured JSON. All file paths can be relative to repo root.
 All edit commands return `hash` in the response for chaining. If post-edit reindexing

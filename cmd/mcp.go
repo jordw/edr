@@ -307,18 +307,21 @@ func mcpTools() []mcpTool {
 			},
 		},
 		{
-			Name:        "edr_plan",
-			Description: "Batch reads or atomic multi-file edits.",
-			InputSchema: mcpSchema{
-				Type: "object",
-				Properties: map[string]mcpProp{
-					"reads":   {Type: "array", Description: "Batch reads: [{file, symbol?, budget?, signatures?, depth?}]", Items: &mcpPropItems{Type: "object"}},
-					"edits":   {Type: "array", Description: "Atomic edits: [{file, old_text, new_text, symbol?, start_line?, end_line?}]", Items: &mcpPropItems{Type: "object"}},
-					"budget":  {Type: "integer", Description: "Total budget distributed across reads"},
-					"dry_run": {Type: "boolean", Description: "Preview edits as diff"},
+				Name:        "edr_plan",
+				Description: "Unified agent tool: batch queries + atomic writes/edits + verify in one call. Reads/queries run in parallel, writes and edits are atomic, verify runs last.",
+				InputSchema: mcpSchema{
+					Type: "object",
+					Properties: map[string]mcpProp{
+						"reads":   {Type: "array", Description: "Batch reads: [{file, symbol?, budget?, signatures?, depth?}]", Items: &mcpPropItems{Type: "object"}},
+						"queries": {Type: "array", Description: "Generalized queries: [{cmd: search|explore|refs|map|find|read, ...params}]. Runs in parallel.", Items: &mcpPropItems{Type: "object"}},
+						"edits":   {Type: "array", Description: "Atomic edits: [{file, old_text, new_text, symbol?, start_line?, end_line?}]", Items: &mcpPropItems{Type: "object"}},
+						"writes":  {Type: "array", Description: "Create/write files: [{file, content, mkdir?, after?, inside?, append?}]", Items: &mcpPropItems{Type: "object"}},
+						"budget":  {Type: "integer", Description: "Total budget distributed across reads/queries"},
+						"dry_run": {Type: "boolean", Description: "Preview edits as diff"},
+						"verify":  {Description: "Run verification after edits. true = auto-detect, string = custom command"},
+					},
 				},
 			},
-		},
 	}
 }
 
@@ -670,10 +673,13 @@ func routeTool(toolName string, raw json.RawMessage) (cmd string, args []string,
 
 // planParams holds the parsed params for edr_plan.
 type planParams struct {
-	Reads  []planRead `json:"reads"`
-	Edits  []planEdit `json:"edits"`
-	Budget *int       `json:"budget"`
-	DryRun *bool      `json:"dry_run"`
+	Reads   []planRead  `json:"reads"`
+	Queries []planQuery `json:"queries"`
+	Edits   []planEdit  `json:"edits"`
+	Writes  []planWrite `json:"writes"`
+	Budget  *int        `json:"budget"`
+	DryRun  *bool       `json:"dry_run"`
+	Verify  any         `json:"verify"`
 }
 
 type planRead struct {
@@ -682,6 +688,44 @@ type planRead struct {
 	Budget     *int   `json:"budget,omitempty"`
 	Signatures *bool  `json:"signatures,omitempty"`
 	Depth      *int   `json:"depth,omitempty"`
+}
+
+// planQuery is a generalized read-only command for use in edr_plan.
+// Cmd selects the operation: search, explore, refs, map, find, read (default).
+type planQuery struct {
+	Cmd string `json:"cmd"` // search, explore, refs, map, find, read
+
+	// Shared
+	Budget *int    `json:"budget,omitempty"`
+	File   *string `json:"file,omitempty"`
+	Symbol *string `json:"symbol,omitempty"`
+
+	// search
+	Pattern *string `json:"pattern,omitempty"`
+	Body    *bool   `json:"body,omitempty"`
+	Text    *bool   `json:"text,omitempty"`
+	Regex   *bool   `json:"regex,omitempty"`
+	Include any     `json:"include,omitempty"`
+	Exclude any     `json:"exclude,omitempty"`
+	Context *int    `json:"context,omitempty"`
+
+	// explore
+	Callers    *bool `json:"callers,omitempty"`
+	Deps       *bool `json:"deps,omitempty"`
+	Gather     *bool `json:"gather,omitempty"`
+	Signatures *bool `json:"signatures,omitempty"`
+
+	// refs
+	Impact *bool   `json:"impact,omitempty"`
+	Chain  *string `json:"chain,omitempty"`
+	Depth  *int    `json:"depth,omitempty"`
+
+	// map
+	Dir    *string `json:"dir,omitempty"`
+	Glob   *string `json:"glob,omitempty"`
+	Type   *string `json:"type,omitempty"`
+	Grep   *string `json:"grep,omitempty"`
+	Locals *bool   `json:"locals,omitempty"`
 }
 
 type planEdit struct {
@@ -693,6 +737,15 @@ type planEdit struct {
 	EndLine   *int   `json:"end_line,omitempty"`
 }
 
+type planWrite struct {
+	File    string  `json:"file"`
+	Content string  `json:"content"`
+	Mkdir   *bool   `json:"mkdir,omitempty"`
+	After   *string `json:"after,omitempty"`
+	Inside  *string `json:"inside,omitempty"`
+	Append  *bool   `json:"append,omitempty"`
+}
+
 // handlePlan dispatches edr_plan (batch reads + atomic edits).
 func handlePlan(ctx context.Context, db *index.DB, sess *session.Session, raw json.RawMessage) (string, error) {
 	var p planParams
@@ -700,14 +753,20 @@ func handlePlan(ctx context.Context, db *index.DB, sess *session.Session, raw js
 		return "", err
 	}
 
-	if len(p.Reads) == 0 && len(p.Edits) == 0 {
-		return `{"error": "edr_plan requires reads or edits (or both)"}`, nil
+	hasReads := len(p.Reads) > 0
+	hasQueries := len(p.Queries) > 0
+	hasEdits := len(p.Edits) > 0
+	hasWrites := len(p.Writes) > 0
+	hasVerify := p.Verify != nil && p.Verify != false
+
+	if !hasReads && !hasQueries && !hasEdits && !hasWrites && !hasVerify {
+		return `{"error": "edr_plan requires at least one of: reads, queries, edits, writes, verify"}`, nil
 	}
 
 	var parts []string
 
-	// Dispatch reads via DispatchMulti
-	if len(p.Reads) > 0 {
+	// 1. Dispatch reads via DispatchMulti
+	if hasReads {
 		cmds := make([]dispatch.MultiCmd, len(p.Reads))
 		for i, r := range p.Reads {
 			readArgs := []string{r.File}
@@ -735,8 +794,51 @@ func handlePlan(ctx context.Context, db *index.DB, sess *session.Session, raw js
 		parts = append(parts, fmt.Sprintf(`"reads":%s`, text))
 	}
 
-	// Dispatch edits via edit-plan
-	if len(p.Edits) > 0 {
+	// 2. Dispatch generalized queries via DispatchMulti
+	if hasQueries {
+		cmds := make([]dispatch.MultiCmd, len(p.Queries))
+		for i, q := range p.Queries {
+			cmds[i] = planQueryToMultiCmd(q)
+		}
+		var budgetOpt []int
+		if p.Budget != nil {
+			budgetOpt = []int{*p.Budget}
+		}
+		results := dispatch.DispatchMulti(ctx, db, cmds, budgetOpt...)
+		text := postProcessMultiResults(sess, cmds, results)
+		parts = append(parts, fmt.Sprintf(`"queries":%s`, text))
+	}
+
+	// 3. Dispatch writes sequentially (before edits, so new files can be edited)
+	if hasWrites {
+		var writeResults []map[string]any
+		for _, w := range p.Writes {
+			flags := map[string]any{"content": w.Content}
+			if w.Mkdir != nil && *w.Mkdir {
+				flags["mkdir"] = true
+			}
+			if w.After != nil && *w.After != "" {
+				flags["after"] = *w.After
+			}
+			if w.Inside != nil && *w.Inside != "" {
+				flags["inside"] = *w.Inside
+			}
+			if w.Append != nil && *w.Append {
+				flags["append"] = true
+			}
+			result, err := dispatch.Dispatch(ctx, db, "write", []string{w.File}, flags)
+			if err != nil {
+				writeResults = append(writeResults, map[string]any{"file": w.File, "ok": false, "error": err.Error()})
+			} else {
+				writeResults = append(writeResults, map[string]any{"file": w.File, "ok": true, "result": result})
+			}
+		}
+		data, _ := json.Marshal(writeResults)
+		parts = append(parts, fmt.Sprintf(`"writes":%s`, string(data)))
+	}
+
+	// 4. Dispatch edits via edit-plan (atomic)
+	if hasEdits {
 		editFlags := map[string]any{}
 		editsRaw := make([]map[string]any, len(p.Edits))
 		for i, e := range p.Edits {
@@ -780,8 +882,152 @@ func handlePlan(ctx context.Context, db *index.DB, sess *session.Session, raw js
 		}
 	}
 
+	// 5. Run verification if requested
+	if hasVerify {
+		verifyFlags := map[string]any{}
+		// verify: true uses auto-detect; verify: "command" uses custom command
+		if cmd, ok := p.Verify.(string); ok && cmd != "" {
+			verifyFlags["command"] = cmd
+		}
+		result, err := dispatch.Dispatch(ctx, db, "verify", []string{}, verifyFlags)
+		if err != nil {
+			parts = append(parts, fmt.Sprintf(`"verify":{"error":%q}`, err.Error()))
+		} else {
+			data, _ := json.Marshal(result)
+			parts = append(parts, fmt.Sprintf(`"verify":%s`, string(data)))
+		}
+	}
+
 	return "{" + strings.Join(parts, ",") + "}", nil
 }
+
+
+// planQueryToMultiCmd converts a generalized planQuery into a dispatch.MultiCmd.
+func planQueryToMultiCmd(q planQuery) dispatch.MultiCmd {
+	cmd := q.Cmd
+	if cmd == "" {
+		cmd = "read"
+	}
+
+	args := []string{}
+	flags := map[string]any{}
+
+	if q.Budget != nil {
+		flags["budget"] = *q.Budget
+	}
+
+	switch cmd {
+	case "read":
+		if q.File != nil {
+			f := *q.File
+			if q.Symbol != nil && *q.Symbol != "" {
+				f += ":" + *q.Symbol
+			}
+			args = []string{f}
+		}
+		if q.Signatures != nil && *q.Signatures {
+			flags["signatures"] = true
+		}
+		if q.Depth != nil {
+			flags["depth"] = *q.Depth
+		}
+
+	case "search":
+		if q.Pattern != nil {
+			args = []string{*q.Pattern}
+		}
+		if q.Body != nil && *q.Body {
+			flags["body"] = true
+		}
+		if q.Text != nil && *q.Text {
+			flags["text"] = true
+		}
+		if q.Regex != nil && *q.Regex {
+			flags["regex"] = true
+		}
+		if q.Include != nil {
+			flags["include"] = q.Include
+		}
+		if q.Exclude != nil {
+			flags["exclude"] = q.Exclude
+		}
+		if q.Context != nil {
+			flags["context"] = *q.Context
+		}
+
+	case "explore":
+		if q.Symbol != nil {
+			args = []string{*q.Symbol}
+		}
+		if q.File != nil && *q.File != "" {
+			args = append([]string{*q.File}, args...)
+		}
+		if q.Body != nil && *q.Body {
+			flags["body"] = true
+		}
+		if q.Callers != nil && *q.Callers {
+			flags["callers"] = true
+		}
+		if q.Deps != nil && *q.Deps {
+			flags["deps"] = true
+		}
+		if q.Gather != nil && *q.Gather {
+			flags["gather"] = true
+		}
+		if q.Signatures != nil && *q.Signatures {
+			flags["signatures"] = true
+		}
+
+	case "refs":
+		if q.Symbol != nil {
+			args = []string{*q.Symbol}
+		}
+		if q.File != nil && *q.File != "" {
+			args = append([]string{*q.File}, args...)
+		}
+		if q.Impact != nil && *q.Impact {
+			flags["impact"] = true
+		}
+		if q.Chain != nil && *q.Chain != "" {
+			flags["chain"] = *q.Chain
+		}
+		if q.Depth != nil {
+			flags["depth"] = *q.Depth
+		}
+
+	case "map":
+		if q.File != nil && *q.File != "" {
+			args = []string{*q.File}
+		}
+		if q.Dir != nil && *q.Dir != "" {
+			flags["dir"] = *q.Dir
+		}
+		if q.Glob != nil && *q.Glob != "" {
+			flags["glob"] = *q.Glob
+		}
+		if q.Type != nil && *q.Type != "" {
+			flags["type"] = *q.Type
+		}
+		if q.Grep != nil && *q.Grep != "" {
+			flags["grep"] = *q.Grep
+		}
+		if q.Locals != nil && *q.Locals {
+			flags["locals"] = true
+		}
+
+	case "find":
+		if q.Pattern != nil {
+			args = []string{*q.Pattern}
+		}
+		if q.Dir != nil && *q.Dir != "" {
+			flags["dir"] = *q.Dir
+		}
+	}
+
+	return dispatch.MultiCmd{Cmd: cmd, Args: args, Flags: flags}
+}
+
+
 
 // --- Post-process multi results ---
 

@@ -551,3 +551,149 @@ func TestMcpTools_Count(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanQueryToMultiCmd_Search(t *testing.T) {
+	body := true
+	pattern := "TODO"
+	q := planQuery{
+		Cmd:     "search",
+		Pattern: &pattern,
+		Body:    &body,
+	}
+	mc := planQueryToMultiCmd(q)
+	if mc.Cmd != "search" {
+		t.Errorf("cmd = %q, want search", mc.Cmd)
+	}
+	if len(mc.Args) != 1 || mc.Args[0] != "TODO" {
+		t.Errorf("args = %v, want [TODO]", mc.Args)
+	}
+	if mc.Flags["body"] != true {
+		t.Error("body flag should be true")
+	}
+}
+
+func TestPlanQueryToMultiCmd_Explore(t *testing.T) {
+	sym := "Dispatch"
+	gather := true
+	body := true
+	q := planQuery{
+		Cmd:    "explore",
+		Symbol: &sym,
+		Gather: &gather,
+		Body:   &body,
+	}
+	mc := planQueryToMultiCmd(q)
+	if mc.Cmd != "explore" {
+		t.Errorf("cmd = %q, want explore", mc.Cmd)
+	}
+	if len(mc.Args) != 1 || mc.Args[0] != "Dispatch" {
+		t.Errorf("args = %v, want [Dispatch]", mc.Args)
+	}
+	if mc.Flags["gather"] != true {
+		t.Error("gather should be true")
+	}
+}
+
+func TestPlanQueryToMultiCmd_Map(t *testing.T) {
+	dir := "internal/"
+	typ := "function"
+	grep := "run"
+	q := planQuery{
+		Cmd:  "map",
+		Dir:  &dir,
+		Type: &typ,
+		Grep: &grep,
+	}
+	mc := planQueryToMultiCmd(q)
+	if mc.Cmd != "map" {
+		t.Errorf("cmd = %q, want map", mc.Cmd)
+	}
+	if mc.Flags["dir"] != "internal/" {
+		t.Errorf("dir = %v, want internal/", mc.Flags["dir"])
+	}
+	if mc.Flags["type"] != "function" {
+		t.Errorf("type = %v, want function", mc.Flags["type"])
+	}
+	if mc.Flags["grep"] != "run" {
+		t.Errorf("grep = %v, want run", mc.Flags["grep"])
+	}
+}
+
+func TestPlanQueryToMultiCmd_DefaultsToRead(t *testing.T) {
+	file := "main.go"
+	q := planQuery{
+		File: &file,
+	}
+	mc := planQueryToMultiCmd(q)
+	if mc.Cmd != "read" {
+		t.Errorf("cmd = %q, want read (default)", mc.Cmd)
+	}
+	if len(mc.Args) != 1 || mc.Args[0] != "main.go" {
+		t.Errorf("args = %v, want [main.go]", mc.Args)
+	}
+}
+
+func TestPlanQueryToMultiCmd_Refs(t *testing.T) {
+	sym := "Dispatch"
+	impact := true
+	depth := 2
+	q := planQuery{
+		Cmd:    "refs",
+		Symbol: &sym,
+		Impact: &impact,
+		Depth:  &depth,
+	}
+	mc := planQueryToMultiCmd(q)
+	if mc.Cmd != "refs" {
+		t.Errorf("cmd = %q, want refs", mc.Cmd)
+	}
+	if mc.Flags["impact"] != true {
+		t.Error("impact should be true")
+	}
+	if mc.Flags["depth"] != 2 {
+		t.Errorf("depth = %v, want 2", mc.Flags["depth"])
+	}
+}
+
+func TestPlanParams_Verify(t *testing.T) {
+	// Test verify: true parses correctly
+	raw := `{"verify": true}`
+	var p planParams
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Verify != true {
+		t.Errorf("verify = %v, want true", p.Verify)
+	}
+
+	// Test verify: "go vet ./..." parses correctly
+	raw = `{"verify": "go vet ./..."}`
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Verify != "go vet ./..." {
+		t.Errorf("verify = %v, want 'go vet ./...'", p.Verify)
+	}
+}
+
+func TestPlanParams_Writes(t *testing.T) {
+	raw := `{"writes": [{"file": "new.go", "content": "package main\n", "mkdir": true}]}`
+	var p planParams
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Writes) != 1 {
+		t.Fatalf("writes len = %d, want 1", len(p.Writes))
+	}
+	w := p.Writes[0]
+	if w.File != "new.go" {
+		t.Errorf("file = %q, want new.go", w.File)
+	}
+	if w.Content != "package main\n" {
+		t.Errorf("content = %q", w.Content)
+	}
+	if w.Mkdir == nil || !*w.Mkdir {
+		t.Error("mkdir should be true")
+	}
+}
+
