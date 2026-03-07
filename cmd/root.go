@@ -27,8 +27,18 @@ func init() {
 	rootCmd.PersistentFlags().StringP("root", "r", ".", "repository root directory")
 }
 
-// openAndEnsureIndex opens the DB and automatically indexes if the index is empty or stale.
+// openAndEnsureIndex opens the DB and bootstraps the index if it does not exist yet.
+// It silently indexes without stderr output in quiet mode (batch/MCP).
 func openAndEnsureIndex(cmd *cobra.Command) (*index.DB, error) {
+	return openDB(cmd, false)
+}
+
+// openAndEnsureIndexQuiet opens the DB and indexes silently (for batch/MCP).
+func openAndEnsureIndexQuiet(cmd *cobra.Command) (*index.DB, error) {
+	return openDB(cmd, true)
+}
+
+func openDB(cmd *cobra.Command, quiet bool) (*index.DB, error) {
 	root := getRoot(cmd)
 	db, err := index.OpenDB(root)
 	if err != nil {
@@ -43,17 +53,16 @@ func openAndEnsureIndex(cmd *cobra.Command) (*index.DB, error) {
 	}
 
 	if files == 0 {
-		fmt.Fprintf(os.Stderr, "edr: no index found, indexing repository...\n")
+		if !quiet {
+			fmt.Fprintf(os.Stderr, "edr: no index found, indexing repository...\n")
+		}
 		filesIndexed, symbolsFound, err := index.IndexRepo(ctx, db)
 		if err != nil {
 			db.Close()
 			return nil, err
 		}
-		fmt.Fprintf(os.Stderr, "edr: indexed %d files, %d symbols\n", filesIndexed, symbolsFound)
-	} else if stale, _ := index.HasStaleFiles(ctx, db); stale {
-		filesIndexed, _, _ := index.IndexRepo(ctx, db)
-		if filesIndexed > 0 {
-			fmt.Fprintf(os.Stderr, "edr: re-indexed %d changed files\n", filesIndexed)
+		if !quiet {
+			fmt.Fprintf(os.Stderr, "edr: indexed %d files, %d symbols\n", filesIndexed, symbolsFound)
 		}
 	}
 

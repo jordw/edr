@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -58,7 +59,7 @@ func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flag
 	case "expand":
 		return runExpand(ctx, db, root, args, flags)
 	case "xrefs":
-		return runXrefs(ctx, db, args)
+		return runXrefs(ctx, db, root, args)
 	case "gather":
 		return runGather(ctx, db, root, args, flags)
 	case "replace-symbol":
@@ -97,6 +98,8 @@ func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flag
 		return runCallChain(ctx, db, root, args, flags)
 	case "verify":
 		return runVerify(ctx, db, root, args, flags)
+	case "multi", "get-diff":
+		return nil, fmt.Errorf("%s is only available in MCP mode (edr mcp)", cmd)
 	default:
 		return nil, fmt.Errorf("unknown command: %s", cmd)
 	}
@@ -423,12 +426,18 @@ func runExpand(ctx context.Context, db *index.DB, root string, args []string, fl
 	return result, nil
 }
 
-func runXrefs(ctx context.Context, db *index.DB, args []string) (any, error) {
+func runXrefs(ctx context.Context, db *index.DB, root string, args []string) (any, error) {
 	if len(args) < 1 {
-		return nil, fmt.Errorf("xrefs requires 1 argument: <symbol>")
+		return nil, fmt.Errorf("xrefs requires 1-2 arguments: [file] <symbol>")
 	}
 
-	refs, err := index.FindReferences(ctx, db, args[0])
+	// Resolve symbol with optional file disambiguation
+	sym, err := resolveSymbolArgs(ctx, db, root, args)
+	if err != nil {
+		return nil, err
+	}
+
+	refs, err := index.FindReferences(ctx, db, sym.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -441,6 +450,9 @@ func runXrefs(ctx context.Context, db *index.DB, args []string) (any, error) {
 			File:  output.Rel(r.File),
 			Lines: [2]int{int(r.StartLine), int(r.EndLine)},
 		})
+	}
+	if results == nil {
+		results = []output.Symbol{}
 	}
 	return results, nil
 }
@@ -826,10 +838,29 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 	newName := args[1]
 	dryRun := flagBool(flags, "dry-run", false)
 
-	// Find all references to the old name
-	refs, err := index.FindReferences(ctx, db, oldName)
+	// Find all identifier occurrences (exact byte ranges for replacement).
+	// We use FindIdentifierOccurrences instead of FindReferences because the
+	// semantic path returns containing symbols, not individual identifier positions.
+	refs, err := index.FindIdentifierOccurrences(ctx, db, oldName)
 	if err != nil {
 		return nil, err
+	}
+
+	// Apply --scope filter (glob pattern on relative paths)
+	if scope := flagString(flags, "scope", ""); scope != "" {
+		var filtered []index.SymbolInfo
+		for _, r := range refs {
+			rel := output.Rel(r.File)
+			if matched, _ := filepath.Match(scope, rel); matched {
+				filtered = append(filtered, r)
+			} else if matched, _ := filepath.Match(scope, filepath.Base(rel)); matched {
+				filtered = append(filtered, r)
+			} else if strings.HasPrefix(rel, strings.TrimSuffix(scope, "**")) {
+				// Support "dir/**" style patterns
+				filtered = append(filtered, r)
+			}
+		}
+		refs = filtered
 	}
 
 	if len(refs) == 0 {
@@ -982,56 +1013,204 @@ func runAppendFile(ctx context.Context, db *index.DB, root string, args []string
 }
 
 func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
-	if len(args) < 1 {
-		return nil, fmt.Errorf("smart-edit requires 1-2 arguments: [file] <symbol>")
-	}
 	replacement := flagString(flags, "replacement", "")
 	if replacement == "" {
 		return nil, fmt.Errorf("smart-edit requires 'replacement' in flags")
 	}
 
+	// Determine targeting mode:
+	// 1. --lines <start> <end>: line range (requires file as first arg)
+	// 2. --match <text>: text match (requires file as first arg, like replace-text but with smart-edit UX)
+	// 3. Default: symbol-based (existing behavior)
+
+	startLine := flagInt(flags, "start_line", 0)
+	endLine := flagInt(flags, "end_line", 0)
+	matchText := flagString(flags, "match", "")
+
+	if startLine > 0 && endLine > 0 {
+		// Line-range mode
+		if len(args) < 1 {
+			return nil, fmt.Errorf("smart-edit with --start_line/--end_line requires a file argument")
+		}
+		file, err := db.ResolvePath(args[0])
+		if err != nil {
+			return nil, err
+		}
+		return smartEditSpan(ctx, db, file, startLine, endLine, replacement, "")
+	}
+
+	if matchText != "" {
+		// Text-match mode
+		if len(args) < 1 {
+			return nil, fmt.Errorf("smart-edit with --match requires a file argument")
+		}
+		file, err := db.ResolvePath(args[0])
+		if err != nil {
+			return nil, err
+		}
+		return smartEditMatch(ctx, db, file, matchText, replacement, flags)
+	}
+
+	// Symbol mode (original behavior)
+	if len(args) < 1 {
+		return nil, fmt.Errorf("smart-edit requires: [file] <symbol>, or <file> with --lines/--match")
+	}
 	sym, err := resolveSymbolArgs(ctx, db, root, args)
 	if err != nil {
 		return nil, err
 	}
+	return smartEditByteRange(ctx, db, sym.File, sym.StartByte, sym.EndByte, replacement, sym.Name)
+}
 
-	// Read the current body
-	src, err := os.ReadFile(sym.File)
+// smartEditByteRange applies an edit to a byte range and returns a smart-edit result.
+func smartEditByteRange(ctx context.Context, db *index.DB, file string, startByte, endByte uint32, replacement, label string) (any, error) {
+	src, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
 	}
-	oldBody := string(src[sym.StartByte:sym.EndByte])
+	oldBody := string(src[startByte:endByte])
 
-	// Generate diff preview
-	diff, err := edit.DiffPreview(sym.File, sym.StartByte, sym.EndByte, replacement)
+	diff, err := edit.DiffPreview(file, startByte, endByte, replacement)
 	if err != nil {
 		return nil, err
 	}
 
-	// Get current hash for safe write
-	hash, _ := edit.FileHash(sym.File)
-
-	// Apply the edit
-	err = edit.ReplaceSpan(sym.File, sym.StartByte, sym.EndByte, replacement, hash)
+	hash, _ := edit.FileHash(file)
+	err = edit.ReplaceSpan(file, startByte, endByte, replacement, hash)
 	if err != nil {
 		return nil, fmt.Errorf("edit failed: %w", err)
 	}
 
-	// Re-index
-	_ = index.IndexFile(ctx, db, sym.File)
+	_ = index.IndexFile(ctx, db, file)
+	newHash, _ := edit.FileHash(file)
 
-	// Return new hash so caller can chain edits
-	newHash, _ := edit.FileHash(sym.File)
-
-	return map[string]any{
+	result := map[string]any{
 		"ok":       true,
-		"file":     output.Rel(sym.File),
-		"symbol":   sym.Name,
+		"file":     output.Rel(file),
 		"diff":     diff,
 		"hash":     newHash,
 		"old_size": len(oldBody) / 4,
 		"new_size": len(replacement) / 4,
-	}, nil
+	}
+	if label != "" {
+		result["symbol"] = label
+	}
+	return result, nil
+}
+
+// smartEditSpan applies an edit to a line range.
+func smartEditSpan(ctx context.Context, db *index.DB, file string, startLine, endLine int, replacement, label string) (any, error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert lines to byte offsets
+	line := 1
+	var startByte, endByte uint32
+	foundStart := false
+	for i := 0; i <= len(data); i++ {
+		if line == startLine && !foundStart {
+			startByte = uint32(i)
+			foundStart = true
+		}
+		if line == endLine+1 || (line == endLine && i == len(data)) {
+			endByte = uint32(i)
+			break
+		}
+		if i < len(data) && data[i] == '\n' {
+			line++
+		}
+	}
+	if !foundStart {
+		return nil, fmt.Errorf("smart-edit: start line %d beyond file (%d lines)", startLine, line-1)
+	}
+	if endByte == 0 && endLine >= line {
+		endByte = uint32(len(data))
+	}
+
+	if label == "" {
+		label = fmt.Sprintf("lines %d-%d", startLine, endLine)
+	}
+	return smartEditByteRange(ctx, db, file, startByte, endByte, replacement, label)
+}
+
+// smartEditMatch applies an edit by finding and replacing text.
+func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacement string, flags map[string]any) (any, error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+
+	content := string(data)
+	useRegex := flagBool(flags, "regex", false)
+	replaceAll := flagBool(flags, "all", false)
+
+	var startByte, endByte int
+	if useRegex {
+		re, err := regexp.Compile(matchText)
+		if err != nil {
+			return nil, fmt.Errorf("invalid regex: %w", err)
+		}
+		loc := re.FindStringIndex(content)
+		if loc == nil {
+			return nil, fmt.Errorf("smart-edit: pattern %q not found in %s", matchText, output.Rel(file))
+		}
+		if replaceAll {
+			// For regex --all, do a full replacement and write directly
+			result := re.ReplaceAllString(content, replacement)
+			count := len(re.FindAllStringIndex(content, -1))
+
+			hash, _ := edit.FileHash(file)
+			info, _ := os.Stat(file)
+			if err := os.WriteFile(file, []byte(result), info.Mode()); err != nil {
+				return nil, err
+			}
+			_ = index.IndexFile(ctx, db, file)
+			newHash, _ := edit.FileHash(file)
+
+			return map[string]any{
+				"ok":       true,
+				"file":     output.Rel(file),
+				"hash":     newHash,
+				"old_hash": hash,
+				"count":    count,
+				"match":    matchText,
+			}, nil
+		}
+		startByte = loc[0]
+		endByte = loc[1]
+	} else {
+		idx := strings.Index(content, matchText)
+		if idx < 0 {
+			return nil, fmt.Errorf("smart-edit: text %q not found in %s", matchText, output.Rel(file))
+		}
+		if replaceAll {
+			count := strings.Count(content, matchText)
+			result := strings.ReplaceAll(content, matchText, replacement)
+
+			hash, _ := edit.FileHash(file)
+			info, _ := os.Stat(file)
+			if err := os.WriteFile(file, []byte(result), info.Mode()); err != nil {
+				return nil, err
+			}
+			_ = index.IndexFile(ctx, db, file)
+			newHash, _ := edit.FileHash(file)
+
+			return map[string]any{
+				"ok":       true,
+				"file":     output.Rel(file),
+				"hash":     newHash,
+				"old_hash": hash,
+				"count":    count,
+				"match":    matchText,
+			}, nil
+		}
+		startByte = idx
+		endByte = idx + len(matchText)
+	}
+
+	return smartEditByteRange(ctx, db, file, uint32(startByte), uint32(endByte), replacement, "")
 }
 
 func runFindFiles(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
@@ -1061,10 +1240,12 @@ func runBatchRead(ctx context.Context, db *index.DB, root string, args []string,
 	type batchEntry struct {
 		File    string          `json:"file"`
 		Symbol  string          `json:"symbol,omitempty"`
-		Content string          `json:"content"`
-		Hash    string          `json:"hash"`
-		Lines   [2]int          `json:"lines"`
-		Size    int             `json:"size"`
+		OK      bool            `json:"ok"`
+		Error   string          `json:"error,omitempty"`
+		Content string          `json:"content,omitempty"`
+		Hash    string          `json:"hash,omitempty"`
+		Lines   [2]int          `json:"lines,omitempty"`
+		Size    int             `json:"size,omitempty"`
 		Symbols []output.Symbol `json:"symbols,omitempty"`
 	}
 
@@ -1084,10 +1265,12 @@ func runBatchRead(ctx context.Context, db *index.DB, root string, args []string,
 			// Read a specific symbol
 			sym, err := resolveSymbolArgs(ctx, db, root, []string{filePath, symName})
 			if err != nil {
+				results = append(results, batchEntry{File: filePath, Symbol: symName, OK: false, Error: err.Error()})
 				continue
 			}
 			src, err := os.ReadFile(sym.File)
 			if err != nil {
+				results = append(results, batchEntry{File: filePath, Symbol: symName, OK: false, Error: err.Error()})
 				continue
 			}
 			body := string(src[sym.StartByte:sym.EndByte])
@@ -1100,6 +1283,7 @@ func runBatchRead(ctx context.Context, db *index.DB, root string, args []string,
 			results = append(results, batchEntry{
 				File:    output.Rel(sym.File),
 				Symbol:  symName,
+				OK:      true,
 				Content: body,
 				Hash:    hash,
 				Lines:   [2]int{int(sym.StartLine), int(sym.EndLine)},
@@ -1109,10 +1293,12 @@ func runBatchRead(ctx context.Context, db *index.DB, root string, args []string,
 			// Read entire file
 			file, err := db.ResolvePath(filePath)
 			if err != nil {
+				results = append(results, batchEntry{File: filePath, OK: false, Error: err.Error()})
 				continue
 			}
 			data, err := os.ReadFile(file)
 			if err != nil {
+				results = append(results, batchEntry{File: filePath, OK: false, Error: err.Error()})
 				continue
 			}
 			body := string(data)
@@ -1125,6 +1311,7 @@ func runBatchRead(ctx context.Context, db *index.DB, root string, args []string,
 			hash, _ := edit.FileHash(file)
 			entry := batchEntry{
 				File:    output.Rel(file),
+				OK:      true,
 				Content: body,
 				Hash:    hash,
 				Lines:   [2]int{1, len(lines)},
@@ -1133,13 +1320,23 @@ func runBatchRead(ctx context.Context, db *index.DB, root string, args []string,
 			if showSymbols {
 				syms, err := db.GetSymbolsByFile(ctx, file)
 				if err == nil {
+					symTokens := 0
 					for _, s := range syms {
+						symSize := len(s.Name)/4 + 5 // rough token estimate per symbol entry
+						symTokens += symSize
 						entry.Symbols = append(entry.Symbols, output.Symbol{
 							Type:  s.Type,
 							Name:  s.Name,
 							Lines: [2]int{int(s.StartLine), int(s.EndLine)},
 							Size:  int(s.EndByte-s.StartByte) / 4,
 						})
+					}
+					// When budget is tight and symbols are requested, count symbols toward budget
+					if perFile > 0 && symTokens+size > perFile*2 {
+						// Content was large; strip it and keep only symbols as the summary
+						if len(entry.Content) > perFile*4 {
+							entry.Content, _ = output.TruncateAtLine(entry.Content, perFile*2)
+						}
 					}
 				}
 			}
@@ -1304,13 +1501,15 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 	if dryRun {
 		var preview []map[string]any
 		for _, r := range resolved {
-			preview = append(preview, map[string]any{
-				"file":             output.Rel(r.File),
-				"description":      r.Description,
-				"start_byte":       r.StartByte,
-				"end_byte":         r.EndByte,
-				"replacement_size": len(r.Replacement),
-			})
+			entry := map[string]any{
+				"file":        output.Rel(r.File),
+				"description": r.Description,
+			}
+			diff, err := edit.DiffPreview(r.File, r.StartByte, r.EndByte, r.Replacement)
+			if err == nil && diff != "" {
+				entry["diff"] = diff
+			}
+			preview = append(preview, entry)
 		}
 		return map[string]any{
 			"dry_run": true,
@@ -1550,6 +1749,8 @@ func runVerify(ctx context.Context, db *index.DB, root string, args []string, fl
 
 	cmd := exec.CommandContext(cmdCtx, "sh", "-c", command)
 	cmd.Dir = root
+	// Inherit environment and set GOCACHE for sandboxed environments
+	cmd.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, ".edr", "gocache"))
 	out, err := cmd.CombinedOutput()
 
 	result := map[string]any{

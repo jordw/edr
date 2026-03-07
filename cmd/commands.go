@@ -43,6 +43,7 @@ func init() {
 	rootCmd.AddCommand(impactCmd)
 	rootCmd.AddCommand(callChainCmd)
 	rootCmd.AddCommand(verifyCmd)
+	rootCmd.AddCommand(getDiffCmd)
 }
 
 // dispatchWithSession runs a command through the session post-processing pipeline.
@@ -376,7 +377,7 @@ var appendFileCmd = &cobra.Command{
 
 var smartEditCmd = &cobra.Command{
 	Use:   "smart-edit <file> [symbol]",
-	Short: "Unified edit: symbol, --lines, or --match targeting (replacement from stdin or --replacement)",
+	Short: "Unified edit: symbol, --start_line/--end_line, or --match targeting (replacement from stdin)",
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return dispatchCmdWithStdin(cmd, "smart-edit", args, "replacement")
@@ -530,4 +531,24 @@ var verifyCmd = &cobra.Command{
 func init() {
 	verifyCmd.Flags().String("command", "", "shell command to run (auto-detects if empty)")
 	verifyCmd.Flags().Int("timeout", 30, "timeout in seconds")
+}
+
+// --- get-diff ---
+
+var getDiffCmd = &cobra.Command{
+	Use:   "get-diff <file> [symbol]",
+	Short: "Retrieve stored diff from last edit (session-scoped)",
+	Args:  cobra.RangeArgs(1, 2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		db, sess, err := openSessionAndDB(cmd)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		defer sess.Save()
+
+		result := sess.GetDiff(args)
+		output.Print(result)
+		return nil
+	},
 }

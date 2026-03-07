@@ -57,7 +57,7 @@ diff-preview, diff-preview-span.
 For edit commands, pass the replacement code via the "replacement" flag
 (or "content" for write-file/append-file/insert-after) in the JSON object.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		db, err := openAndEnsureIndex(cmd)
+		db, err := openAndEnsureIndexQuiet(cmd)
 		if err != nil {
 			return fmt.Errorf("open db: %w", err)
 		}

@@ -220,6 +220,14 @@ func FindReferences(ctx context.Context, db *DB, symbolName string) ([]SymbolInf
 	return findReferencesTextBased(ctx, db, symbolName)
 }
 
+// FindIdentifierOccurrences finds all identifier nodes matching symbolName across
+// all indexed files using tree-sitter. Unlike FindReferences (which returns
+// containing symbols via the semantic path), this returns exact identifier byte
+// ranges suitable for rename operations.
+func FindIdentifierOccurrences(ctx context.Context, db *DB, symbolName string) ([]SymbolInfo, error) {
+	return findReferencesTextBased(ctx, db, symbolName)
+}
+
 // findReferencesTextBased is the legacy text-based reference search.
 func findReferencesTextBased(ctx context.Context, db *DB, symbolName string) ([]SymbolInfo, error) {
 	rows, err := db.db.QueryContext(ctx, `SELECT DISTINCT file FROM symbols`)
@@ -342,6 +350,84 @@ func findDepsTextBased(ctx context.Context, db *DB, sym *SymbolInfo) ([]SymbolIn
 	return deps, nil
 }
 
+// builtinNames contains Go builtins and common names that should not be treated as dependencies.
+var builtinNames = map[string]bool{
+	// Go builtin types
+	"bool": true, "byte": true, "complex64": true, "complex128": true,
+	"error": true, "float32": true, "float64": true, "int": true,
+	"int8": true, "int16": true, "int32": true, "int64": true,
+	"rune": true, "string": true, "uint": true, "uint8": true,
+	"uint16": true, "uint32": true, "uint64": true, "uintptr": true,
+	"any": true,
+	// Go builtin functions
+	"append": true, "cap": true, "close": true, "complex": true,
+	"copy": true, "delete": true, "imag": true, "len": true,
+	"make": true, "new": true, "panic": true, "print": true,
+	"println": true, "real": true, "recover": true,
+	// Common identifiers that are never dependencies
+	"nil": true, "true": true, "false": true, "iota": true,
+	"err": true, "ok": true, "ctx": true, "_": true,
+}
+
+// isDeclarationName returns true if the given identifier node is the name being
+// declared (left side of :=, var/const spec name, parameter name, etc.).
+func isDeclarationName(node *tree_sitter.Node) bool {
+	parent := node.Parent()
+	if parent == nil {
+		return false
+	}
+	kind := parent.Kind()
+
+	// For short_var_declaration, assignment_statement, range_clause:
+	// the identifier is typically inside an expression_list child.
+	// Check both direct parent and grandparent.
+	ancestor := parent
+	ancestorKind := kind
+	if kind == "expression_list" {
+		gp := parent.Parent()
+		if gp != nil {
+			ancestor = gp
+			ancestorKind = gp.Kind()
+		}
+	}
+
+	switch ancestorKind {
+	case "short_var_declaration", "assignment_statement", "range_clause":
+		// Left side of := or = or range — check if this node is within the left subtree
+		left := ancestor.ChildByFieldName("left")
+		if left != nil {
+			nb := uint32(node.StartByte())
+			ne := uint32(node.EndByte())
+			lb := uint32(left.StartByte())
+			le := uint32(left.EndByte())
+			if nb >= lb && ne <= le {
+				return true
+			}
+		}
+	case "parameter_declaration", "variadic_parameter_declaration":
+		// Function parameters — the name is typically the first child
+		if ancestor.ChildCount() > 1 {
+			first := ancestor.Child(0)
+			if first != nil && uint32(first.StartByte()) == uint32(node.StartByte()) {
+				return true
+			}
+		}
+	case "var_spec", "const_spec":
+		// var x int = ... — name is the "name" field
+		nameNode := ancestor.ChildByFieldName("name")
+		if nameNode != nil {
+			nb := uint32(node.StartByte())
+			ne := uint32(node.EndByte())
+			nnb := uint32(nameNode.StartByte())
+			nne := uint32(nameNode.EndByte())
+			if nb >= nnb && ne <= nne {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func collectIdentifiers(node *tree_sitter.Node, src []byte, startByte, endByte uint32, seen map[string]bool, out *[]string) {
 	nb := uint32(node.StartByte())
 	ne := uint32(node.EndByte())
@@ -352,7 +438,7 @@ func collectIdentifiers(node *tree_sitter.Node, src []byte, startByte, endByte u
 	if node.Kind() == "identifier" || node.Kind() == "type_identifier" {
 		if nb >= startByte && ne <= endByte {
 			text := string(src[nb:ne])
-			if !seen[text] {
+			if !seen[text] && !builtinNames[text] && !isDeclarationName(node) {
 				seen[text] = true
 				*out = append(*out, text)
 			}
@@ -365,7 +451,6 @@ func collectIdentifiers(node *tree_sitter.Node, src []byte, startByte, endByte u
 		}
 	}
 }
-
 // extractImports walks the AST and extracts import statements.
 func extractImports(root *tree_sitter.Node, src []byte, path string, lang *LangConfig) []ImportInfo {
 	if lang.Imports == nil {
@@ -527,6 +612,32 @@ func extractRefsFromSymbol(root *tree_sitter.Node, src []byte, sym *SymbolInfo, 
 	// Get the symbol's declaration name to skip it
 	declName := sym.Name
 
+	// Pass 1: Collect all locally declared names (parameters, locals, etc.)
+	localNames := make(map[string]bool)
+	var collectLocals func(node *tree_sitter.Node)
+	collectLocals = func(node *tree_sitter.Node) {
+		nb := uint32(node.StartByte())
+		ne := uint32(node.EndByte())
+		if ne <= sym.StartByte || nb >= sym.EndByte {
+			return
+		}
+		kind := node.Kind()
+		if kind == "identifier" && nb >= sym.StartByte && ne <= sym.EndByte {
+			if isDeclarationName(node) {
+				text := string(src[nb:ne])
+				localNames[text] = true
+			}
+		}
+		for i := 0; i < int(node.ChildCount()); i++ {
+			child := node.Child(uint(i))
+			if child != nil {
+				collectLocals(child)
+			}
+		}
+	}
+	collectLocals(root)
+
+	// Pass 2: Collect refs, skipping locals, builtins, and the symbol's own name
 	seen := make(map[string]bool)
 	var walk func(node *tree_sitter.Node)
 	walk = func(node *tree_sitter.Node) {
@@ -543,13 +654,8 @@ func extractRefsFromSymbol(root *tree_sitter.Node, src []byte, sym *SymbolInfo, 
 		if kind == "identifier" || kind == "type_identifier" || kind == "field_identifier" {
 			if nb >= sym.StartByte && ne <= sym.EndByte {
 				text := string(src[nb:ne])
-				// Skip the symbol's own name and very short/common identifiers
-				if text == declName || len(text) <= 1 {
-					// Still skip — but allow if it's not the declaration position
-					// We skip all occurrences of the symbol's own name to avoid self-refs
-					if text == declName {
-						goto recurse
-					}
+				// Skip own name, short identifiers, builtins, and local variable names
+				if text == declName || len(text) <= 1 || builtinNames[text] || localNames[text] {
 					goto recurse
 				}
 
