@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/jordw/edr/internal/edit"
@@ -266,6 +267,17 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 		}, nil
 	}
 
+	// Snapshot file contents before commit so we can compute diffs.
+	preContents := make(map[string][]byte)
+	for _, r := range resolved {
+		rel := output.Rel(r.File)
+		if _, seen := preContents[rel]; !seen {
+			if data, err := os.ReadFile(r.File); err == nil {
+				preContents[rel] = data
+			}
+		}
+	}
+
 	cr, err := commitEdits(ctx, db, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("edit-plan: %w", err)
@@ -276,12 +288,35 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 		descriptions = append(descriptions, r.Description)
 	}
 
+	// Compute per-file unified diffs for the session's slim-edit pipeline.
+	// Sort keys for deterministic output order.
+	diffKeys := make([]string, 0, len(preContents))
+	for rel := range preContents {
+		diffKeys = append(diffKeys, rel)
+	}
+	sort.Strings(diffKeys)
+	var diffs []string
+	for _, rel := range diffKeys {
+		oldData := preContents[rel]
+		absPath := filepath.Join(root, rel)
+		newData, err := os.ReadFile(absPath)
+		if err != nil {
+			continue
+		}
+		if d := edit.UnifiedDiff(rel, oldData, newData); d != "" {
+			diffs = append(diffs, d)
+		}
+	}
+
 	result := map[string]any{
 		"ok":          true,
 		"edits":       cr.EditCount,
 		"files":       cr.FileCount,
 		"hashes":      cr.Hashes,
 		"description": descriptions,
+	}
+	if len(diffs) > 0 {
+		result["diff"] = strings.Join(diffs, "\n")
 	}
 	if len(cr.IndexErrors) > 0 {
 		result["index_errors"] = cr.IndexErrors

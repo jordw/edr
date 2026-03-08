@@ -584,3 +584,46 @@ func TestDoParams_Edits_RegexAll(t *testing.T) {
 	}
 }
 
+func TestDoParams_Edits_DryRunPromotion(t *testing.T) {
+	// Per-edit dry_run should be parsed into the DryRun field.
+	raw := `{"edits": [{"file": "f.go", "old_text": "old", "new_text": "new", "dry_run": true}]}`
+	var p doParams
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Edits) != 1 {
+		t.Fatalf("edits len = %d, want 1", len(p.Edits))
+	}
+	e := p.Edits[0]
+	if e.DryRun == nil || !*e.DryRun {
+		t.Error("per-edit dry_run should be parsed as true")
+	}
+	// Top-level DryRun should still be nil (promotion happens in handleDo, not parsing).
+	if p.DryRun != nil {
+		t.Error("top-level dry_run should be nil before handleDo promotion")
+	}
+}
+
+func TestPostProcess_EditPlanDiff(t *testing.T) {
+	// edit-plan results should go through the slim-edit pipeline now that
+	// DiffEditCommands includes "edit-plan".
+	sess := session.New()
+	text := `{"ok":true,"edits":1,"files":1,"hashes":{"f.go":"abc"},"description":["replace text"],"diff":"--- a/f.go\n+++ b/f.go\n@@ -1 +1 @@\n-old\n+new\n"}`
+
+	result := sess.PostProcess("edit-plan", []string{}, map[string]any{}, nil, text)
+	if !strings.Contains(result, `"diff"`) {
+		t.Error("small edit-plan diff should stay inline")
+	}
+	if !strings.Contains(result, "lines_changed") {
+		t.Error("should have lines_changed")
+	}
+	if !strings.Contains(result, "diff_available") {
+		t.Error("should have diff_available")
+	}
+	// Verify the diff was stored for later retrieval.
+	gd := sess.GetDiff([]string{"f.go"})
+	if gd["error"] != nil {
+		t.Errorf("GetDiff should find stored diff, got error: %v", gd["error"])
+	}
+}
+

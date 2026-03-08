@@ -62,7 +62,7 @@ var EditCommands = map[string]bool{
 }
 
 var DiffEditCommands = map[string]bool{
-	"edit": true,
+	"edit": true, "edit-plan": true,
 }
 
 var DeltaReadCommands = map[string]bool{
@@ -153,6 +153,14 @@ func (s *Session) StoreDiff(result map[string]any, flags map[string]any) map[str
 	}
 
 	file, _ := result["file"].(string)
+	// edit-plan results have no top-level "file" — infer from hashes map.
+	if file == "" {
+		if hashes, ok := result["hashes"].(map[string]any); ok && len(hashes) == 1 {
+			for f := range hashes {
+				file = f
+			}
+		}
+	}
 	key := file
 	if sym, ok := result["symbol"].(string); ok && sym != "" {
 		key = file + ":" + sym

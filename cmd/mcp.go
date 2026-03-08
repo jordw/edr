@@ -303,6 +303,7 @@ type doEdit struct {
 	Move      string `json:"move,omitempty"`
 	After     string `json:"after,omitempty"`
 	Before    string `json:"before,omitempty"`
+	DryRun    *bool  `json:"dry_run,omitempty"`
 }
 
 type doWrite struct {
@@ -341,7 +342,7 @@ var doQueryKnownKeys = map[string]bool{
 var doEditKnownKeys = map[string]bool{
 	"file": true, "old_text": true, "new_text": true, "symbol": true,
 	"start_line": true, "end_line": true, "regex": true, "all": true,
-	"move": true, "after": true, "before": true,
+	"move": true, "after": true, "before": true, "dry_run": true,
 }
 
 var doWriteKnownKeys = map[string]bool{
@@ -624,6 +625,21 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 	// 5. Dispatch edits via edit-plan (atomic)
 	if hasEdits {
 		editFlags := map[string]any{}
+
+		// Promote per-edit dry_run to batch level (edits are atomic, so
+		// dry_run only makes sense for the whole batch). This prevents
+		// agents from accidentally mutating when they intended to preview.
+		if p.DryRun == nil || !*p.DryRun {
+			for _, e := range p.Edits {
+				if e.DryRun != nil && *e.DryRun {
+					t := true
+					p.DryRun = &t
+					warnings = append(warnings, "per-edit dry_run promoted to batch level (edits are atomic)")
+					break
+				}
+			}
+		}
+
 		editsRaw := make([]map[string]any, len(p.Edits))
 		for i, e := range p.Edits {
 			m := map[string]any{"file": e.File}
