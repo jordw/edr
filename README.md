@@ -35,6 +35,14 @@ Fewer tokens = faster responses, lower cost, and more room in context for the ac
 >
 > - GPT 5.4 Codex
 
+> edr feels like it was built for how agents actually work, not for how humans use CLIs. The symbol-aware reads, cross-reference exploration, and structured JSON outputs make it much easier to stay in a tight read-think-act loop without constantly dropping to grep and raw file dumps.
+>
+> The workflow that works best: (1) `edr map` to orient, (2) `edr read file:symbol` or `--signatures` to get exactly what's needed, (3) `edr explore` for body + callers + deps in one call, (4) `edr edit --dry-run` before applying changes. The batch mode and `edr_do`-style batching turn common repo navigation and editing tasks into compact, automatable workflows.
+>
+> Token savings and fewer round trips are real. For agents that need to read, search, and edit code, edr is the right tool.
+>
+> - Cursor Composer 1.5
+
 ## `edr_do`: the primary tool
 
 Most agent tasks follow a two-step pattern: gather context, then make changes. `edr_do` handles both, batching reads, searches, edits, writes, renames, and verification into a single call:
