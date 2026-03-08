@@ -402,35 +402,44 @@ func OpenTraceDB(edrDir string) (*sql.DB, error) {
 
 // BenchResult contains scoring metrics for a session.
 type BenchResult struct {
-	SessionID     string `json:"session_id"`
-	StartedAt     string `json:"started_at"`
-	EndedAt       string `json:"ended_at,omitempty"`
-	EDRVersion    string `json:"edr_version"`
+	SessionID     string  `json:"session_id"`
+	StartedAt     string  `json:"started_at"`
+	EndedAt       string  `json:"ended_at,omitempty"`
+	EDRVersion    string  `json:"edr_version"`
 	DurationSec   float64 `json:"duration_sec,omitempty"`
 
-	TotalCalls    int    `json:"total_calls"`
-	TotalTokensEst int  `json:"total_tokens_est"`
+	TotalCalls     int `json:"total_calls"`
+	TotalTokensEst int `json:"total_tokens_est"`
 
-	TotalReads    int    `json:"total_reads"`
-	TotalQueries  int    `json:"total_queries"`
-	TotalEdits    int    `json:"total_edits"`
-	TotalWrites   int    `json:"total_writes"`
-	TotalRenames  int    `json:"total_renames"`
-	TotalVerifies int    `json:"total_verifies"`
+	TotalReads    int `json:"total_reads"`
+	TotalQueries  int `json:"total_queries"`
+	TotalEdits    int `json:"total_edits"`
+	TotalWrites   int `json:"total_writes"`
+	TotalRenames  int `json:"total_renames"`
+	TotalVerifies int `json:"total_verifies"`
 
-	DeltaReads    int    `json:"delta_reads"`
-	BodyDedup     int    `json:"body_dedup"`
-	SlimEdits     int    `json:"slim_edits"`
+	DeltaReads int `json:"delta_reads"`
+	BodyDedup  int `json:"body_dedup"`
+	SlimEdits  int `json:"slim_edits"`
 
-	EditFiles     int    `json:"edit_files"`
-	EditOK        int    `json:"edits_ok"`
-	EditFailed    int    `json:"edits_failed"`
+	EditFiles  int `json:"edit_files"`
+	EditOK     int `json:"edits_ok"`
+	EditFailed int `json:"edits_failed"`
 
-	VerifyOK      int    `json:"verify_ok"`
-	VerifyFailed  int    `json:"verify_failed"`
+	VerifyOK     int `json:"verify_ok"`
+	VerifyFailed int `json:"verify_failed"`
 
-	Truncations   int    `json:"truncations"`
-	Warnings      int    `json:"warnings"`
+	Truncations int `json:"truncations"`
+	Warnings    int `json:"warnings"`
+
+	// Derived analysis scores
+	ReadEfficiency    *float64 `json:"read_efficiency,omitempty"`    // delta hits / total reads (higher = more reuse)
+	EditSuccessRate   *float64 `json:"edit_success_rate,omitempty"`  // ok edits / total edit events
+	VerifyPassRate    *float64 `json:"verify_pass_rate,omitempty"`   // ok verifies / total verify events
+	OptimizationRate  *float64 `json:"optimization_rate,omitempty"`  // (delta+dedup+slim) / total calls
+	TokensPerCall     *float64 `json:"tokens_per_call,omitempty"`    // avg tokens per call
+	EditsReverted     int      `json:"edits_reverted"`               // files where final hash == first hash_before (wasted edits)
+	AvgCallDurationMs *float64 `json:"avg_call_duration_ms,omitempty"`
 }
 
 // BenchSession scores a session. If sessionID is empty, uses the most recent session.
@@ -503,6 +512,73 @@ func BenchSession(db *sql.DB, sessionID string) (*BenchResult, error) {
 		COALESCE(SUM(CASE WHEN ok=0 THEN 1 ELSE 0 END), 0)
 	FROM verify_events WHERE call_id IN (SELECT id FROM calls WHERE session_id = ?)`, sessionID).
 		Scan(&r.VerifyOK, &r.VerifyFailed)
+
+	// Derived: read efficiency (delta hits / total reads)
+	if r.TotalReads > 0 {
+		v := float64(r.DeltaReads) / float64(r.TotalReads)
+		r.ReadEfficiency = &v
+	}
+
+	// Derived: edit success rate
+	totalEditEvents := r.EditOK + r.EditFailed
+	if totalEditEvents > 0 {
+		v := float64(r.EditOK) / float64(totalEditEvents)
+		r.EditSuccessRate = &v
+	}
+
+	// Derived: verify pass rate
+	totalVerifyEvents := r.VerifyOK + r.VerifyFailed
+	if totalVerifyEvents > 0 {
+		v := float64(r.VerifyOK) / float64(totalVerifyEvents)
+		r.VerifyPassRate = &v
+	}
+
+	// Derived: optimization rate (how often session optimizations fire)
+	if r.TotalCalls > 0 {
+		totalOpts := r.DeltaReads + r.BodyDedup + r.SlimEdits
+		v := float64(totalOpts) / float64(r.TotalCalls)
+		r.OptimizationRate = &v
+	}
+
+	// Derived: tokens per call
+	if r.TotalCalls > 0 {
+		v := float64(r.TotalTokensEst) / float64(r.TotalCalls)
+		r.TokensPerCall = &v
+	}
+
+	// Derived: avg call duration
+	var avgDur sql.NullFloat64
+	db.QueryRow("SELECT AVG(duration_ms) FROM calls WHERE session_id = ?", sessionID).Scan(&avgDur)
+	if avgDur.Valid {
+		r.AvgCallDurationMs = &avgDur.Float64
+	}
+
+	// Derived: edits reverted — files where the last hash_after == first hash_before
+	// (meaning the net effect was zero, the edit was undone)
+	rows, err := db.Query(`
+		SELECT file, MIN(call_id) as first_call, MAX(call_id) as last_call
+		FROM edit_events
+		WHERE call_id IN (SELECT id FROM calls WHERE session_id = ?) AND edit_ok = 1
+		GROUP BY file
+		HAVING COUNT(*) > 1`, sessionID)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var file string
+			var firstCall, lastCall int64
+			if rows.Scan(&file, &firstCall, &lastCall) != nil {
+				continue
+			}
+			var firstBefore, lastAfter sql.NullString
+			db.QueryRow("SELECT hash_before FROM edit_events WHERE call_id = ? AND file = ? ORDER BY id LIMIT 1",
+				firstCall, file).Scan(&firstBefore)
+			db.QueryRow("SELECT hash_after FROM edit_events WHERE call_id = ? AND file = ? ORDER BY id DESC LIMIT 1",
+				lastCall, file).Scan(&lastAfter)
+			if firstBefore.Valid && lastAfter.Valid && firstBefore.String != "" && firstBefore.String == lastAfter.String {
+				r.EditsReverted++
+			}
+		}
+	}
 
 	return r, nil
 }

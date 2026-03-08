@@ -125,6 +125,24 @@ func TestCollectorRecordAndBench(t *testing.T) {
 	if result.EDRVersion != "test-1.0+abc123" {
 		t.Errorf("expected version test-1.0+abc123, got %s", result.EDRVersion)
 	}
+
+	// Derived scores
+	if result.ReadEfficiency == nil || *result.ReadEfficiency != 0.5 {
+		t.Errorf("expected read efficiency 0.5, got %v", result.ReadEfficiency)
+	}
+	if result.EditSuccessRate == nil || *result.EditSuccessRate != 1.0 {
+		t.Errorf("expected edit success rate 1.0, got %v", result.EditSuccessRate)
+	}
+	if result.VerifyPassRate == nil || *result.VerifyPassRate != 1.0 {
+		t.Errorf("expected verify pass rate 1.0, got %v", result.VerifyPassRate)
+	}
+	if result.TokensPerCall == nil || *result.TokensPerCall != 150.0 {
+		t.Errorf("expected 150 tokens/call, got %v", result.TokensPerCall)
+	}
+	// optimization rate: (1 delta + 0 dedup + 1 slim) / 3 calls = 2/3
+	if result.OptimizationRate == nil {
+		t.Error("expected optimization rate to be set")
+	}
 }
 
 func TestBenchSessionMostRecent(t *testing.T) {
