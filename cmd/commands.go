@@ -103,184 +103,149 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 
 var readCmd = &cobra.Command{
 	Use:   "read <file> [start] [end] | <file> <symbol> | <file>:<symbol> ...",
-	Short: "Read files, symbols, or batches",
-	Long: `Read command:
-  read file.go                     Read entire file
-  read file.go 10 50               Read line range
-  read file.go parseConfig         Read a symbol
-  read file.go:parseConfig         Read a symbol (colon syntax)
-  read f1.go f2.go f3.go:sym       Batch read multiple files/symbols`,
-	Args: cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "read", args) },
+	Short: ToolDesc["read"],
+	Args:  cobra.MinimumNArgs(1),
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "read", args) },
 }
 
 func init() {
-	readCmd.Flags().Int("budget", 0, "token budget (0 = unlimited)")
-	readCmd.Flags().Bool("symbols", false, "include symbol list for code files")
-	readCmd.Flags().Bool("signatures", false, "for containers: return method signatures only (no bodies)")
-	readCmd.Flags().Int("depth", 0, "progressive disclosure depth (1=signatures, 2=bodies with blocks collapsed, 3+=more)")
-	readCmd.Flags().Bool("full", false, "force full content (skip delta optimization)")
+	readCmd.Flags().Int("budget", 0, P("budget"))
+	readCmd.Flags().Bool("symbols", false, P("symbols"))
+	readCmd.Flags().Bool("signatures", false, P("signatures"))
+	readCmd.Flags().Int("depth", 0, P("depth"))
+	readCmd.Flags().Bool("full", false, P("full"))
 }
 
 var writeCmd = &cobra.Command{
 	Use:   "write <file>",
-	Short: "Create, overwrite, append, or insert into containers",
-	Long: `Write command (content from stdin):
-  write file.go                          Create or overwrite
-  write file.go --append                 Append to file
-  write file.go --after symbol           Insert after a symbol
-  write file.go --inside MyClass         Insert inside a class/struct/impl
-  write file.go --mkdir                  Create parent directories`,
-	Args: cobra.MinimumNArgs(1),
+	Short: ToolDesc["write"],
+	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return dispatchCmdWithStdin(cmd, "write", args, "content")
 	},
 }
 
 func init() {
-	writeCmd.Flags().Bool("mkdir", false, "create parent directories if needed")
-	writeCmd.Flags().Bool("append", false, "append to existing file instead of overwriting")
-	writeCmd.Flags().String("after", "", "insert content after this symbol")
-	writeCmd.Flags().String("inside", "", "insert content inside a container symbol (class/struct/impl)")
+	writeCmd.Flags().Bool("mkdir", false, P("mkdir"))
+	writeCmd.Flags().Bool("append", false, P("append"))
+	writeCmd.Flags().String("after", "", P("after"))
+	writeCmd.Flags().String("inside", "", P("inside"))
 }
 
 var editCmd = &cobra.Command{
 	Use:   "edit <file> [symbol]",
-	Short: "Edit by text match, symbol, or line range",
-	Long: `Edit command (new_text from stdin):
-  edit file.go --old_text "old code"   Find and replace
-  edit file.go --old_text "x" --all    Replace all occurrences
-  edit file.go parseConfig             Replace entire symbol body
-  edit file.go --start_line 10 --end_line 20   Replace line range`,
-	Args: cobra.RangeArgs(1, 2),
+	Short: ToolDesc["edit"],
+	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return dispatchCmdWithStdin(cmd, "edit", args, "new_text")
 	},
 }
 
 func init() {
-	editCmd.Flags().Int("start_line", 0, "start line for line-range mode")
-	editCmd.Flags().Int("end_line", 0, "end line for line-range mode")
-	editCmd.Flags().String("old_text", "", "text to find and replace")
-	editCmd.Flags().String("new_text", "", "replacement text (alternative to stdin)")
-	editCmd.Flags().Bool("regex", false, "treat --old_text as regex")
-	editCmd.Flags().Bool("all", false, "replace all occurrences (with --old_text)")
-	editCmd.Flags().Bool("dry-run", false, "preview changes as a diff without applying")
+	editCmd.Flags().Int("start_line", 0, P("start_line"))
+	editCmd.Flags().Int("end_line", 0, P("end_line"))
+	editCmd.Flags().String("old_text", "", P("old_text"))
+	editCmd.Flags().String("new_text", "", P("new_text"))
+	editCmd.Flags().Bool("regex", false, P("regex"))
+	editCmd.Flags().Bool("all", false, P("all"))
+	editCmd.Flags().Bool("dry-run", false, P("dry_run"))
 }
 
 var mapCmd = &cobra.Command{
 	Use:   "map [file]",
-	Short: "Symbol map of repo or file",
-	Long: `Map command:
-  map                              Repo-wide symbol map
-  map file.go                      Symbols in a specific file
-  map --dir internal/ --type func  Filtered repo map`,
-	Args: cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "map", args) },
+	Short: ToolDesc["map"],
+	Args:  cobra.MaximumNArgs(1),
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "map", args) },
 }
 
 func init() {
-	mapCmd.Flags().Int("budget", 0, "token budget (0 = unlimited)")
-	mapCmd.Flags().String("dir", "", "only show files under this directory")
-	mapCmd.Flags().String("glob", "", "only show files matching this glob pattern")
-	mapCmd.Flags().String("type", "", "only show symbols of this type (function, type, variable)")
-	mapCmd.Flags().String("grep", "", "only show symbols whose name contains this string")
+	mapCmd.Flags().Int("budget", 0, P("budget"))
+	mapCmd.Flags().String("dir", "", P("dir"))
+	mapCmd.Flags().String("glob", "", P("glob"))
+	mapCmd.Flags().String("type", "", P("type"))
+	mapCmd.Flags().String("grep", "", P("grep"))
+	mapCmd.Flags().Bool("locals", false, P("locals"))
 }
 
 var searchCmd = &cobra.Command{
 	Use:   "search <pattern>",
-	Short: "Search symbols or text",
-	Long: `Search command:
-  search parseConfig               Symbol search
-  search parseConfig --body        Symbol search with body snippets
-  search "TODO" --text             Text search across all files
-  search "func.*" --regex          Text search with regex
-  search "err" --include "*.go"    Text search filtered by glob`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "search", args) },
+	Short: ToolDesc["search"],
+	Args:  cobra.ExactArgs(1),
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "search", args) },
 }
 
 func init() {
-	searchCmd.Flags().Int("budget", 0, "token budget (0 = unlimited)")
-	searchCmd.Flags().Bool("body", false, "include symbol body snippets")
-	searchCmd.Flags().Bool("text", false, "force text search mode")
-	searchCmd.Flags().Bool("regex", false, "treat pattern as regex (implies --text)")
-	searchCmd.Flags().StringSlice("include", nil, "glob patterns to include (implies --text)")
-	searchCmd.Flags().StringSlice("exclude", nil, "glob patterns to exclude (implies --text)")
-	searchCmd.Flags().Int("context", 0, "lines of context around matches (implies --text)")
+	searchCmd.Flags().Int("budget", 0, P("budget"))
+	searchCmd.Flags().Bool("body", false, P("body"))
+	searchCmd.Flags().Bool("text", false, P("text"))
+	searchCmd.Flags().Bool("regex", false, P("regex"))
+	searchCmd.Flags().StringSlice("include", nil, P("include"))
+	searchCmd.Flags().StringSlice("exclude", nil, P("exclude"))
+	searchCmd.Flags().Int("context", 0, P("context"))
 }
 
 var exploreCmd = &cobra.Command{
 	Use:   "explore [file] <symbol>",
-	Short: "Explore a symbol: body, callers, deps, or full context gather",
-	Long: `Explore command:
-  explore sym --body --callers     Expand with body and callers
-  explore sym --gather             Full context bundle (callers + tests)
-  explore sym --body --deps        Show body and dependencies`,
-	Args: cobra.RangeArgs(1, 2),
-	RunE: func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "explore", args) },
+	Short: ToolDesc["explore"],
+	Args:  cobra.RangeArgs(1, 2),
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "explore", args) },
 }
 
 func init() {
-	exploreCmd.Flags().Bool("body", false, "include symbol body")
-	exploreCmd.Flags().Bool("callers", false, "include callers")
-	exploreCmd.Flags().Bool("deps", false, "include dependencies")
-	exploreCmd.Flags().Bool("gather", false, "gather mode: callers + tests within budget")
-	exploreCmd.Flags().Bool("signatures", false, "include extracted signatures")
-	exploreCmd.Flags().Int("budget", 0, "token budget (0 = unlimited)")
+	exploreCmd.Flags().Bool("body", false, P("body"))
+	exploreCmd.Flags().Bool("callers", false, P("callers"))
+	exploreCmd.Flags().Bool("deps", false, P("deps"))
+	exploreCmd.Flags().Bool("gather", false, P("gather"))
+	exploreCmd.Flags().Bool("signatures", false, P("signatures"))
+	exploreCmd.Flags().Int("budget", 0, P("budget"))
 }
 
 var refsCmd = &cobra.Command{
 	Use:   "refs [file] <symbol>",
-	Short: "Find references, impact, or call chains",
-	Long: `Refs command:
-  refs parseConfig                 Find all references
-  refs parseConfig --impact        Transitive impact analysis
-  refs parseConfig --chain main    Find call path to another symbol`,
-	Args: cobra.RangeArgs(1, 2),
-	RunE: func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "refs", args) },
+	Short: ToolDesc["refs"],
+	Args:  cobra.RangeArgs(1, 2),
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "refs", args) },
 }
 
 func init() {
-	refsCmd.Flags().Bool("impact", false, "transitive impact analysis (BFS through callers)")
-	refsCmd.Flags().String("chain", "", "find call chain from this symbol to target")
-	refsCmd.Flags().Int("depth", 3, "max depth for --impact or --chain")
+	refsCmd.Flags().Bool("impact", false, P("impact"))
+	refsCmd.Flags().String("chain", "", P("chain"))
+	refsCmd.Flags().Int("depth", 3, P("depth"))
 }
 
 var renameCmd = &cobra.Command{
 	Use:   "rename <old-name> <new-name>",
-	Short: "Rename a symbol across all files",
+	Short: ToolDesc["rename"],
 	Args:  cobra.ExactArgs(2),
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "rename", args) },
 }
 
 func init() {
-	renameCmd.Flags().Bool("dry-run", false, "preview what would change without applying")
-	renameCmd.Flags().String("scope", "", "glob pattern to limit rename scope")
+	renameCmd.Flags().Bool("dry-run", false, P("dry_run"))
+	renameCmd.Flags().String("scope", "", P("scope"))
 }
 
 var findCmd = &cobra.Command{
 	Use:   "find <pattern>",
-	Short: "Find files by glob pattern (supports **)",
+	Short: ToolDesc["find"],
 	Args:  cobra.ExactArgs(1),
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "find", args) },
 }
 
 func init() {
-	findCmd.Flags().String("dir", "", "scope search to directory")
-	findCmd.Flags().Int("budget", 0, "limit results by total file size in tokens")
+	findCmd.Flags().String("dir", "", P("dir"))
+	findCmd.Flags().Int("budget", 0, P("budget"))
 }
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Index the repository",
+	Short: ToolDesc["init"],
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "init", args) },
 }
 
 var editPlanCmd = &cobra.Command{
 	Use:   "edit-plan",
-	Short: "Apply multiple edits atomically (edits via --edits JSON or stdin)",
-	Long:  "Each edit can be symbol-based, line-based, or text-based. Supports --dry-run.\nPass edits as --edits '<JSON array>' or pipe JSON via stdin.",
+	Short: ToolDesc["plan"],
 	RunE: func(cmd *cobra.Command, args []string) error {
 		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
@@ -322,17 +287,17 @@ var editPlanCmd = &cobra.Command{
 }
 
 func init() {
-	editPlanCmd.Flags().Bool("dry-run", false, "preview what would change without applying")
-	editPlanCmd.Flags().String("edits", "", "JSON array of edits")
+	editPlanCmd.Flags().Bool("dry-run", false, P("dry_run"))
+	editPlanCmd.Flags().String("edits", "", P("edits"))
 }
 
 var verifyCmd = &cobra.Command{
 	Use:   "verify",
-	Short: "Run a verification command (build/typecheck) and return structured result",
+	Short: ToolDesc["verify"],
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "verify", args) },
 }
 
 func init() {
-	verifyCmd.Flags().String("command", "", "shell command to run (auto-detects if empty)")
-	verifyCmd.Flags().Int("timeout", 30, "timeout in seconds")
+	verifyCmd.Flags().String("command", "", P("command"))
+	verifyCmd.Flags().Int("timeout", 30, P("timeout"))
 }

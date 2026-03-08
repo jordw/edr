@@ -167,8 +167,8 @@ edr map src/config.go
 # Filter by directory, glob, symbol type, or name
 edr map --dir internal/ --type function --grep parse
 
-# MCP supports a `locals` parameter on `edr_map`, but the current CLI does not
-# expose a `--locals` flag. File maps may still include some local variables.
+# Local variables are hidden by default; pass --locals to include them
+edr map --dir internal/ --locals
 
 # Explore a symbol: body, callers, deps
 edr explore src/config.go parseConfig --body --callers --deps
@@ -230,16 +230,9 @@ It supports five operation types, all in one call:
 # Call 2: edr_plan(edits: [...], writes: [...], verify: true)  — ALL mutations + verify
 ```
 
-## MCP Server Mode
+## Context-Aware Responses
 
-When running as an MCP server (`./edr mcp`), edr exposes 13 dedicated typed tools
-(`edr_read`, `edr_edit`, `edr_write`, etc.). Each tool has typed parameters —
-no need to construct `{cmd, args, flags}` objects. The DB stays open across calls,
-so there is no per-call overhead.
-
-### Context-Aware Responses
-
-The MCP server tracks what content you've already seen and optimizes responses:
+The MCP server tracks what content you've already seen:
 
 - **Slim edits**: Small diffs (<=20 changed lines) are returned inline automatically. Large diffs are stripped to `{ok, file, hash, lines_changed, diff_available}` — use `edr_diff` to retrieve them.
 - **Delta reads**: Re-reading a file/symbol you've already seen returns `{unchanged: true}` if identical, or `{delta: true, diff: "..."}` with just the changes. Pass `full: true` to force full content.
@@ -261,23 +254,10 @@ These optimizations are automatic and session-scoped (reset on reconnect).
 9. **Re-reads are delta** — `{unchanged: true}` or `{delta: true, diff: "..."}`. Use `full: true` to force full content.
 10. **Use `--inside`** to add fields/methods to a class without reading the file first.
 
-## All MCP Tools
+## MCP Tools
 
-| Tool | Purpose |
-|---|---|
-| **`edr_plan`** | **Primary tool. Use for multi-step tasks.** `reads`, `queries` [{cmd: search/explore/refs/map/find, ...}], `edits`, `writes`, `verify`. |
-| `edr_read` | Single read shorthand. `files` (supports `file:sym`), `budget`, `signatures`, `depth` |
-| `edr_edit` | Single edit shorthand. `old_text`/`new_text`, `symbol`, `start_line`/`end_line`, `dry_run` |
-| `edr_write` | Single write shorthand. `content`, `append`, `after`, `inside`, `mkdir` |
-| `edr_search` | Single search shorthand. `pattern`, `body`, `text`/`regex`, `include`/`exclude` |
-| `edr_map` | Repo/file symbol map. `budget`, `dir`, `glob`, `type`, `grep` |
-| `edr_explore` | Symbol context. `body`, `callers`, `deps`, `gather`, `signatures` |
-| `edr_refs` | References. `impact`, `chain`, `depth` |
-| `edr_find` | Find files by glob. `dir`, `budget` |
-| `edr_rename` | Cross-file rename, import-aware. `dry_run`, `scope` |
-| `edr_verify` | Build check. `command`, `timeout` |
-| `edr_init` | Force re-index |
-| `edr_diff` | Retrieve stored diff from last large edit |
+13 tools: `edr_plan`, `edr_read`, `edr_edit`, `edr_write`, `edr_search`, `edr_map`,
+`edr_explore`, `edr_refs`, `edr_find`, `edr_rename`, `edr_verify`, `edr_init`, `edr_diff`.
 
-All output is structured JSON. All file paths are relative to repo root.
-`edr_read` output includes line numbers. Edit commands return `hash` for chaining.
+Each tool is self-documenting via its MCP schema (descriptions sourced from `cmd/toolinfo.go`).
+All output is structured JSON. File paths are relative to repo root. Edit commands return `hash`.
