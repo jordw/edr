@@ -6,19 +6,6 @@ From "better repo tool" to "system agents can genuinely depend on."
 
 ## Phase 1: Foundations (weeks 1–2)
 
-### ~~Session trace collection~~ ✓ Done
-
-Append-only `traces.db` captures structured traces per MCP session: calls, edit events, verify events, query events, and session optimization stats (delta reads, body dedup, slim edits). Async flush goroutine with buffered channel ensures zero impact on MCP response latency.
-
-`edr bench-session` scores a completed session with derived analysis: read efficiency, edit success rate, verify pass rate, optimization rate, tokens per call, edits reverted.
-
-**Benchmark baseline** (55-call multi-language session across Go/Python/Rust/C/Java/Ruby/JS/TSX):
-- 25% read efficiency (8 delta reads / 32 total reads)
-- 27% optimization rate (delta + dedup + slim hits / total optimizable calls)
-- 180 tokens/call average
-- 7 body dedup hits, 8 delta reads
-- ~14ms/session, ~17.5KB total response
-
 ### Persistent session state ← highest impact next
 
 **Why this is next:** The benchmark shows 25% read efficiency and 27% optimization rate — meaning 75% of reads and 73% of optimizable operations gain nothing from session tracking. The main reason: session state lives in process memory and resets on every reconnect. Persisting it would let delta reads and body dedup accumulate across long-running agent tasks, directly improving both metrics.
@@ -33,12 +20,6 @@ Persist session state in SQLite with explicit session IDs:
 - **measured impact target**: push read efficiency above 50% and optimization rate above 40% for multi-call sessions
 
 Phase 5's session memory graph should build on this, not reinvent it.
-
-### ~~Bug fixes from evaluation~~ ✓ Done
-
-- ~~`explore` with nonexistent symbol returns `ok: true` with empty data instead of an error.~~ Fixed in `gather.go:GatherBySearch` — now returns proper error.
-- ~~`diff` query returns "no diff stored" with no explanation.~~ Error message now explains session-scoping and suggests alternatives.
-- ~~`write --inside` doesn't accept `--new_text` in CLI mode.~~ Added `--content` and `--new_text` flags to write command; fixed stdin fallback logic.
 
 ### Index health + freshness reporting
 
