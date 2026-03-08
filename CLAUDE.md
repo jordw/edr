@@ -59,6 +59,14 @@ go build -o edr .           # Build (requires Go + C compiler for tree-sitter)
 
 For cloud agents: clone this repo, run `./setup.sh /path/to/your/project`, and edr is ready as both a CLI and MCP server. The setup script handles everything — dependency installation, build, PATH setup, and MCP configuration.
 
+## Supported languages
+
+**Symbol indexing** (map, read, edit, signatures, inside, move): Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby, PHP, Zig, Lua, Bash/Shell.
+
+**Import-aware semantic refs** (refs, rename, explore callers/deps): Go, Python, JavaScript, TypeScript. Other languages fall back to text-based refs.
+
+edr can **read** any text file regardless of language support. Symbol-aware features require a supported language.
+
 ## Reading (`read`)
 
 ```bash

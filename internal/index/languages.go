@@ -6,14 +6,19 @@ import (
 	"unsafe"
 
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
+	tree_sitter_bash "github.com/tree-sitter/tree-sitter-bash/bindings/go"
 	tree_sitter_c "github.com/tree-sitter/tree-sitter-c/bindings/go"
+	tree_sitter_cpp "github.com/tree-sitter/tree-sitter-cpp/bindings/go"
 	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
 	tree_sitter_java "github.com/tree-sitter/tree-sitter-java/bindings/go"
 	tree_sitter_javascript "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
+	tree_sitter_lua "github.com/tree-sitter-grammars/tree-sitter-lua/bindings/go"
+	tree_sitter_php "github.com/tree-sitter/tree-sitter-php/bindings/go"
 	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
 	tree_sitter_ruby "github.com/tree-sitter/tree-sitter-ruby/bindings/go"
 	tree_sitter_rust "github.com/tree-sitter/tree-sitter-rust/bindings/go"
 	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
+	tree_sitter_zig "github.com/tree-sitter-grammars/tree-sitter-zig/bindings/go"
 )
 
 // ImportNodeConfig describes how to extract imports from tree-sitter AST.
@@ -173,6 +178,68 @@ func GetLangConfig(filename string) *LangConfig {
 			},
 			NameField: "name",
 			LangID:    "ruby",
+		}
+	case ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_cpp.Language())),
+			SymbolNodes: []string{
+				"function_definition",
+				"class_specifier",
+				"struct_specifier",
+				"enum_specifier",
+				"namespace_definition",
+				"template_declaration",
+			},
+			NameField: "name",
+			LangID:    "cpp",
+		}
+	case ".php":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_php.LanguagePHP())),
+			SymbolNodes: []string{
+				"function_definition",
+				"method_declaration",
+				"class_declaration",
+				"interface_declaration",
+				"trait_declaration",
+				"enum_declaration",
+			},
+			NameField: "name",
+			LangID:    "php",
+		}
+	case ".zig":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_zig.Language())),
+			SymbolNodes: []string{
+				"function_declaration",
+				"test_declaration",
+				"variable_declaration",
+				"struct_declaration",
+				"enum_declaration",
+				"union_declaration",
+			},
+			NameField: "name",
+			LangID:    "zig",
+		}
+	case ".lua":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_lua.Language())),
+			SymbolNodes: []string{
+				"function_declaration",
+				"function_definition",
+				"local_function",
+			},
+			NameField: "name",
+			LangID:    "lua",
+		}
+	case ".sh", ".bash":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_bash.Language())),
+			SymbolNodes: []string{
+				"function_definition",
+			},
+			NameField: "name",
+			LangID:    "bash",
 		}
 	default:
 		return nil

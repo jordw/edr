@@ -39,8 +39,18 @@ func ExtractSignatureFromSource(sym SymbolInfo, src []byte) string {
 		return javaSignature(body)
 	case ".rb":
 		return rubySignature(body)
-	case ".c", ".h", ".cpp", ".cc":
+	case ".c", ".h":
 		return cSignature(body)
+	case ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh":
+		return cppSignature(body)
+	case ".php":
+		return phpSignature(body)
+	case ".zig":
+		return zigSignature(body)
+	case ".lua":
+		return luaSignature(body)
+	case ".sh", ".bash":
+		return bashSignature(body)
 	default:
 		return firstLine(body)
 	}
@@ -161,6 +171,40 @@ func cSignature(body string) string {
 	if idx := strings.Index(body, "{"); idx >= 0 {
 		return strings.TrimRight(body[:idx], " \t\n")
 	}
+	return firstLine(body)
+}
+
+// cppSignature extracts a C++ function/class/struct signature.
+func cppSignature(body string) string {
+	if idx := strings.Index(body, "{"); idx >= 0 {
+		return strings.TrimRight(body[:idx], " \t\n")
+	}
+	return firstLine(body)
+}
+
+// phpSignature extracts a PHP function/class signature.
+func phpSignature(body string) string {
+	if idx := strings.Index(body, "{"); idx >= 0 {
+		return strings.TrimRight(body[:idx], " \t\n")
+	}
+	return firstLine(body)
+}
+
+// zigSignature extracts a Zig fn/test signature.
+func zigSignature(body string) string {
+	if idx := strings.Index(body, "{"); idx >= 0 {
+		return strings.TrimRight(body[:idx], " \t\n")
+	}
+	return firstLine(body)
+}
+
+// luaSignature extracts a Lua function signature.
+func luaSignature(body string) string {
+	return firstLine(body)
+}
+
+// bashSignature extracts a Bash function signature.
+func bashSignature(body string) string {
 	return firstLine(body)
 }
 

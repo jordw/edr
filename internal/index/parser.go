@@ -187,6 +187,44 @@ func extractName(node *tree_sitter.Node, src []byte, lang *LangConfig) string {
 		return string(src[nameNode.StartByte():nameNode.EndByte()])
 	}
 
+	// C/C++: function_definition uses declarator field → function_declarator → identifier
+	if decl := node.ChildByFieldName("declarator"); decl != nil {
+		// Direct identifier (e.g., variable declarator)
+		if decl.Kind() == "identifier" {
+			return string(src[decl.StartByte():decl.EndByte()])
+		}
+		// function_declarator or pointer_declarator wrapping an identifier
+		if id := decl.ChildByFieldName("declarator"); id != nil {
+			if id.Kind() == "identifier" || id.Kind() == "field_identifier" {
+				return string(src[id.StartByte():id.EndByte()])
+			}
+			// One more level for pointer_declarator → function_declarator → identifier
+			if id2 := id.ChildByFieldName("declarator"); id2 != nil && (id2.Kind() == "identifier" || id2.Kind() == "field_identifier") {
+				return string(src[id2.StartByte():id2.EndByte()])
+			}
+		}
+		// Qualified identifier (C++ namespace::func)
+		if n := decl.ChildByFieldName("name"); n != nil {
+			return string(src[n.StartByte():n.EndByte()])
+		}
+	}
+
+	// Template declarations (C++): name is on the inner definition
+	if node.Kind() == "template_declaration" {
+		for i := 0; i < int(node.ChildCount()); i++ {
+			child := node.Child(uint(i))
+			if child == nil {
+				continue
+			}
+			switch child.Kind() {
+			case "function_definition", "class_specifier", "struct_specifier":
+				if name := extractName(child, src, lang); name != "" {
+					return name
+				}
+			}
+		}
+	}
+
 	// For variable_declarator patterns (e.g., const foo = () => {})
 	for i := 0; i < int(node.ChildCount()); i++ {
 		child := node.Child(uint(i))
@@ -199,6 +237,20 @@ func extractName(node *tree_sitter.Node, src []byte, lang *LangConfig) string {
 }
 
 func normalizeType(nodeType string) string {
+	// Exact matches first to avoid substring false positives
+	switch nodeType {
+	case "namespace_definition":
+		return "namespace"
+	case "template_declaration":
+		return "template"
+	case "trait_declaration":
+		return "trait"
+	case "test_declaration":
+		return "test"
+	case "property_declaration":
+		return "property"
+	}
+	// Substring-based fallbacks for the common patterns
 	switch {
 	case strings.Contains(nodeType, "function") || strings.Contains(nodeType, "method"):
 		return "function"

@@ -121,7 +121,9 @@ Go 1.25+, a C compiler (tree-sitter grammars), write access for `.edr/` in the r
 
 ## Supported languages
 
-Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C/H, Ruby
+Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby, PHP, Zig, Lua, Bash/Shell
+
+All languages support full symbol indexing (functions, classes, structs, enums, etc.), symbol-targeted reads/edits, `--signatures`, `--inside`, `--move`, and `map`. Import-aware semantic refs are available for Go, Python, JavaScript, and TypeScript.
 
 ## Running the benchmarks
 
