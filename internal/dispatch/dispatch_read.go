@@ -345,7 +345,7 @@ func runBatchRead(ctx context.Context, db *index.DB, root string, args []string,
 	return results, nil
 }
 
-func runSymbols(ctx context.Context, db *index.DB, root string, args []string) (any, error) {
+func runSymbols(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {
 		return nil, fmt.Errorf("symbols requires 1 argument: <file>")
 	}
@@ -359,6 +359,11 @@ func runSymbols(ctx context.Context, db *index.DB, root string, args []string) (
 		return nil, err
 	}
 
+	// Apply filters consistent with repo-map
+	typeFilter := flagString(flags, "type", "")
+	grepFilter := flagString(flags, "grep", "")
+	hideLocals := !flagBool(flags, "locals", false)
+
 	// Detect duplicate names for disambiguation
 	nameCounts := make(map[string]int)
 	for _, s := range syms {
@@ -367,6 +372,20 @@ func runSymbols(ctx context.Context, db *index.DB, root string, args []string) (
 
 	var results []output.Symbol
 	for _, s := range syms {
+		if typeFilter != "" && !strings.EqualFold(s.Type, typeFilter) {
+			continue
+		}
+		if grepFilter != "" && !strings.Contains(strings.ToLower(s.Name), strings.ToLower(grepFilter)) {
+			continue
+		}
+		if hideLocals {
+			if parentSym, pErr := db.GetContainerAt(ctx, s.File, int(s.StartLine)); pErr == nil && parentSym != nil && parentSym.Name != s.Name {
+				pt := strings.ToLower(parentSym.Type)
+				if pt == "function" || pt == "method" {
+					continue
+				}
+			}
+		}
 		sym := output.Symbol{
 			Type:  s.Type,
 			Name:  s.Name,

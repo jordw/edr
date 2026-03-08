@@ -308,14 +308,21 @@ func (s *Session) ProcessReadResult(cmd string, result map[string]any, flags map
 		file, _ := sym["file"].(string)
 		name, _ := sym["name"].(string)
 		key = file + ":" + name
-		// Depth-specific reads produce different content for the same symbol;
-		// track them under separate keys so depth=2 doesn't return "unchanged"
-		// when the caller previously saw the full body (or vice versa).
+		// Depth/budget-specific reads produce different content for the same symbol;
+		// track them under separate keys so different truncation levels don't
+		// produce spurious deltas.
 		if d, ok := flags["depth"]; ok {
 			if di, isNum := d.(float64); isNum && di > 0 {
 				key += fmt.Sprintf(":depth=%d", int(di))
 			} else if di, isInt := d.(int); isInt && di > 0 {
 				key += fmt.Sprintf(":depth=%d", di)
+			}
+		}
+		if b, ok := flags["budget"]; ok {
+			if bi, isNum := b.(float64); isNum && bi > 0 {
+				key += fmt.Sprintf(":budget=%d", int(bi))
+			} else if bi, isInt := b.(int); isInt && bi > 0 {
+				key += fmt.Sprintf(":budget=%d", bi)
 			}
 		}
 		label = key
@@ -326,6 +333,13 @@ func (s *Session) ProcessReadResult(cmd string, result map[string]any, flags map
 		file, _ := result["file"].(string)
 		lines, _ := result["lines"]
 		key = fmt.Sprintf("%s:%v", file, lines)
+		if b, ok := flags["budget"]; ok {
+			if bi, isNum := b.(float64); isNum && bi > 0 {
+				key += fmt.Sprintf(":budget=%d", int(bi))
+			} else if bi, isInt := b.(int); isInt && bi > 0 {
+				key += fmt.Sprintf(":budget=%d", bi)
+			}
+		}
 		label = file
 	} else {
 		return nil

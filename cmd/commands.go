@@ -137,6 +137,10 @@ var editCmd = &cobra.Command{
 	Short: ToolDesc["edit"],
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// --move doesn't need stdin content; dispatch directly
+		if move, _ := cmd.Flags().GetString("move"); move != "" {
+			return dispatchCmd(cmd, "edit", args)
+		}
 		return dispatchCmdWithStdin(cmd, "edit", args, "new_text")
 	},
 }
@@ -149,6 +153,7 @@ func init() {
 	editCmd.Flags().Bool("regex", false, P("regex"))
 	editCmd.Flags().Bool("all", false, P("all"))
 	editCmd.Flags().Bool("dry-run", false, P("dry_run"))
+	editCmd.Flags().String("expect_hash", "", "Reject edit if file hash doesn't match (concurrency guard)")
 	editCmd.Flags().String("move", "", "Symbol to move")
 	editCmd.Flags().String("after", "", "Place after this symbol (use with --move)")
 	editCmd.Flags().String("before", "", "Place before this symbol (use with --move)")

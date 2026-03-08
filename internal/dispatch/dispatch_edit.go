@@ -15,6 +15,18 @@ import (
 func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
 	dryRun := flagBool(flags, "dry-run", false)
 
+	// Pre-check: if --expect-hash is set, validate file hash before any edit
+	if expectHash := flagString(flags, "expect_hash", ""); expectHash != "" && len(args) >= 1 {
+		file, err := db.ResolvePath(args[0])
+		if err != nil {
+			return nil, err
+		}
+		currentHash, _ := edit.FileHash(file)
+		if currentHash != expectHash {
+			return nil, fmt.Errorf("hash mismatch on %s: expected %s, got %s (file was modified)", output.Rel(file), expectHash, currentHash)
+		}
+	}
+
 	// Move mode: --move <symbol> --after/--before <symbol>
 	moveSymbol := flagString(flags, "move", "")
 	if moveSymbol != "" {

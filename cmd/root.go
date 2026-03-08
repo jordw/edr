@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -29,7 +30,10 @@ var rootCmd = &cobra.Command{
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		// Emit structured JSON error to stdout for machine-friendly parsing,
+		// matching the MCP error shape. Keep non-zero exit code for shell chaining.
+		errJSON, _ := json.Marshal(err.Error())
+		fmt.Fprintf(os.Stdout, "{\"ok\":false,\"error\":%s}\n", errJSON)
 		os.Exit(1)
 	}
 }

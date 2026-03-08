@@ -171,10 +171,16 @@ func runWriteUnified(ctx context.Context, db *index.DB, root string, args []stri
 	if insideSymbol != "" {
 		return runInsertInside(ctx, db, root, args[0], insideSymbol, flags)
 	}
+	if _, hasInside := flagLookup(flags, "inside"); hasInside && insideSymbol == "" {
+		return nil, fmt.Errorf("write --inside requires a non-empty container name")
+	}
 
 	afterSymbol := flagString(flags, "after", "")
 	if afterSymbol != "" {
 		return runInsertAfter(ctx, db, root, []string{args[0], afterSymbol}, flags)
+	}
+	if _, hasAfter := flagLookup(flags, "after"); hasAfter && afterSymbol == "" {
+		return nil, fmt.Errorf("write --after requires a non-empty symbol name")
 	}
 
 	if flagBool(flags, "append", false) {
@@ -203,7 +209,7 @@ func runMapUnified(ctx context.Context, db *index.DB, root string, args []string
 			flags["dir"] = args[0]
 			return runRepoMap(ctx, db, flags)
 		}
-		return runSymbols(ctx, db, root, args)
+		return runSymbols(ctx, db, root, args, flags)
 	}
 	return runRepoMap(ctx, db, flags)
 }
