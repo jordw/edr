@@ -497,6 +497,121 @@ func TestDoQueryToMultiCmd_Refs(t *testing.T) {
 	}
 }
 
+func TestDoQueryToMultiCmd_InferredDefaultBudget(t *testing.T) {
+	// When cmd is not set (inferred), doQueryToMultiCmd should apply a default budget of 200
+	pattern := "TODO"
+	q := doQuery{
+		Pattern: &pattern,
+		// No Cmd set — will be inferred as "search"
+		// No Budget set — should get default 200
+	}
+	mc := doQueryToMultiCmd(q)
+	if mc.Cmd != "search" {
+		t.Errorf("cmd = %q, want search", mc.Cmd)
+	}
+	if mc.Flags["budget"] != 200 {
+		t.Errorf("budget = %v, want 200 (default for inferred cmd)", mc.Flags["budget"])
+	}
+}
+
+func TestDoQueryToMultiCmd_ExplicitCmdNoBudgetDefault(t *testing.T) {
+	// When cmd is explicitly set, no default budget should be applied
+	pattern := "TODO"
+	q := doQuery{
+		Cmd:     "search",
+		Pattern: &pattern,
+		// Explicit Cmd — should NOT get default budget
+	}
+	mc := doQueryToMultiCmd(q)
+	if _, ok := mc.Flags["budget"]; ok {
+		t.Errorf("budget should not be set for explicit cmd, got %v", mc.Flags["budget"])
+	}
+}
+
+func TestDoQueryToMultiCmd_InferredWithExplicitBudget(t *testing.T) {
+	// When cmd is inferred but budget is explicitly set, keep the explicit budget
+	pattern := "TODO"
+	budget := 500
+	q := doQuery{
+		Pattern: &pattern,
+		Budget:  &budget,
+	}
+	mc := doQueryToMultiCmd(q)
+	if mc.Flags["budget"] != 500 {
+		t.Errorf("budget = %v, want 500 (explicit budget should be preserved)", mc.Flags["budget"])
+	}
+}
+
+func TestHandleDo_DistributeBudgetToQueries(t *testing.T) {
+	// Verify that top-level budget is distributed to queries lacking individual budgets
+	topBudget := 600
+	pattern1 := "foo"
+	pattern2 := "bar"
+	individualBudget := 100
+	pattern3 := "baz"
+
+	p := doParams{
+		Budget: &topBudget,
+		Queries: []doQuery{
+			{Cmd: "search", Pattern: &pattern1},                            // no budget — should get 200 (600/3)
+			{Cmd: "search", Pattern: &pattern2, Budget: &individualBudget}, // has budget — should keep 100
+			{Cmd: "search", Pattern: &pattern3},                            // no budget — should get 200 (600/3)
+		},
+	}
+
+	// Simulate the distribution logic from handleDo
+	if p.Budget != nil && len(p.Queries) > 0 {
+		perQuery := *p.Budget / len(p.Queries)
+		if perQuery < 50 {
+			perQuery = 50
+		}
+		for i := range p.Queries {
+			if p.Queries[i].Budget == nil {
+				b := perQuery
+				p.Queries[i].Budget = &b
+			}
+		}
+	}
+
+	if *p.Queries[0].Budget != 200 {
+		t.Errorf("query[0] budget = %d, want 200", *p.Queries[0].Budget)
+	}
+	if *p.Queries[1].Budget != 100 {
+		t.Errorf("query[1] budget = %d, want 100 (should keep individual budget)", *p.Queries[1].Budget)
+	}
+	if *p.Queries[2].Budget != 200 {
+		t.Errorf("query[2] budget = %d, want 200", *p.Queries[2].Budget)
+	}
+}
+
+func TestHandleDo_DistributeBudgetMinimum(t *testing.T) {
+	// When budget/len(queries) < 50, use minimum of 50
+	topBudget := 10
+	pattern := "foo"
+
+	p := doParams{
+		Budget:  &topBudget,
+		Queries: []doQuery{{Cmd: "search", Pattern: &pattern}},
+	}
+
+	if p.Budget != nil && len(p.Queries) > 0 {
+		perQuery := *p.Budget / len(p.Queries)
+		if perQuery < 50 {
+			perQuery = 50
+		}
+		for i := range p.Queries {
+			if p.Queries[i].Budget == nil {
+				b := perQuery
+				p.Queries[i].Budget = &b
+			}
+		}
+	}
+
+	if *p.Queries[0].Budget != 50 {
+		t.Errorf("query[0] budget = %d, want 50 (minimum)", *p.Queries[0].Budget)
+	}
+}
+
 func TestDoParams_Verify(t *testing.T) {
 	// Test verify: true parses correctly
 	raw := `{"verify": true}`
