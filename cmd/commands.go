@@ -137,8 +137,16 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 
 	sess := session.New()
 	flags := extractFlags(cmd)
-	// If the content flag was provided on CLI, skip stdin
-	if v, ok := flags[stdinKey]; !ok || v == nil || v == "" {
+	// If any content-equivalent flag was provided on CLI, skip stdin.
+	// writeContent() checks "content", "new_text", "body" — mirror that here.
+	hasContent := false
+	for _, key := range []string{stdinKey, "content", "new_text", "body"} {
+		if v, ok := flags[key]; ok && v != nil && v != "" {
+			hasContent = true
+			break
+		}
+	}
+	if !hasContent {
 		if err := readStdinToFlags(flags, stdinKey); err != nil {
 			return err
 		}
@@ -179,6 +187,8 @@ func init() {
 	writeCmd.Flags().Bool("append", false, P("append"))
 	writeCmd.Flags().String("after", "", P("after"))
 	writeCmd.Flags().String("inside", "", P("inside"))
+	writeCmd.Flags().String("content", "", "Content to write (alternative to stdin)")
+	writeCmd.Flags().String("new_text", "", "Content to write (alias for --content, consistent with edit)")
 }
 
 var editCmd = &cobra.Command{

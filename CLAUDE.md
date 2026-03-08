@@ -143,8 +143,9 @@ edr edit src/config.go --old_text "oldName" --dry-run --new_text "newName"
 ## Writing (`write`)
 
 ```bash
-# Create or overwrite a file (CLI reads content from stdin; MCP uses content field)
+# Create or overwrite a file (content from stdin, --content, or --new_text)
 edr write src/main.go                        # CLI: content from stdin
+edr write src/main.go --content "package main"  # or pass content directly
 edr write config/app/settings.yaml --mkdir   # creates parent dirs
 
 # Append to an existing file
@@ -157,6 +158,7 @@ edr write src/config.go --after parseConfig
 edr write src/models.go --inside UserStore     # adds before closing }
 edr write src/models.py --inside UserService   # correct Python indentation
 edr write src/models.go --inside UserStore --after Get  # insert after specific method
+edr write src/models.go --inside UserStore --new_text "Name string"  # --new_text also works
 ```
 
 ## Refactoring (`rename`)

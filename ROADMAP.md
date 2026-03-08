@@ -26,11 +26,11 @@ Persist session state in SQLite with explicit session IDs:
 
 Phase 5's session memory graph should build on this, not reinvent it.
 
-### Bug fixes from evaluation
+### ~~Bug fixes from evaluation~~ ✓ Done
 
-- `explore` with nonexistent symbol returns `ok: true` with empty data instead of an error. Every other command errors correctly — explore is the outlier. Fix in `dispatch_explore.go:runExpand`.
-- `diff` query returns "no diff stored" with no explanation that it's session-scoped. Improve the error message or fall back to `git diff`.
-- `write --inside` doesn't accept `--new_text` in CLI mode (requires stdin), inconsistent with `edit`.
+- ~~`explore` with nonexistent symbol returns `ok: true` with empty data instead of an error.~~ Fixed in `gather.go:GatherBySearch` — now returns proper error.
+- ~~`diff` query returns "no diff stored" with no explanation.~~ Error message now explains session-scoping and suggests alternatives.
+- ~~`write --inside` doesn't accept `--new_text` in CLI mode.~~ Added `--content` and `--new_text` flags to write command; fixed stdin fallback logic.
 
 ### Index health + freshness reporting
 

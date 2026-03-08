@@ -204,7 +204,7 @@ func (s *Session) GetDiff(args []string) map[string]any {
 			return map[string]any{"diff": diff, "file": args[0]}
 		}
 	}
-	return map[string]any{"error": "no diff stored", "key": key}
+	return map[string]any{"error": "no diff stored for " + key + "; diffs are session-scoped and only available for files edited during this session. Use queries: [{cmd: \"search\", pattern: \"...\", text: true}] or git diff instead.", "key": key}
 }
 
 // --- Level 2: Delta reads ---

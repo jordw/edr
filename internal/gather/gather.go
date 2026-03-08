@@ -2,6 +2,7 @@ package gather
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/jordw/edr/internal/index"
@@ -171,7 +172,7 @@ func GatherBySearch(ctx context.Context, db *index.DB, query string, budget int,
 		return nil, err
 	}
 	if len(symbols) == 0 {
-		return &output.GatherResult{}, nil
+		return nil, fmt.Errorf("symbol %q not found", query)
 	}
 
 	// Use first match as target
