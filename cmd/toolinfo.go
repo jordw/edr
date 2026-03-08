@@ -88,10 +88,10 @@ var ParamDesc = map[string]string{
 	// do (was plan)
 	"reads":     "Read queries: [{file, symbol?, budget?, signatures?, depth?}]",
 	"queries":   "Any query: [{cmd: search|explore|refs|map|find|diff, ...params}]",
-	"edits":     "Atomic edits: [{file, old_text, new_text}]",
+	"edits":     "Atomic edits: [{file, old_text, new_text}] or [{file, symbol, new_text}] or [{file, start_line, end_line, new_text}]. Supports regex, all flags.",
 	"writes":    "File writes: [{file, content, mkdir?, after?, inside?}]",
 	"renames":   "Cross-file renames: [{old_name, new_name, dry_run?, scope?}]",
-	"verify":    "true = auto-detect build check, string = custom command",
+	"verify":    "true = auto-detect build check, \"build\"/\"test\" = shortcut for level, other string = custom command",
 	"init_flag": "Force re-index before other operations",
 }
 

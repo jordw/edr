@@ -133,7 +133,7 @@ edr edit src/config.go --old_text "oldName" --dry-run --new_text "newName"
 ## Writing (`write`)
 
 ```bash
-# Create or overwrite a file (CLI reads content from stdin; MCP uses content/new_text flag)
+# Create or overwrite a file (CLI reads content from stdin; MCP uses content field)
 edr write src/main.go                        # CLI: content from stdin
 edr write config/app/settings.yaml --mkdir   # creates parent dirs
 
@@ -271,7 +271,8 @@ Renames and `init: true` clear all tracking state.
 3 tools: `edr_do`, `edr_read`, `edr_map`.
 
 `edr_do` handles everything: reads, queries (search/explore/refs/map/find/diff), edits, writes, renames, verify, init.
-`edr_read` and `edr_map` are convenience shortcuts for the most common single operations.
+`edr_read` params: `file`, `symbol?`, `budget?`, `signatures?`, `depth?`, `full?`, `start_line?`, `end_line?`.
+`edr_map` params: `file?`, `budget?`, `dir?`, `glob?`, `type?`, `grep?`, `locals?`.
 
 Each tool is self-documenting via its MCP schema (descriptions sourced from `cmd/toolinfo.go`).
 All output is structured JSON. File paths are relative to repo root. Edit commands return `hash`.
