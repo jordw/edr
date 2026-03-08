@@ -26,6 +26,13 @@ type ContentEntry struct {
 //  2. Slim edits: strip large diffs, serve via GetDiff
 //  3. Delta reads: re-reads return a diff from the last-seen version
 //  4. Seen-body stripping: gather/search skip bodies already in context
+// PostProcessStats tracks session optimization hits for trace collection.
+type PostProcessStats struct {
+	DeltaReads int
+	BodyDedup  int
+	SlimEdits  int
+}
+
 type Session struct {
 	Responses     map[string]string       `json:"responses"`
 	Diffs         map[string]string       `json:"diffs"`
@@ -36,6 +43,19 @@ type Session struct {
 
 	// filePath is set for file-backed sessions. Empty = in-memory only.
 	filePath string
+
+	// stats tracks optimization hits per handleDo call (reset between calls).
+	stats PostProcessStats
+}
+
+// ResetStats resets per-call optimization counters.
+func (s *Session) ResetStats() {
+	s.stats = PostProcessStats{}
+}
+
+// GetStats returns current optimization counters.
+func (s *Session) GetStats() (deltaReads, bodyDedup, slimEdits int) {
+	return s.stats.DeltaReads, s.stats.BodyDedup, s.stats.SlimEdits
 }
 
 const MaxContentEntries = 200
@@ -175,6 +195,7 @@ func (s *Session) StoreDiff(result map[string]any, flags map[string]any) map[str
 		return nil
 	}
 
+	s.stats.SlimEdits++
 	slim := make(map[string]any)
 	for k, v := range result {
 		if k == "diff" || k == "old_size" || k == "new_size" {
@@ -361,6 +382,7 @@ func (s *Session) ProcessReadResult(cmd string, result map[string]any, flags map
 		return nil
 
 	case "unchanged":
+		s.stats.DeltaReads++
 		file, hash := ExtractFileHash(result)
 		return map[string]any{"unchanged": true, "file": file, "hash": hash}
 
@@ -370,6 +392,7 @@ func (s *Session) ProcessReadResult(cmd string, result map[string]any, flags map
 		if diff == "" {
 			return nil
 		}
+		s.stats.DeltaReads++
 		file, hash := ExtractFileHash(result)
 		return map[string]any{
 			"delta":         true,
@@ -514,6 +537,7 @@ func (s *Session) StripSeenBodies(result map[string]any, cmd string) {
 	}
 
 	if len(skipped) > 0 {
+		s.stats.BodyDedup += len(skipped)
 		result["skipped_bodies"] = skipped
 	}
 }

@@ -10,10 +10,13 @@ import (
 	"strconv"
 	"strings"
 
+	"path/filepath"
+
 	"github.com/jordw/edr/internal/dispatch"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
+	"github.com/jordw/edr/internal/trace"
 	"github.com/spf13/cobra"
 )
 
@@ -393,7 +396,7 @@ func checkSubObjectFields(raw json.RawMessage, section string, known map[string]
 }
 
 // handleDo dispatches edr_do (batch reads/queries/edits/writes/renames/verify).
-func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json.RawMessage) (string, error) {
+func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trace.Collector, raw json.RawMessage) (string, error) {
 	var p doParams
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return "", err
@@ -436,6 +439,11 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 	hasWrites := len(p.Writes) > 0
 	hasRenames := len(p.Renames) > 0
 	hasVerify := p.Verify != nil && p.Verify != false
+
+	// Trace: begin call and defer finish
+	sess.ResetStats()
+	cb := tc.BeginCall()
+	cb.SetRequest(len(p.Reads), len(p.Queries), len(p.Edits), len(p.Writes), len(p.Renames), hasVerify, hasInit, p.Budget)
 
 	// Warn if reads and mutations target the same file(s)
 	if hasReads && (hasEdits || hasWrites) {
@@ -609,6 +617,17 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 		}
 		text := postProcessMultiResults(sess, allCmds, allResults)
 		parts = append(parts, fmt.Sprintf(`"queries":%s`, text))
+
+		// Trace: record query events
+		for _, r := range allResults {
+			resultBytes := 0
+			if r.Result != nil {
+				if d, err := json.Marshal(r.Result); err == nil {
+					resultBytes = len(d)
+				}
+			}
+			cb.AddQueryEvent(r.Cmd, r.OK, resultBytes)
+		}
 	}
 
 	// 3. Dispatch writes sequentially (before renames/edits, so new files can be edited)
@@ -739,10 +758,17 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 			} else {
 				parts = append(parts, fmt.Sprintf(`"edits":{"error":%q}`, err.Error()))
 			}
+			// Trace: record failed edits
+			for _, e := range p.Edits {
+				cb.AddEditEvent(e.File, 0, "", "", false)
+			}
 		} else {
 			data, _ := json.Marshal(result)
 			text := sess.PostProcess("edit-plan", []string{}, editFlags, result, string(data))
 			parts = append(parts, fmt.Sprintf(`"edits":%s`, text))
+
+			// Trace: extract per-file edit events from result
+			traceEditEvents(cb, result)
 		}
 	}
 
@@ -784,9 +810,13 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 		result, err := dispatch.Dispatch(ctx, db, "verify", []string{}, verifyFlags)
 		if err != nil {
 			parts = append(parts, fmt.Sprintf(`"verify":{"error":%q}`, err.Error()))
+			cb.AddVerifyEvent("", false, 0, 0)
 		} else {
 			data, _ := json.Marshal(result)
 			parts = append(parts, fmt.Sprintf(`"verify":%s`, string(data)))
+
+			// Trace: extract verify event
+			traceVerifyEvent(cb, result)
 		}
 	}
 
@@ -800,7 +830,9 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 	// Hard cap: if response exceeds 100KB, drop sections from the end until
 	// it fits. This guarantees valid JSON unlike raw byte slicing.
 	const maxResponseBytes = 100_000
+	wasTruncated := false
 	if len(result) > maxResponseBytes {
+		wasTruncated = true
 		fullSize := len(result)
 		var dropped []string
 		// Drop sections from the end (last added = least critical) until it fits.
@@ -826,9 +858,70 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 		result = "{" + meta + "," + strings.Join(parts, ",") + "}"
 	}
 
+	// Trace: record session stats and finish
+	dr, bd, se := sess.GetStats()
+	cb.SetSessionStats(dr, bd, se)
+	cb.Finish(len(result), wasTruncated, len(warnings))
+
 	return result, nil
 }
 
+// traceEditEvents extracts per-file edit results and records them on the CallBuilder.
+func traceEditEvents(cb *trace.CallBuilder, result any) {
+	if cb == nil {
+		return
+	}
+	m, ok := result.(map[string]any)
+	if !ok {
+		return
+	}
+
+	editOK := true
+	if ok, exists := m["ok"].(bool); exists {
+		editOK = ok
+	}
+
+	linesChanged := 0
+	if lc, ok := m["lines_changed"].(float64); ok {
+		linesChanged = int(lc)
+	}
+
+	// edit-plan results have a "hashes" map: {file: hash}
+	if hashes, ok := m["hashes"].(map[string]any); ok {
+		for file, hash := range hashes {
+			hashStr, _ := hash.(string)
+			cb.AddEditEvent(file, linesChanged, "", hashStr, editOK)
+		}
+	} else if file, ok := m["file"].(string); ok {
+		hash, _ := m["hash"].(string)
+		cb.AddEditEvent(file, linesChanged, "", hash, editOK)
+	}
+}
+
+// traceVerifyEvent extracts verify result and records it on the CallBuilder.
+func traceVerifyEvent(cb *trace.CallBuilder, result any) {
+	if cb == nil {
+		return
+	}
+	m, ok := result.(map[string]any)
+	if !ok {
+		return
+	}
+	command, _ := m["command"].(string)
+	verifyOK := true
+	if ok, exists := m["ok"].(bool); exists {
+		verifyOK = ok
+	}
+	durationMs := 0
+	if d, ok := m["duration_ms"].(float64); ok {
+		durationMs = int(d)
+	}
+	outputBytes := 0
+	if o, ok := m["output"].(string); ok {
+		outputBytes = len(o)
+	}
+	cb.AddVerifyEvent(command, verifyOK, durationMs, outputBytes)
+}
 
 // doQueryToMultiCmd converts a generalized doQuery into a dispatch.MultiCmd.
 // inferQueryCmd guesses the intended cmd from populated fields when cmd is omitted.
@@ -1049,6 +1142,14 @@ func serveMCP(db *index.DB) error {
 	ctx := context.Background()
 	sess := session.New()
 
+	// Start trace collector (non-fatal if it fails)
+	tc := trace.NewCollector(filepath.Join(db.Root(), ".edr"), Version+"+"+BuildHash)
+	defer func() {
+		if tc != nil {
+			tc.Close()
+		}
+	}()
+
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -1132,7 +1233,7 @@ func serveMCP(db *index.DB) error {
 
 			// Handle edr_do specially
 			if cmd == "do" {
-				doText, doErr := handleDo(ctx, db, sess, params.Arguments)
+				doText, doErr := handleDo(ctx, db, sess, tc, params.Arguments)
 				if doErr != nil {
 					text = fmt.Sprintf(`{"error": %q}`, doErr.Error())
 				} else {

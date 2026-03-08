@@ -64,7 +64,7 @@ Example:
 
 		sess := session.New()
 		ctx := context.Background()
-		text, err := handleDo(ctx, db, sess, raw)
+		text, err := handleDo(ctx, db, sess, nil, raw)
 		if err != nil {
 			return err
 		}
