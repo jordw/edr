@@ -509,7 +509,8 @@ type commitResult struct {
 }
 
 // commitEdits applies edits via Transaction and reindexes all affected files.
-// NOT atomic — earlier files are not rolled back on mid-commit failure.
+// The Transaction is atomic: all files are validated and transformed in memory
+// first, then written via temp-file-then-rename with rollback on failure.
 func commitEdits(ctx context.Context, db *index.DB, edits []resolvedEdit) (*commitResult, error) {
 	tx := edit.NewTransaction()
 	for _, r := range edits {

@@ -292,18 +292,19 @@ type doQuery struct {
 }
 
 type doEdit struct {
-	File      string `json:"file"`
-	OldText   string `json:"old_text,omitempty"`
-	NewText   string `json:"new_text,omitempty"`
-	Symbol    string `json:"symbol,omitempty"`
-	StartLine *int   `json:"start_line,omitempty"`
-	EndLine   *int   `json:"end_line,omitempty"`
-	Regex     *bool  `json:"regex,omitempty"`
-	All       *bool  `json:"all,omitempty"`
-	Move      string `json:"move,omitempty"`
-	After     string `json:"after,omitempty"`
-	Before    string `json:"before,omitempty"`
-	DryRun    *bool  `json:"dry_run,omitempty"`
+	File       string `json:"file"`
+	OldText    string `json:"old_text,omitempty"`
+	NewText    string `json:"new_text,omitempty"`
+	Symbol     string `json:"symbol,omitempty"`
+	StartLine  *int   `json:"start_line,omitempty"`
+	EndLine    *int   `json:"end_line,omitempty"`
+	Regex      *bool  `json:"regex,omitempty"`
+	All        *bool  `json:"all,omitempty"`
+	Move       string `json:"move,omitempty"`
+	After      string `json:"after,omitempty"`
+	Before     string `json:"before,omitempty"`
+	DryRun     *bool  `json:"dry_run,omitempty"`
+	ExpectHash string `json:"expect_hash,omitempty"`
 }
 
 type doWrite struct {
@@ -343,6 +344,7 @@ var doEditKnownKeys = map[string]bool{
 	"file": true, "old_text": true, "new_text": true, "symbol": true,
 	"start_line": true, "end_line": true, "regex": true, "all": true,
 	"move": true, "after": true, "before": true, "dry_run": true,
+	"expect_hash": true,
 }
 
 var doWriteKnownKeys = map[string]bool{
@@ -352,6 +354,12 @@ var doWriteKnownKeys = map[string]bool{
 
 var doRenameKnownKeys = map[string]bool{
 	"old_name": true, "new_name": true, "dry_run": true, "scope": true,
+}
+
+var doReadKnownKeys = map[string]bool{
+	"file": true, "symbol": true, "budget": true, "signatures": true,
+	"depth": true, "start_line": true, "end_line": true, "symbols": true,
+	"full": true,
 }
 
 // checkSubObjectFields validates fields in JSON sub-objects and returns warnings.
@@ -368,7 +376,11 @@ func checkSubObjectFields(raw json.RawMessage, section string, known map[string]
 		}
 		for key := range m {
 			if !known[key] {
-				warnings = append(warnings, fmt.Sprintf("%s[%d]: unknown field %q ignored", section, i, key))
+				if suggestion := suggestField(key, known); suggestion != "" {
+					warnings = append(warnings, fmt.Sprintf("%s[%d]: unknown field %q ignored (did you mean %q?)", section, i, key, suggestion))
+				} else {
+					warnings = append(warnings, fmt.Sprintf("%s[%d]: unknown field %q ignored", section, i, key))
+				}
 			}
 		}
 	}
@@ -388,8 +400,15 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 	if json.Unmarshal(raw, &rawMap) == nil {
 		for key := range rawMap {
 			if !doKnownKeys[key] {
-				warnings = append(warnings, fmt.Sprintf("unknown field %q ignored", key))
+				if suggestion := suggestField(key, doKnownKeys); suggestion != "" {
+					warnings = append(warnings, fmt.Sprintf("unknown field %q ignored (did you mean %q?)", key, suggestion))
+				} else {
+					warnings = append(warnings, fmt.Sprintf("unknown field %q ignored", key))
+				}
 			}
+		}
+		if rd, ok := rawMap["reads"]; ok {
+			warnings = append(warnings, checkSubObjectFields(rd, "reads", doReadKnownKeys)...)
 		}
 		if q, ok := rawMap["queries"]; ok {
 			warnings = append(warnings, checkSubObjectFields(q, "queries", doQueryKnownKeys)...)
@@ -434,7 +453,12 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 	}
 
 	if !hasInit && !hasReads && !hasQueries && !hasEdits && !hasWrites && !hasRenames && !hasVerify {
-		return `{"error": "edr_do requires at least one of: reads, queries, edits, writes, renames, verify, init"}`, nil
+		errMsg := `"error":"edr_do requires at least one of: reads, queries, edits, writes, renames, verify, init"`
+		if len(warnings) > 0 {
+			warnJSON, _ := json.Marshal(warnings)
+			return fmt.Sprintf(`{%s,"warnings":%s}`, errMsg, warnJSON), nil
+		}
+		return fmt.Sprintf(`{%s}`, errMsg), nil
 	}
 
 	var parts []string
@@ -506,16 +530,31 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 		}
 		var dispatchIdxs []int
 		var diffIdxs []int
+		var errorIdxs []int
 		for i, q := range p.Queries {
 			if q.Cmd == "diff" {
 				diffIdxs = append(diffIdxs, i)
 			} else {
-				dispatchIdxs = append(dispatchIdxs, i)
+				mc := doQueryToMultiCmd(q)
+				if mc.Cmd == "" {
+					errorIdxs = append(errorIdxs, i)
+				} else {
+					dispatchIdxs = append(dispatchIdxs, i)
+				}
 			}
 		}
 
 		// Build ordered results array
 		allResults := make([]dispatch.MultiResult, len(p.Queries))
+
+		// Fill in errors for queries missing cmd
+		for _, qi := range errorIdxs {
+			allResults[qi] = dispatch.MultiResult{
+				Cmd:   "",
+				OK:    false,
+				Error: `query requires a "cmd" field (search, map, explore, refs, find, diff)`,
+			}
+		}
 
 		// Dispatch regular queries
 		if len(dispatchIdxs) > 0 {
@@ -673,6 +712,9 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 			if e.Before != "" {
 				m["before"] = e.Before
 			}
+			if e.ExpectHash != "" {
+				m["expect_hash"] = e.ExpectHash
+			}
 			editsRaw[i] = m
 		}
 		editFlags["edits"] = editsRaw
@@ -724,19 +766,33 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 
 	result := "{" + strings.Join(parts, ",") + "}"
 
-	// Hard cap: truncate if response exceeds 100KB to prevent context blowup
+	// Hard cap: if response exceeds 100KB, drop sections from the end until
+	// it fits. This guarantees valid JSON unlike raw byte slicing.
 	const maxResponseBytes = 100_000
 	if len(result) > maxResponseBytes {
-		truncated := result[:maxResponseBytes]
-		// Find last complete JSON value boundary (closing brace/bracket)
-		for i := len(truncated) - 1; i >= 0; i-- {
-			if truncated[i] == '}' || truncated[i] == ']' {
-				truncated = truncated[:i+1]
+		fullSize := len(result)
+		var dropped []string
+		// Drop sections from the end (last added = least critical) until it fits.
+		// Keep at least one section to return something useful.
+		for len(parts) > 1 {
+			// Extract the key name from the last part (format: "key":value)
+			last := parts[len(parts)-1]
+			keyEnd := strings.Index(last, "\":")
+			key := "unknown"
+			if keyEnd > 0 && last[0] == '"' {
+				key = last[1:keyEnd]
+			}
+			dropped = append(dropped, key)
+			parts = parts[:len(parts)-1]
+			candidate := "{" + strings.Join(parts, ",") + "}"
+			if len(candidate) <= maxResponseBytes-200 { // leave room for metadata
 				break
 			}
 		}
-		return fmt.Sprintf(`{"truncated":true,"truncated_reason":"response exceeded %d bytes (%d actual)","partial":%s}`,
-			maxResponseBytes, len(result), truncated), nil
+		droppedJSON, _ := json.Marshal(dropped)
+		meta := fmt.Sprintf(`"truncated":true,"truncated_reason":"response exceeded %d bytes (%d actual)","sections_dropped":%s`,
+			maxResponseBytes, fullSize, droppedJSON)
+		result = "{" + meta + "," + strings.Join(parts, ",") + "}"
 	}
 
 	return result, nil
@@ -744,11 +800,38 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 
 
 // doQueryToMultiCmd converts a generalized doQuery into a dispatch.MultiCmd.
+// inferQueryCmd guesses the intended cmd from populated fields when cmd is omitted.
+func inferQueryCmd(q doQuery) string {
+	if q.Pattern != nil && *q.Pattern != "" {
+		return "search"
+	}
+	if (q.Callers != nil && *q.Callers) || (q.Deps != nil && *q.Deps) || (q.Gather != nil && *q.Gather) {
+		return "explore"
+	}
+	if q.Impact != nil && *q.Impact {
+		return "refs"
+	}
+	if q.Chain != nil && *q.Chain != "" {
+		return "refs"
+	}
+	if (q.Dir != nil && *q.Dir != "") || (q.Grep != nil && *q.Grep != "") || (q.Locals != nil && *q.Locals) {
+		return "map"
+	}
+	if q.File != nil && *q.File != "" {
+		return "read"
+	}
+	if q.Symbol != nil && *q.Symbol != "" {
+		return "explore"
+	}
+	return "" // will be caught as error below
+}
+
 func doQueryToMultiCmd(q doQuery) dispatch.MultiCmd {
 	cmd := q.Cmd
 	if cmd == "" {
-		cmd = "read"
+		cmd = inferQueryCmd(q)
 	}
+
 
 	args := []string{}
 	flags := map[string]any{}
@@ -1101,4 +1184,54 @@ func asAmbiguousError(err error) *ambiguousResult {
 		})
 	}
 	return r
+}
+
+// suggestField finds the closest known field name by Levenshtein distance.
+func suggestField(input string, known map[string]bool) string {
+	best := ""
+	bestDist := 3 // only suggest if distance <= 2
+	for key := range known {
+		d := fieldLevenshtein(input, key)
+		if d < bestDist {
+			bestDist = d
+			best = key
+		}
+	}
+	return best
+}
+
+func fieldLevenshtein(a, b string) int {
+	if len(a) == 0 {
+		return len(b)
+	}
+	if len(b) == 0 {
+		return len(a)
+	}
+	prev := make([]int, len(b)+1)
+	curr := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		curr[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			ins := curr[j-1] + 1
+			del := prev[j] + 1
+			sub := prev[j-1] + cost
+			m := ins
+			if del < m {
+				m = del
+			}
+			if sub < m {
+				m = sub
+			}
+			curr[j] = m
+		}
+		prev, curr = curr, prev
+	}
+	return prev[len(b)]
 }

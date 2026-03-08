@@ -72,6 +72,7 @@ type RenameResult struct {
 	Hashes       map[string]string  `json:"hashes,omitempty"` // file -> new hash for chaining
 	DryRun       bool               `json:"dry_run,omitempty"`
 	Preview      []RenameOccurrence `json:"preview,omitempty"`
+	Warnings     []string           `json:"warnings,omitempty"`
 }
 
 // RenameOccurrence describes a single reference that would be renamed.

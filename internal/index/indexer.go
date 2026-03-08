@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -461,6 +462,23 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, error)
 		}
 	}
 
+	// Sort files for budget-friendly output: non-test/bench first, shallower first, alpha
+	sort.SliceStable(fileOrder, func(i, j int) bool {
+		ri, _ := filepath.Rel(root, fileOrder[i])
+		rj, _ := filepath.Rel(root, fileOrder[j])
+		ti := isTestOrBenchFile(ri)
+		tj := isTestOrBenchFile(rj)
+		if ti != tj {
+			return !ti // non-test first
+		}
+		di := strings.Count(ri, string(filepath.Separator))
+		dj := strings.Count(rj, string(filepath.Separator))
+		if di != dj {
+			return di < dj // shallower first
+		}
+		return ri < rj
+	})
+
 	var b strings.Builder
 	for _, file := range fileOrder {
 		syms := byFile[file]
@@ -478,4 +496,23 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, error)
 	}
 
 	return b.String(), nil
+}
+
+// isTestOrBenchFile returns true for common test/benchmark file patterns.
+func isTestOrBenchFile(rel string) bool {
+	base := filepath.Base(rel)
+	dir := filepath.Dir(rel)
+	if strings.HasPrefix(dir, "bench") || strings.HasPrefix(dir, "test") ||
+		strings.HasPrefix(dir, "testdata") || strings.Contains(dir, "/testdata/") {
+		return true
+	}
+	// Go test files
+	if strings.HasSuffix(base, "_test.go") {
+		return true
+	}
+	// Common test file patterns: test_*.py, *_test.js, *.test.ts, *.spec.ts
+	if strings.HasPrefix(base, "test_") || strings.Contains(base, ".test.") || strings.Contains(base, ".spec.") {
+		return true
+	}
+	return false
 }

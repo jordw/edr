@@ -3,6 +3,7 @@ package dispatch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -437,25 +438,36 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 		return nil, fmt.Errorf("rename failed: %w", err)
 	}
 
+	var renameWarnings []string
 	if len(cr.IndexErrors) > 0 {
 		var parts []string
 		for file, errMsg := range cr.IndexErrors {
 			parts = append(parts, file+": "+errMsg)
 		}
-		return nil, fmt.Errorf("rename applied but re-index failed: %s", strings.Join(parts, "; "))
+		renameWarnings = append(renameWarnings, "re-index partial failure: "+strings.Join(parts, "; "))
 	}
 
-	// Verify the new symbol is queryable — if not, the index is stale despite
-	// IndexFile succeeding (e.g., WAL visibility issue).
+	// Verify the new symbol is queryable. ResolveSymbol fails if the name is
+	// ambiguous (exists in multiple files), which is expected after a rename
+	// that touched multiple files. Treat ambiguity as success, only warn on
+	// true not-found (stale index / WAL issue).
 	if _, err := db.ResolveSymbol(ctx, newName); err != nil {
-		return nil, fmt.Errorf("rename applied and re-indexed, but new symbol %q not found in index — try 'edr init'", newName)
+		var ambErr *index.AmbiguousSymbolError
+		if errors.As(err, &ambErr) {
+			// Multiple matches is fine — the rename worked, symbol exists
+		} else {
+			renameWarnings = append(renameWarnings,
+				fmt.Sprintf("new symbol %q not found in index — try 'edr init'", newName))
+		}
 	}
 
-	return output.RenameResult{
+	result := output.RenameResult{
 		OldName:      oldName,
 		NewName:      newName,
 		FilesChanged: filesChanged,
 		Occurrences:  len(refs),
 		Hashes:       cr.Hashes,
-	}, nil
+		Warnings:     renameWarnings,
+	}
+	return result, nil
 }

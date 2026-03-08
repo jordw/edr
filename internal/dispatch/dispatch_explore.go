@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"os"
 
+	"strings"
+
 	"github.com/jordw/edr/internal/edit"
 	"github.com/jordw/edr/internal/gather"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
+	"github.com/jordw/edr/internal/search"
 )
 
 func runExpand(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
@@ -119,6 +122,15 @@ func runXrefs(ctx context.Context, db *index.DB, root string, args []string) (an
 	// Resolve symbol with optional file disambiguation
 	sym, err := resolveSymbolArgs(ctx, db, root, args)
 	if err != nil {
+		// If symbol not found, try a quick search to suggest alternatives
+		if strings.Contains(err.Error(), "not found") && len(args) >= 1 {
+			name := args[len(args)-1]
+			if sr, sErr := search.SearchSymbol(ctx, db, name, 50, false); sErr == nil && sr.TotalMatches > 0 {
+				match := sr.Matches[0].Symbol
+				return nil, fmt.Errorf("%w; found %q in %s — try: search or explore",
+					err, match.Name, match.File)
+			}
+		}
 		return nil, err
 	}
 
