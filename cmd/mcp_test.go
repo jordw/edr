@@ -1,11 +1,16 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/session"
+	"github.com/jordw/edr/internal/trace"
 )
 
 func TestCountDiffLines(t *testing.T) {
@@ -624,6 +629,56 @@ func TestPostProcess_EditPlanDiff(t *testing.T) {
 	gd := sess.GetDiff([]string{"f.go"})
 	if gd["error"] != nil {
 		t.Errorf("GetDiff should find stored diff, got error: %v", gd["error"])
+	}
+}
+
+func TestHandleDo_SkipsPostEditReadsAndVerifyOnEditFailure(t *testing.T) {
+	// Create a temp dir with a .edr directory for the DB and traces.
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+
+	// Create a dummy Go file so the repo root is valid.
+	os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module test\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc != nil {
+		defer tc.Close()
+	}
+
+	// Call handleDo with an edit targeting a non-existent file, plus
+	// read_after_edit and verify — both should be skipped.
+	raw := json.RawMessage(`{
+		"edits": [{"file": "nonexistent.go", "old_text": "foo", "new_text": "bar"}],
+		"read_after_edit": true,
+		"verify": true
+	}`)
+
+	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo error: %v", err)
+	}
+
+	// The edit should have failed.
+	if !strings.Contains(result, `"error"`) {
+		t.Errorf("expected edit error in result, got: %s", result)
+	}
+
+	// post_edit_reads should be skipped.
+	if !strings.Contains(result, `"post_edit_reads":"skipped: edits failed"`) {
+		t.Errorf("expected post_edit_reads to be skipped, got: %s", result)
+	}
+
+	// verify should be skipped.
+	if !strings.Contains(result, `"verify":"skipped: edits failed"`) {
+		t.Errorf("expected verify to be skipped, got: %s", result)
 	}
 }
 

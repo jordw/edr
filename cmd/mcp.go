@@ -686,6 +686,7 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 	}
 
 	// 5. Dispatch edits via edit-plan (atomic)
+	editsFailed := false
 	if hasEdits {
 		editFlags := map[string]any{}
 
@@ -752,6 +753,7 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 
 		result, err := dispatch.Dispatch(ctx, db, "edit-plan", []string{}, editFlags)
 		if err != nil {
+			editsFailed = true
 			if ambErr := asAmbiguousError(err); ambErr != nil {
 				data, _ := json.Marshal(ambErr)
 				parts = append(parts, fmt.Sprintf(`"edits":%s`, string(data)))
@@ -773,7 +775,9 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 	}
 
 	// 5b. Post-edit reads — return edited file contents to save a round trip
-	if (hasEdits || hasWrites) && p.ReadAfterEdit != nil && *p.ReadAfterEdit && (p.DryRun == nil || !*p.DryRun) {
+	if editsFailed && p.ReadAfterEdit != nil && *p.ReadAfterEdit {
+		parts = append(parts, `"post_edit_reads":"skipped: edits failed"`)
+	} else if (hasEdits || hasWrites) && p.ReadAfterEdit != nil && *p.ReadAfterEdit && (p.DryRun == nil || !*p.DryRun) {
 		editedFiles := make(map[string]bool)
 		for _, e := range p.Edits {
 			editedFiles[e.File] = true
@@ -797,7 +801,9 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 	}
 
 	// 6. Run verification if requested
-	if hasVerify {
+	if editsFailed && hasVerify {
+		parts = append(parts, `"verify":"skipped: edits failed"`)
+	} else if hasVerify {
 		verifyFlags := map[string]any{}
 		// verify: true uses auto-detect; verify: "test"/"build" sets level; verify: "command" uses custom command
 		if cmd, ok := p.Verify.(string); ok && cmd != "" {
