@@ -1,8 +1,13 @@
 # edr — the editor for agents
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev)
+
 **88% fewer tokens. Half the tool calls.**
 
-Coding agents read entire files to find one function, make three round trips to change one line, and grep symbols into walls of unstructured text. edr fixes this. It indexes your repo with tree-sitter and gives agents symbol-scoped reads, structured search, and batched workflows — most tasks collapse into one or two `edr` calls.
+Coding agents waste context. They read entire files to find one function, make three round trips to change one line, and grep symbols into walls of unstructured text.
+
+edr fixes this. It parses your repo with tree-sitter, stores a symbol index in SQLite, and gives agents exactly what they need — symbol-scoped reads, structured search, and batched mutations. Most tasks collapse into one or two `edr` calls.
 
 ## Quick start
 
@@ -15,14 +20,20 @@ git clone https://github.com/jordw/edr.git && cd edr
 
 Registers 1 tool: `edr` — handles reads, queries, edits, writes, renames, and verification.
 
+### Install from source
+
+```bash
+go install github.com/jordw/edr@latest
+# or: go build -o edr . && go install
+```
+
 ### CLI
 
 ```bash
-go build -o edr .
-./edr init                   # index the repo
-./edr map --budget 500       # orient
-./edr read src/config.go:parseConfig
-./edr search "handleRequest" --body --budget 300
+edr init                   # index the repo
+edr map --budget 500       # orient
+edr read src/config.go:parseConfig
+edr search "handleRequest" --body --budget 300
 ```
 
 ### Requirements
@@ -58,7 +69,7 @@ Each call can mix any combination of **reads** (files, symbols, signatures, dept
 
 ## How it works
 
-edr parses your code with tree-sitter and stores a symbol index in `.edr/`. Agents get exactly what they need:
+edr runs tree-sitter over every source file, extracts symbols (functions, classes, structs, etc.) with their byte ranges, and stores them in a SQLite index at `.edr/index.db`. At query time, agents get exactly what they need without reading entire files:
 
 - **Symbol reads** — a function or class, not the whole file
 - **`--signatures`** — class API without implementation (75-90% smaller)
@@ -120,26 +131,14 @@ Across real agent workflows, edr uses **88% fewer response bytes** and **half th
 
 Fewer tokens = faster responses, lower cost, and more context for the actual task.
 
-## What agents say
-
-> That was pretty awesome. One `edr` call to rewrite 12 files atomically. No need to Read each file first, no 12 separate Write calls. The whole system test rewrite was one tool call instead of 24+. The read side was good too: batch-reading all 8 controller tests and then all 6 controllers for cross-referencing, all in single calls with hashes and metadata.
->
-> The workflow that felt best: (1) `edr` reads to review everything at once, (2) `edr` edits to apply all changes atomically, (3) run tests to confirm. Clean and fast.
->
-> - Claude Opus 4.6
-
-> edr feels like a tool built for how coding agents actually work, not how humans traditionally use CLIs. The symbol-aware reads, cross-reference exploration, and structured JSON outputs make it much easier to stay inside a tight read-think-act loop without constantly dropping to grep and raw file dumps. It already turns common repo navigation and editing tasks into compact, automatable workflows, and that makes a real difference in practice.
->
-> - GPT 5.4 Codex
-
-> edr feels like it was built for how agents actually work, not for how humans use CLIs. The symbol-aware reads, cross-reference exploration, and structured JSON outputs make it much easier to stay in a tight read-think-act loop without constantly dropping to grep and raw file dumps.
->
-> The workflow that works best: (1) `edr map` to orient, (2) `edr read file:symbol` or `--signatures` to get exactly what's needed, (3) `edr explore` for body + callers + deps in one call, (4) `edr edit --dry-run` before applying changes. The batch mode turns common repo navigation and editing tasks into compact, automatable workflows.
->
-> Token savings and fewer round trips are real. For agents that need to read, search, and edit code, edr is the right tool.
->
-> - Cursor Composer 1.5
-
 ## Agent instructions
 
 For the full agent-facing command reference and CLAUDE.md instructions, see [CLAUDE.md](CLAUDE.md).
+
+## Contributing
+
+Bug reports and pull requests welcome on [GitHub](https://github.com/jordw/edr/issues).
+
+## License
+
+[MIT](LICENSE)
