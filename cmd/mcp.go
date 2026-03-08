@@ -142,6 +142,10 @@ func mcpTools() []mcpTool {
 						"budget":     {Type: "integer", Description: P("budget")},
 						"signatures": {Type: "boolean", Description: P("signatures")},
 						"depth":      {Type: "integer", Description: P("depth")},
+						"start_line": {Type: "integer", Description: "Start line"},
+						"end_line":   {Type: "integer", Description: "End line"},
+						"symbols":    {Type: "boolean", Description: "Append symbol list"},
+						"full":       {Type: "boolean", Description: "Force full content (skip delta)"},
 					}}},
 					"queries": {Type: "array", Description: P("queries"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
 						"cmd":        {Type: "string", Description: "Command: search, explore, refs, map, find, diff"},
@@ -356,6 +360,10 @@ type doRead struct {
 	Budget     *int   `json:"budget,omitempty"`
 	Signatures *bool  `json:"signatures,omitempty"`
 	Depth      *int   `json:"depth,omitempty"`
+	StartLine  *int   `json:"start_line,omitempty"`
+	EndLine    *int   `json:"end_line,omitempty"`
+	Symbols    *bool  `json:"symbols,omitempty"`
+	Full       *bool  `json:"full,omitempty"`
 }
 
 // doQuery is a generalized read-only command for use in edr_do.
@@ -564,6 +572,10 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 			if r.Symbol != "" {
 				readArgs = []string{r.File + ":" + r.Symbol}
 			}
+			// If start_line + end_line provided for a single file read, fold into args
+			if r.StartLine != nil && r.EndLine != nil && r.Symbol == "" {
+				readArgs = []string{r.File, strconv.Itoa(*r.StartLine), strconv.Itoa(*r.EndLine)}
+			}
 			readFlags := map[string]any{}
 			if r.Budget != nil {
 				readFlags["budget"] = *r.Budget
@@ -573,6 +585,18 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 			}
 			if r.Depth != nil {
 				readFlags["depth"] = *r.Depth
+			}
+			if r.StartLine != nil && r.EndLine == nil {
+				readFlags["start_line"] = *r.StartLine
+			}
+			if r.EndLine != nil && r.StartLine == nil {
+				readFlags["end_line"] = *r.EndLine
+			}
+			if r.Symbols != nil && *r.Symbols {
+				readFlags["symbols"] = true
+			}
+			if r.Full != nil && *r.Full {
+				readFlags["full"] = true
 			}
 			cmds[i] = dispatch.MultiCmd{Cmd: "read", Args: readArgs, Flags: readFlags}
 		}

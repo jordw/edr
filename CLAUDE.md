@@ -286,6 +286,7 @@ Renames and `init: true` clear all tracking state.
 3 tools: `edr_do`, `edr_read`, `edr_map`.
 
 `edr_do` handles everything: reads, queries (search/explore/refs/map/find/diff), edits, writes, renames, verify, init.
+`edr_do` reads params: `file`, `symbol?`, `budget?`, `signatures?`, `depth?`, `start_line?`, `end_line?`, `symbols?`, `full?`.
 `edr_read` params: `file`, `symbol?`, `budget?`, `signatures?`, `depth?`, `full?`, `start_line?`, `end_line?`.
 `edr_map` params: `file?`, `budget?`, `dir?`, `glob?`, `type?`, `grep?`, `locals?`.
 
