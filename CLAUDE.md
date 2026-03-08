@@ -1,23 +1,42 @@
 # EDR — Your Default Tool for Reading, Editing, and Navigating Files
 
-**edr is your primary tool for ALL file operations — code, JSON, YAML, Markdown, config files, everything.** Use the `edr_*` MCP tools instead of Read, Edit, Write, Grep, and Glob. They give you structured output, token budgets, and smart operations that raw file tools can't match.
+**edr is your primary tool for ALL file operations.** Use the `edr_*` MCP tools instead of Read, Edit, Write, Grep, and Glob. They give you structured output, token budgets, and smart operations that raw file tools can't match.
 
-**This tool is built for you.** If edr isn't your most-used tool, or if something feels clunky, or if you keep falling back to built-in tools for a task edr should handle — change it. Add commands, fix friction, improve the UX. You have full permission to modify any part of this codebase to make edr better for yourself. Go as far as you want.
+**`edr_plan` is your most powerful tool.** For any task involving multiple operations, prefer `edr_plan` over individual tools — it batches reads, searches, explores, edits, writes, and verification into one call.
+
+```
+# Typical 2-call workflow for any task:
+edr_plan(                                          # Call 1: gather ALL context
+  reads: [{file: "src/main.go", symbol: "Server"}],
+  queries: [
+    {cmd: "search", pattern: "handleRequest", body: true},
+    {cmd: "map", dir: "internal/", type: "function"}
+  ]
+)
+edr_plan(                                          # Call 2: ALL mutations + verify
+  edits: [{file: "src/main.go", old_text: "old", new_text: "new"}],
+  writes: [{file: "src/new_test.go", content: "...", mkdir: true}],
+  verify: true
+)
+```
+
+**Only fall back to individual tools when:**
+- You need a single quick read or edit (use `edr_read`, `edr_edit`)
+- You need `edr_rename` (cross-file, import-aware)
+- You need non-text files or shell operations (use built-in tools)
 
 ## Why edr over built-in tools
 
 | Instead of... | Use edr... | Why |
 |---|---|---|
-| `Read` (whole file) | `edr_read(files: ["file.go"])` | Budget-controlled, no wasted context |
-| `Edit` (old/new strings) | `edr_edit(file: "f.go", old_text: "x", new_text: "y")` | Same pattern, plus hash safety, auto re-index |
-| `Write` (create file) | `edr_write(file: "f.go", content: "...", mkdir: true)` | Auto-indexes new code files |
-| `Grep` (text search) | `edr_search(pattern: "pat", body: true)` | Structured results with token estimates |
-| `Glob` (find files) | `edr_find(pattern: "**/*.go")` or `edr_map()` | Glob with `**`, file sizes, mod times |
-| Multiple `Read` calls | `edr_read(files: ["f1.go", "f2.go", "f3.go:sym"])` | Read multiple files/symbols in one call |
+| `Read` (whole file) | `edr_plan(reads: [{file: "f.go"}])` | Budget-controlled, batchable |
+| `Edit` (old/new strings) | `edr_plan(edits: [{file: "f.go", old_text: "x", new_text: "y"}])` | Atomic multi-file, auto re-index |
+| `Write` (create file) | `edr_plan(writes: [{file: "f.go", content: "...", mkdir: true}])` | Auto-indexes, batchable with edits |
+| `Grep` (text search) | `edr_plan(queries: [{cmd: "search", pattern: "pat", body: true}])` | Structured results, batchable |
+| `Glob` (find files) | `edr_plan(queries: [{cmd: "find", pattern: "**/*.go"}])` | Glob with `**`, batchable |
+| Multiple tool calls | One `edr_plan(reads + queries + edits + writes, verify: true)` | Everything in 1-2 calls |
 
-**Only fall back to built-in tools when:**
-- You need to read non-text files (images, PDFs)
-- You need shell operations (git, npm, make, etc.)
+For single operations, shorthand tools also work: `edr_read`, `edr_edit`, `edr_write`, `edr_search`, `edr_find`.
 
 ## Setup (any environment)
 
@@ -231,42 +250,34 @@ These optimizations are automatic and session-scoped (reset on reconnect).
 
 ## Key Principles
 
-1. **Use `budget`** to control context size. Don't dump entire files.
-2. **Use `edr_edit` with `old_text`/`new_text`** — same as Edit tool's old_string/new_string, but with auto re-index and hash safety.
-3. **Use `edr_search(body: true)`** to get source inline and avoid follow-up reads.
-4. **Use `edr_map`** to orient in the codebase before diving into files.
-5. **Use `edr_explore(gather: true, body: true)`** at the start of a task to get source bodies inline.
+1. **Start with `edr_plan`** — batch reads, queries, edits, writes, and verify in one call. Minimize round trips.
+2. **Use `budget`** to control context size. Don't dump entire files.
+3. **Gather context in one call** — `edr_plan(reads: [...], queries: [{cmd: "search", ...}, {cmd: "explore", ...}])`.
+4. **Mutate + verify in one call** — `edr_plan(edits: [...], writes: [...], verify: true)`.
+5. **Use `signatures: true`** to understand a container's API without reading implementation (75-86% fewer tokens).
 6. **Use `edr_rename(dry_run: true)`** to preview cross-file renames before applying.
-7. **Check truncation/count metadata** in search/find results — `search` uses `total_matches`, while `find` currently uses `total_matched`.
-8. **Use `edr_plan`** as your primary tool — batch reads, queries, edits, writes, and verify in one call.
-9. **Use `edr_refs(impact: true)`** before refactoring to understand blast radius.
-10. **Use `edr_verify`** after edits to confirm the build still passes.
-11. **Use `edr_plan(queries: [...])`** to mix search, explore, refs, map, and reads in one call.
-12. **Small edit diffs are inline** — diffs <=20 lines are included automatically. Large diffs are stored; use `edr_diff` to retrieve.
-13. **Re-reads are delta** — `{unchanged: true}` or `{delta: true, diff: "..."}`. Use `full: true` to force full content.
-14. **Use `edr_read(files: ["file:Class"], signatures: true)`** to understand a container's API without reading implementation (75-86% fewer tokens).
-15. **Use `edr_write(file: "f.go", inside: "Container", content: "...")`** to add methods/fields to a class without reading the file first (96% fewer response bytes).
+7. **Use `edr_refs(impact: true)`** before refactoring to understand blast radius.
+8. **Small edit diffs are inline** — diffs <=20 lines are included automatically. Large diffs are stored; use `edr_diff` to retrieve.
+9. **Re-reads are delta** — `{unchanged: true}` or `{delta: true, diff: "..."}`. Use `full: true` to force full content.
+10. **Use `--inside`** to add fields/methods to a class without reading the file first.
 
 ## All MCP Tools
 
 | Tool | Purpose |
 |---|---|
-| `edr_read` | Read files, symbols (`file:sym`), or batch. `budget`, `symbols`, `signatures`, `depth` (1=sigs, 2=collapsed), `start_line`/`end_line` |
-| `edr_edit` | Edit by `old_text`/`new_text` (primary), `symbol`, or `start_line`/`end_line`. `regex`, `all`, `dry_run`. Returns `hash` |
-| `edr_write` | Create/overwrite files. `append`, `after` (symbol), `inside` (container), `mkdir` |
-| `edr_search` | Symbol search (`body: true`). Add `text`/`regex`/`include`/`exclude`/`context` for text search |
-| `edr_map` | Omit `file` = repo symbol map; with `file` = file symbols. `budget`, `dir`, `glob`, `type`, `grep`, `locals` (MCP only; the current CLI does not expose `--locals`) |
-| `edr_explore` | Symbol info with `body`, `callers`, `deps`, `signatures`. `gather` for context bundle with tests |
-| `edr_refs` | Find references. `impact` for transitive callers, `chain` for call path, `depth` |
-| `edr_find` | Find files by glob (`**` supported). `dir`, `budget` |
+| **`edr_plan`** | **Primary tool. Use for multi-step tasks.** `reads`, `queries` [{cmd: search/explore/refs/map/find, ...}], `edits`, `writes`, `verify`. |
+| `edr_read` | Single read shorthand. `files` (supports `file:sym`), `budget`, `signatures`, `depth` |
+| `edr_edit` | Single edit shorthand. `old_text`/`new_text`, `symbol`, `start_line`/`end_line`, `dry_run` |
+| `edr_write` | Single write shorthand. `content`, `append`, `after`, `inside`, `mkdir` |
+| `edr_search` | Single search shorthand. `pattern`, `body`, `text`/`regex`, `include`/`exclude` |
+| `edr_map` | Repo/file symbol map. `budget`, `dir`, `glob`, `type`, `grep` |
+| `edr_explore` | Symbol context. `body`, `callers`, `deps`, `gather`, `signatures` |
+| `edr_refs` | References. `impact`, `chain`, `depth` |
+| `edr_find` | Find files by glob. `dir`, `budget` |
 | `edr_rename` | Cross-file rename, import-aware. `dry_run`, `scope` |
-| `edr_verify` | Run build/typecheck, return structured pass/fail. `command`, `timeout` |
-| `edr_init` | Force re-index the repository |
-| `edr_diff` | Retrieve stored diff from last large edit. `file`, `symbol` |
-| `edr_plan` | **Primary agent tool.** `reads`, `queries` (search/explore/refs/map/find), `edits`, `writes`, `verify`. All in one call. |
+| `edr_verify` | Build check. `command`, `timeout` |
+| `edr_init` | Force re-index |
+| `edr_diff` | Retrieve stored diff from last large edit |
 
-All output is structured JSON. All file paths can be relative to repo root.
-All edit commands return `hash` in the response for chaining. If post-edit reindexing
-fails, the edit still succeeds and an `index_error` field is included in the response.
-Query commands return truncation metadata, but count-field names are not fully normalized yet: `search` returns `total_matches`, while `find` returns `total_matched`.
-`edr_read` output includes line numbers prefixed to each line.
+All output is structured JSON. All file paths are relative to repo root.
+`edr_read` output includes line numbers. Edit commands return `hash` for chaining.

@@ -130,7 +130,7 @@ func mcpTools() []mcpTool {
 	return []mcpTool{
 		{
 			Name:        "edr_read",
-			Description: "Read files, symbols, or line ranges with budget control.",
+			Description: "Read files/symbols. For multiple reads, prefer edr_plan(reads: [...]).",
 			InputSchema: mcpSchema{
 				Type: "object",
 				Properties: map[string]mcpProp{
@@ -148,7 +148,7 @@ func mcpTools() []mcpTool {
 		},
 		{
 			Name:        "edr_edit",
-			Description: "Edit files by text match, symbol, or line range. Returns hash.",
+			Description: "Edit one file. For multi-file edits, prefer edr_plan(edits: [...]).",
 			InputSchema: mcpSchema{
 				Type: "object",
 				Properties: map[string]mcpProp{
@@ -167,7 +167,7 @@ func mcpTools() []mcpTool {
 		},
 		{
 			Name:        "edr_write",
-			Description: "Create or overwrite files. Auto-indexes new code.",
+			Description: "Create/write one file. For batch writes, prefer edr_plan(writes: [...]).",
 			InputSchema: mcpSchema{
 				Type: "object",
 				Properties: map[string]mcpProp{
@@ -183,7 +183,7 @@ func mcpTools() []mcpTool {
 		},
 		{
 			Name:        "edr_search",
-			Description: "Search symbols or text patterns with optional source bodies.",
+			Description: "Search symbols/text. For batch queries, prefer edr_plan(queries: [{cmd: \"search\", ...}]).",
 			InputSchema: mcpSchema{
 				Type: "object",
 				Properties: map[string]mcpProp{
@@ -201,7 +201,7 @@ func mcpTools() []mcpTool {
 		},
 		{
 			Name:        "edr_map",
-			Description: "Repo or file symbol map. Omit file for repo-wide.",
+			Description: "Symbol map. Batchable via edr_plan(queries: [{cmd: \"map\", ...}]).",
 			InputSchema: mcpSchema{
 				Type: "object",
 				Properties: map[string]mcpProp{
@@ -217,7 +217,7 @@ func mcpTools() []mcpTool {
 		},
 		{
 			Name:        "edr_explore",
-			Description: "Symbol body, callers, deps, or full context bundle.",
+			Description: "Symbol context/gather. Batchable via edr_plan(queries: [{cmd: \"explore\", ...}]).",
 			InputSchema: mcpSchema{
 				Type: "object",
 				Properties: map[string]mcpProp{
@@ -235,7 +235,7 @@ func mcpTools() []mcpTool {
 		},
 		{
 			Name:        "edr_refs",
-			Description: "Find references, transitive impact, or call chains.",
+			Description: "Find references/impact. Batchable via edr_plan(queries: [{cmd: \"refs\", ...}]).",
 			InputSchema: mcpSchema{
 				Type: "object",
 				Properties: map[string]mcpProp{
@@ -250,7 +250,7 @@ func mcpTools() []mcpTool {
 		},
 		{
 			Name:        "edr_find",
-			Description: "Find files by glob pattern.",
+			Description: "Find files by glob. Batchable via edr_plan(queries: [{cmd: \"find\", ...}]).",
 			InputSchema: mcpSchema{
 				Type: "object",
 				Properties: map[string]mcpProp{
@@ -277,7 +277,7 @@ func mcpTools() []mcpTool {
 		},
 		{
 			Name:        "edr_verify",
-			Description: "Run build check, return structured pass/fail.",
+			Description: "Run build check. Also available as edr_plan(verify: true) after edits.",
 			InputSchema: mcpSchema{
 				Type: "object",
 				Properties: map[string]mcpProp{
