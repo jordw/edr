@@ -826,6 +826,9 @@ func (d *DB) getImportsForFile(ctx context.Context, file string) []ImportInfo {
 
 // SearchSymbols finds symbols matching a name pattern.
 func (d *DB) SearchSymbols(ctx context.Context, pattern string, limit ...int) ([]SymbolInfo, error) {
+	if pattern == "" {
+		return nil, fmt.Errorf("search requires a non-empty pattern")
+	}
 	query := `SELECT name, type, file, start_line, end_line, start_byte, end_byte
 		FROM symbols WHERE name LIKE ?
 		ORDER BY name`

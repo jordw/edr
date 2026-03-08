@@ -222,6 +222,24 @@ func ExtractContainerStub(container SymbolInfo, children []SymbolInfo) string {
 		}
 	}
 
+	// Go structs: also include receiver methods defined outside the struct body.
+	if ext == ".go" && (container.Type == "type" || container.Type == "struct") {
+		for _, child := range children {
+			// Skip children inside the container (already handled above)
+			if child.StartByte >= container.StartByte && child.EndByte <= container.EndByte {
+				continue
+			}
+			if child.Type != "function" {
+				continue
+			}
+			recv := extractGoReceiver(data, child)
+			if recv == container.Name {
+				sig := ExtractSignatureFromSource(child, data)
+				lines = append(lines, "  "+sig)
+			}
+		}
+	}
+
 	// Add closing delimiter
 	switch ext {
 	case ".py":

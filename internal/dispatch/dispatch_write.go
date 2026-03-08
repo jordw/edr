@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/jordw/edr/internal/edit"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 )
@@ -79,7 +80,8 @@ func runWriteFile(ctx context.Context, db *index.DB, root string, args []string,
 
 	// Overwrite existing: replace all content
 	cr, err := commitEdits(ctx, db, []resolvedEdit{{
-		File: file, StartByte: 0, EndByte: uint32(len(existingData)), Replacement: content,
+		File: file, StartByte: 0, EndByte: uint32(len(existingData)),
+		Replacement: content, ExpectHash: edit.HashBytes(existingData),
 	}})
 	if err != nil {
 		return nil, err
@@ -116,7 +118,7 @@ func runAppendFile(ctx context.Context, db *index.DB, root string, args []string
 
 	cr, err := commitEdits(ctx, db, []resolvedEdit{{
 		File: file, StartByte: uint32(len(data)), EndByte: uint32(len(data)),
-		Replacement: insertion,
+		Replacement: insertion, ExpectHash: edit.HashBytes(data),
 	}})
 	if err != nil {
 		return nil, err
@@ -138,11 +140,13 @@ func runInsertAfter(ctx context.Context, db *index.DB, root string, args []strin
 		return nil, err
 	}
 
+	hash, _ := edit.FileHash(sym.File)
+
 	// Insert content after the symbol, with a blank line separator
 	insertion := "\n\n" + content
 	cr, err := commitEdits(ctx, db, []resolvedEdit{{
 		File: sym.File, StartByte: sym.EndByte, EndByte: sym.EndByte,
-		Replacement: insertion,
+		Replacement: insertion, ExpectHash: hash,
 	}})
 	if err != nil {
 		return output.EditResult{OK: false, File: output.Rel(sym.File), Message: err.Error()}, nil
@@ -203,7 +207,7 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 		lang = cfg.LangID
 	}
 
-	// Go structs: --inside adds fields (not methods). Warn if content looks like a method.
+	// Go structs: --inside adds fields, not methods. Auto-reroute methods to --after.
 	if lang == "go" && (container.Type == "struct" || container.Type == "type") {
 		data, readErr := os.ReadFile(container.File)
 		if readErr == nil {
@@ -211,7 +215,17 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 			if strings.Contains(body, "struct {") || strings.Contains(body, "struct{") {
 				trimmed := strings.TrimSpace(content)
 				if strings.HasPrefix(trimmed, "func ") || strings.HasPrefix(trimmed, "func(") {
-					return nil, fmt.Errorf("symbol %q is a Go struct — methods go outside with receivers. Use 'write %s --after %s' to insert after the struct definition", containerName, output.Rel(container.File), containerName)
+					// Auto-reroute: insert after the struct instead of inside it
+					hash := edit.HashBytes(data)
+					insertion := "\n\n" + content
+					cr, err := commitEdits(ctx, db, []resolvedEdit{{
+						File: container.File, StartByte: container.EndByte, EndByte: container.EndByte,
+						Replacement: insertion, ExpectHash: hash,
+					}})
+					if err != nil {
+						return output.EditResult{OK: false, File: output.Rel(container.File), Message: err.Error()}, nil
+					}
+					return writeResult(container.File, cr, fmt.Sprintf("inserted after %s (auto-rerouted from --inside: Go struct methods go outside)", container.Name)), nil
 				}
 			}
 		}
@@ -248,7 +262,7 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 
 	cr, err := commitEdits(ctx, db, []resolvedEdit{{
 		File: container.File, StartByte: uint32(insertByte), EndByte: uint32(insertByte),
-		Replacement: insertion,
+		Replacement: insertion, ExpectHash: edit.HashBytes(data),
 	}})
 	if err != nil {
 		return output.EditResult{OK: false, File: output.Rel(container.File), Message: err.Error()}, nil
@@ -277,7 +291,7 @@ func insertInsideAfterChild(ctx context.Context, db *index.DB, container *index.
 
 	cr, err := commitEdits(ctx, db, []resolvedEdit{{
 		File: container.File, StartByte: child.EndByte, EndByte: child.EndByte,
-		Replacement: insertion,
+		Replacement: insertion, ExpectHash: edit.HashBytes(data),
 	}})
 	if err != nil {
 		return output.EditResult{OK: false, File: output.Rel(container.File), Message: err.Error()}, nil

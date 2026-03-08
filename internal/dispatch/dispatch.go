@@ -229,7 +229,14 @@ func runSearchUnified(ctx context.Context, db *index.DB, args []string, flags ma
 		return nil, err
 	}
 	if sr, ok := result.(*search.SearchResult); ok && sr.TotalMatches == 0 {
-		sr.Hint = "no symbol matches; try --text for text search"
+		// Auto-fallback to text search when symbol search finds nothing
+		budget := flagInt(flags, "budget", 0)
+		textResult, textErr := search.SearchText(ctx, db, args[0], budget, false)
+		if textErr == nil && textResult.TotalMatches > 0 {
+			textResult.Hint = "no symbol matches; showing text results"
+			return textResult, nil
+		}
+		sr.Hint = "no symbol or text matches found"
 	}
 	return result, nil
 }

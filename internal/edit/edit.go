@@ -21,6 +21,13 @@ type Edit struct {
 	ExpectHash  string // optional; if set, the file hash is checked before applying
 }
 
+// HashBytes returns the first 8 hex chars of the SHA256 of data.
+// Use this when you already have file contents to avoid a redundant read.
+func HashBytes(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])[:8]
+}
+
 // FileHash returns the first 8 characters of the hex-encoded SHA256 hash of the
 // file at the given path.
 func FileHash(path string) (string, error) {
@@ -28,8 +35,7 @@ func FileHash(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("filehash: %w", err)
 	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])[:8], nil
+	return HashBytes(data), nil
 }
 
 // ReplaceSpan reads the file at path, optionally verifies its hash against

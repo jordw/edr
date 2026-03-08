@@ -427,6 +427,51 @@ var doKnownKeys = map[string]bool{
 	"init": true,
 }
 
+// Known fields for sub-objects, used to warn on typos like "bodies" instead of "body".
+var doQueryKnownKeys = map[string]bool{
+	"cmd": true, "budget": true, "file": true, "symbol": true,
+	"pattern": true, "body": true, "text": true, "regex": true,
+	"include": true, "exclude": true, "context": true,
+	"callers": true, "deps": true, "gather": true, "signatures": true,
+	"impact": true, "chain": true, "depth": true,
+	"dir": true, "glob": true, "type": true, "grep": true, "locals": true,
+}
+
+var doEditKnownKeys = map[string]bool{
+	"file": true, "old_text": true, "new_text": true, "symbol": true,
+	"start_line": true, "end_line": true, "regex": true, "all": true,
+}
+
+var doWriteKnownKeys = map[string]bool{
+	"file": true, "content": true, "mkdir": true, "after": true,
+	"inside": true, "append": true, "new_text": true, "body": true,
+}
+
+var doRenameKnownKeys = map[string]bool{
+	"old_name": true, "new_name": true, "dry_run": true, "scope": true,
+}
+
+// checkSubObjectFields validates fields in JSON sub-objects and returns warnings.
+func checkSubObjectFields(raw json.RawMessage, section string, known map[string]bool) []string {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil
+	}
+	var warnings []string
+	for i, item := range items {
+		var m map[string]json.RawMessage
+		if json.Unmarshal(item, &m) != nil {
+			continue
+		}
+		for key := range m {
+			if !known[key] {
+				warnings = append(warnings, fmt.Sprintf("%s[%d]: unknown field %q ignored", section, i, key))
+			}
+		}
+	}
+	return warnings
+}
+
 // handleDo dispatches edr_do (batch reads/queries/edits/writes/renames/verify).
 func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json.RawMessage) (string, error) {
 	var p doParams
@@ -434,7 +479,7 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 		return "", err
 	}
 
-	// Detect unknown top-level keys and warn
+	// Detect unknown top-level keys and sub-object fields, warn on typos
 	var rawMap map[string]json.RawMessage
 	var warnings []string
 	if json.Unmarshal(raw, &rawMap) == nil {
@@ -442,6 +487,18 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 			if !doKnownKeys[key] {
 				warnings = append(warnings, fmt.Sprintf("unknown field %q ignored", key))
 			}
+		}
+		if q, ok := rawMap["queries"]; ok {
+			warnings = append(warnings, checkSubObjectFields(q, "queries", doQueryKnownKeys)...)
+		}
+		if e, ok := rawMap["edits"]; ok {
+			warnings = append(warnings, checkSubObjectFields(e, "edits", doEditKnownKeys)...)
+		}
+		if w, ok := rawMap["writes"]; ok {
+			warnings = append(warnings, checkSubObjectFields(w, "writes", doWriteKnownKeys)...)
+		}
+		if r, ok := rawMap["renames"]; ok {
+			warnings = append(warnings, checkSubObjectFields(r, "renames", doRenameKnownKeys)...)
 		}
 	}
 
@@ -452,6 +509,26 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 	hasWrites := len(p.Writes) > 0
 	hasRenames := len(p.Renames) > 0
 	hasVerify := p.Verify != nil && p.Verify != false
+
+	// Warn if reads and mutations target the same file(s)
+	if hasReads && (hasEdits || hasWrites) {
+		readFiles := make(map[string]bool)
+		for _, r := range p.Reads {
+			readFiles[r.File] = true
+		}
+		for _, e := range p.Edits {
+			if readFiles[e.File] {
+				warnings = append(warnings, "reads and edits target the same file; reads reflect pre-edit state")
+				break
+			}
+		}
+		for _, w := range p.Writes {
+			if readFiles[w.File] {
+				warnings = append(warnings, "reads and writes target the same file; reads reflect pre-write state")
+				break
+			}
+		}
+	}
 
 	if !hasInit && !hasReads && !hasQueries && !hasEdits && !hasWrites && !hasRenames && !hasVerify {
 		return `{"error": "edr_do requires at least one of: reads, queries, edits, writes, renames, verify, init"}`, nil
@@ -468,7 +545,7 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 		}); err != nil {
 			parts = append(parts, fmt.Sprintf(`"init":{"ok":false,"error":%q}`, err.Error()))
 		} else {
-			parts = append(parts, `"init":{"ok":true}`)
+			parts = append(parts, fmt.Sprintf(`"init":{"ok":true,"version":%q}`, Version+"+"+BuildHash))
 		}
 	}
 
@@ -702,7 +779,24 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 		parts = append(parts, fmt.Sprintf(`"warnings":%s`, warnJSON))
 	}
 
-	return "{" + strings.Join(parts, ",") + "}", nil
+	result := "{" + strings.Join(parts, ",") + "}"
+
+	// Hard cap: truncate if response exceeds 100KB to prevent context blowup
+	const maxResponseBytes = 100_000
+	if len(result) > maxResponseBytes {
+		truncated := result[:maxResponseBytes]
+		// Find last complete JSON value boundary (closing brace/bracket)
+		for i := len(truncated) - 1; i >= 0; i-- {
+			if truncated[i] == '}' || truncated[i] == ']' {
+				truncated = truncated[:i+1]
+				break
+			}
+		}
+		return fmt.Sprintf(`{"truncated":true,"truncated_reason":"response exceeded %d bytes (%d actual)","partial":%s}`,
+			maxResponseBytes, len(result), truncated), nil
+	}
+
+	return result, nil
 }
 
 
@@ -737,9 +831,10 @@ func doQueryToMultiCmd(q doQuery) dispatch.MultiCmd {
 		}
 
 	case "search":
-		if q.Pattern != nil && *q.Pattern != "" {
-			args = []string{*q.Pattern}
+		if q.Pattern == nil || *q.Pattern == "" {
+			return dispatch.MultiCmd{Cmd: "search", Args: []string{}, Flags: flags}
 		}
+		args = []string{*q.Pattern}
 		if q.Body != nil && *q.Body {
 			flags["body"] = true
 		}
@@ -913,6 +1008,8 @@ func serveMCP(db *index.DB) error {
 
 		switch req.Method {
 		case "initialize":
+			// Include binary start time so clients can detect stale servers after rebuild
+			serverVersion := Version + "+" + BuildHash
 			enc.Encode(jsonRPCResponse{
 				JSONRPC: "2.0",
 				ID:      req.ID,
@@ -923,7 +1020,7 @@ func serveMCP(db *index.DB) error {
 					},
 					ServerInfo: mcpServerInfo{
 						Name:    "edr",
-						Version: Version + "+" + BuildHash,
+						Version: serverVersion,
 					},
 				},
 			})

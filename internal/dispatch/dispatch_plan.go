@@ -81,13 +81,25 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 			if err != nil {
 				return nil, fmt.Errorf("edit-plan: edit %d: symbol %q: %w", i, e.Symbol, err)
 			}
+			expectHash := e.ExpectHash
+			if expectHash == "" {
+				expectHash, _ = edit.FileHash(file)
+			}
 			resolved = append(resolved, resolvedEdit{
 				File: file, StartByte: sym.StartByte, EndByte: sym.EndByte,
-				Replacement: e.resolvedNewText(), ExpectHash: e.ExpectHash,
+				Replacement: e.resolvedNewText(), ExpectHash: expectHash,
 				Description: fmt.Sprintf("replace symbol %s in %s", e.Symbol, output.Rel(file)),
 			})
 
 		case e.OldText != "":
+			// Detect no-op: old_text == new_text means nothing would change
+			if e.OldText == e.resolvedNewText() {
+				return map[string]any{
+					"ok":      true,
+					"noop":    true,
+					"message": fmt.Sprintf("edit %d: old_text equals new_text, no change applied", i),
+				}, nil
+			}
 			// Text-based edit — resolve to byte spans
 			data, err := os.ReadFile(file)
 			if err != nil {
@@ -97,6 +109,11 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 			idx := strings.Index(content, e.OldText)
 			if idx < 0 {
 				return nil, fmt.Errorf("edit-plan: edit %d: old_text not found in %s", i, output.Rel(file))
+			}
+			// Auto-compute hash if caller didn't provide one
+			expectHash := e.ExpectHash
+			if expectHash == "" {
+				expectHash = edit.HashBytes(data)
 			}
 			if e.All {
 				// For replace-all, collect all occurrences (reverse order for offset stability)
@@ -113,14 +130,14 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 				for j := len(offsets) - 1; j >= 0; j-- {
 					resolved = append(resolved, resolvedEdit{
 						File: file, StartByte: uint32(offsets[j]), EndByte: uint32(offsets[j] + len(e.OldText)),
-						Replacement: e.resolvedNewText(), ExpectHash: e.ExpectHash,
+						Replacement: e.resolvedNewText(), ExpectHash: expectHash,
 						Description: fmt.Sprintf("replace text in %s (occurrence %d)", output.Rel(file), j+1),
 					})
 				}
 			} else {
 				resolved = append(resolved, resolvedEdit{
 					File: file, StartByte: uint32(idx), EndByte: uint32(idx + len(e.OldText)),
-					Replacement: e.resolvedNewText(), ExpectHash: e.ExpectHash,
+					Replacement: e.resolvedNewText(), ExpectHash: expectHash,
 					Description: fmt.Sprintf("replace text in %s", output.Rel(file)),
 				})
 			}
@@ -150,9 +167,13 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 			if !foundStart {
 				return nil, fmt.Errorf("edit-plan: edit %d: start line %d beyond file", i, e.StartLine)
 			}
+			expectHash := e.ExpectHash
+			if expectHash == "" {
+				expectHash = edit.HashBytes(data)
+			}
 			resolved = append(resolved, resolvedEdit{
 				File: file, StartByte: startByte, EndByte: endByte,
-				Replacement: e.resolvedNewText(), ExpectHash: e.ExpectHash,
+				Replacement: e.resolvedNewText(), ExpectHash: expectHash,
 				Description: fmt.Sprintf("replace lines %d-%d in %s", e.StartLine, e.EndLine, output.Rel(file)),
 			})
 
