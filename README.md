@@ -1,4 +1,4 @@
-# edr (Edit, Discover, Refactor)
+# edr — the editor for agents
 
 **Up to 90% fewer tokens on common agent workflows.**
 
