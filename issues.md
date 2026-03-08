@@ -6,7 +6,7 @@
 Fixed: top-level budget now distributed to queries; inferred commands get default budget of 200 tokens.
 
 ### 2. Rename doesn't catch convention-related identifiers
-- **Iterations observed**: 4g (iterations 1-9)
+- **Iterations observed**: 4g (iterations 1-10)
 - **Phase**: 4g (cross-file rename)
 - **Command**: `edr(renames: [{old_name: "Greeter", new_name: "Speaker", ...}])`
 - **Expected**: Also rename `NewGreeter` → `NewSpeaker` (Go constructor convention)
@@ -120,4 +120,4 @@ Text search returns individual matches ungrouped by default, wasting tokens when
 - **Current**: `group: true` must be explicitly passed; agents rarely know to do this
 - **Desired**: default `group: true` for text search via MCP (CLI can keep current behavior)
 - **Area**: `cmd/mcp.go:doQueryToMultiCmd` (line ~1034), `internal/dispatch/dispatch_search.go`
-- **Iterations observed**: 9
+- **Iterations observed**: 9, 10
