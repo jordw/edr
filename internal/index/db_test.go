@@ -309,3 +309,56 @@ func TestCloseReleasesLockFile(t *testing.T) {
 	}
 	syscall.Flock(int(probe.Fd()), syscall.LOCK_UN)
 }
+
+func TestSearchSymbolsLimit(t *testing.T) {
+	tmp := t.TempDir()
+	// Create a Go file with several symbols that all match "item".
+	if err := os.WriteFile(filepath.Join(tmp, "main.go"), []byte(`package main
+
+func itemA() {}
+func itemB() {}
+func itemC() {}
+func itemD() {}
+func itemE() {}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without limit: all 5 symbols returned.
+	all, err := db.SearchSymbols(ctx, "item")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 5 {
+		t.Fatalf("expected 5 symbols, got %d", len(all))
+	}
+
+	// With limit=2: only 2 returned.
+	limited, err := db.SearchSymbols(ctx, "item", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(limited) != 2 {
+		t.Fatalf("expected 2 symbols with limit, got %d", len(limited))
+	}
+
+	// With limit=0: no limit applied (same as no limit arg).
+	noLimit, err := db.SearchSymbols(ctx, "item", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(noLimit) != 5 {
+		t.Fatalf("expected 5 symbols with limit=0, got %d", len(noLimit))
+	}
+}

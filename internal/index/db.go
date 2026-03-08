@@ -825,12 +825,16 @@ func (d *DB) getImportsForFile(ctx context.Context, file string) []ImportInfo {
 }
 
 // SearchSymbols finds symbols matching a name pattern.
-func (d *DB) SearchSymbols(ctx context.Context, pattern string) ([]SymbolInfo, error) {
-	rows, err := d.db.QueryContext(ctx, `
-		SELECT name, type, file, start_line, end_line, start_byte, end_byte
+func (d *DB) SearchSymbols(ctx context.Context, pattern string, limit ...int) ([]SymbolInfo, error) {
+	query := `SELECT name, type, file, start_line, end_line, start_byte, end_byte
 		FROM symbols WHERE name LIKE ?
-		ORDER BY name
-	`, "%"+pattern+"%")
+		ORDER BY name`
+	args := []any{"%" + pattern + "%"}
+	if len(limit) > 0 && limit[0] > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit[0])
+	}
+	rows, err := d.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -190,7 +190,7 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 	}
 	container, err := db.GetSymbol(ctx, resolvedFile, containerName)
 	if err != nil {
-		return nil, fmt.Errorf("container symbol %q not found: %w", containerName, err)
+		return nil, fmt.Errorf("container symbol %q not found (try --after <symbol> or --append instead): %w", containerName, err)
 	}
 
 	if !containerTypes[container.Type] {

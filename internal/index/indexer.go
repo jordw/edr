@@ -411,7 +411,7 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, error)
 
 		// Grep filter: try regex first, fall back to case-insensitive substring
 		if cfg.grep != "" {
-			if re, err := regexp.Compile("(?i)" + cfg.grep); err == nil {
+			if re, err := regexp.Compile("(?i)(?:" + cfg.grep + ")"); err == nil {
 				if !re.MatchString(s.Name) {
 					continue
 				}

@@ -449,6 +449,21 @@ func TestDoQueryToMultiCmd_Search(t *testing.T) {
 	}
 }
 
+func TestDoQueryToMultiCmd_SearchEmptyPattern(t *testing.T) {
+	empty := ""
+	q := doQuery{
+		Cmd:     "search",
+		Pattern: &empty,
+	}
+	mc := doQueryToMultiCmd(q)
+	if mc.Cmd != "search" {
+		t.Errorf("cmd = %q, want search", mc.Cmd)
+	}
+	if len(mc.Args) != 0 {
+		t.Errorf("args = %v, want [] (empty pattern should be dropped)", mc.Args)
+	}
+}
+
 func TestDoQueryToMultiCmd_Explore(t *testing.T) {
 	sym := "Dispatch"
 	gather := true

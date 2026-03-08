@@ -61,7 +61,11 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int,
 	if pattern == "" {
 		return &SearchResult{Kind: "symbol"}, nil
 	}
-	symbols, err := db.SearchSymbols(ctx, pattern)
+	sqlLimit := 0
+	if budget > 0 {
+		sqlLimit = budget * 3 // overestimate: fetch more rows than budget to allow scoring/trimming
+	}
+	symbols, err := db.SearchSymbols(ctx, pattern, sqlLimit)
 	if err != nil {
 		return nil, err
 	}

@@ -162,7 +162,7 @@ func runCallChain(ctx context.Context, db *index.DB, root string, args []string,
 			"from":    from,
 			"to":      to,
 			"found":   false,
-			"message": fmt.Sprintf("no call chain found from %s to %s within depth %d", from, to, maxDepth),
+			"message": fmt.Sprintf("no call chain found from %s to %s within depth %d (traces callers of %s; try swapping arguments if needed)", from, to, maxDepth, to),
 		}, nil
 	}
 

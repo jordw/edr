@@ -737,7 +737,7 @@ func doQueryToMultiCmd(q doQuery) dispatch.MultiCmd {
 		}
 
 	case "search":
-		if q.Pattern != nil {
+		if q.Pattern != nil && *q.Pattern != "" {
 			args = []string{*q.Pattern}
 		}
 		if q.Body != nil && *q.Body {

@@ -73,7 +73,7 @@ var ParamDesc = map[string]string{
 
 	// refs
 	"impact": "Transitive callers",
-	"chain":  "Find call path to target",
+	"chain":  "Find call path from symbol to target (traces callers of target backward)",
 
 	// rename
 	"old_name": "Current name",
