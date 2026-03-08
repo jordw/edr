@@ -238,6 +238,92 @@ func BenchmarkRefs(b *testing.B) {
 	benchDispatch(b, db, "refs", []string{"_execute_task"}, nil)
 }
 
+func BenchmarkRefsChain(b *testing.B) {
+	db, _ := setupRepo(b)
+	benchDispatch(b, db, "refs", []string{"Scheduler"}, map[string]any{"chain": "_execute_task"})
+}
+
+// ---------------------------------------------------------------------------
+// Find benchmarks
+// ---------------------------------------------------------------------------
+
+func BenchmarkFind(b *testing.B) {
+	db, _ := setupRepo(b)
+	benchDispatch(b, db, "find", []string{"**/*.py"}, nil)
+}
+
+// ---------------------------------------------------------------------------
+// Map with filters benchmark
+// ---------------------------------------------------------------------------
+
+func BenchmarkMapFileFiltered(b *testing.B) {
+	db, _ := setupRepo(b)
+	benchDispatch(b, db, "map", []string{"lib/scheduler.py"}, map[string]any{"type": "function"})
+}
+
+// ---------------------------------------------------------------------------
+// Explore --gather benchmark
+// ---------------------------------------------------------------------------
+
+func BenchmarkExploreGather(b *testing.B) {
+	db, _ := setupRepo(b)
+	benchDispatch(b, db, "explore", []string{"_execute_task"}, map[string]any{
+		"gather": true,
+		"body":   true,
+		"budget": 1500,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Move edit benchmark
+// ---------------------------------------------------------------------------
+
+func BenchmarkEditMoveDryRun(b *testing.B) {
+	db, _ := setupRepo(b)
+	benchDispatch(b, db, "edit", []string{"internal/queue.go"}, map[string]any{
+		"move":    "Close",
+		"after":   "NewTaskQueue",
+		"dry-run": true,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Rename benchmark
+// ---------------------------------------------------------------------------
+
+func BenchmarkRenameDryRun(b *testing.B) {
+	db, _ := setupRepo(b)
+	benchDispatch(b, db, "rename", []string{"HandlerFunc", "TaskHandlerFunc"}, map[string]any{
+		"dry_run": true,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// DispatchMulti (batch) benchmark
+// ---------------------------------------------------------------------------
+
+func BenchmarkDispatchMulti(b *testing.B) {
+	db, _ := setupRepo(b)
+	ctx := context.Background()
+	cmds := []dispatch.MultiCmd{
+		{Cmd: "read", Args: []string{"lib/scheduler.py:Scheduler"}, Flags: map[string]any{"signatures": true}},
+		{Cmd: "search", Args: []string{"execute"}, Flags: map[string]any{"body": true, "budget": 300}},
+		{Cmd: "map", Args: nil, Flags: map[string]any{"budget": 300}},
+		{Cmd: "refs", Args: []string{"_execute_task"}, Flags: nil},
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		results := dispatch.DispatchMulti(ctx, db, cmds)
+		totalBytes := 0
+		for _, r := range results {
+			data, _ := json.Marshal(r)
+			totalBytes += len(data)
+		}
+		b.ReportMetric(float64(totalBytes), "response_bytes")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Write --inside benchmark
 // ---------------------------------------------------------------------------
@@ -391,6 +477,41 @@ func TestResponseSizeRegression(t *testing.T) {
 			args:     []string{"lib/scheduler.py"},
 			flags:    map[string]any{"old_text": "self._running = True", "new_text": "self._running = False", "dry-run": true},
 			maxBytes: 1000,
+		},
+		{
+			name:     "find files",
+			cmd:      "find",
+			args:     []string{"**/*.py"},
+			flags:    nil,
+			maxBytes: 1500,
+		},
+		{
+			name:     "map file with type filter",
+			cmd:      "map",
+			args:     []string{"lib/scheduler.py"},
+			flags:    map[string]any{"type": "function"},
+			maxBytes: 3000,
+		},
+		{
+			name:     "rename dry-run",
+			cmd:      "rename",
+			args:     []string{"HandlerFunc", "TaskHandlerFunc"},
+			flags:    map[string]any{"dry_run": true},
+			maxBytes: 1000,
+		},
+		{
+			name:     "refs chain",
+			cmd:      "refs",
+			args:     []string{"Scheduler"},
+			flags:    map[string]any{"chain": "_execute_task"},
+			maxBytes: 500,
+		},
+		{
+			name:     "explore gather",
+			cmd:      "explore",
+			args:     []string{"_execute_task"},
+			flags:    map[string]any{"gather": true, "body": true, "budget": 1500},
+			maxBytes: 8000,
 		},
 	}
 
