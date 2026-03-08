@@ -72,6 +72,7 @@ edr parses your code with tree-sitter and stores a symbol index in `.edr/`. Agen
 
 | Command | What it does |
 |---|---|
+| `edr '{"reads":[...], "queries":[...]}'` | Batched JSON — same interface as the MCP tool |
 | `edr map` | Symbol overview of the repo or a directory |
 | `edr read file:Symbol` | Read a specific symbol (function, class, struct) |
 | `edr read file:Class --signatures` | Class API without implementation bodies |
