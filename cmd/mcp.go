@@ -171,6 +171,7 @@ func mcpTools() []mcpTool {
 						"type":       {Type: "string", Description: P("type")},
 						"grep":       {Type: "string", Description: P("grep")},
 						"locals":     {Type: "boolean", Description: P("locals")},
+						"group":      {Type: "boolean", Description: P("group")},
 					}}},
 					"edits": {Type: "array", Description: P("edits"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
 						"file":       {Type: "string", Description: "File path (required)"},
@@ -183,7 +184,8 @@ func mcpTools() []mcpTool {
 						"all":        {Type: "boolean", Description: P("all")},
 						"move":       {Type: "string", Description: P("move")},
 						"after":      {Type: "string", Description: P("after")},
-						"before":     {Type: "string", Description: P("before")},
+						"before":      {Type: "string", Description: P("before")},
+						"expect_hash": {Type: "string", Description: P("expect_hash")},
 					}}},
 					"writes": {Type: "array", Description: P("writes"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
 						"file":    {Type: "string", Description: "File path (required)"},
@@ -200,9 +202,10 @@ func mcpTools() []mcpTool {
 						"scope":    {Type: "string", Description: P("scope")},
 					}}},
 					"budget":  {Type: "integer", Description: P("budget")},
-					"dry_run": {Type: "boolean", Description: P("dry_run")},
-					"verify":  {Description: P("verify")},
-					"init":    {Type: "boolean", Description: P("init_flag")},
+					"dry_run":         {Type: "boolean", Description: P("dry_run")},
+					"verify":          {Description: P("verify")},
+					"init":            {Type: "boolean", Description: P("init_flag")},
+					"read_after_edit": {Type: "boolean", Description: P("read_after_edit")},
 				},
 			},
 		},
@@ -230,15 +233,16 @@ func routeTool(toolName string, raw json.RawMessage) (cmd string, args []string,
 
 // doParams holds the parsed params for edr_do.
 type doParams struct {
-	Reads   []doRead   `json:"reads"`
-	Queries []doQuery  `json:"queries"`
-	Edits   []doEdit   `json:"edits"`
-	Writes  []doWrite  `json:"writes"`
-	Renames []doRename `json:"renames"`
-	Budget  *int       `json:"budget"`
-	DryRun  *bool      `json:"dry_run"`
-	Verify  any        `json:"verify"`
-	Init    *bool      `json:"init"`
+	Reads         []doRead   `json:"reads"`
+	Queries       []doQuery  `json:"queries"`
+	Edits         []doEdit   `json:"edits"`
+	Writes        []doWrite  `json:"writes"`
+	Renames       []doRename `json:"renames"`
+	Budget        *int       `json:"budget"`
+	DryRun        *bool      `json:"dry_run"`
+	Verify        any        `json:"verify"`
+	Init          *bool      `json:"init"`
+	ReadAfterEdit *bool      `json:"read_after_edit,omitempty"`
 }
 
 type doRead struct {
@@ -271,6 +275,7 @@ type doQuery struct {
 	Include any     `json:"include,omitempty"`
 	Exclude any     `json:"exclude,omitempty"`
 	Context *int    `json:"context,omitempty"`
+	Group   *bool   `json:"group,omitempty"`
 
 	// explore
 	Callers    *bool `json:"callers,omitempty"`
@@ -327,14 +332,14 @@ type doRename struct {
 var doKnownKeys = map[string]bool{
 	"reads": true, "queries": true, "edits": true, "writes": true,
 	"renames": true, "budget": true, "dry_run": true, "verify": true,
-	"init": true,
+	"init": true, "read_after_edit": true,
 }
 
 // Known fields for sub-objects, used to warn on typos like "bodies" instead of "body".
 var doQueryKnownKeys = map[string]bool{
 	"cmd": true, "budget": true, "file": true, "symbol": true,
 	"pattern": true, "body": true, "text": true, "regex": true,
-	"include": true, "exclude": true, "context": true,
+	"include": true, "exclude": true, "context": true, "group": true,
 	"callers": true, "deps": true, "gather": true, "signatures": true,
 	"impact": true, "chain": true, "depth": true,
 	"dir": true, "glob": true, "type": true, "grep": true, "locals": true,
@@ -685,7 +690,9 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 			if e.OldText != "" {
 				m["old_text"] = e.OldText
 			}
-			if e.NewText != "" {
+			// Always include new_text when an edit mode is active.
+			// Empty new_text with old_text/symbol/line-range = deletion.
+			if e.NewText != "" || e.OldText != "" || e.Symbol != "" || (e.StartLine != nil && e.EndLine != nil) {
 				m["new_text"] = e.NewText
 			}
 			if e.Symbol != "" {
@@ -736,6 +743,27 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 			data, _ := json.Marshal(result)
 			text := sess.PostProcess("edit-plan", []string{}, editFlags, result, string(data))
 			parts = append(parts, fmt.Sprintf(`"edits":%s`, text))
+		}
+	}
+
+	// 5b. Post-edit reads — return edited file contents to save a round trip
+	if hasEdits && p.ReadAfterEdit != nil && *p.ReadAfterEdit && (p.DryRun == nil || !*p.DryRun) {
+		editedFiles := make(map[string]bool)
+		for _, e := range p.Edits {
+			editedFiles[e.File] = true
+		}
+		var readCmds []dispatch.MultiCmd
+		for f := range editedFiles {
+			readCmds = append(readCmds, dispatch.MultiCmd{Cmd: "read", Args: []string{f}, Flags: map[string]any{"full": true}})
+		}
+		if len(readCmds) > 0 {
+			var budgetOpt []int
+			if p.Budget != nil {
+				budgetOpt = []int{*p.Budget}
+			}
+			results := dispatch.DispatchMulti(ctx, db, readCmds, budgetOpt...)
+			text := postProcessMultiResults(sess, readCmds, results)
+			parts = append(parts, fmt.Sprintf(`"post_edit_reads":%s`, text))
 		}
 	}
 
@@ -878,6 +906,9 @@ func doQueryToMultiCmd(q doQuery) dispatch.MultiCmd {
 		}
 		if q.Context != nil {
 			flags["context"] = *q.Context
+		}
+		if q.Group != nil && *q.Group {
+			flags["group"] = true
 		}
 
 	case "explore":

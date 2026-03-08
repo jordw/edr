@@ -97,16 +97,17 @@ func (t *Transaction) Commit() error {
 	// Phase 2: Write all files atomically using temp files + rename.
 	// Track successfully written files for rollback on failure.
 	type written struct {
-		file    string
-		backup  string // temp file holding original content
+		file   string
+		backup string      // temp file holding original content
+		mode   os.FileMode // original file permissions
 	}
 	var completed []written
 
 	rollback := func() {
 		for _, w := range completed {
-			// Restore original content from backup
+			// Restore original content and permissions from backup
 			if orig, err := os.ReadFile(w.backup); err == nil {
-				os.WriteFile(w.file, orig, 0644)
+				os.WriteFile(w.file, orig, w.mode)
 			}
 			os.Remove(w.backup)
 		}
@@ -161,7 +162,7 @@ func (t *Transaction) Commit() error {
 			return fmt.Errorf("transaction: rename temp to %s: %w", file, err)
 		}
 
-		completed = append(completed, written{file: file, backup: backupFile.Name()})
+		completed = append(completed, written{file: file, backup: backupFile.Name(), mode: res.mode})
 	}
 
 	// Phase 3: Clean up backup files (all writes succeeded).

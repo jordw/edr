@@ -294,11 +294,50 @@ func FindReferences(ctx context.Context, db *DB, symbolName string) ([]SymbolInf
 }
 
 // FindIdentifierOccurrences finds all identifier nodes matching symbolName across
-// all indexed files using tree-sitter. Unlike FindReferences (which returns
-// containing symbols via the semantic path), this returns exact identifier byte
-// ranges suitable for rename operations.
+// indexed files using tree-sitter. Returns exact identifier byte ranges suitable
+// for rename operations. When semantic refs are available, only scans files that
+// import or define the symbol (filtering out unrelated identifiers with the same name).
 func FindIdentifierOccurrences(ctx context.Context, db *DB, symbolName string) ([]SymbolInfo, error) {
-	return findReferencesTextBased(ctx, db, symbolName)
+	if !db.HasRefs(ctx) {
+		return findReferencesTextBased(ctx, db, symbolName)
+	}
+
+	// Resolve the symbol to get its definition file for import filtering.
+	sym, err := db.ResolveSymbol(ctx, symbolName)
+	if err != nil {
+		// Can't resolve — fall back to text-based scan.
+		return findReferencesTextBased(ctx, db, symbolName)
+	}
+
+	// Use the refs table to find files that semantically reference this symbol.
+	refFiles, err := db.FindReferencingFiles(ctx, symbolName, sym.File)
+	if err != nil {
+		return findReferencesTextBased(ctx, db, symbolName)
+	}
+
+	// Always include the definition file.
+	fileSet := map[string]bool{sym.File: true}
+	for _, f := range refFiles {
+		fileSet[f] = true
+	}
+
+	// Scan only the relevant files for exact identifier byte ranges.
+	var refs []SymbolInfo
+	for file := range fileSet {
+		lang := GetLangConfig(file)
+		if lang == nil {
+			continue
+		}
+		src, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		cachedParseWith(lang, src, func(root *tree_sitter.Node) {
+			findIdentifierRefs(root, src, file, symbolName, &refs)
+		})
+	}
+
+	return refs, nil
 }
 
 // findReferencesTextBased is the legacy text-based reference search.

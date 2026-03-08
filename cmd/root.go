@@ -117,9 +117,20 @@ func openDB(cmd *cobra.Command, quiet bool) (*index.DB, error) {
 		return nil, err
 	}
 
-	if files == 0 {
+	needsIndex := files == 0
+	if !needsIndex {
+		if stale, _ := index.HasStaleFiles(ctx, db); stale {
+			needsIndex = true
+		}
+	}
+
+	if needsIndex {
 		if !quiet {
-			fmt.Fprintf(os.Stderr, "edr: no index found, indexing repository...\n")
+			if files == 0 {
+				fmt.Fprintf(os.Stderr, "edr: no index found, indexing repository...\n")
+			} else {
+				fmt.Fprintf(os.Stderr, "edr: index stale, re-indexing...\n")
+			}
 		}
 		var filesIndexed, symbolsFound int
 		err = db.WithWriteLock(func() error {

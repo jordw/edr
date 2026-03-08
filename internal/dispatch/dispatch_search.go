@@ -77,7 +77,67 @@ func runSearchText(ctx context.Context, db *index.DB, args []string, flags map[s
 	if ctxLines := flagInt(flags, "context", 0); ctxLines > 0 {
 		opts = append(opts, search.WithContext(ctxLines))
 	}
-	return search.SearchText(ctx, db, args[0], budget, useRegex, opts...)
+	result, err := search.SearchText(ctx, db, args[0], budget, useRegex, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	// Group text results by file for compact output
+	if flagBool(flags, "group", false) && result.Kind == "text" && len(result.Matches) > 0 {
+		return groupTextResults(result), nil
+	}
+	return result, nil
+}
+
+type groupedFileMatch struct {
+	File    string         `json:"file"`
+	Count   int            `json:"count"`
+	Matches []groupedLine  `json:"matches"`
+}
+
+type groupedLine struct {
+	Line    int     `json:"line"`
+	Column  int     `json:"column,omitempty"`
+	Text    string  `json:"text"`
+	Snippet string  `json:"snippet,omitempty"`
+	Score   float64 `json:"score"`
+}
+
+func groupTextResults(result *search.SearchResult) map[string]any {
+	fileOrder := []string{}
+	groups := map[string]*groupedFileMatch{}
+
+	for _, m := range result.Matches {
+		f := m.Symbol.File
+		g, ok := groups[f]
+		if !ok {
+			g = &groupedFileMatch{File: f}
+			groups[f] = g
+			fileOrder = append(fileOrder, f)
+		}
+		g.Count++
+		g.Matches = append(g.Matches, groupedLine{
+			Line:    m.Symbol.Lines[0],
+			Column:  m.Column,
+			Text:    m.Symbol.Name,
+			Snippet: m.Snippet,
+			Score:   m.Score,
+		})
+	}
+
+	resultGroups := make([]groupedFileMatch, 0, len(fileOrder))
+	for _, f := range fileOrder {
+		resultGroups = append(resultGroups, *groups[f])
+	}
+
+	return map[string]any{
+		"kind":          "text_grouped",
+		"files":         resultGroups,
+		"total_files":   len(fileOrder),
+		"total_matches": result.TotalMatches,
+		"truncated":     result.Truncated,
+		"hint":          result.Hint,
+	}
 }
 
 func runFindFiles(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {

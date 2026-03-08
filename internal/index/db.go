@@ -679,6 +679,41 @@ func (d *DB) FindSemanticReferences(ctx context.Context, symbolName, symbolFile 
 	return results, nil
 }
 
+// FindReferencingFiles returns the set of files that reference symbolName and
+// pass import-visibility checks relative to symbolFile. Used by rename to
+// restrict identifier scanning to semantically relevant files.
+func (d *DB) FindReferencingFiles(ctx context.Context, symbolName, symbolFile string) ([]string, error) {
+	rows, err := d.db.QueryContext(ctx, `SELECT DISTINCT r.file FROM refs r WHERE r.to_name = ?`, symbolName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	importCache := make(map[string][]ImportInfo)
+	var files []string
+	for rows.Next() {
+		var f string
+		if err := rows.Scan(&f); err != nil {
+			continue
+		}
+		// Same-file always included
+		if f == symbolFile {
+			files = append(files, f)
+			continue
+		}
+		// Check import visibility
+		imports, ok := importCache[f]
+		if !ok {
+			imports = d.getImportsForFile(ctx, f)
+			importCache[f] = imports
+		}
+		if importsReach(imports, symbolFile, f, d.root) {
+			files = append(files, f)
+		}
+	}
+	return files, nil
+}
+
 // FindSemanticCallers finds symbols that call/reference the given symbol, filtered by imports.
 func (d *DB) FindSemanticCallers(ctx context.Context, symbolName, symbolFile string) ([]SymbolInfo, error) {
 	rows, err := d.db.QueryContext(ctx, `

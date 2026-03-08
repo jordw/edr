@@ -44,8 +44,9 @@ var ParamDesc = map[string]string{
 	"new_text": "Replacement text",
 	"regex":    "Treat pattern as regex",
 	"all":      "Replace all matches",
-	"move":     "Symbol to move to a new position",
-	"before":   "Place moved symbol before this symbol",
+	"move":        "Symbol to move to a new position",
+	"before":      "Place moved symbol before this symbol",
+	"expect_hash": "Expected file hash for optimistic concurrency (from previous read/edit)",
 
 	// write / edit-move
 	"mkdir":  "Create parent dirs",
@@ -60,6 +61,7 @@ var ParamDesc = map[string]string{
 	"include": "File glob(s) to include",
 	"exclude": "File glob(s) to exclude",
 	"context": "Lines of context",
+	"group":   "Group text search results by file for compact output",
 
 	// map
 	"dir":    "Filter by directory",
@@ -94,7 +96,8 @@ var ParamDesc = map[string]string{
 	"writes":    "File writes: [{file, content, mkdir?, after?, inside?}]",
 	"renames":   "Cross-file renames: [{old_name, new_name, dry_run?, scope?}]",
 	"verify":    "true = auto-detect build check, \"build\"/\"test\" = shortcut for level, other string = custom command",
-	"init_flag": "Force re-index before other operations",
+	"init_flag":        "Force re-index before other operations",
+	"read_after_edit":  "Read edited files after applying edits (saves a round trip)",
 }
 
 // P is a shorthand for ParamDesc lookup.

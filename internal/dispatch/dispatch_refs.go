@@ -3,10 +3,25 @@ package dispatch
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 )
+
+// splitFileSymbol parses "file.go:Symbol" into [file, symbol].
+// Returns nil if the string doesn't look like file:symbol.
+func splitFileSymbol(s string) []string {
+	idx := strings.LastIndex(s, ":")
+	if idx <= 0 || idx == len(s)-1 {
+		return nil
+	}
+	file, sym := s[:idx], s[idx+1:]
+	if !looksLikeFilePath(file) {
+		return nil
+	}
+	return []string{file, sym}
+}
 
 func runImpact(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {
@@ -98,10 +113,24 @@ func runCallChain(ctx context.Context, db *index.DB, root string, args []string,
 	to := args[1]
 	maxDepth := flagInt(flags, "depth", 5)
 
-	// Resolve 'to' to get its file for semantic lookup
-	toSym, err := db.ResolveSymbol(ctx, to)
-	if err != nil {
-		return nil, fmt.Errorf("call-chain: cannot resolve %q: %w", to, err)
+	// Resolve 'to' — supports file:symbol syntax for disambiguation
+	var toSym *index.SymbolInfo
+	if parts := splitFileSymbol(to); parts != nil {
+		file, err := db.ResolvePath(parts[0])
+		if err != nil {
+			return nil, fmt.Errorf("call-chain: cannot resolve file %q: %w", parts[0], err)
+		}
+		toSym, err = db.GetSymbol(ctx, file, parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("call-chain: cannot resolve %q in %s: %w", parts[1], parts[0], err)
+		}
+		to = parts[1]
+	} else {
+		var err error
+		toSym, err = db.ResolveSymbol(ctx, to)
+		if err != nil {
+			return nil, fmt.Errorf("call-chain: cannot resolve %q: %w", to, err)
+		}
 	}
 
 	// BFS from 'to' backwards through callers to find 'from'
