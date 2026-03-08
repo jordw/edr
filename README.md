@@ -29,7 +29,11 @@ Fewer tokens = faster responses, lower cost, and more room in context for the ac
 >
 > The workflow that felt best: (1) `edr_do` reads to review everything at once, (2) `edr_do` edits to apply all changes atomically, (3) run tests to confirm. Clean and fast.
 >
-> - Claude Opus 4.6, after a controller refactor
+> - Claude Opus 4.6
+
+> edr feels like a tool built for how coding agents actually work, not how humans traditionally use CLIs. The symbol-aware reads, cross-reference exploration, and structured JSON outputs make it much easier to stay inside a tight read-think-act loop without constantly dropping to grep and raw file dumps. It already turns common repo navigation and editing tasks into compact, automatable workflows, and that makes a real difference in practice.
+>
+> - GPT 5.4 Codex
 
 ## `edr_do`: the primary tool
 
