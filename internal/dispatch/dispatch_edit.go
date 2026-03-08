@@ -13,6 +13,29 @@ import (
 )
 
 func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+	dryRun := flagBool(flags, "dry-run", false)
+
+	// Move mode: --move <symbol> --after/--before <symbol>
+	moveSymbol := flagString(flags, "move", "")
+	if moveSymbol != "" {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("edit --move requires a file argument")
+		}
+		file, err := db.ResolvePath(args[0])
+		if err != nil {
+			return nil, err
+		}
+		after := flagString(flags, "after", "")
+		before := flagString(flags, "before", "")
+		if after == "" && before == "" {
+			return nil, fmt.Errorf("edit --move requires --after or --before to specify destination")
+		}
+		if after != "" && before != "" {
+			return nil, fmt.Errorf("edit --move: use --after or --before, not both")
+		}
+		return smartEditMove(ctx, db, file, moveSymbol, after, before, dryRun)
+	}
+
 	// new_text is the primary flag name; replacement is accepted as a legacy alias.
 	newText := flagString(flags, "new_text", "")
 	if newText == "" {
@@ -21,8 +44,6 @@ func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string,
 	if newText == "" {
 		return nil, fmt.Errorf("edit requires 'new_text' in flags")
 	}
-
-	dryRun := flagBool(flags, "dry-run", false)
 
 	// Determine targeting mode:
 	// 1. --start_line/--end_line: line range (requires file as first arg)
@@ -233,6 +254,133 @@ func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacem
 		if totalMatches > 1 {
 			m["total_matches"] = totalMatches
 		}
+	}
+	return result, nil
+}
+
+// smartEditMove moves a symbol to a new position relative to another symbol, atomically.
+func smartEditMove(ctx context.Context, db *index.DB, file, moveSymbol, afterSymbol, beforeSymbol string, dryRun bool) (any, error) {
+	src, err := db.GetSymbol(ctx, file, moveSymbol)
+	if err != nil {
+		return nil, fmt.Errorf("move source: %w", err)
+	}
+
+	destName := afterSymbol
+	if destName == "" {
+		destName = beforeSymbol
+	}
+	dest, err := db.GetSymbol(ctx, file, destName)
+	if err != nil {
+		return nil, fmt.Errorf("move destination: %w", err)
+	}
+
+	// Self-move is a no-op
+	if src.StartByte == dest.StartByte && src.EndByte == dest.EndByte {
+		return map[string]any{
+			"ok":      true,
+			"noop":    true,
+			"file":    output.Rel(file),
+			"message": fmt.Sprintf("%s is already at the target position", moveSymbol),
+		}, nil
+	}
+
+	// Check for overlap
+	if src.StartByte < dest.EndByte && dest.StartByte < src.EndByte {
+		return nil, fmt.Errorf("cannot move %s: overlaps with %s", moveSymbol, destName)
+	}
+
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract the source text, including leading blank lines that visually belong to it.
+	// Also consume trailing newlines to avoid leaving a gap.
+	deleteStart := src.StartByte
+	deleteEnd := src.EndByte
+
+	// Expand backward to consume preceding blank line(s) (up to one blank line)
+	pos := int(deleteStart)
+	// Skip back past the newline right before the symbol
+	if pos > 0 && data[pos-1] == '\n' {
+		pos--
+		// Skip back past another blank line if present
+		if pos > 0 && data[pos-1] == '\n' {
+			pos--
+		}
+		deleteStart = uint32(pos + 1) // keep one newline as separator
+	}
+
+	// Expand forward to consume trailing newline(s)
+	pos = int(deleteEnd)
+	for pos < len(data) && data[pos] == '\n' {
+		pos++
+	}
+	deleteEnd = uint32(pos)
+
+	symbolText := strings.TrimRight(string(data[src.StartByte:src.EndByte]), "\n")
+
+	// Compute insertion point
+	var insertAt uint32
+	if afterSymbol != "" {
+		insertAt = dest.EndByte
+	} else {
+		insertAt = dest.StartByte
+	}
+
+	// Build the replacement text
+	var insertion string
+	if afterSymbol != "" {
+		insertion = "\n\n" + symbolText + "\n"
+	} else {
+		insertion = symbolText + "\n\n"
+	}
+
+	if dryRun {
+		// Apply both edits in memory to produce a preview
+		result := string(data)
+		// Apply in reverse byte order to preserve offsets
+		if deleteStart > insertAt {
+			// Delete is after insert position
+			result = result[:deleteStart] + result[deleteEnd:]
+			result = result[:insertAt] + insertion + result[insertAt:]
+		} else {
+			// Insert is after delete position
+			result = result[:insertAt] + insertion + result[insertAt:]
+			result = result[:deleteStart] + result[deleteEnd:]
+		}
+		diff, _ := edit.DiffPreviewContent(file, data, []byte(result))
+		return map[string]any{
+			"file":    output.Rel(file),
+			"symbol":  moveSymbol,
+			"diff":    diff,
+			"dry_run": true,
+		}, nil
+	}
+
+	hash, _ := edit.FileHash(file)
+	cr, err := commitEdits(ctx, db, []resolvedEdit{
+		{File: file, StartByte: deleteStart, EndByte: deleteEnd, Replacement: "", ExpectHash: hash},
+		{File: file, StartByte: insertAt, EndByte: insertAt, Replacement: insertion, ExpectHash: hash},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("move failed: %w", err)
+	}
+
+	rel := output.Rel(file)
+	result := map[string]any{
+		"ok":     true,
+		"file":   rel,
+		"hash":   cr.Hashes[rel],
+		"symbol": moveSymbol,
+	}
+	if afterSymbol != "" {
+		result["after"] = afterSymbol
+	} else {
+		result["before"] = beforeSymbol
+	}
+	if len(cr.IndexErrors) > 0 {
+		result["index_error"] = cr.IndexErrors[rel]
 	}
 	return result, nil
 }

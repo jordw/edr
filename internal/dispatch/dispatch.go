@@ -483,33 +483,6 @@ func toOutputSymbol(sym *index.SymbolInfo, hash string) output.Symbol {
 	}
 }
 
-
-
-// reindexFiles re-indexes multiple files under a single writer lock acquisition.
-// Returns a map of file→error for any failures; nil if all succeeded.
-func reindexFiles(ctx context.Context, db *index.DB, files []string) map[string]string {
-	var errs map[string]string
-	if lockErr := db.WithWriteLock(func() error {
-		for _, file := range files {
-			if err := index.IndexFile(ctx, db, file); err != nil {
-				if errs == nil {
-					errs = make(map[string]string)
-				}
-				errs[output.Rel(file)] = err.Error()
-			}
-		}
-		return nil
-	}); lockErr != nil {
-		if errs == nil {
-			errs = make(map[string]string)
-		}
-		for _, file := range files {
-			errs[output.Rel(file)] = lockErr.Error()
-		}
-	}
-	return errs
-}
-
 type resolvedEdit struct {
 	File        string
 	StartByte   uint32

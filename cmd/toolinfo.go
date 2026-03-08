@@ -8,7 +8,7 @@ var ToolDesc = map[string]string{
 	"plan":    "Batch edits with dry-run preview. Use edr_do for full read/query/edit/write workflows.",
 	"do":      "Batch reads, queries, edits, writes, renames, verify, init. The primary tool for all operations.",
 	"read":    "Read file, symbol (file:sym), or batch. Use edr_do for multiple reads.",
-	"edit":    "Edit by old_text/new_text, symbol, or line range. Returns hash.",
+	"edit":    "Edit by old_text/new_text, symbol, line range, or move. Returns hash.",
 	"write":   "Create/overwrite file. Supports append, after (symbol), inside (container), mkdir.",
 	"search":  "Symbol or text search. body=true includes source inline.",
 	"map":     "Symbol map of repo or file. Filters: dir, glob, type, grep.",
@@ -40,15 +40,17 @@ var ParamDesc = map[string]string{
 	"full":        "Force full content (skip delta)",
 
 	// edit
-	"old_text":  "Text to find",
-	"new_text":  "Replacement text",
-	"regex":     "Treat pattern as regex",
-	"all":       "Replace all matches",
+	"old_text": "Text to find",
+	"new_text": "Replacement text",
+	"regex":    "Treat pattern as regex",
+	"all":      "Replace all matches",
+	"move":     "Symbol to move to a new position",
+	"before":   "Place moved symbol before this symbol",
 
-	// write
+	// write / edit-move
 	"mkdir":  "Create parent dirs",
 	"append": "Append to file",
-	"after":  "Insert after symbol",
+	"after":  "Place after this symbol",
 	"inside": "Insert inside container",
 
 	// search
@@ -88,7 +90,7 @@ var ParamDesc = map[string]string{
 	// do (was plan)
 	"reads":     "Read queries: [{file, symbol?, budget?, signatures?, depth?}]",
 	"queries":   "Any query: [{cmd: search|explore|refs|map|find|diff, ...params}]",
-	"edits":     "Atomic edits: [{file, old_text, new_text}] or [{file, symbol, new_text}] or [{file, start_line, end_line, new_text}]. Supports regex, all flags.",
+	"edits":     "Atomic edits: [{file, old_text, new_text}] or [{file, symbol, new_text}] or [{file, start_line, end_line, new_text}] or [{file, move, after/before}]. Supports regex, all flags.",
 	"writes":    "File writes: [{file, content, mkdir?, after?, inside?}]",
 	"renames":   "Cross-file renames: [{old_name, new_name, dry_run?, scope?}]",
 	"verify":    "true = auto-detect build check, \"build\"/\"test\" = shortcut for level, other string = custom command",

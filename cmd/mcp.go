@@ -177,6 +177,9 @@ func mcpTools() []mcpTool {
 						"end_line":   {Type: "integer", Description: P("end_line")},
 						"regex":      {Type: "boolean", Description: P("regex")},
 						"all":        {Type: "boolean", Description: P("all")},
+						"move":       {Type: "string", Description: P("move")},
+						"after":      {Type: "string", Description: P("after")},
+						"before":     {Type: "string", Description: P("before")},
 					}}},
 					"writes": {Type: "array", Description: P("writes"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
 						"file":    {Type: "string", Description: "File path (required)"},
@@ -402,6 +405,9 @@ type doEdit struct {
 	EndLine   *int   `json:"end_line,omitempty"`
 	Regex     *bool  `json:"regex,omitempty"`
 	All       *bool  `json:"all,omitempty"`
+	Move      string `json:"move,omitempty"`
+	After     string `json:"after,omitempty"`
+	Before    string `json:"before,omitempty"`
 }
 
 type doWrite struct {
@@ -440,6 +446,7 @@ var doQueryKnownKeys = map[string]bool{
 var doEditKnownKeys = map[string]bool{
 	"file": true, "old_text": true, "new_text": true, "symbol": true,
 	"start_line": true, "end_line": true, "regex": true, "all": true,
+	"move": true, "after": true, "before": true,
 }
 
 var doWriteKnownKeys = map[string]bool{
@@ -729,6 +736,15 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 			}
 			if e.All != nil && *e.All {
 				m["all"] = true
+			}
+			if e.Move != "" {
+				m["move"] = e.Move
+			}
+			if e.After != "" {
+				m["after"] = e.After
+			}
+			if e.Before != "" {
+				m["before"] = e.Before
 			}
 			editsRaw[i] = m
 		}

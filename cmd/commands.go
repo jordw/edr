@@ -149,6 +149,9 @@ func init() {
 	editCmd.Flags().Bool("regex", false, P("regex"))
 	editCmd.Flags().Bool("all", false, P("all"))
 	editCmd.Flags().Bool("dry-run", false, P("dry_run"))
+	editCmd.Flags().String("move", "", "Symbol to move")
+	editCmd.Flags().String("after", "", "Place after this symbol (use with --move)")
+	editCmd.Flags().String("before", "", "Place before this symbol (use with --move)")
 }
 
 var mapCmd = &cobra.Command{

@@ -215,17 +215,28 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 			if strings.Contains(body, "struct {") || strings.Contains(body, "struct{") {
 				trimmed := strings.TrimSpace(content)
 				if strings.HasPrefix(trimmed, "func ") || strings.HasPrefix(trimmed, "func(") {
-					// Auto-reroute: insert after the struct instead of inside it
+					// If --after is also set, honor it for placement
+					afterChild := flagString(flags, "after", "")
+					insertAfter := container.EndByte
+					insertLabel := container.Name
+					if afterChild != "" {
+						afterSym, afterErr := db.GetSymbol(ctx, container.File, afterChild)
+						if afterErr != nil {
+							return nil, fmt.Errorf("--after symbol %q not found in %s: %w", afterChild, output.Rel(container.File), afterErr)
+						}
+						insertAfter = afterSym.EndByte
+						insertLabel = afterSym.Name
+					}
 					hash := edit.HashBytes(data)
 					insertion := "\n\n" + content
 					cr, err := commitEdits(ctx, db, []resolvedEdit{{
-						File: container.File, StartByte: container.EndByte, EndByte: container.EndByte,
+						File: container.File, StartByte: insertAfter, EndByte: insertAfter,
 						Replacement: insertion, ExpectHash: hash,
 					}})
 					if err != nil {
 						return output.EditResult{OK: false, File: output.Rel(container.File), Message: err.Error()}, nil
 					}
-					return writeResult(container.File, cr, fmt.Sprintf("inserted after %s (auto-rerouted from --inside: Go struct methods go outside)", container.Name)), nil
+					return writeResult(container.File, cr, fmt.Sprintf("inserted after %s (auto-rerouted from --inside: Go struct methods go outside)", insertLabel)), nil
 				}
 			}
 		}

@@ -123,12 +123,18 @@ edr edit src/config.go parseConfig --new_text "func parseConfig() { ... }"
 # Line-range: replace lines with new_text
 edr edit src/config.go --start_line 45 --end_line 60 --new_text "replacement code"
 
+# Move a symbol to a new position (atomic delete + insert)
+edr edit src/config.go --move parseConfig --after main
+edr edit src/config.go --move parseConfig --before initDefaults
+edr edit src/config.go --move parseConfig --after main --dry-run
+
 # Preview changes without applying
 edr edit src/config.go --old_text "oldName" --dry-run --new_text "newName"
 ```
 
 > **MCP usage**: `edr_do(edits: [{file: "file.go", old_text: "old code", new_text: "new code"}])`
 > This is the direct equivalent of the built-in Edit tool's `old_string`/`new_string` pattern.
+> **Move**: `edr_do(edits: [{file: "file.go", move: "FuncA", after: "FuncB"}])`
 
 ## Writing (`write`)
 
@@ -229,7 +235,8 @@ It supports seven operation types, all in one call:
 #   ],
 #   edits: [
 #     {file: "src/main.go", old_text: "oldFunc()", new_text: "newFunc()"},
-#     {file: "src/config.go", symbol: "parseConfig", new_text: "..."}
+#     {file: "src/config.go", symbol: "parseConfig", new_text: "..."},
+#     {file: "src/main.go", move: "initDB", after: "main"}
 #   ],
 #   writes: [{file: "src/new.go", content: "package main\n...", mkdir: true}],
 #   renames: [{old_name: "OldFunc", new_name: "NewFunc", dry_run: true}],
