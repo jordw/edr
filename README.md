@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev)
 
-**On the included fixture: ~89% fewer response bytes. 20 calls down to 9.**
+**Up to 89% less context burned and 55% fewer tool calls than simulated default Read/Edit/Grep/Glob workflows.**
 
 Coding agents waste context. They read entire files to find one function, make three round trips to change one line, and grep symbols into walls of unstructured text.
 
