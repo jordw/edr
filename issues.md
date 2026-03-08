@@ -6,6 +6,7 @@
 Fixed: top-level budget now distributed to queries; inferred commands get default budget of 200 tokens.
 
 ### 2. Rename doesn't catch convention-related identifiers
+- **Iterations observed**: 4g (iterations 1-9)
 - **Phase**: 4g (cross-file rename)
 - **Command**: `edr(renames: [{old_name: "Greeter", new_name: "Speaker", ...}])`
 - **Expected**: Also rename `NewGreeter` → `NewSpeaker` (Go constructor convention)
@@ -35,7 +36,7 @@ Code already correctly updates stored hash after delta delivery. Regression test
 - **Actual**: Preview diff showed pre-edit content instead of the current content written in Phase 4c
 - **Severity**: Bug — misleading preview could cause agents to approve incorrect moves
 - **Area**: `internal/dispatch/dispatch.go:runEditPlan` — move preview should read fresh from disk, not from index/cache
-- **Iterations observed**: 7
+- **Iterations observed**: 7 (not reproduced in iteration 9 -- preview showed correct post-edit content)
 
 ### 7. MCP server operates on main repo root, not worktree root
 - **Phase**: 10 (update issues.md)
@@ -85,9 +86,9 @@ Batch reads divide budget evenly across N items. A small symbol and a large func
 - **Area**: `internal/dispatch/dispatch.go:DispatchMulti`
 
 ### 4. Move symbol: unified diff in dry-run
-Move dry-run shows two separate diffs (delete + insert). Also may use stale index content (Issue 7). Confirmed iterations 2-8.
-- **Current**: two separate diffs, potentially with stale content
-- **Desired**: single merged diff; add `"final_order"` summary; always read fresh from disk
+Move dry-run shows two separate diffs (delete + insert). Stale index content issue (Issue 7) not reproduced in iteration 9. Confirmed iterations 2-8.
+- **Current**: two separate diffs
+- **Desired**: single merged diff; add `"final_order"` summary
 - **Area**: `internal/dispatch/dispatch.go:runEditPlan`
 
 ### 5. Rename dry-run should show diffs, not just line previews
@@ -113,3 +114,10 @@ Parallel iteration agents all write to `_iter_test.go` in the shared repo root, 
 - **Current**: all agents use `_iter_test.go`
 - **Desired**: use unique names per worktree or write to worktree directory
 - **Area**: `iteration.md` Phase 4a setup
+
+### 9. Text search should default to `group: true` via MCP
+Text search returns individual matches ungrouped by default, wasting tokens when multiple matches appear in one file. The `group: true` flag exists but agents must know to pass it.
+- **Current**: `group: true` must be explicitly passed; agents rarely know to do this
+- **Desired**: default `group: true` for text search via MCP (CLI can keep current behavior)
+- **Area**: `cmd/mcp.go:doQueryToMultiCmd` (line ~1034), `internal/dispatch/dispatch_search.go`
+- **Iterations observed**: 9
