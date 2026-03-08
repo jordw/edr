@@ -145,3 +145,13 @@ For each:
 1. What to change and why it matters for agents
 2. Current behavior → desired behavior
 3. Starting point in the codebase (file:function)
+
+## Phase 10: Update issues.md
+
+After producing the report, update `issues.md` at the repo root:
+
+1. **Read `issues.md`** to see existing issues and improvements.
+2. **Add new issues** found during this iteration to the Issues section. If a new issue duplicates an existing one, enhance the existing entry with additional detail or leave it as-is — do not create duplicates.
+3. **Add new improvements** to the Improvements section using the same dedup logic.
+4. **Re-assess priority** of the entire Improvements list based on cumulative evidence across all iterations. Reorder if priorities have shifted.
+5. **Remove resolved items** — if an issue or improvement has been fixed since the last iteration, delete it.

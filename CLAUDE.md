@@ -337,4 +337,4 @@ All output is structured JSON. File paths are relative to repo root. Edit comman
 
 ## Iterate command
 
-When the user says **"iterate"**, run the iteration prompt in `iteration_prompt.md`. Follow every phase in order, respect the call budgets, and produce the structured report at the end.
+When the user says **"iterate"**, run the iteration prompt in `iteration.md`. Follow every phase in order, respect the call budgets, and produce the structured report at the end.
