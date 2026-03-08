@@ -6,15 +6,22 @@ From "better repo tool" to "system agents can genuinely depend on."
 
 ## Phase 1: Foundations (weeks 1–2)
 
-### Session trace collection
+### ~~Session trace collection~~ ✓ Done
 
-Instrument every MCP session to capture structured traces: query issued, results returned, which result the agent used next, whether the final edit passed verification. Store in SQLite alongside the index.
+Append-only `traces.db` captures structured traces per MCP session: calls, edit events, verify events, query events, and session optimization stats (delta reads, body dedup, slim edits). Async flush goroutine with buffered channel ensures zero impact on MCP response latency.
 
-This is the foundation for everything else. Without traces, you can't train ranking, learn patterns, or measure what works.
+`edr bench-session` scores a completed session with derived analysis: read efficiency, edit success rate, verify pass rate, optimization rate, tokens per call, edits reverted.
 
-Add `edr bench-session` that scores a completed session: tool calls used, tokens consumed, edits that stuck vs. reverted, verify passes/failures. This is the optimization target for every feature that follows.
+**Benchmark baseline** (55-call multi-language session across Go/Python/Rust/C/Java/Ruby/JS/TSX):
+- 25% read efficiency (8 delta reads / 32 total reads)
+- 27% optimization rate (delta + dedup + slim hits / total optimizable calls)
+- 180 tokens/call average
+- 7 body dedup hits, 8 delta reads
+- ~14ms/session, ~17.5KB total response
 
-### Persistent session state
+### Persistent session state ← highest impact next
+
+**Why this is next:** The benchmark shows 25% read efficiency and 27% optimization rate — meaning 75% of reads and 73% of optimizable operations gain nothing from session tracking. The main reason: session state lives in process memory and resets on every reconnect. Persisting it would let delta reads and body dedup accumulate across long-running agent tasks, directly improving both metrics.
 
 Today, diffs, read deltas, and "already seen" bodies live only in process memory. That's fine for one MCP connection, but it means normal CLI calls forget everything and `diff` becomes much less useful across reconnects.
 
@@ -23,6 +30,7 @@ Persist session state in SQLite with explicit session IDs:
 - resume a previous session
 - inspect recent diffs after reconnect
 - keep body-dedup and delta-reads working across long-running agent tasks
+- **measured impact target**: push read efficiency above 50% and optimization rate above 40% for multi-call sessions
 
 Phase 5's session memory graph should build on this, not reinvent it.
 
@@ -114,6 +122,20 @@ If edr is going to be the default repo tool for agents, "works on my laptop" is 
 ### Doc comment indexing
 
 Tree-sitter already parses comments adjacent to symbols. Extract and store doc comments / docstrings in the index alongside symbol metadata. Surface them in `map`, `search`, and `explore` output. Zero-model version of `edr explain` — lets agents understand intent without reading full bodies.
+
+### Benchmark-driven priorities
+
+The 55-call multi-language benchmark (`TestSessionMultiLang`) reveals concrete optimization opportunities, ranked by expected impact:
+
+1. **Persistent sessions** (see above) — 75% of reads are full fetches. Persisting content hashes across reconnects would turn most re-reads into deltas. Target: 50%+ read efficiency.
+
+2. **Slim edit tracking** — The benchmark records 0 slim edits because the test helper routes edits through dispatch (which returns full results). In real MCP sessions, large edit diffs are stripped — but the threshold (20 lines) may be too conservative. Tuning this and ensuring slim edits are counted in all code paths would improve optimization rate.
+
+3. **Signatures as default for orientation** — The benchmark's signature reads (phase 2) are 75-86% smaller than full reads. Making `--signatures` the default for `map` and initial `explore` would reduce tokens/call significantly for orientation phases.
+
+4. **Depth-2 reads for implementation** — Depth-2 reads (phase 10) provide collapsed block views that are 40-60% smaller than full reads. Defaulting to depth-2 for large files (>200 lines) would reduce wasted context on first read.
+
+5. **Cross-language semantic refs** — The benchmark covers 8 languages but only Go/Python/JS/TS have import-aware refs. Rust, Java, and Ruby `explore --callers` and `rename` calls produce noisy results. Adding import extraction for these three languages would improve the quality of every multi-language session.
 
 ---
 
