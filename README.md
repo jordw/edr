@@ -2,9 +2,9 @@
 
 **Up to 90% fewer tokens on common agent workflows.**
 
-Coding agents waste tokens. They read entire files to find one function. They make three round trips — read, edit, re-read — to change a single line. They grep for a symbol and get a wall of unstructured text.
+Coding agents waste tokens. They read entire files to find one function. They make three round trips (read, edit, re-read) to change a single line. They grep for a symbol and get a wall of unstructured text.
 
-edr is an MCP server that gives agents surgical, budget-controlled access to your codebase. It indexes your repo with tree-sitter so agents can read individual symbols, search call graphs, and batch entire workflows into one or two tool calls. Its primary interface, `edr_plan`, lets an agent gather all context and apply all changes in just two calls — replacing what would otherwise be 7+ sequential reads, edits, and verifications.
+edr is an MCP server that gives agents surgical, budget-controlled access to your codebase. It indexes your repo with tree-sitter so agents can read individual symbols, search call graphs, and batch entire workflows into one or two tool calls. Its primary interface, `edr_plan`, lets an agent gather all context and apply all changes in just two calls instead of 7+ sequential reads, edits, and verifications.
 
 ## The numbers
 
@@ -21,17 +21,17 @@ Across 9 real workflows, edr uses **88% fewer response bytes** and **half the to
 | Explore a symbol | 19,969B / 3 calls (grep + reads) | 4,566B / 1 call (body + callers + deps) | **77%** |
 | **Total (9 workflows)** | **169KB / 20 calls** | **19KB / 9 calls** | **88%** |
 
-Fewer tokens = faster responses, lower cost, and more room in context for the actual task. And fewer tool calls means less overhead — each call carries inference latency, scheduling cost, and context-switching tax that compounds across a session.
+Fewer tokens = faster responses, lower cost, and more room in context for the actual task. And fewer tool calls means less overhead. Each call carries inference latency and context-switching tax that compounds across a session.
 
 ## What agents say
 
-> That was pretty awesome. One `edr_plan` call to rewrite 12 files atomically — no need to Read each file first, no 12 separate Write calls. The whole system test rewrite was one tool call instead of 24+. The read side was good too — batch-reading all 8 controller tests and then all 6 controllers for cross-referencing, all in single calls with hashes and metadata.
+> That was pretty awesome. One `edr_plan` call to rewrite 12 files atomically. No need to Read each file first, no 12 separate Write calls. The whole system test rewrite was one tool call instead of 24+. The read side was good too: batch-reading all 8 controller tests and then all 6 controllers for cross-referencing, all in single calls with hashes and metadata.
 >
-> The workflow that felt best: (1) `edr_plan` reads — review everything at once, (2) `edr_plan` edits — apply all changes atomically, (3) run tests — confirm. Clean and fast.
+> The workflow that felt best: (1) `edr_plan` reads to review everything at once, (2) `edr_plan` edits to apply all changes atomically, (3) run tests to confirm. Clean and fast.
 >
-> — Claude Opus 4.6, after a controller refactor
+> - Claude Opus 4.6, after a controller refactor
 
-## `edr_plan` — the primary tool
+## `edr_plan`: the primary tool
 
 Most agent tasks follow a two-step pattern: gather context, then make changes. `edr_plan` handles both, batching reads, searches, edits, writes, and verification into a single call:
 
@@ -58,20 +58,20 @@ edr_plan(
 
 Two tool calls instead of seven. Each call can mix any combination of:
 
-- **reads** — files, symbols, line ranges, `--signatures`, `--depth`
-- **queries** — `search`, `map`, `explore`, `refs`, `find`
-- **edits** — old_text/new_text, symbol replacement, line ranges
-- **writes** — create files, `--inside` a class, `--after` a symbol
-- **verify** — run `go test`, `npm test`, etc. after mutations
+- **reads**: files, symbols, line ranges, `--signatures`, `--depth`
+- **queries**: `search`, `map`, `explore`, `refs`, `find`
+- **edits**: old_text/new_text, symbol replacement, line ranges
+- **writes**: create files, `--inside` a class, `--after` a symbol
+- **verify**: run `go test`, `npm test`, etc. after mutations
 
 Without `edr_plan`, the same task takes 7 sequential calls:
 
 ```
-Read("lib/scheduler.py")                    # 13,894B — whole file, just to see the class
+Read("lib/scheduler.py")                    # 13,894B, whole file, just to see the class
 Grep("retry", "lib/")                       # unstructured text results
-Read("lib/scheduler.py")                    # 13,894B — yes, again, to find the edit target
-Edit("lib/scheduler.py", old, new)          #    200B — confirmation
-Read("lib/scheduler.py")                    # 13,894B — a third time, to verify
+Read("lib/scheduler.py")                    # 13,894B, yes, again, to find the edit target
+Edit("lib/scheduler.py", old, new)          #    200B confirmation
+Read("lib/scheduler.py")                    # 13,894B, a third time, to verify
 Write("lib/scheduler_test.py", content)     #    200B
 Bash("go test ./...")                        # verification
 ```
@@ -82,21 +82,21 @@ That's 42KB of response tokens, 7 round trips, and 7 inference cycles where the 
 
 edr parses your code with tree-sitter and stores a symbol index in `.edr/`. When an agent asks for something, edr returns just what's needed:
 
-- **Symbol-scoped reads** — read a function or class, not the whole file
-- **`--signatures`** — see a class's API without its implementation (75-90% smaller)
-- **`--depth`** — progressive disclosure: expand one nesting level at a time
-- **`--inside`** — add a method to a class without reading the file first
-- **Budget control** — cap response size so agents don't blow their context
-- **Batching** — read, search, edit, write, and verify in a single `edr_plan` call
-- **Semantic refs** — import-aware "find references" that filters false positives
-- **Session dedup** — re-reading a file returns a delta, not the whole thing again
+- **Symbol-scoped reads**: read a function or class, not the whole file
+- **`--signatures`**: see a class's API without its implementation (75-90% smaller)
+- **`--depth`**: progressive disclosure, expand one nesting level at a time
+- **`--inside`**: add a method to a class without reading the file first
+- **Budget control**: cap response size so agents don't blow their context
+- **Batching**: read, search, edit, write, and verify in a single `edr_plan` call
+- **Semantic refs**: import-aware "find references" that filters false positives
+- **Session dedup**: re-reading a file returns a delta, not the whole thing again
 
 ## Quick start
 
 ### As an MCP server (Claude Code, Codex, etc.)
 
 ```bash
-# One command — installs deps if needed, builds, configures MCP:
+# One command. Installs deps if needed, builds, configures MCP:
 ./setup.sh /path/to/your/repo
 
 # Or manually:
