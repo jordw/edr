@@ -536,6 +536,20 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 
 	// 2. Dispatch generalized queries via DispatchMulti (+ diff queries inline)
 	if hasQueries {
+		// Distribute top-level budget to queries that lack individual budgets
+		if p.Budget != nil && len(p.Queries) > 0 {
+			perQuery := *p.Budget / len(p.Queries)
+			if perQuery < 50 {
+				perQuery = 50
+			}
+			for i := range p.Queries {
+				if p.Queries[i].Budget == nil {
+					b := perQuery
+					p.Queries[i].Budget = &b
+				}
+			}
+		}
+
 		// Partition into dispatch queries and diff queries
 		type indexedResult struct {
 			idx    int
@@ -952,10 +966,17 @@ func inferQueryCmd(q doQuery) string {
 
 func doQueryToMultiCmd(q doQuery) dispatch.MultiCmd {
 	cmd := q.Cmd
+	inferred := false
 	if cmd == "" {
 		cmd = inferQueryCmd(q)
+		inferred = true
 	}
 
+	// When cmd is inferred and no budget is set, apply a default cap
+	if inferred && q.Budget == nil {
+		defaultBudget := 200
+		q.Budget = &defaultBudget
+	}
 
 	args := []string{}
 	flags := map[string]any{}
