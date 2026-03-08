@@ -1,12 +1,13 @@
 package cmd
 
 // toolinfo.go — single source of truth for tool descriptions.
-// Used by both MCP tool schema (mcpTools) and CLI help (cobra commands).
+// ParamDesc is used by CLI help (cobra flags). MP() returns MCP-optimized
+// descriptions that omit self-documenting fields to save ~400 schema tokens.
 
 // ToolDesc holds the description for each tool.
 var ToolDesc = map[string]string{
 	"plan":    "Batch edits with dry-run preview. Use edr for full read/query/edit/write workflows.",
-	"do":      "Batch reads, queries, edits, writes, renames, verify, init. The primary tool for all operations.",
+	"do":      "Batch reads, queries, edits, writes, renames, verify, init.",
 	"read":    "Read file, symbol (file:sym), or batch. Use edr for multiple reads.",
 	"edit":    "Edit by old_text/new_text, symbol, line range, or move. Returns hash.",
 	"write":   "Create/overwrite file. Supports append, after (symbol), inside (container), mkdir.",
@@ -21,7 +22,7 @@ var ToolDesc = map[string]string{
 	"diff":    "Retrieve stored diff from last large edit.",
 }
 
-// ParamDesc holds parameter descriptions shared between MCP and CLI.
+// ParamDesc holds parameter descriptions for CLI help text.
 var ParamDesc = map[string]string{
 	// Shared
 	"budget":     "Max response tokens",
@@ -100,10 +101,86 @@ var ParamDesc = map[string]string{
 	"read_after_edit":  "Read edited files after applying edits (saves a round trip)",
 }
 
-// P is a shorthand for ParamDesc lookup.
+// mcpParamDesc holds MCP-optimized descriptions. Self-documenting fields
+// (file, symbol, pattern, start_line, etc.) are omitted — with omitempty
+// they vanish from the JSON schema, saving tokens every conversation turn.
+var mcpParamDesc = map[string]string{
+	// Shared — omit self-documenting: file, symbol, content, old_text, new_text,
+	// start_line, end_line, pattern, old_name, new_name
+	"budget":  "Max tokens",
+	"dry_run": "Preview only",
+
+	// read
+	"symbols":    "Append symbol list",
+	"signatures": "Signatures only (75-86% fewer tokens)",
+	"depth":      "1=sigs, 2=collapsed blocks",
+	"full":       "Skip delta cache",
+
+	// edit
+	"regex":       "Regex mode",
+	"all":         "Replace all",
+	"move":        "Symbol to move",
+	"before":      "Before this symbol",
+	"expect_hash": "Hash from prior read/edit",
+
+	// write / edit-move
+	"mkdir":  "Create parent dirs",
+	"append": "Append mode",
+	"after":  "After this symbol",
+	"inside": "Inside container",
+
+	// search
+	"body":    "Include source",
+	"text":    "Text search mode",
+	"include": "Include glob",
+	"exclude": "Exclude glob",
+	"context": "Context lines",
+	"group":   "Group by file",
+
+	// map
+	"dir":    "Directory filter",
+	"glob":   "File glob filter",
+	"type":   "Symbol type filter",
+	"grep":   "Name filter",
+	"locals": "Include locals",
+
+	// explore
+	"callers": "Include callers",
+	"deps":    "Include deps",
+	"gather":  "Callers + tests",
+
+	// refs
+	"impact": "Transitive callers",
+	"chain":  "Call path to target",
+
+	// rename
+	"scope": "Glob scope",
+
+	// do arrays — shorter since schema shows structure
+	"reads":   "Files/symbols to read",
+	"queries": "search|explore|refs|map|find|diff",
+	"edits":   "old_text/new_text, symbol, line range, or move",
+	"writes":  "File creates/overwrites",
+	"renames": "Cross-file renames",
+	"verify":  "true, \"build\", \"test\", or custom command",
+
+	"init_flag":       "Re-index first",
+	"read_after_edit": "Read files after edit",
+}
+
+// P is a shorthand for ParamDesc lookup (CLI help).
 func P(key string) string {
 	if d, ok := ParamDesc[key]; ok {
 		return d
 	}
 	return key
+}
+
+// MP returns MCP-optimized description — empty string for self-documenting
+// fields (omitted from JSON via omitempty).
+func MP(key string) string {
+	if d, ok := mcpParamDesc[key]; ok {
+		return d
+	}
+	return ""
 }
