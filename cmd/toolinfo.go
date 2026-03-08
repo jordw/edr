@@ -6,7 +6,8 @@ package cmd
 // ToolDesc holds the description for each tool.
 var ToolDesc = map[string]string{
 	"plan":    "Batch reads/queries/edits/writes + verify. Preferred for multi-step tasks.",
-	"read":    "Read file, symbol (file:sym), or batch. Use plan for multiple reads.",
+	"do":      "Batch reads, queries, edits, writes, renames, verify, init. The primary tool for all operations.",
+	"read":    "Read file, symbol (file:sym), or batch. Use edr_do for multiple reads.",
 	"edit":    "Edit by old_text/new_text, symbol, or line range. Returns hash.",
 	"write":   "Create/overwrite file. Supports append, after (symbol), inside (container), mkdir.",
 	"search":  "Symbol or text search. body=true includes source inline.",
@@ -83,12 +84,14 @@ var ParamDesc = map[string]string{
 	"command": "Custom command (auto-detect if omitted)",
 	"timeout": "Timeout in seconds",
 
-	// plan
-	"reads":   "Read queries: [{file, symbol?, budget?, signatures?, depth?}]",
-	"queries": "Any query: [{cmd: search|explore|refs|map|find, ...params}]",
-	"edits":   "Atomic edits: [{file, old_text, new_text}]",
-	"writes":  "File writes: [{file, content, mkdir?, after?, inside?}]",
-	"verify":  "true = auto-detect build check, string = custom command",
+	// do (was plan)
+	"reads":     "Read queries: [{file, symbol?, budget?, signatures?, depth?}]",
+	"queries":   "Any query: [{cmd: search|explore|refs|map|find|diff, ...params}]",
+	"edits":     "Atomic edits: [{file, old_text, new_text}]",
+	"writes":    "File writes: [{file, content, mkdir?, after?, inside?}]",
+	"renames":   "Cross-file renames: [{old_name, new_name, dry_run?, scope?}]",
+	"verify":    "true = auto-detect build check, string = custom command",
+	"init_flag": "Force re-index before other operations",
 }
 
 // P is a shorthand for ParamDesc lookup.

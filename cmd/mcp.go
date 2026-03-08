@@ -131,62 +131,71 @@ type mcpContent struct {
 func mcpTools() []mcpTool {
 	return []mcpTool{
 		{
-			Name:        "edr_plan",
-			Description: ToolDesc["plan"],
+			Name:        "edr_do",
+			Description: ToolDesc["do"],
 			InputSchema: mcpSchema{
 				Type: "object",
 				Properties: map[string]mcpProp{
 					"reads": {Type: "array", Description: P("reads"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
-						"file": {Type: "string", Description: "File path (required)"},
-						"symbol": {Type: "string", Description: P("symbol")},
-						"budget": {Type: "integer", Description: P("budget")},
+						"file":       {Type: "string", Description: "File path (required)"},
+						"symbol":     {Type: "string", Description: P("symbol")},
+						"budget":     {Type: "integer", Description: P("budget")},
 						"signatures": {Type: "boolean", Description: P("signatures")},
-						"depth": {Type: "integer", Description: P("depth")},
+						"depth":      {Type: "integer", Description: P("depth")},
 					}}},
 					"queries": {Type: "array", Description: P("queries"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
-						"cmd": {Type: "string", Description: "Command: search, explore, refs, map, find"},
-						"pattern": {Type: "string", Description: P("pattern")},
-						"symbol": {Type: "string", Description: P("symbol")},
-						"file": {Type: "string", Description: P("file")},
-						"budget": {Type: "integer", Description: P("budget")},
-						"body": {Type: "boolean", Description: P("body")},
-						"text": {Type: "boolean", Description: P("text")},
-						"regex": {Type: "boolean", Description: P("regex")},
-						"include": {Type: "string", Description: P("include")},
-						"exclude": {Type: "string", Description: P("exclude")},
-						"context": {Type: "integer", Description: P("context")},
-						"callers": {Type: "boolean", Description: P("callers")},
-						"deps": {Type: "boolean", Description: P("deps")},
-						"gather": {Type: "boolean", Description: P("gather")},
+						"cmd":        {Type: "string", Description: "Command: search, explore, refs, map, find, diff"},
+						"pattern":    {Type: "string", Description: P("pattern")},
+						"symbol":     {Type: "string", Description: P("symbol")},
+						"file":       {Type: "string", Description: P("file")},
+						"budget":     {Type: "integer", Description: P("budget")},
+						"body":       {Type: "boolean", Description: P("body")},
+						"text":       {Type: "boolean", Description: P("text")},
+						"regex":      {Type: "boolean", Description: P("regex")},
+						"include":    {Type: "string", Description: P("include")},
+						"exclude":    {Type: "string", Description: P("exclude")},
+						"context":    {Type: "integer", Description: P("context")},
+						"callers":    {Type: "boolean", Description: P("callers")},
+						"deps":       {Type: "boolean", Description: P("deps")},
+						"gather":     {Type: "boolean", Description: P("gather")},
 						"signatures": {Type: "boolean", Description: P("signatures")},
-						"impact": {Type: "boolean", Description: P("impact")},
-						"chain": {Type: "string", Description: P("chain")},
-						"depth": {Type: "integer", Description: P("depth")},
-						"dir": {Type: "string", Description: P("dir")},
-						"glob": {Type: "string", Description: P("glob")},
-						"type": {Type: "string", Description: P("type")},
-						"grep": {Type: "string", Description: P("grep")},
-						"locals": {Type: "boolean", Description: P("locals")},
+						"impact":     {Type: "boolean", Description: P("impact")},
+						"chain":      {Type: "string", Description: P("chain")},
+						"depth":      {Type: "integer", Description: P("depth")},
+						"dir":        {Type: "string", Description: P("dir")},
+						"glob":       {Type: "string", Description: P("glob")},
+						"type":       {Type: "string", Description: P("type")},
+						"grep":       {Type: "string", Description: P("grep")},
+						"locals":     {Type: "boolean", Description: P("locals")},
 					}}},
 					"edits": {Type: "array", Description: P("edits"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
-						"file": {Type: "string", Description: "File path (required)"},
-						"old_text": {Type: "string", Description: P("old_text")},
-						"new_text": {Type: "string", Description: P("new_text")},
-						"symbol": {Type: "string", Description: P("symbol")},
+						"file":       {Type: "string", Description: "File path (required)"},
+						"old_text":   {Type: "string", Description: P("old_text")},
+						"new_text":   {Type: "string", Description: P("new_text")},
+						"symbol":     {Type: "string", Description: P("symbol")},
 						"start_line": {Type: "integer", Description: P("start_line")},
-						"end_line": {Type: "integer", Description: P("end_line")},
+						"end_line":   {Type: "integer", Description: P("end_line")},
+						"regex":      {Type: "boolean", Description: P("regex")},
+						"all":        {Type: "boolean", Description: P("all")},
 					}}},
 					"writes": {Type: "array", Description: P("writes"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
-						"file": {Type: "string", Description: "File path (required)"},
+						"file":    {Type: "string", Description: "File path (required)"},
 						"content": {Type: "string", Description: P("content")},
-						"mkdir": {Type: "boolean", Description: P("mkdir")},
-						"after": {Type: "string", Description: P("after")},
-						"inside": {Type: "string", Description: P("inside")},
-						"append": {Type: "boolean", Description: P("append")},
+						"mkdir":   {Type: "boolean", Description: P("mkdir")},
+						"after":   {Type: "string", Description: P("after")},
+						"inside":  {Type: "string", Description: P("inside")},
+						"append":  {Type: "boolean", Description: P("append")},
+					}}},
+					"renames": {Type: "array", Description: P("renames"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
+						"old_name": {Type: "string", Description: P("old_name")},
+						"new_name": {Type: "string", Description: P("new_name")},
+						"dry_run":  {Type: "boolean", Description: P("dry_run")},
+						"scope":    {Type: "string", Description: P("scope")},
 					}}},
 					"budget":  {Type: "integer", Description: P("budget")},
 					"dry_run": {Type: "boolean", Description: P("dry_run")},
 					"verify":  {Description: P("verify")},
+					"init":    {Type: "boolean", Description: P("init_flag")},
 				},
 			},
 		},
@@ -209,59 +218,6 @@ func mcpTools() []mcpTool {
 			},
 		},
 		{
-			Name:        "edr_edit",
-			Description: ToolDesc["edit"],
-			InputSchema: mcpSchema{
-				Type: "object",
-				Properties: map[string]mcpProp{
-					"file":       {Type: "string", Description: P("file")},
-					"new_text":   {Type: "string", Description: P("new_text")},
-					"old_text":   {Type: "string", Description: P("old_text")},
-					"symbol":     {Type: "string", Description: P("symbol")},
-					"start_line": {Type: "integer", Description: P("start_line")},
-					"end_line":   {Type: "integer", Description: P("end_line")},
-					"regex":      {Type: "boolean", Description: P("regex")},
-					"all":        {Type: "boolean", Description: P("all")},
-					"dry_run":    {Type: "boolean", Description: P("dry_run")},
-				},
-				Required: []string{"file", "new_text"},
-			},
-		},
-		{
-			Name:        "edr_write",
-			Description: ToolDesc["write"],
-			InputSchema: mcpSchema{
-				Type: "object",
-				Properties: map[string]mcpProp{
-					"file":    {Type: "string", Description: P("file")},
-					"content": {Type: "string", Description: P("content")},
-					"mkdir":   {Type: "boolean", Description: P("mkdir")},
-					"append":  {Type: "boolean", Description: P("append")},
-					"after":   {Type: "string", Description: P("after")},
-					"inside":  {Type: "string", Description: P("inside")},
-				},
-				Required: []string{"file", "content"},
-			},
-		},
-		{
-			Name:        "edr_search",
-			Description: ToolDesc["search"],
-			InputSchema: mcpSchema{
-				Type: "object",
-				Properties: map[string]mcpProp{
-					"pattern": {Type: "string", Description: P("pattern")},
-					"budget":  {Type: "integer", Description: P("budget")},
-					"body":    {Type: "boolean", Description: P("body")},
-					"text":    {Type: "boolean", Description: P("text")},
-					"regex":   {Type: "boolean", Description: P("regex")},
-					"include": {Description: P("include")},
-					"exclude": {Description: P("exclude")},
-					"context": {Type: "integer", Description: P("context")},
-				},
-				Required: []string{"pattern"},
-			},
-		},
-		{
 			Name:        "edr_map",
 			Description: ToolDesc["map"],
 			InputSchema: mcpSchema{
@@ -277,97 +233,6 @@ func mcpTools() []mcpTool {
 				},
 			},
 		},
-		{
-			Name:        "edr_explore",
-			Description: ToolDesc["explore"],
-			InputSchema: mcpSchema{
-				Type: "object",
-				Properties: map[string]mcpProp{
-					"symbol":     {Type: "string", Description: P("symbol")},
-					"file":       {Type: "string", Description: P("file")},
-					"budget":     {Type: "integer", Description: P("budget")},
-					"body":       {Type: "boolean", Description: P("body")},
-					"callers":    {Type: "boolean", Description: P("callers")},
-					"deps":       {Type: "boolean", Description: P("deps")},
-					"gather":     {Type: "boolean", Description: P("gather")},
-					"signatures": {Type: "boolean", Description: P("signatures")},
-				},
-				Required: []string{"symbol"},
-			},
-		},
-		{
-			Name:        "edr_refs",
-			Description: ToolDesc["refs"],
-			InputSchema: mcpSchema{
-				Type: "object",
-				Properties: map[string]mcpProp{
-					"symbol": {Type: "string", Description: P("symbol")},
-					"file":   {Type: "string", Description: P("file")},
-					"impact": {Type: "boolean", Description: P("impact")},
-					"depth":  {Type: "integer", Description: P("depth")},
-					"chain":  {Type: "string", Description: P("chain")},
-				},
-				Required: []string{"symbol"},
-			},
-		},
-		{
-			Name:        "edr_find",
-			Description: ToolDesc["find"],
-			InputSchema: mcpSchema{
-				Type: "object",
-				Properties: map[string]mcpProp{
-					"pattern": {Type: "string", Description: P("pattern")},
-					"dir":     {Type: "string", Description: P("dir")},
-					"budget":  {Type: "integer", Description: P("budget")},
-				},
-				Required: []string{"pattern"},
-			},
-		},
-		{
-			Name:        "edr_rename",
-			Description: ToolDesc["rename"],
-			InputSchema: mcpSchema{
-				Type: "object",
-				Properties: map[string]mcpProp{
-					"old_name": {Type: "string", Description: P("old_name")},
-					"new_name": {Type: "string", Description: P("new_name")},
-					"dry_run":  {Type: "boolean", Description: P("dry_run")},
-					"scope":    {Type: "string", Description: P("scope")},
-				},
-				Required: []string{"old_name", "new_name"},
-			},
-		},
-		{
-			Name:        "edr_verify",
-			Description: ToolDesc["verify"],
-			InputSchema: mcpSchema{
-				Type: "object",
-				Properties: map[string]mcpProp{
-					"command": {Type: "string", Description: P("command")},
-					"timeout": {Type: "integer", Description: P("timeout")},
-				},
-			},
-		},
-		{
-			Name:        "edr_init",
-			Description: ToolDesc["init"],
-			InputSchema: mcpSchema{
-				Type:       "object",
-				Properties: map[string]mcpProp{},
-			},
-		},
-		{
-			Name:        "edr_diff",
-			Description: ToolDesc["diff"],
-			InputSchema: mcpSchema{
-				Type: "object",
-				Properties: map[string]mcpProp{
-					"file":   {Type: "string", Description: P("file")},
-					"symbol": {Type: "string", Description: P("symbol")},
-				},
-				Required: []string{"file"},
-			},
-		},
 	}
 }
 
@@ -375,8 +240,7 @@ func mcpTools() []mcpTool {
 // --- Tool routing ---
 
 // routeTool converts typed tool params into the (cmd, args, flags) tuple for dispatch.
-// Returns isSessionCmd=true for commands handled at the session layer (get-diff).
-func routeTool(toolName string, raw json.RawMessage) (cmd string, args []string, flags map[string]any, isSessionCmd bool, err error) {
+func routeTool(toolName string, raw json.RawMessage) (cmd string, args []string, flags map[string]any, err error) {
 	flags = map[string]any{}
 	args = []string{}
 
@@ -424,113 +288,6 @@ func routeTool(toolName string, raw json.RawMessage) (cmd string, args []string,
 			flags["full"] = true
 		}
 
-	case "edr_edit":
-		var p struct {
-			File      string  `json:"file"`
-			NewText   string  `json:"new_text"`
-			OldText   *string `json:"old_text"`
-			Symbol    *string `json:"symbol"`
-			StartLine *int    `json:"start_line"`
-			EndLine   *int    `json:"end_line"`
-			Regex     *bool   `json:"regex"`
-			All       *bool   `json:"all"`
-			DryRun    *bool   `json:"dry_run"`
-		}
-		if err = json.Unmarshal(raw, &p); err != nil {
-			return
-		}
-		cmd = "edit"
-		if p.Symbol != nil && *p.Symbol != "" {
-			args = []string{p.File, *p.Symbol}
-		} else {
-			args = []string{p.File}
-		}
-		flags["new_text"] = p.NewText
-		if p.OldText != nil {
-			flags["old_text"] = *p.OldText
-		}
-		if p.StartLine != nil {
-			flags["start_line"] = *p.StartLine
-		}
-		if p.EndLine != nil {
-			flags["end_line"] = *p.EndLine
-		}
-		if p.Regex != nil && *p.Regex {
-			flags["regex"] = true
-		}
-		if p.All != nil && *p.All {
-			flags["all"] = true
-		}
-		if p.DryRun != nil && *p.DryRun {
-			flags["dry_run"] = true
-		}
-
-	case "edr_write":
-		var p struct {
-			File    string  `json:"file"`
-			Content string  `json:"content"`
-			Mkdir   *bool   `json:"mkdir"`
-			Append  *bool   `json:"append"`
-			After   *string `json:"after"`
-			Inside  *string `json:"inside"`
-		}
-		if err = json.Unmarshal(raw, &p); err != nil {
-			return
-		}
-		cmd = "write"
-		args = []string{p.File}
-		flags["content"] = p.Content
-		if p.Mkdir != nil && *p.Mkdir {
-			flags["mkdir"] = true
-		}
-		if p.Append != nil && *p.Append {
-			flags["append"] = true
-		}
-		if p.After != nil && *p.After != "" {
-			flags["after"] = *p.After
-		}
-		if p.Inside != nil && *p.Inside != "" {
-			flags["inside"] = *p.Inside
-		}
-
-	case "edr_search":
-		var p struct {
-			Pattern string `json:"pattern"`
-			Budget  *int   `json:"budget"`
-			Body    *bool  `json:"body"`
-			Text    *bool  `json:"text"`
-			Regex   *bool  `json:"regex"`
-			Include any    `json:"include"`
-			Exclude any    `json:"exclude"`
-			Context *int   `json:"context"`
-		}
-		if err = json.Unmarshal(raw, &p); err != nil {
-			return
-		}
-		cmd = "search"
-		args = []string{p.Pattern}
-		if p.Budget != nil {
-			flags["budget"] = *p.Budget
-		}
-		if p.Body != nil && *p.Body {
-			flags["body"] = true
-		}
-		if p.Text != nil && *p.Text {
-			flags["text"] = true
-		}
-		if p.Regex != nil && *p.Regex {
-			flags["regex"] = true
-		}
-		if p.Include != nil {
-			flags["include"] = p.Include
-		}
-		if p.Exclude != nil {
-			flags["exclude"] = p.Exclude
-		}
-		if p.Context != nil {
-			flags["context"] = *p.Context
-		}
-
 	case "edr_map":
 		var p struct {
 			File   *string `json:"file"`
@@ -567,150 +324,9 @@ func routeTool(toolName string, raw json.RawMessage) (cmd string, args []string,
 			flags["locals"] = true
 		}
 
-	case "edr_explore":
-		var p struct {
-			Symbol     string  `json:"symbol"`
-			File       *string `json:"file"`
-			Budget     *int    `json:"budget"`
-			Body       *bool   `json:"body"`
-			Callers    *bool   `json:"callers"`
-			Deps       *bool   `json:"deps"`
-			Gather     *bool   `json:"gather"`
-			Signatures *bool   `json:"signatures"`
-		}
-		if err = json.Unmarshal(raw, &p); err != nil {
-			return
-		}
-		cmd = "explore"
-		if p.File != nil && *p.File != "" {
-			args = []string{*p.File, p.Symbol}
-		} else {
-			args = []string{p.Symbol}
-		}
-		if p.Budget != nil {
-			flags["budget"] = *p.Budget
-		}
-		if p.Body != nil && *p.Body {
-			flags["body"] = true
-		}
-		if p.Callers != nil && *p.Callers {
-			flags["callers"] = true
-		}
-		if p.Deps != nil && *p.Deps {
-			flags["deps"] = true
-		}
-		if p.Gather != nil && *p.Gather {
-			flags["gather"] = true
-		}
-		if p.Signatures != nil && *p.Signatures {
-			flags["signatures"] = true
-		}
-
-	case "edr_refs":
-		var p struct {
-			Symbol string  `json:"symbol"`
-			File   *string `json:"file"`
-			Impact *bool   `json:"impact"`
-			Depth  *int    `json:"depth"`
-			Chain  *string `json:"chain"`
-		}
-		if err = json.Unmarshal(raw, &p); err != nil {
-			return
-		}
-		cmd = "refs"
-		hasChain := p.Chain != nil && *p.Chain != ""
-		if hasChain {
-			// runCallChain expects [fromSymbol, toSymbol] — dispatch appends chain target.
-			// Always pass just [symbol] here; file disambiguation doesn't apply to call chains
-			// since runCallChain resolves symbols by name.
-			args = []string{p.Symbol}
-			flags["chain"] = *p.Chain
-		} else if p.File != nil && *p.File != "" {
-			args = []string{*p.File, p.Symbol}
-		} else {
-			args = []string{p.Symbol}
-		}
-		if p.Impact != nil && *p.Impact {
-			flags["impact"] = true
-		}
-		if p.Depth != nil {
-			flags["depth"] = *p.Depth
-		}
-
-	case "edr_find":
-		var p struct {
-			Pattern string  `json:"pattern"`
-			Dir     *string `json:"dir"`
-			Budget  *int    `json:"budget"`
-		}
-		if err = json.Unmarshal(raw, &p); err != nil {
-			return
-		}
-		cmd = "find"
-		args = []string{p.Pattern}
-		if p.Dir != nil && *p.Dir != "" {
-			flags["dir"] = *p.Dir
-		}
-		if p.Budget != nil {
-			flags["budget"] = *p.Budget
-		}
-
-	case "edr_rename":
-		var p struct {
-			OldName string  `json:"old_name"`
-			NewName string  `json:"new_name"`
-			DryRun  *bool   `json:"dry_run"`
-			Scope   *string `json:"scope"`
-		}
-		if err = json.Unmarshal(raw, &p); err != nil {
-			return
-		}
-		cmd = "rename"
-		args = []string{p.OldName, p.NewName}
-		if p.DryRun != nil && *p.DryRun {
-			flags["dry_run"] = true
-		}
-		if p.Scope != nil && *p.Scope != "" {
-			flags["scope"] = *p.Scope
-		}
-
-	case "edr_verify":
-		var p struct {
-			Command *string `json:"command"`
-			Timeout *int    `json:"timeout"`
-		}
-		if err = json.Unmarshal(raw, &p); err != nil {
-			return
-		}
-		cmd = "verify"
-		if p.Command != nil && *p.Command != "" {
-			flags["command"] = *p.Command
-		}
-		if p.Timeout != nil {
-			flags["timeout"] = *p.Timeout
-		}
-
-	case "edr_init":
-		cmd = "init"
-
-	case "edr_diff":
-		var p struct {
-			File   string  `json:"file"`
-			Symbol *string `json:"symbol"`
-		}
-		if err = json.Unmarshal(raw, &p); err != nil {
-			return
-		}
-		cmd = "get-diff"
-		args = []string{p.File}
-		if p.Symbol != nil && *p.Symbol != "" {
-			args = append(args, *p.Symbol)
-		}
-		isSessionCmd = true
-
-	case "edr_plan":
-		// Handled specially — see handlePlan()
-		cmd = "plan"
+	case "edr_do":
+		// Handled specially — see handleDo()
+		cmd = "do"
 
 	default:
 		err = fmt.Errorf("unknown tool: %s", toolName)
@@ -718,18 +334,20 @@ func routeTool(toolName string, raw json.RawMessage) (cmd string, args []string,
 	return
 }
 
-// planParams holds the parsed params for edr_plan.
-type planParams struct {
-	Reads   []planRead  `json:"reads"`
-	Queries []planQuery `json:"queries"`
-	Edits   []planEdit  `json:"edits"`
-	Writes  []planWrite `json:"writes"`
-	Budget  *int        `json:"budget"`
-	DryRun  *bool       `json:"dry_run"`
-	Verify  any         `json:"verify"`
+// doParams holds the parsed params for edr_do.
+type doParams struct {
+	Reads   []doRead   `json:"reads"`
+	Queries []doQuery  `json:"queries"`
+	Edits   []doEdit   `json:"edits"`
+	Writes  []doWrite  `json:"writes"`
+	Renames []doRename `json:"renames"`
+	Budget  *int       `json:"budget"`
+	DryRun  *bool      `json:"dry_run"`
+	Verify  any        `json:"verify"`
+	Init    *bool      `json:"init"`
 }
 
-type planRead struct {
+type doRead struct {
 	File       string `json:"file"`
 	Symbol     string `json:"symbol,omitempty"`
 	Budget     *int   `json:"budget,omitempty"`
@@ -737,10 +355,10 @@ type planRead struct {
 	Depth      *int   `json:"depth,omitempty"`
 }
 
-// planQuery is a generalized read-only command for use in edr_plan.
-// Cmd selects the operation: search, explore, refs, map, find, read (default).
-type planQuery struct {
-	Cmd string `json:"cmd"` // search, explore, refs, map, find, read
+// doQuery is a generalized read-only command for use in edr_do.
+// Cmd selects the operation: search, explore, refs, map, find, diff, read (default).
+type doQuery struct {
+	Cmd string `json:"cmd"` // search, explore, refs, map, find, diff, read
 
 	// Shared
 	Budget *int    `json:"budget,omitempty"`
@@ -775,16 +393,18 @@ type planQuery struct {
 	Locals *bool   `json:"locals,omitempty"`
 }
 
-type planEdit struct {
+type doEdit struct {
 	File      string `json:"file"`
 	OldText   string `json:"old_text,omitempty"`
 	NewText   string `json:"new_text,omitempty"`
 	Symbol    string `json:"symbol,omitempty"`
 	StartLine *int   `json:"start_line,omitempty"`
 	EndLine   *int   `json:"end_line,omitempty"`
+	Regex     *bool  `json:"regex,omitempty"`
+	All       *bool  `json:"all,omitempty"`
 }
 
-type planWrite struct {
+type doWrite struct {
 	File    string  `json:"file"`
 	Content string  `json:"content"`
 	Mkdir   *bool   `json:"mkdir,omitempty"`
@@ -793,15 +413,23 @@ type planWrite struct {
 	Append  *bool   `json:"append,omitempty"`
 }
 
-// planKnownKeys are the valid top-level keys for edr_plan params.
-var planKnownKeys = map[string]bool{
-	"reads": true, "queries": true, "edits": true, "writes": true,
-	"budget": true, "dry_run": true, "verify": true,
+type doRename struct {
+	OldName string  `json:"old_name"`
+	NewName string  `json:"new_name"`
+	DryRun  *bool   `json:"dry_run,omitempty"`
+	Scope   *string `json:"scope,omitempty"`
 }
 
-// handlePlan dispatches edr_plan (batch reads + atomic edits).
-func handlePlan(ctx context.Context, db *index.DB, sess *session.Session, raw json.RawMessage) (string, error) {
-	var p planParams
+// doKnownKeys are the valid top-level keys for edr_do params.
+var doKnownKeys = map[string]bool{
+	"reads": true, "queries": true, "edits": true, "writes": true,
+	"renames": true, "budget": true, "dry_run": true, "verify": true,
+	"init": true,
+}
+
+// handleDo dispatches edr_do (batch reads/queries/edits/writes/renames/verify).
+func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json.RawMessage) (string, error) {
+	var p doParams
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return "", err
 	}
@@ -811,23 +439,38 @@ func handlePlan(ctx context.Context, db *index.DB, sess *session.Session, raw js
 	var warnings []string
 	if json.Unmarshal(raw, &rawMap) == nil {
 		for key := range rawMap {
-			if !planKnownKeys[key] {
+			if !doKnownKeys[key] {
 				warnings = append(warnings, fmt.Sprintf("unknown field %q ignored", key))
 			}
 		}
 	}
 
+	hasInit := p.Init != nil && *p.Init
 	hasReads := len(p.Reads) > 0
 	hasQueries := len(p.Queries) > 0
 	hasEdits := len(p.Edits) > 0
 	hasWrites := len(p.Writes) > 0
+	hasRenames := len(p.Renames) > 0
 	hasVerify := p.Verify != nil && p.Verify != false
 
-	if !hasReads && !hasQueries && !hasEdits && !hasWrites && !hasVerify {
-		return `{"error": "edr_plan requires at least one of: reads, queries, edits, writes, verify"}`, nil
+	if !hasInit && !hasReads && !hasQueries && !hasEdits && !hasWrites && !hasRenames && !hasVerify {
+		return `{"error": "edr_do requires at least one of: reads, queries, edits, writes, renames, verify, init"}`, nil
 	}
 
 	var parts []string
+
+	// 0. Force re-index if requested
+	if hasInit {
+		sess.InvalidateForEdit("init", []string{})
+		if err := db.WithWriteLock(func() error {
+			_, _, err := index.IndexRepo(ctx, db)
+			return err
+		}); err != nil {
+			parts = append(parts, fmt.Sprintf(`"init":{"ok":false,"error":%q}`, err.Error()))
+		} else {
+			parts = append(parts, `"init":{"ok":true}`)
+		}
+	}
 
 	// 1. Dispatch reads via DispatchMulti
 	if hasReads {
@@ -858,22 +501,77 @@ func handlePlan(ctx context.Context, db *index.DB, sess *session.Session, raw js
 		parts = append(parts, fmt.Sprintf(`"reads":%s`, text))
 	}
 
-	// 2. Dispatch generalized queries via DispatchMulti
+	// 2. Dispatch generalized queries via DispatchMulti (+ diff queries inline)
 	if hasQueries {
-		cmds := make([]dispatch.MultiCmd, len(p.Queries))
+		// Partition into dispatch queries and diff queries
+		type indexedResult struct {
+			idx    int
+			result dispatch.MultiResult
+		}
+		var dispatchIdxs []int
+		var diffIdxs []int
 		for i, q := range p.Queries {
-			cmds[i] = planQueryToMultiCmd(q)
+			if q.Cmd == "diff" {
+				diffIdxs = append(diffIdxs, i)
+			} else {
+				dispatchIdxs = append(dispatchIdxs, i)
+			}
 		}
-		var budgetOpt []int
-		if p.Budget != nil {
-			budgetOpt = []int{*p.Budget}
+
+		// Build ordered results array
+		allResults := make([]dispatch.MultiResult, len(p.Queries))
+
+		// Dispatch regular queries
+		if len(dispatchIdxs) > 0 {
+			cmds := make([]dispatch.MultiCmd, len(dispatchIdxs))
+			for ci, qi := range dispatchIdxs {
+				cmds[ci] = doQueryToMultiCmd(p.Queries[qi])
+			}
+			var budgetOpt []int
+			if p.Budget != nil {
+				budgetOpt = []int{*p.Budget}
+			}
+			results := dispatch.DispatchMulti(ctx, db, cmds, budgetOpt...)
+			for ci, qi := range dispatchIdxs {
+				allResults[qi] = results[ci]
+			}
 		}
-		results := dispatch.DispatchMulti(ctx, db, cmds, budgetOpt...)
-		text := postProcessMultiResults(sess, cmds, results)
+
+		// Handle diff queries via session
+		for _, qi := range diffIdxs {
+			q := p.Queries[qi]
+			var diffArgs []string
+			if q.File != nil {
+				diffArgs = append(diffArgs, *q.File)
+			}
+			if q.Symbol != nil && *q.Symbol != "" {
+				diffArgs = append(diffArgs, *q.Symbol)
+			}
+			diffResult := sess.GetDiff(diffArgs)
+			allResults[qi] = dispatch.MultiResult{
+				Cmd:    "diff",
+				OK:     diffResult["error"] == nil,
+				Result: diffResult,
+			}
+			if errMsg, ok := diffResult["error"].(string); ok {
+				allResults[qi].Error = errMsg
+			}
+		}
+
+		// Build cmds array for post-processing (need full list for session)
+		allCmds := make([]dispatch.MultiCmd, len(p.Queries))
+		for i, q := range p.Queries {
+			if q.Cmd == "diff" {
+				allCmds[i] = dispatch.MultiCmd{Cmd: "diff"}
+			} else {
+				allCmds[i] = doQueryToMultiCmd(q)
+			}
+		}
+		text := postProcessMultiResults(sess, allCmds, allResults)
 		parts = append(parts, fmt.Sprintf(`"queries":%s`, text))
 	}
 
-	// 3. Dispatch writes sequentially (before edits, so new files can be edited)
+	// 3. Dispatch writes sequentially (before renames/edits, so new files can be edited)
 	if hasWrites {
 		var writeResults []map[string]any
 		for _, w := range p.Writes {
@@ -901,7 +599,34 @@ func handlePlan(ctx context.Context, db *index.DB, sess *session.Session, raw js
 		parts = append(parts, fmt.Sprintf(`"writes":%s`, string(data)))
 	}
 
-	// 4. Dispatch edits via edit-plan (atomic)
+	// 4. Dispatch renames (clears session state)
+	if hasRenames {
+		var renameResults []map[string]any
+		for _, r := range p.Renames {
+			sess.InvalidateForEdit("rename", []string{r.OldName, r.NewName})
+			renameFlags := map[string]any{}
+			if r.DryRun != nil && *r.DryRun {
+				renameFlags["dry_run"] = true
+			}
+			if r.Scope != nil && *r.Scope != "" {
+				renameFlags["scope"] = *r.Scope
+			}
+			result, err := dispatch.Dispatch(ctx, db, "rename", []string{r.OldName, r.NewName}, renameFlags)
+			if err != nil {
+				renameResults = append(renameResults, map[string]any{
+					"old_name": r.OldName, "new_name": r.NewName, "ok": false, "error": err.Error(),
+				})
+			} else {
+				renameResults = append(renameResults, map[string]any{
+					"old_name": r.OldName, "new_name": r.NewName, "ok": true, "result": result,
+				})
+			}
+		}
+		data, _ := json.Marshal(renameResults)
+		parts = append(parts, fmt.Sprintf(`"renames":%s`, string(data)))
+	}
+
+	// 5. Dispatch edits via edit-plan (atomic)
 	if hasEdits {
 		editFlags := map[string]any{}
 		editsRaw := make([]map[string]any, len(p.Edits))
@@ -921,6 +646,12 @@ func handlePlan(ctx context.Context, db *index.DB, sess *session.Session, raw js
 			}
 			if e.EndLine != nil {
 				m["end_line"] = *e.EndLine
+			}
+			if e.Regex != nil && *e.Regex {
+				m["regex"] = true
+			}
+			if e.All != nil && *e.All {
+				m["all"] = true
 			}
 			editsRaw[i] = m
 		}
@@ -946,12 +677,16 @@ func handlePlan(ctx context.Context, db *index.DB, sess *session.Session, raw js
 		}
 	}
 
-	// 5. Run verification if requested
+	// 6. Run verification if requested
 	if hasVerify {
 		verifyFlags := map[string]any{}
-		// verify: true uses auto-detect; verify: "command" uses custom command
+		// verify: true uses auto-detect; verify: "test"/"build" sets level; verify: "command" uses custom command
 		if cmd, ok := p.Verify.(string); ok && cmd != "" {
-			verifyFlags["command"] = cmd
+			if cmd == "test" || cmd == "build" {
+				verifyFlags["level"] = cmd
+			} else {
+				verifyFlags["command"] = cmd
+			}
 		}
 		result, err := dispatch.Dispatch(ctx, db, "verify", []string{}, verifyFlags)
 		if err != nil {
@@ -971,8 +706,8 @@ func handlePlan(ctx context.Context, db *index.DB, sess *session.Session, raw js
 }
 
 
-// planQueryToMultiCmd converts a generalized planQuery into a dispatch.MultiCmd.
-func planQueryToMultiCmd(q planQuery) dispatch.MultiCmd {
+// doQueryToMultiCmd converts a generalized doQuery into a dispatch.MultiCmd.
+func doQueryToMultiCmd(q doQuery) dispatch.MultiCmd {
 	cmd := q.Cmd
 	if cmd == "" {
 		cmd = "read"
@@ -1216,26 +951,12 @@ func serveMCP(db *index.DB) error {
 				continue
 			}
 
-			cmd, cmdArgs, flags, isSessionCmd, err := routeTool(params.Name, params.Arguments)
+			cmd, cmdArgs, flags, err := routeTool(params.Name, params.Arguments)
 			if err != nil {
 				enc.Encode(jsonRPCResponse{
 					JSONRPC: "2.0",
 					ID:      req.ID,
 					Error:   &jsonRPCError{Code: -32602, Message: err.Error()},
-				})
-				continue
-			}
-
-			// Session-layer commands (get-diff)
-			if isSessionCmd {
-				result := sess.GetDiff(cmdArgs)
-				data, _ := json.Marshal(result)
-				enc.Encode(jsonRPCResponse{
-					JSONRPC: "2.0",
-					ID:      req.ID,
-					Result: mcpToolResult{
-						Content: []mcpContent{{Type: "text", Text: string(data)}},
-					},
 				})
 				continue
 			}
@@ -1252,19 +973,15 @@ func serveMCP(db *index.DB) error {
 
 			var text string
 
-			// Handle edr_plan specially
-			if cmd == "plan" {
-				planText, planErr := handlePlan(ctx, db, sess, params.Arguments)
-				if planErr != nil {
-					text = fmt.Sprintf(`{"error": %q}`, planErr.Error())
+			// Handle edr_do specially
+			if cmd == "do" {
+				doText, doErr := handleDo(ctx, db, sess, params.Arguments)
+				if doErr != nil {
+					text = fmt.Sprintf(`{"error": %q}`, doErr.Error())
 				} else {
-					text = planText
+					text = doText
 				}
 			} else {
-				if session.EditCommands[cmd] || cmd == "init" {
-					sess.InvalidateForEdit(cmd, cmdArgs)
-				}
-
 				result, err := dispatch.Dispatch(ctx, db, cmd, cmdArgs, flags)
 				if err != nil {
 					if ambErr := asAmbiguousError(err); ambErr != nil {

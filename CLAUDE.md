@@ -2,18 +2,18 @@
 
 **edr is your primary tool for ALL file operations.** Use the `edr_*` MCP tools instead of Read, Edit, Write, Grep, and Glob. They give you structured output, token budgets, and smart operations that raw file tools can't match.
 
-**`edr_plan` is your most powerful tool.** For any task involving multiple operations, prefer `edr_plan` over individual tools — it batches reads, searches, explores, edits, writes, and verification into one call.
+**`edr_do` is your primary tool.** It batches reads, searches, explores, edits, writes, renames, and verification into one call.
 
 ```
 # Typical 2-call workflow for any task:
-edr_plan(                                          # Call 1: gather ALL context
+edr_do(                                            # Call 1: gather ALL context
   reads: [{file: "src/main.go", symbol: "Server"}],
   queries: [
     {cmd: "search", pattern: "handleRequest", body: true},
     {cmd: "map", dir: "internal/", type: "function"}
   ]
 )
-edr_plan(                                          # Call 2: ALL mutations + verify
+edr_do(                                            # Call 2: ALL mutations + verify
   edits: [{file: "src/main.go", old_text: "old", new_text: "new"}],
   writes: [{file: "src/new_test.go", content: "...", mkdir: true}],
   verify: true
@@ -21,22 +21,29 @@ edr_plan(                                          # Call 2: ALL mutations + ver
 ```
 
 **Only fall back to individual tools when:**
-- You need a single quick read or edit (use `edr_read`, `edr_edit`)
-- You need `edr_rename` (cross-file, import-aware)
+- You need a single quick read (use `edr_read`)
+- You need a quick symbol map overview (use `edr_map`)
 - You need non-text files or shell operations (use built-in tools)
 
 ## Why edr over built-in tools
 
 | Instead of... | Use edr... | Why |
 |---|---|---|
-| `Read` (whole file) | `edr_plan(reads: [{file: "f.go"}])` | Budget-controlled, batchable |
-| `Edit` (old/new strings) | `edr_plan(edits: [{file: "f.go", old_text: "x", new_text: "y"}])` | Atomic multi-file, auto re-index |
-| `Write` (create file) | `edr_plan(writes: [{file: "f.go", content: "...", mkdir: true}])` | Auto-indexes, batchable with edits |
-| `Grep` (text search) | `edr_plan(queries: [{cmd: "search", pattern: "pat", body: true}])` | Structured results, batchable |
-| `Glob` (find files) | `edr_plan(queries: [{cmd: "find", pattern: "**/*.go"}])` | Glob with `**`, batchable |
-| Multiple tool calls | One `edr_plan(reads + queries + edits + writes, verify: true)` | Everything in 1-2 calls |
+| `Read` (whole file) | `edr_do(reads: [{file: "f.go"}])` | Budget-controlled, batchable |
+| `Edit` (old/new strings) | `edr_do(edits: [{file: "f.go", old_text: "x", new_text: "y"}])` | Atomic multi-file, auto re-index |
+| `Write` (create file) | `edr_do(writes: [{file: "f.go", content: "...", mkdir: true}])` | Auto-indexes, batchable with edits |
+| `Grep` (text search) | `edr_do(queries: [{cmd: "search", pattern: "pat", body: true}])` | Structured results, batchable |
+| `Glob` (find files) | `edr_do(queries: [{cmd: "find", pattern: "**/*.go"}])` | Glob with `**`, batchable |
+| Multiple tool calls | One `edr_do(reads + queries + edits + writes, verify: true)` | Everything in 1-2 calls |
 
-For single operations, shorthand tools also work: `edr_read`, `edr_edit`, `edr_write`, `edr_search`, `edr_find`.
+For single reads, `edr_read` also works directly.
+
+## Development workflow
+
+**Every time you change Go source files, rebuild and reinstall:**
+```bash
+go build -o edr . && go install
+```
 
 ## Setup (any environment)
 
@@ -120,7 +127,7 @@ edr edit src/config.go --start_line 45 --end_line 60 --new_text "replacement cod
 edr edit src/config.go --old_text "oldName" --dry-run --new_text "newName"
 ```
 
-> **MCP usage**: `edr_edit(file: "file.go", old_text: "old code", new_text: "new code")`
+> **MCP usage**: `edr_do(edits: [{file: "file.go", old_text: "old code", new_text: "new code"}])`
 > This is the direct equivalent of the built-in Edit tool's `old_string`/`new_string` pattern.
 
 ## Writing (`write`)
@@ -154,6 +161,8 @@ edr rename oldFuncName newFuncName --dry-run
 # Limit rename scope with a glob pattern
 edr rename oldFuncName newFuncName --scope "internal/**"
 ```
+
+> **MCP usage**: `edr_do(renames: [{old_name: "Foo", new_name: "Bar", dry_run: true}])`
 
 ## Orientation (`map`, `explore`)
 
@@ -202,62 +211,67 @@ edr find "*.yaml" --dir config/
 edr find "**/test_*" --budget 500
 ```
 
-## Unified Agent Tool (`edr_plan`)
+## Primary Agent Tool (`edr_do`)
 
-`edr_plan` is the single tool that handles complete agent workflows in minimal round trips.
-It supports five operation types, all in one call:
+`edr_do` is the single tool that handles complete agent workflows in minimal round trips.
+It supports seven operation types, all in one call:
 
 ```bash
 # Via MCP: gather context + make changes + verify in one call
-# edr_plan(
+# edr_do(
 #   reads: [{file: "src/main.go"}, {file: "src/config.go", symbol: "parseConfig"}],
 #   queries: [
 #     {cmd: "search", pattern: "handleRequest", body: true},
 #     {cmd: "explore", symbol: "Server", gather: true, body: true},
 #     {cmd: "map", dir: "internal/", type: "function"},
-#     {cmd: "refs", symbol: "Config", impact: true}
+#     {cmd: "refs", symbol: "Config", impact: true},
+#     {cmd: "diff", file: "src/main.go"}
 #   ],
 #   edits: [
 #     {file: "src/main.go", old_text: "oldFunc()", new_text: "newFunc()"},
 #     {file: "src/config.go", symbol: "parseConfig", new_text: "..."}
 #   ],
 #   writes: [{file: "src/new.go", content: "package main\n...", mkdir: true}],
-#   verify: true
+#   renames: [{old_name: "OldFunc", new_name: "NewFunc", dry_run: true}],
+#   verify: true,
+#   init: true
 # )
 #
 # Typical 2-call workflow:
-# Call 1: edr_plan(reads: [...], queries: [...])     — gather ALL context
-# Call 2: edr_plan(edits: [...], writes: [...], verify: true)  — ALL mutations + verify
+# Call 1: edr_do(reads: [...], queries: [...])     — gather ALL context
+# Call 2: edr_do(edits: [...], writes: [...], verify: true)  — ALL mutations + verify
 ```
 
 ## Context-Aware Responses
 
 The MCP server tracks what content you've already seen:
 
-- **Slim edits**: Small diffs (<=20 changed lines) are returned inline automatically. Large diffs are stripped to `{ok, file, hash, lines_changed, diff_available}` — use `edr_diff` to retrieve them.
+- **Slim edits**: Small diffs (<=20 changed lines) are returned inline automatically. Large diffs are stripped to `{ok, file, hash, lines_changed, diff_available}` — use `queries: [{cmd: "diff", file: "..."}]` to retrieve them.
 - **Delta reads**: Re-reading a file/symbol you've already seen returns `{unchanged: true}` if identical, or `{delta: true, diff: "..."}` with just the changes. Pass `full: true` to force full content.
-- **Body dedup**: `edr_explore(gather: true, body: true)` and `edr_search(body: true)` replace bodies you've already seen with `"[in context]"` and report `skipped_bodies`. New/changed bodies are returned in full.
+- **Body dedup**: `explore(gather: true, body: true)` and `search(body: true)` replace bodies you've already seen with `"[in context]"` and report `skipped_bodies`. New/changed bodies are returned in full.
 
 These optimizations are automatic and session-scoped (reset on reconnect).
-`edr_rename` and `edr_init` clear all tracking state.
+Renames and `init: true` clear all tracking state.
 
 ## Key Principles
 
-1. **Start with `edr_plan`** — batch reads, queries, edits, writes, and verify in one call. Minimize round trips.
+1. **Start with `edr_do`** — batch reads, queries, edits, writes, renames, and verify in one call. Minimize round trips.
 2. **Use `budget`** to control context size. Don't dump entire files.
-3. **Gather context in one call** — `edr_plan(reads: [...], queries: [{cmd: "search", ...}, {cmd: "explore", ...}])`.
-4. **Mutate + verify in one call** — `edr_plan(edits: [...], writes: [...], verify: true)`.
+3. **Gather context in one call** — `edr_do(reads: [...], queries: [{cmd: "search", ...}, {cmd: "explore", ...}])`.
+4. **Mutate + verify in one call** — `edr_do(edits: [...], writes: [...], verify: true)`.
 5. **Use `signatures: true`** to understand a container's API without reading implementation (75-86% fewer tokens).
-6. **Use `edr_rename(dry_run: true)`** to preview cross-file renames before applying.
-7. **Use `edr_refs(impact: true)`** before refactoring to understand blast radius.
-8. **Small edit diffs are inline** — diffs <=20 lines are included automatically. Large diffs are stored; use `edr_diff` to retrieve.
+6. **Preview renames** — `edr_do(renames: [{old_name: "X", new_name: "Y", dry_run: true}])`.
+7. **Check impact before refactoring** — `edr_do(queries: [{cmd: "refs", symbol: "X", impact: true}])`.
+8. **Small edit diffs are inline** — diffs <=20 lines are included automatically. Large diffs are stored; use `queries: [{cmd: "diff", file: "..."}]` to retrieve.
 9. **Re-reads are delta** — `{unchanged: true}` or `{delta: true, diff: "..."}`. Use `full: true` to force full content.
 10. **Use `--inside`** to add fields/methods to a class without reading the file first.
 
 ## MCP Tools
 
-13 tools: `edr_plan`, `edr_read`, `edr_edit`, `edr_write`, `edr_search`, `edr_map`,
-`edr_explore`, `edr_refs`, `edr_find`, `edr_rename`, `edr_verify`, `edr_init`, `edr_diff`.
+3 tools: `edr_do`, `edr_read`, `edr_map`.
+
+`edr_do` handles everything: reads, queries (search/explore/refs/map/find/diff), edits, writes, renames, verify, init.
+`edr_read` and `edr_map` are convenience shortcuts for the most common single operations.
 
 Each tool is self-documenting via its MCP schema (descriptions sourced from `cmd/toolinfo.go`).
 All output is structured JSON. File paths are relative to repo root. Edit commands return `hash`.
