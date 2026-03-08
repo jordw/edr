@@ -37,6 +37,24 @@ median() {
 min_val() { printf '%s\n' "$@" | sort -n | head -1; }
 max_val() { printf '%s\n' "$@" | sort -n | tail -1; }
 
+pct_round() {
+    local native_bytes="$1" edr_bytes="$2"
+    awk -v native="$native_bytes" -v edr="$edr_bytes" '
+        BEGIN {
+            if (native <= 0) {
+                print 0
+                exit
+            }
+            pct = ((native - edr) * 100) / native
+            if (pct >= 0) {
+                printf "%d", int(pct + 0.5)
+            } else {
+                printf "%d", int(pct - 0.5)
+            }
+        }
+    '
+}
+
 # ---------------------------------------------------------------------------
 # Simulate native tool output sizes
 # ---------------------------------------------------------------------------
@@ -56,6 +74,36 @@ native_read_range_bytes() {
 native_grep_bytes() {
     local pattern="$1"; shift
     grep -rn "$pattern" "$@" 2>/dev/null | wc -c | tr -d ' '
+}
+
+# Files an agent would likely open after a grep to inspect real usages.
+native_grep_files() {
+    local pattern="$1"; shift
+    grep -rl "$pattern" "$@" 2>/dev/null | sort -u || true
+}
+
+# Sum full-file Read tool output for each unique grep match file.
+native_grep_followup_read_bytes() {
+    local pattern="$1"; shift
+    local total=0
+    local file
+    while IFS= read -r file; do
+        [ -n "$file" ] || continue
+        total=$((total + $(native_read_bytes "$file")))
+    done < <(native_grep_files "$pattern" "$@")
+    echo "$total"
+}
+
+# Count follow-up Read calls needed after grep.
+native_grep_followup_read_calls() {
+    local pattern="$1"; shift
+    local count=0
+    local file
+    while IFS= read -r file; do
+        [ -n "$file" ] || continue
+        count=$((count + 1))
+    done < <(native_grep_files "$pattern" "$@")
+    echo "$count"
 }
 
 # Glob tool: returns file paths
@@ -83,11 +131,7 @@ report() {
     local label="$1" native_bytes="$2" native_calls="$3" edr_bytes="$4" edr_calls="$5"
     local saved pct
     saved=$((native_bytes - edr_bytes))
-    if [ "$native_bytes" -gt 0 ]; then
-        pct=$((saved * 100 / native_bytes))
-    else
-        pct=0
-    fi
+    pct=$(pct_round "$native_bytes" "$edr_bytes")
     if [ "$saved" -ge 0 ]; then
         printf "  %-14s │ %6dB × %d calls │ %6dB × %d calls │ %4d%% │ -%dB\n" \
             "$label" "$native_bytes" "$native_calls" "$edr_bytes" "$edr_calls" "$pct" "$saved"
@@ -101,8 +145,8 @@ JSON_SCENARIOS="[]"
 json_add() {
     local name="$1" native_bytes="$2" native_calls="$3" edr_bytes="$4" edr_calls="$5"
     local saved=$((native_bytes - edr_bytes))
-    local pct=0
-    [ "$native_bytes" -gt 0 ] && pct=$((saved * 100 / native_bytes))
+    local pct
+    pct=$(pct_round "$native_bytes" "$edr_bytes")
     JSON_SCENARIOS=$(echo "$JSON_SCENARIOS" | python3 -c "
 import json,sys
 s=json.load(sys.stdin)
@@ -149,14 +193,18 @@ json_add "read_symbol" "$native_bytes" 1 "$edr_bytes" 1
 # ============================================================
 # SCENARIO 3: Find usages of a function
 # ============================================================
-# Native: Grep for the name across all files → lots of false positives
+# Native: Grep for the name across all files, then open each matched file
+# to confirm which hits are real usages.
 # edr: refs (import-aware, structured)
 
 PATTERN="_execute_task"
-native_bytes=$(native_grep_bytes "$PATTERN" bench/testdata/)
+grep_bytes=$(native_grep_bytes "$PATTERN" bench/testdata/)
+read_bytes=$(native_grep_followup_read_bytes "$PATTERN" bench/testdata/)
+native_bytes=$((grep_bytes + read_bytes))
+native_calls=$((1 + $(native_grep_followup_read_calls "$PATTERN" bench/testdata)))
 edr_bytes=$(edr_median_bytes $EDR refs "$PATTERN")
-report "Find refs" "$native_bytes" 1 "$edr_bytes" 1
-json_add "find_refs" "$native_bytes" 1 "$edr_bytes" 1
+report "Find refs" "$native_bytes" "$native_calls" "$edr_bytes" 1
+json_add "find_refs" "$native_bytes" "$native_calls" "$edr_bytes" 1
 
 # ============================================================
 # SCENARIO 4: Search for a pattern with context
@@ -300,7 +348,7 @@ for s in json.load(sys.stdin):
 done
 
 total_saved=$((total_native - total_edr))
-total_pct=$((total_saved * 100 / total_native))
+total_pct=$(pct_round "$total_native" "$total_edr")
 
 if [ "$total_saved" -ge 0 ]; then
     printf "  %-14s │ %6dB × %d calls │ %6dB × %d calls │ %4d%% │ -%dB\n" \
@@ -333,7 +381,7 @@ print(json.dumps({
     'benchmark': 'native_comparison',
     'iterations': $ITERS,
     'scenarios': data,
-    'totals': {'native_bytes': tn, 'edr_bytes': te, 'savings_pct': pct,
+    'totals': {'native_bytes': tn, 'edr_bytes': te, 'savings_pct': round((tn-te)*100/tn) if tn else 0,
                'native_calls': sum(s['native_calls'] for s in data),
                'edr_calls': sum(s['edr_calls'] for s in data)}
 }, indent=2))

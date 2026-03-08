@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev)
 
-**Up to 89% less context burned and 55% fewer tool calls than simulated default Read/Edit/Grep/Glob workflows.**
+**Up to 90% less context burned and 57% fewer tool calls than simulated default Read/Edit/Grep/Glob workflows.**
 
 Coding agents waste context. They read entire files to find one function, make three round trips to change one line, and grep symbols into walls of unstructured text.
 
@@ -119,24 +119,21 @@ internal/
 ## The numbers
 
 On the included benchmark fixture in `bench/testdata`, `bench/native_comparison.sh`
-shows `edr` using **89% fewer response bytes** and **11 fewer tool calls**
+shows `edr` using **90% fewer response bytes** and **12 fewer tool calls**
 than simulated Read/Edit/Grep/Glob workflows:
 
 | Workflow | Without edr | With edr | Savings |
 |---|---|---|---|
-| Understand a class API | 13,894B (read whole file) | 1,137B (`--signatures`) | **91%** |
+| Understand a class API | 13,894B (read whole file) | 1,137B (`--signatures`) | **92%** |
 | Read a specific function | 13,894B (read whole file) | 2,155B (symbol read) | **84%** |
-| Find refs | 175B (`grep`) | 406B (`refs`) | **-132%** |
-| Search with context | 12,869B (`grep -C3`) | 4,823B (`search --text --context 3 --budget 500`) | **62%** |
+| Find refs | 14,069B / 2 calls (`grep` + read matched file) | 406B / 1 call (`refs`) | **97%** |
+| Search with context | 12,869B (`grep -C3`) | 4,823B (`search --text --context 3 --budget 500`) | **63%** |
 | Orient in codebase | 36,457B / 5 calls (glob + reads) | 2,149B / 1 call (`map`) | **94%** |
-| Edit a function | 27,988B / 3 calls (read + edit + verify) | 589B / 1 call (inline diff) | **97%** |
+| Edit a function | 27,988B / 3 calls (read + edit + verify) | 589B / 1 call (inline diff) | **98%** |
 | Add method to a class | 14,094B / 2 calls (read + edit) | 125B / 1 call (`--inside`) | **99%** |
 | Multi-file read | 30,195B / 3 calls | 2,643B / 1 call (batched + budget) | **91%** |
 | Explore a symbol | 19,969B / 3 calls (grep + reads) | 4,566B / 1 call (body + callers + deps) | **77%** |
-| **Total** | **169,535B / 20 calls** | **18,593B / 9 calls** | **89%** |
-
-`refs` is larger than raw `grep` on this fixture because it returns structured,
-symbol-aware results. The tradeoff is precision rather than smaller bytes.
+| **Total** | **183,429B / 21 calls** | **18,593B / 9 calls** | **90%** |
 
 Smaller responses still mean lower context pressure, lower cost, and faster tool
 round trips for the actual task.
