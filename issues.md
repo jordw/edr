@@ -74,18 +74,24 @@ Batch reads divide budget evenly across N items. A small symbol and a large func
 - **Area**: `internal/dispatch/dispatch.go:DispatchMulti`
 
 ### 7. Move symbol: unified diff in dry-run
-Move dry-run shows two separate diffs (delete + insert) which requires mental reconstruction. Confirmed in iteration 2 (Phase 4e): two diffs shown for Goodbye move.
+Move dry-run shows two separate diffs (delete + insert) which requires mental reconstruction. Confirmed in iterations 2-3 (Phase 4e): two diffs shown for Goodbye move.
 - **Current**: two separate diffs
-- **Desired**: single merged diff or `preview_content` field showing final state
+- **Desired**: single merged diff or `preview_content` field showing final state; also add `"final_order": ["Goodbye", "Hello", "main"]` summary so agents can verify intent
 - **Area**: `internal/dispatch/dispatch.go:runEditPlan`
 
-### 8. read_after_edit for writes should use delta
+### 8. Rename dry-run should show diffs, not just line previews
+Rename `--dry-run` shows file/line/text for each occurrence, but not unified diffs. Agents can't verify surrounding context.
+- **Current**: preview is `[{file, line, text}]` — just the matching line
+- **Desired**: show unified diff format (like edit dry-run) so agents see context around each rename site
+- **Area**: `internal/dispatch/dispatch.go:runRenameSymbol`
+
+### 9. read_after_edit for writes should use delta
 `read_after_edit` after writes forces `full: true`. Since the session just saw the write content, delta could save tokens.
 - **Current**: `full: true` forced in post-edit reads
 - **Desired**: normal read with delta awareness
 - **Area**: `cmd/mcp.go:handleDo` (~line 826, post-edit reads section)
 
-### 9. Map truncation should show counts and guidance
+### 10. Map truncation should show counts and guidance
 When `map` truncates at large repos, the response just says `truncated: true` with no hint on scope or how to narrow.
 - **Current**: `"truncated": true`
 - **Desired**: `"truncated": true, "shown": 45, "total": 1268, "hint": "use dir, type, or grep filter to narrow"`
