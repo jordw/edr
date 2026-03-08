@@ -747,10 +747,13 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json
 	}
 
 	// 5b. Post-edit reads — return edited file contents to save a round trip
-	if hasEdits && p.ReadAfterEdit != nil && *p.ReadAfterEdit && (p.DryRun == nil || !*p.DryRun) {
+	if (hasEdits || hasWrites) && p.ReadAfterEdit != nil && *p.ReadAfterEdit && (p.DryRun == nil || !*p.DryRun) {
 		editedFiles := make(map[string]bool)
 		for _, e := range p.Edits {
 			editedFiles[e.File] = true
+		}
+		for _, w := range p.Writes {
+			editedFiles[w.File] = true
 		}
 		var readCmds []dispatch.MultiCmd
 		for f := range editedFiles {

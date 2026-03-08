@@ -204,6 +204,13 @@ func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacem
 
 	// Detect no-op: old_text == new_text means nothing would change
 	if matchText == replacement {
+		// Even for no-ops, validate expect_hash if provided
+		if expectHash := flagString(flags, "expect_hash", ""); expectHash != "" {
+			currentHash := edit.HashBytes(data)
+			if currentHash != expectHash {
+				return nil, fmt.Errorf("hash mismatch on %s: expected %s, got %s (file was modified)", output.Rel(file), expectHash, currentHash)
+			}
+		}
 		return map[string]any{
 			"ok":      true,
 			"noop":    true,
@@ -320,10 +327,17 @@ func smartEditMove(ctx context.Context, db *index.DB, file, moveSymbol, afterSym
 		deleteStart = uint32(pos + 1) // keep one newline as separator
 	}
 
-	// Expand forward to consume trailing newline(s)
+	// Expand forward to consume trailing newline(s), but keep one
+	// so the symbol below the gap isn't glued to the one above it.
 	pos = int(deleteEnd)
+	nlCount := 0
 	for pos < len(data) && data[pos] == '\n' {
 		pos++
+		nlCount++
+	}
+	if nlCount > 1 && pos < len(data) {
+		// Leave one \n so adjacent symbols stay separated
+		pos--
 	}
 	deleteEnd = uint32(pos)
 

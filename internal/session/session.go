@@ -463,7 +463,7 @@ func (s *Session) StripSeenBodies(result map[string]any, cmd string) {
 	var skipped []string
 
 	switch cmd {
-	case "gather":
+	case "gather", "explore":
 		if body, ok := result["target_body"].(string); ok && body != "" {
 			if target, ok := result["target"].(map[string]any); ok {
 				file, _ := target["file"].(string)
@@ -592,7 +592,7 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 	// StripSeenBodies handles both stripping previously-seen bodies and
 	// tracking new ones, so we must NOT call TrackBodies first for these
 	// commands (that would mark current results as "seen" before stripping).
-	willStrip := cmd == "gather" || (cmd == "search" && FlagIsTruthy(flags, "body"))
+	willStrip := cmd == "gather" || (cmd == "search" && FlagIsTruthy(flags, "body")) || (cmd == "explore" && FlagIsTruthy(flags, "gather") && FlagIsTruthy(flags, "body"))
 	if BodyCommands[cmd] && !willStrip {
 		s.TrackBodies(m, cmd)
 	}

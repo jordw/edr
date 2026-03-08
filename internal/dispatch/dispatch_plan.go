@@ -99,6 +99,16 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 		case e.OldText != "":
 			// Detect no-op: old_text == new_text means nothing would change
 			if e.OldText == e.resolvedNewText() {
+				// Even for no-ops, validate expect_hash if provided
+				if e.ExpectHash != "" {
+					currentHash, err := edit.FileHash(file)
+					if err != nil {
+						return nil, fmt.Errorf("edit-plan: edit %d: hash check: %w", i, err)
+					}
+					if currentHash != e.ExpectHash {
+						return nil, fmt.Errorf("edit-plan: edit %d: hash mismatch on %s: expected %s, got %s (file was modified)", i, output.Rel(file), e.ExpectHash, currentHash)
+					}
+				}
 				return map[string]any{
 					"ok":      true,
 					"noop":    true,
