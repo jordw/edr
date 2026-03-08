@@ -58,6 +58,9 @@ func scoreSymbolMatch(symbolName, pattern string) float64 {
 // SearchSymbol searches the index for symbols matching a pattern.
 // When showBody is true, each match includes a snippet of the symbol's source.
 func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int, showBody bool) (*SearchResult, error) {
+	if pattern == "" {
+		return &SearchResult{Kind: "symbol"}, nil
+	}
 	symbols, err := db.SearchSymbols(ctx, pattern)
 	if err != nil {
 		return nil, err
@@ -229,6 +232,9 @@ func matchDoublestar(path, pattern string) bool {
 // YAML, Markdown, Dockerfiles, etc. When useRegex is true, pattern is
 // compiled as a Go regexp.
 func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, useRegex bool, opts ...SearchTextOption) (*SearchResult, error) {
+	if pattern == "" {
+		return &SearchResult{Kind: "text"}, nil
+	}
 	cfg := searchTextConfig{}
 	for _, o := range opts {
 		o(&cfg)

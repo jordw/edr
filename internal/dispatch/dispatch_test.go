@@ -737,3 +737,94 @@ func TestWriteAcceptsNewTextFlag(t *testing.T) {
 	}
 }
 
+func TestSearchEmptyPatternReturnsError(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	if err := os.WriteFile(goFile, []byte("package main\n\nfunc hello() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Symbol search with empty pattern
+	_, err = dispatch.Dispatch(ctx, db, "search", []string{""}, nil)
+	if err == nil {
+		t.Fatal("expected error for empty search pattern, got nil")
+	}
+	if !strings.Contains(err.Error(), "non-empty") {
+		t.Fatalf("expected error about non-empty pattern, got: %v", err)
+	}
+
+	// Text search with empty pattern
+	_, err = dispatch.Dispatch(ctx, db, "search", []string{""}, map[string]any{"text": true})
+	if err == nil {
+		t.Fatal("expected error for empty text search pattern, got nil")
+	}
+	if !strings.Contains(err.Error(), "non-empty") {
+		t.Fatalf("expected error about non-empty pattern, got: %v", err)
+	}
+
+	// No args at all
+	_, err = dispatch.Dispatch(ctx, db, "search", []string{}, nil)
+	if err == nil {
+		t.Fatal("expected error for missing search pattern, got nil")
+	}
+}
+
+func TestEditNoopDetection(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	original := "package main\n\nfunc hello() {\n\tprintln(\"hello\")\n}\n"
+	if err := os.WriteFile(goFile, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Edit with identical old_text and new_text
+	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+		"old_text": "hello",
+		"new_text": "hello",
+	})
+	if err != nil {
+		t.Fatalf("noop edit returned error: %v", err)
+	}
+
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+
+	if m["noop"] != true {
+		t.Fatalf("expected noop=true, got: %v", m)
+	}
+
+	// Verify file was not modified
+	data, err := os.ReadFile(goFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != original {
+		t.Fatalf("file was modified during noop edit: %q", string(data))
+	}
+}
+

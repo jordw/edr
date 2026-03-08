@@ -53,8 +53,8 @@ func runRepoMap(ctx context.Context, db *index.DB, flags map[string]any) (any, e
 }
 
 func runSearch(ctx context.Context, db *index.DB, args []string, flags map[string]any) (any, error) {
-	if len(args) < 1 {
-		return nil, fmt.Errorf("search requires 1 argument: <pattern>")
+	if len(args) < 1 || args[0] == "" {
+		return nil, fmt.Errorf("search requires a non-empty pattern")
 	}
 	budget := flagInt(flags, "budget", 0)
 	showBody := flagBool(flags, "body", false)
@@ -62,8 +62,8 @@ func runSearch(ctx context.Context, db *index.DB, args []string, flags map[strin
 }
 
 func runSearchText(ctx context.Context, db *index.DB, args []string, flags map[string]any) (any, error) {
-	if len(args) < 1 {
-		return nil, fmt.Errorf("search-text requires 1 argument: <pattern>")
+	if len(args) < 1 || args[0] == "" {
+		return nil, fmt.Errorf("search requires a non-empty pattern")
 	}
 	budget := flagInt(flags, "budget", 0)
 	useRegex := flagBool(flags, "regex", false)

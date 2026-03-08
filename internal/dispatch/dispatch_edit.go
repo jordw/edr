@@ -168,6 +168,17 @@ func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacem
 	}
 
 	content := string(data)
+
+	// Detect no-op: old_text == new_text means nothing would change
+	if matchText == replacement {
+		return map[string]any{
+			"ok":      true,
+			"noop":    true,
+			"file":    output.Rel(file),
+			"message": "old_text equals new_text, no change applied",
+		}, nil
+	}
+
 	useRegex := flagBool(flags, "regex", false)
 	replaceAll := flagBool(flags, "all", false)
 
@@ -228,6 +239,14 @@ func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacem
 
 // applyReplaceAll handles the shared tail of regex and literal replace-all edits.
 func applyReplaceAll(ctx context.Context, db *index.DB, file, oldContent, newContent, matchText string, count int, dryRun bool) (any, error) {
+	if oldContent == newContent {
+		return map[string]any{
+			"ok":      true,
+			"noop":    true,
+			"file":    output.Rel(file),
+			"message": "old_text equals new_text, no change applied",
+		}, nil
+	}
 	if dryRun {
 		diff, _ := edit.DiffPreviewContent(file, []byte(oldContent), []byte(newContent))
 		return map[string]any{
