@@ -279,6 +279,52 @@ Renames and `init: true` clear all tracking state.
 9. **Re-reads are delta** — `{unchanged: true}` or `{delta: true, diff: "..."}`. Use `full: true` to force full content.
 10. **Use `--inside`** to add fields/methods to a class without reading the file first.
 
+## Session Tracing
+
+MCP sessions are automatically traced to `.edr/traces.db` (append-only, separate from the index).
+Traces capture request shape, edit/verify/query events, and session optimization hits.
+
+```bash
+# Score the most recent session (or pass a session ID)
+edr bench-session
+
+# Output includes raw counts + derived analysis:
+# - read_efficiency: delta hits / total reads
+# - edit_success_rate, verify_pass_rate
+# - optimization_rate: (delta + dedup + slim) / total calls
+# - tokens_per_call, avg_call_duration_ms
+# - edits_reverted: files where final hash == first hash (wasted work)
+```
+
+Key files:
+- `internal/trace/trace.go` — Collector, CallBuilder, schema, BenchSession scoring
+- `internal/session/session.go` — PostProcessStats (DeltaReads, BodyDedup, SlimEdits)
+- `cmd/mcp.go` — instrumentation in serveMCP + handleDo
+- `cmd/bench_session.go` — CLI command
+
+## Benchmarks
+
+Performance and session benchmarks live in `bench/`:
+
+```bash
+# Run all benchmarks
+go test ./bench/ -bench . -benchmem
+
+# Run the multi-language session test (55 calls across 8 languages)
+go test ./bench/ -run TestSessionMultiLang -v
+
+# Run the session workflow performance benchmark
+go test ./bench/ -bench BenchmarkSessionWorkflow -benchmem
+```
+
+`bench/testdata/` contains a realistic multi-language task queue system:
+Go, Python, Rust, C/H, Java, Ruby, JS, TSX.
+
+**TestSessionMultiLang** exercises the full session lifecycle with trace validation:
+orientation (map, find), signatures + full reads across all languages, delta reads,
+cross-language search + body dedup, explore/refs, dry-run + real edits, write inside,
+batch reads, depth-2 reads, and bench-session scoring of the resulting trace.
+
 ## MCP Tool
 
 1 tool: `edr`.
