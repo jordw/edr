@@ -56,8 +56,10 @@ fi
 # --- Build ---
 echo "==> Building edr..."
 cd "$REPO_DIR"
-go build -o edr .
-echo "    built: $REPO_DIR/edr"
+BUILD_HASH=$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_VERSION=$(git -C "$REPO_DIR" describe --tags --always 2>/dev/null || echo "dev")
+go build -ldflags "-X github.com/jordw/edr/cmd.Version=${BUILD_VERSION} -X github.com/jordw/edr/cmd.BuildHash=${BUILD_HASH}" -o edr .
+echo "    built: $REPO_DIR/edr (${BUILD_VERSION}+${BUILD_HASH})"
 
 # --- Install to PATH ---
 mkdir -p "$INSTALL_DIR"

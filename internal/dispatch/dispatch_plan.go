@@ -91,7 +91,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 			// Text-based edit — resolve to byte spans
 			data, err := os.ReadFile(file)
 			if err != nil {
-				return nil, fmt.Errorf("edit-plan: edit %d: %w", i, err)
+				return nil, fmt.Errorf("edit-plan: edit %d: read %s: %w", i, output.Rel(file), err)
 			}
 			content := string(data)
 			idx := strings.Index(content, e.OldText)
@@ -129,7 +129,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 			// Line-based edit — convert to byte offsets
 			data, err := os.ReadFile(file)
 			if err != nil {
-				return nil, fmt.Errorf("edit-plan: edit %d: %w", i, err)
+				return nil, fmt.Errorf("edit-plan: edit %d: read %s: %w", i, output.Rel(file), err)
 			}
 			var startByte, endByte uint32
 			line := 1

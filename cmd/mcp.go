@@ -107,7 +107,9 @@ type mcpProp struct {
 }
 
 type mcpPropItems struct {
-	Type string `json:"type"`
+	Type        string             `json:"type"`
+	Description string             `json:"description,omitempty"`
+	Properties  map[string]mcpProp `json:"properties,omitempty"`
 }
 
 type mcpToolCallParams struct {
@@ -134,10 +136,54 @@ func mcpTools() []mcpTool {
 			InputSchema: mcpSchema{
 				Type: "object",
 				Properties: map[string]mcpProp{
-					"reads":   {Type: "array", Description: P("reads"), Items: &mcpPropItems{Type: "object"}},
-					"queries": {Type: "array", Description: P("queries"), Items: &mcpPropItems{Type: "object"}},
-					"edits":   {Type: "array", Description: P("edits"), Items: &mcpPropItems{Type: "object"}},
-					"writes":  {Type: "array", Description: P("writes"), Items: &mcpPropItems{Type: "object"}},
+					"reads": {Type: "array", Description: P("reads"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
+						"file": {Type: "string", Description: "File path (required)"},
+						"symbol": {Type: "string", Description: P("symbol")},
+						"budget": {Type: "integer", Description: P("budget")},
+						"signatures": {Type: "boolean", Description: P("signatures")},
+						"depth": {Type: "integer", Description: P("depth")},
+					}}},
+					"queries": {Type: "array", Description: P("queries"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
+						"cmd": {Type: "string", Description: "Command: search, explore, refs, map, find"},
+						"pattern": {Type: "string", Description: P("pattern")},
+						"symbol": {Type: "string", Description: P("symbol")},
+						"file": {Type: "string", Description: P("file")},
+						"budget": {Type: "integer", Description: P("budget")},
+						"body": {Type: "boolean", Description: P("body")},
+						"text": {Type: "boolean", Description: P("text")},
+						"regex": {Type: "boolean", Description: P("regex")},
+						"include": {Type: "string", Description: P("include")},
+						"exclude": {Type: "string", Description: P("exclude")},
+						"context": {Type: "integer", Description: P("context")},
+						"callers": {Type: "boolean", Description: P("callers")},
+						"deps": {Type: "boolean", Description: P("deps")},
+						"gather": {Type: "boolean", Description: P("gather")},
+						"signatures": {Type: "boolean", Description: P("signatures")},
+						"impact": {Type: "boolean", Description: P("impact")},
+						"chain": {Type: "string", Description: P("chain")},
+						"depth": {Type: "integer", Description: P("depth")},
+						"dir": {Type: "string", Description: P("dir")},
+						"glob": {Type: "string", Description: P("glob")},
+						"type": {Type: "string", Description: P("type")},
+						"grep": {Type: "string", Description: P("grep")},
+						"locals": {Type: "boolean", Description: P("locals")},
+					}}},
+					"edits": {Type: "array", Description: P("edits"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
+						"file": {Type: "string", Description: "File path (required)"},
+						"old_text": {Type: "string", Description: P("old_text")},
+						"new_text": {Type: "string", Description: P("new_text")},
+						"symbol": {Type: "string", Description: P("symbol")},
+						"start_line": {Type: "integer", Description: P("start_line")},
+						"end_line": {Type: "integer", Description: P("end_line")},
+					}}},
+					"writes": {Type: "array", Description: P("writes"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
+						"file": {Type: "string", Description: "File path (required)"},
+						"content": {Type: "string", Description: P("content")},
+						"mkdir": {Type: "boolean", Description: P("mkdir")},
+						"after": {Type: "string", Description: P("after")},
+						"inside": {Type: "string", Description: P("inside")},
+						"append": {Type: "boolean", Description: P("append")},
+					}}},
 					"budget":  {Type: "integer", Description: P("budget")},
 					"dry_run": {Type: "boolean", Description: P("dry_run")},
 					"verify":  {Description: P("verify")},
@@ -747,11 +793,28 @@ type planWrite struct {
 	Append  *bool   `json:"append,omitempty"`
 }
 
+// planKnownKeys are the valid top-level keys for edr_plan params.
+var planKnownKeys = map[string]bool{
+	"reads": true, "queries": true, "edits": true, "writes": true,
+	"budget": true, "dry_run": true, "verify": true,
+}
+
 // handlePlan dispatches edr_plan (batch reads + atomic edits).
 func handlePlan(ctx context.Context, db *index.DB, sess *session.Session, raw json.RawMessage) (string, error) {
 	var p planParams
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return "", err
+	}
+
+	// Detect unknown top-level keys and warn
+	var rawMap map[string]json.RawMessage
+	var warnings []string
+	if json.Unmarshal(raw, &rawMap) == nil {
+		for key := range rawMap {
+			if !planKnownKeys[key] {
+				warnings = append(warnings, fmt.Sprintf("unknown field %q ignored", key))
+			}
+		}
 	}
 
 	hasReads := len(p.Reads) > 0
@@ -897,6 +960,11 @@ func handlePlan(ctx context.Context, db *index.DB, sess *session.Session, raw js
 			data, _ := json.Marshal(result)
 			parts = append(parts, fmt.Sprintf(`"verify":%s`, string(data)))
 		}
+	}
+
+	if len(warnings) > 0 {
+		warnJSON, _ := json.Marshal(warnings)
+		parts = append(parts, fmt.Sprintf(`"warnings":%s`, warnJSON))
 	}
 
 	return "{" + strings.Join(parts, ",") + "}", nil
@@ -1120,7 +1188,7 @@ func serveMCP(db *index.DB) error {
 					},
 					ServerInfo: mcpServerInfo{
 						Name:    "edr",
-						Version: "0.1.0",
+						Version: Version + "+" + BuildHash,
 					},
 				},
 			})

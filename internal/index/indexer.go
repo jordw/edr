@@ -74,6 +74,11 @@ func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 		return 0, 0, err
 	}
 
+	// Batch all SQLite writes into a single transaction for ~5x speedup.
+	if err := db.BeginBatch(ctx); err == nil {
+		defer db.RollbackBatch()
+	}
+
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip errors
@@ -164,6 +169,9 @@ func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 
 	if err != nil {
 		return filesIndexed, symbolsFound, err
+	}
+	if err := db.CommitBatch(); err != nil {
+		return filesIndexed, symbolsFound, fmt.Errorf("commit index batch: %w", err)
 	}
 	if err := updateIndexedSnapshot(ctx, root); err != nil {
 		return filesIndexed, symbolsFound, err

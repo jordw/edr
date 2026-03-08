@@ -10,10 +10,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Version and BuildHash are set at build time via ldflags:
+//
+//	go build -ldflags "-X github.com/jordw/edr/cmd.Version=... -X github.com/jordw/edr/cmd.BuildHash=..."
+var (
+	Version   = "dev"
+	BuildHash = "unknown"
+)
+
 var rootCmd = &cobra.Command{
-	Use:   "edr",
-	Short: "Edit, Discover, Refactor — a CLI for coding agents",
-	Long:  "Context-preserving code navigation and editing tool optimized for LLM agents.",
+	Use:     "edr",
+	Short:   "Edit, Discover, Refactor — a CLI for coding agents",
+	Long:    "Context-preserving code navigation and editing tool optimized for LLM agents.",
+	Version: Version,
 }
 
 func Execute() {

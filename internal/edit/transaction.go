@@ -1,7 +1,10 @@
 package edit
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"os"
 	"sort"
 )
 
@@ -55,17 +58,37 @@ func (t *Transaction) Commit() error {
 			return edits[i].StartByte > edits[j].StartByte
 		})
 
-		for idx, e := range edits {
-			// Only pass the expectHash on the first edit applied to this file
-			// (before any modifications). After the first edit the hash will
-			// have changed.
-			hash := ""
-			if idx == 0 {
-				hash = e.ExpectHash
+		// Single read-modify-write per file to avoid race conditions.
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return fmt.Errorf("transaction: read %s: %w", file, err)
+		}
+
+		// Verify hash from the first edit (before any modifications).
+		// Hashes are truncated to 8 hex chars, matching FileHash/ReplaceSpan.
+		if h := edits[0].ExpectHash; h != "" {
+			sum := sha256.Sum256(data)
+			got := hex.EncodeToString(sum[:])[:8]
+			if got != h {
+				return fmt.Errorf("transaction: hash mismatch on %s: expected %s, got %s", file, h, got)
 			}
-			if err := ReplaceSpan(file, e.StartByte, e.EndByte, e.Replacement, hash); err != nil {
-				return fmt.Errorf("transaction: commit failed on %s: %w", file, err)
+		}
+
+		// Apply all edits in-memory in reverse byte order (offsets stay valid).
+		for _, e := range edits {
+			if int(e.StartByte) > len(data) || int(e.EndByte) > len(data) || e.StartByte > e.EndByte {
+				return fmt.Errorf("transaction: span [%d:%d] out of range for %s (len %d)", e.StartByte, e.EndByte, file, len(data))
 			}
+			data = append(data[:e.StartByte], append([]byte(e.Replacement), data[e.EndByte:]...)...)
+		}
+
+		// Preserve original file mode.
+		fi, err := os.Stat(file)
+		if err != nil {
+			return fmt.Errorf("transaction: stat %s: %w", file, err)
+		}
+		if err := os.WriteFile(file, data, fi.Mode().Perm()); err != nil {
+			return fmt.Errorf("transaction: write %s: %w", file, err)
 		}
 	}
 

@@ -21,6 +21,7 @@ type DB struct {
 	root     string
 	writeMu  sync.Mutex // in-process writer serialization (for MCP goroutines)
 	lockFile *os.File   // cross-process writer lock (.edr/writer.lock)
+	batchTx  *sql.Tx    // optional: if set, write methods join this tx instead of creating their own
 }
 
 // retryDB wraps sql.DB to automatically retry on SQLITE_BUSY errors.
@@ -68,6 +69,16 @@ func (r *retryDB) QueryRowContext(ctx context.Context, query string, args ...any
 	return r.db.QueryRowContext(ctx, query, args...)
 }
 
+func (r *retryDB) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
+	var stmt *sql.Stmt
+	err := retryBusy(func() error {
+		var e error
+		stmt, e = r.db.PrepareContext(ctx, query)
+		return e
+	})
+	return stmt, err
+}
+
 func (r *retryDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
 	var tx *sql.Tx
 	err := retryBusy(func() error {
@@ -96,23 +107,23 @@ func OpenDB(repoRoot string) (*DB, error) {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 
+	// Set busy_timeout FIRST so subsequent PRAGMAs don't fail with
+	// "database is locked" if another process is mid-write.
+	if _, err := sqlDB.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		sqlDB.Close()
+		return nil, err
+	}
 	// Enable WAL mode for better concurrent access
 	if _, err := sqlDB.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		sqlDB.Close()
 		return nil, err
 	}
-	// Set busy_timeout as a hint (works within a single process).
-	// Cross-process busy handling is done by retryDB wrapper.
-	if _, err := sqlDB.Exec("PRAGMA busy_timeout=5000"); err != nil {
-		sqlDB.Close()
-		return nil, err
-	}
 
-	// Single connection avoids cross-connection locking issues within the same
-	// process. SQLite serializes writes anyway; a pool only helps concurrent
-	// readers, but with WAL + single short-lived CLI calls the benefit is
-	// negligible while the locking risk is real.
-	sqlDB.SetMaxOpenConns(1)
+	// Two connections: one for the batch write transaction (BeginBatch),
+	// one for concurrent reads (e.g. GetFileHash during IndexRepo).
+	// WAL mode allows readers and writers to proceed concurrently.
+	// Write safety is ensured by WithWriteLock (mutex + flock).
+	sqlDB.SetMaxOpenConns(2)
 
 	// Open a persistent lock file for cross-process writer serialization.
 	// The file stays open for the lifetime of the DB; flock is acquired/released
@@ -146,6 +157,71 @@ func (d *DB) WithWriteLock(fn func() error) error {
 	defer syscall.Flock(int(d.lockFile.Fd()), syscall.LOCK_UN)
 
 	return fn()
+}
+
+// execer is the common interface between *sql.DB (via retryDB) and *sql.Tx.
+// Write methods use this so they can participate in a batch transaction.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	PrepareContext(ctx context.Context, query string) (*sql.Stmt, error)
+}
+
+// BeginBatch starts a batch transaction. While active, write methods
+// (UpsertFile, ClearFileData, InsertSymbolsBatch, InsertImports, InsertRefs)
+// join this transaction instead of creating their own. This collapses
+// ~5N transaction commits into 1 when reindexing N files.
+// Must be called while holding the writer lock. Call CommitBatch to finalize.
+func (d *DB) BeginBatch(ctx context.Context) error {
+	if d.batchTx != nil {
+		return fmt.Errorf("batch already active")
+	}
+	tx, err := d.raw.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin batch: %w", err)
+	}
+	d.batchTx = tx
+	return nil
+}
+
+// CommitBatch commits the active batch transaction.
+func (d *DB) CommitBatch() error {
+	if d.batchTx == nil {
+		return nil
+	}
+	err := d.batchTx.Commit()
+	d.batchTx = nil
+	return err
+}
+
+// RollbackBatch rolls back the active batch transaction.
+func (d *DB) RollbackBatch() {
+	if d.batchTx != nil {
+		d.batchTx.Rollback()
+		d.batchTx = nil
+	}
+}
+
+// writerExecer returns the batch tx if active, otherwise the retryDB wrapper.
+func (d *DB) writerExecer() execer {
+	if d.batchTx != nil {
+		return d.batchTx
+	}
+	return d.db
+}
+
+// localTxOrBatch returns an execer and a commit function. If a batch tx is
+// active, the execer joins it and commitFn is a no-op. Otherwise a new local
+// transaction is created; commitFn commits it. On error, call the returned
+// rollbackFn (no-op when using batch tx).
+func (d *DB) localTxOrBatch(ctx context.Context) (q execer, commitFn func() error, err error) {
+	if d.batchTx != nil {
+		return d.batchTx, func() error { return nil }, nil
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	return tx, tx.Commit, nil
 }
 
 func (d *DB) Close() error {
@@ -345,7 +421,7 @@ func (d *DB) migrateV4() error {
 
 // UpsertFile updates or inserts a file record.
 func (d *DB) UpsertFile(ctx context.Context, path, hash string, mtime int64) error {
-	_, err := d.db.ExecContext(ctx, `
+	_, err := d.writerExecer().ExecContext(ctx, `
 		INSERT INTO files (path, hash, mtime) VALUES (?, ?, ?)
 		ON CONFLICT(path) DO UPDATE SET hash=excluded.hash, mtime=excluded.mtime
 	`, path, hash, mtime)
@@ -364,16 +440,17 @@ func (d *DB) GetFileHash(ctx context.Context, path string) (string, error) {
 
 // ClearFileData removes all symbols, imports, and refs for a file.
 func (d *DB) ClearFileData(ctx context.Context, file string) error {
+	q := d.writerExecer()
 	// Delete refs that reference symbols in this file
-	_, err := d.db.ExecContext(ctx, `DELETE FROM refs WHERE file = ?`, file)
+	_, err := q.ExecContext(ctx, `DELETE FROM refs WHERE file = ?`, file)
 	if err != nil {
 		return err
 	}
-	_, err = d.db.ExecContext(ctx, "DELETE FROM imports WHERE file = ?", file)
+	_, err = q.ExecContext(ctx, "DELETE FROM imports WHERE file = ?", file)
 	if err != nil {
 		return err
 	}
-	_, err = d.db.ExecContext(ctx, "DELETE FROM symbols WHERE file = ?", file)
+	_, err = q.ExecContext(ctx, "DELETE FROM symbols WHERE file = ?", file)
 	return err
 }
 
@@ -419,13 +496,12 @@ func (d *DB) InsertSymbolsBatch(ctx context.Context, symbols []SymbolInfo) (map[
 		return ids, nil
 	}
 
-	tx, err := d.db.BeginTx(ctx, nil)
+	q, commitFn, err := d.localTxOrBatch(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
 
-	stmt, err := tx.PrepareContext(ctx, `
+	stmt, err := q.PrepareContext(ctx, `
 		INSERT INTO symbols (name, type, file, start_line, end_line, start_byte, end_byte, parent_id)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`)
@@ -451,7 +527,7 @@ func (d *DB) InsertSymbolsBatch(ctx context.Context, symbols []SymbolInfo) (map[
 		ids[i] = id
 	}
 
-	return ids, tx.Commit()
+	return ids, commitFn()
 }
 
 // ImportInfo represents an import statement extracted from a source file.
@@ -474,13 +550,12 @@ func (d *DB) InsertImports(ctx context.Context, imports []ImportInfo) error {
 	if len(imports) == 0 {
 		return nil
 	}
-	tx, err := d.db.BeginTx(ctx, nil)
+	q, commitFn, err := d.localTxOrBatch(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
 
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO imports (file, import_path, alias) VALUES (?, ?, ?)`)
+	stmt, err := q.PrepareContext(ctx, `INSERT INTO imports (file, import_path, alias) VALUES (?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -491,7 +566,7 @@ func (d *DB) InsertImports(ctx context.Context, imports []ImportInfo) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	return commitFn()
 }
 
 // InsertRefs bulk-inserts reference edges for a file.
@@ -499,13 +574,12 @@ func (d *DB) InsertRefs(ctx context.Context, file string, refs []RefInfo) error 
 	if len(refs) == 0 {
 		return nil
 	}
-	tx, err := d.db.BeginTx(ctx, nil)
+	q, commitFn, err := d.localTxOrBatch(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
 
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO refs (file, from_symbol_id, to_name, line, kind) VALUES (?, ?, ?, ?, ?)`)
+	stmt, err := q.PrepareContext(ctx, `INSERT INTO refs (file, from_symbol_id, to_name, line, kind) VALUES (?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -516,7 +590,7 @@ func (d *DB) InsertRefs(ctx context.Context, file string, refs []RefInfo) error 
 			return err
 		}
 	}
-	return tx.Commit()
+	return commitFn()
 }
 
 // HasRefs returns true if the refs table has any data.

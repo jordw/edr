@@ -505,9 +505,6 @@ func commitEdits(ctx context.Context, db *index.DB, edits []resolvedEdit) (*comm
 	for _, r := range edits {
 		tx.Add(r.File, r.StartByte, r.EndByte, r.Replacement, r.ExpectHash)
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
 
 	fileSet := make(map[string]bool)
 	for _, r := range edits {
@@ -518,7 +515,32 @@ func commitEdits(ctx context.Context, db *index.DB, edits []resolvedEdit) (*comm
 		fileList = append(fileList, f)
 	}
 
-	indexErrors := reindexFiles(ctx, db, fileList)
+	// Hold writer lock across both commit and reindex to prevent concurrent
+	// same-file edit races.
+	var indexErrors map[string]string
+	if lockErr := db.WithWriteLock(func() error {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		// Batch all reindex SQLite writes into a single transaction.
+		if err := db.BeginBatch(ctx); err == nil {
+			defer db.RollbackBatch() // no-op after CommitBatch
+		}
+		for _, file := range fileList {
+			if err := index.IndexFile(ctx, db, file); err != nil {
+				if indexErrors == nil {
+					indexErrors = make(map[string]string)
+				}
+				indexErrors[output.Rel(file)] = err.Error()
+			}
+		}
+		if err := db.CommitBatch(); err != nil {
+			return fmt.Errorf("commit reindex batch: %w", err)
+		}
+		return nil
+	}); lockErr != nil {
+		return nil, lockErr
+	}
 
 	hashes := make(map[string]string)
 	for f := range fileSet {

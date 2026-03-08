@@ -4,7 +4,7 @@
 
 Coding agents waste tokens. They read entire files to find one function. They make three round trips (read, edit, re-read) to change a single line. They grep for a symbol and get a wall of unstructured text.
 
-edr is an MCP server that gives agents surgical, budget-controlled access to your codebase. It indexes your repo with tree-sitter so agents can read individual symbols, search call graphs, and batch entire workflows into one or two tool calls. Its primary interface, `edr_plan`, lets an agent gather all context and apply all changes in just two calls instead of 7+ sequential reads, edits, and verifications.
+edr is a token-efficient MCP server and CLI that gives agents surgical, budget-controlled access to your codebase. It indexes your repo with tree-sitter so agents can read individual symbols, search call graphs, and batch entire workflows into one or two tool calls. Its primary interface, `edr_plan`, lets an agent gather all context and apply all changes in just two calls instead of 7+ sequential reads, edits, and verifications.
 
 ## The numbers
 
