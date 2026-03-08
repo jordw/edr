@@ -131,7 +131,7 @@ type mcpContent struct {
 func mcpTools() []mcpTool {
 	return []mcpTool{
 		{
-			Name:        "edr_do",
+			Name:        "edr",
 			Description: ToolDesc["do"],
 			InputSchema: mcpSchema{
 				Type: "object",
@@ -206,24 +206,6 @@ func mcpTools() []mcpTool {
 				},
 			},
 		},
-		{
-			Name:        "edr_read",
-			Description: ToolDesc["read"],
-			InputSchema: mcpSchema{
-				Type: "object",
-				Properties: map[string]mcpProp{
-					"files":      {Type: "array", Description: P("files"), Items: &mcpPropItems{Type: "string"}},
-					"budget":     {Type: "integer", Description: P("budget")},
-					"start_line": {Type: "integer", Description: P("start_line")},
-					"end_line":   {Type: "integer", Description: P("end_line")},
-					"symbols":    {Type: "boolean", Description: P("symbols")},
-					"signatures": {Type: "boolean", Description: P("signatures")},
-					"depth":      {Type: "integer", Description: P("depth")},
-					"full":       {Type: "boolean", Description: P("full")},
-				},
-				Required: []string{"files"},
-			},
-		},
 	}
 }
 
@@ -236,50 +218,7 @@ func routeTool(toolName string, raw json.RawMessage) (cmd string, args []string,
 	args = []string{}
 
 	switch toolName {
-	case "edr_read":
-		var p struct {
-			Files      []string `json:"files"`
-			Budget     *int     `json:"budget"`
-			StartLine  *int     `json:"start_line"`
-			EndLine    *int     `json:"end_line"`
-			Symbols    *bool    `json:"symbols"`
-			Signatures *bool    `json:"signatures"`
-			Depth      *int     `json:"depth"`
-			Full       *bool    `json:"full"`
-		}
-		if err = json.Unmarshal(raw, &p); err != nil {
-			return
-		}
-		cmd = "read"
-		// If single file with start/end lines, fold into args
-		if len(p.Files) == 1 && p.StartLine != nil && p.EndLine != nil {
-			args = []string{p.Files[0], strconv.Itoa(*p.StartLine), strconv.Itoa(*p.EndLine)}
-		} else {
-			args = p.Files
-		}
-		if p.Budget != nil {
-			flags["budget"] = *p.Budget
-		}
-		if p.StartLine != nil && (len(p.Files) != 1 || p.EndLine == nil) {
-			flags["start_line"] = *p.StartLine
-		}
-		if p.EndLine != nil && (len(p.Files) != 1 || p.StartLine == nil) {
-			flags["end_line"] = *p.EndLine
-		}
-		if p.Symbols != nil && *p.Symbols {
-			flags["symbols"] = true
-		}
-		if p.Signatures != nil && *p.Signatures {
-			flags["signatures"] = true
-		}
-		if p.Depth != nil {
-			flags["depth"] = *p.Depth
-		}
-		if p.Full != nil && *p.Full {
-			flags["full"] = true
-		}
-
-	case "edr_do":
+	case "edr":
 		// Handled specially — see handleDo()
 		cmd = "do"
 

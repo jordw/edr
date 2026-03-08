@@ -346,47 +346,9 @@ func TestPostProcess_FullFlag(t *testing.T) {
 	}
 }
 
-func TestRouteTool_Read(t *testing.T) {
-	raw := json.RawMessage(`{"files":["src/main.go","src/config.go:parseConfig"],"budget":300}`)
-	cmd, args, flags, err := routeTool("edr_read", raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cmd != "read" {
-		t.Errorf("cmd=%s", cmd)
-	}
-	if len(args) != 2 || args[0] != "src/main.go" || args[1] != "src/config.go:parseConfig" {
-		t.Errorf("args = %v", args)
-	}
-	if flags["budget"] != 300 {
-		t.Errorf("budget = %v", flags["budget"])
-	}
-}
-
-func TestRouteTool_ReadLineRange(t *testing.T) {
-	raw := json.RawMessage(`{"files":["f.go"],"start_line":10,"end_line":20}`)
-	cmd, args, _, err := routeTool("edr_read", raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cmd != "read" {
-		t.Errorf("cmd=%s", cmd)
-	}
-	if len(args) != 3 || args[0] != "f.go" || args[1] != "10" || args[2] != "20" {
-		t.Errorf("args = %v, want [f.go 10 20]", args)
-	}
-}
-
-func TestRouteTool_MapReturnsError(t *testing.T) {
-	_, _, _, err := routeTool("edr_map", json.RawMessage(`{}`))
-	if err == nil {
-		t.Error("expected error for removed edr_map tool")
-	}
-}
-
-func TestRouteTool_Do(t *testing.T) {
+func TestRouteTool_Edr(t *testing.T) {
 	raw := json.RawMessage(`{"reads":[{"file":"f.go"}]}`)
-	cmd, _, _, err := routeTool("edr_do", raw)
+	cmd, _, _, err := routeTool("edr", raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,18 +366,11 @@ func TestRouteTool_Unknown(t *testing.T) {
 
 func TestMcpTools_Count(t *testing.T) {
 	tools := mcpTools()
-	if len(tools) != 2 {
-		t.Errorf("expected 2 tools, got %d", len(tools))
+	if len(tools) != 1 {
+		t.Errorf("expected 1 tool, got %d", len(tools))
 	}
-	names := map[string]bool{}
-	for _, tool := range tools {
-		names[tool.Name] = true
-	}
-	expected := []string{"edr_do", "edr_read"}
-	for _, name := range expected {
-		if !names[name] {
-			t.Errorf("missing tool: %s", name)
-		}
+	if tools[0].Name != "edr" {
+		t.Errorf("tool name = %q, want edr", tools[0].Name)
 	}
 }
 

@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
+	"github.com/jordw/edr/internal/session"
 	"github.com/spf13/cobra"
 )
 
@@ -26,6 +29,52 @@ var rootCmd = &cobra.Command{
 	Version:       Version,
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	Args:          cobra.ArbitraryArgs,
+	RunE:          rootRunE,
+}
+
+func rootRunE(cmd *cobra.Command, args []string) error {
+	// If called with a JSON arg or stdin has data, route to handleDo.
+	var raw json.RawMessage
+	if len(args) > 0 && strings.HasPrefix(strings.TrimSpace(args[0]), "{") {
+		raw = json.RawMessage(args[0])
+	} else if len(args) == 0 {
+		stat, _ := os.Stdin.Stat()
+		if (stat.Mode() & os.ModeCharDevice) == 0 {
+			data, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return fmt.Errorf("reading stdin: %w", err)
+			}
+			if len(data) > 0 && strings.HasPrefix(strings.TrimSpace(string(data)), "{") {
+				raw = json.RawMessage(data)
+			}
+		}
+	}
+
+	if raw == nil {
+		return cmd.Help()
+	}
+
+	db, err := openAndEnsureIndex(cmd)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	sess := session.New()
+	ctx := context.Background()
+	text, err := handleDo(ctx, db, sess, raw)
+	if err != nil {
+		return err
+	}
+
+	var out any
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		fmt.Println(text)
+	} else {
+		output.Print(out)
+	}
+	return nil
 }
 
 func Execute() {

@@ -16,6 +16,7 @@ import (
 )
 
 func init() {
+	rootCmd.AddCommand(doCmd)
 	rootCmd.AddCommand(readCmd)
 	rootCmd.AddCommand(writeCmd)
 	rootCmd.AddCommand(editCmd)
@@ -28,6 +29,54 @@ func init() {
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(editPlanCmd)
 	rootCmd.AddCommand(initCmd)
+}
+
+var doCmd = &cobra.Command{
+	Use:   "do [json]",
+	Short: "Execute a batched operation (same format as the edr MCP tool)",
+	Long: `Accepts the same JSON format as the edr MCP tool. Reads JSON from the
+first argument or stdin. Supports reads, queries, edits, writes, renames,
+verify, and init — all in one call.
+
+JSON can also be passed directly to the root command (edr '{...}').
+
+Example:
+  edr '{"reads":[{"file":"src/main.go","symbol":"Server"}]}'
+  edr do '{"reads":[{"file":"src/main.go","symbol":"Server"}]}'
+  echo '{"edits":[{"file":"f.go","old_text":"x","new_text":"y"}],"verify":true}' | edr`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		db, err := openAndEnsureIndex(cmd)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+
+		var raw json.RawMessage
+		if len(args) > 0 {
+			raw = json.RawMessage(args[0])
+		} else {
+			data, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return fmt.Errorf("reading stdin: %w", err)
+			}
+			raw = json.RawMessage(data)
+		}
+
+		sess := session.New()
+		ctx := context.Background()
+		text, err := handleDo(ctx, db, sess, raw)
+		if err != nil {
+			return err
+		}
+
+		var out any
+		if err := json.Unmarshal([]byte(text), &out); err != nil {
+			fmt.Println(text)
+		} else {
+			output.Print(out)
+		}
+		return nil
+	},
 }
 
 // dispatchWithSession runs a command through the session post-processing pipeline.

@@ -2,7 +2,7 @@
 
 **88% fewer tokens. Half the tool calls.**
 
-Coding agents read entire files to find one function, make three round trips to change one line, and grep symbols into walls of unstructured text. edr fixes this. It indexes your repo with tree-sitter and gives agents symbol-scoped reads, structured search, and batched workflows — most tasks collapse into one or two `edr_do` calls.
+Coding agents read entire files to find one function, make three round trips to change one line, and grep symbols into walls of unstructured text. edr fixes this. It indexes your repo with tree-sitter and gives agents symbol-scoped reads, structured search, and batched workflows — most tasks collapse into one or two `edr` calls.
 
 ## Quick start
 
@@ -13,7 +13,7 @@ git clone https://github.com/jordw/edr.git && cd edr
 ./setup.sh /path/to/your/repo    # installs deps, builds, configures MCP
 ```
 
-Registers 2 tools: `edr_do` (primary) and `edr_read` (convenience for quick reads).
+Registers 1 tool: `edr` — handles reads, queries, edits, writes, renames, and verification.
 
 ### CLI
 
@@ -29,13 +29,13 @@ go build -o edr .
 
 Go 1.25+, a C compiler (tree-sitter grammars), write access for `.edr/` in the repo root.
 
-## `edr_do`: the primary tool
+## `edr`: the primary tool
 
 Gather context, then make changes — two calls instead of seven:
 
 ```
 # Call 1: gather all context
-edr_do(
+edr(
   reads: [
     {file: "lib/scheduler.py", symbol: "Scheduler", signatures: true},
     {file: "lib/scheduler.py", symbol: "_execute_task"}
@@ -47,7 +47,7 @@ edr_do(
 )
 
 # Call 2: make changes + verify
-edr_do(
+edr(
   edits: [{file: "lib/scheduler.py", old_text: "self._running = True", new_text: "self._running = False"}],
   writes: [{file: "lib/scheduler_test.py", content: "...", mkdir: true}],
   verify: true
@@ -121,9 +121,9 @@ Fewer tokens = faster responses, lower cost, and more context for the actual tas
 
 ## What agents say
 
-> That was pretty awesome. One `edr_do` call to rewrite 12 files atomically. No need to Read each file first, no 12 separate Write calls. The whole system test rewrite was one tool call instead of 24+. The read side was good too: batch-reading all 8 controller tests and then all 6 controllers for cross-referencing, all in single calls with hashes and metadata.
+> That was pretty awesome. One `edr` call to rewrite 12 files atomically. No need to Read each file first, no 12 separate Write calls. The whole system test rewrite was one tool call instead of 24+. The read side was good too: batch-reading all 8 controller tests and then all 6 controllers for cross-referencing, all in single calls with hashes and metadata.
 >
-> The workflow that felt best: (1) `edr_do` reads to review everything at once, (2) `edr_do` edits to apply all changes atomically, (3) run tests to confirm. Clean and fast.
+> The workflow that felt best: (1) `edr` reads to review everything at once, (2) `edr` edits to apply all changes atomically, (3) run tests to confirm. Clean and fast.
 >
 > - Claude Opus 4.6
 
@@ -133,7 +133,7 @@ Fewer tokens = faster responses, lower cost, and more context for the actual tas
 
 > edr feels like it was built for how agents actually work, not for how humans use CLIs. The symbol-aware reads, cross-reference exploration, and structured JSON outputs make it much easier to stay in a tight read-think-act loop without constantly dropping to grep and raw file dumps.
 >
-> The workflow that works best: (1) `edr map` to orient, (2) `edr read file:symbol` or `--signatures` to get exactly what's needed, (3) `edr explore` for body + callers + deps in one call, (4) `edr edit --dry-run` before applying changes. The batch mode and `edr_do`-style batching turn common repo navigation and editing tasks into compact, automatable workflows.
+> The workflow that works best: (1) `edr map` to orient, (2) `edr read file:symbol` or `--signatures` to get exactly what's needed, (3) `edr explore` for body + callers + deps in one call, (4) `edr edit --dry-run` before applying changes. The batch mode turns common repo navigation and editing tasks into compact, automatable workflows.
 >
 > Token savings and fewer round trips are real. For agents that need to read, search, and edit code, edr is the right tool.
 >

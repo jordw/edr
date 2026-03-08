@@ -5,9 +5,9 @@ package cmd
 
 // ToolDesc holds the description for each tool.
 var ToolDesc = map[string]string{
-	"plan":    "Batch edits with dry-run preview. Use edr_do for full read/query/edit/write workflows.",
+	"plan":    "Batch edits with dry-run preview. Use edr for full read/query/edit/write workflows.",
 	"do":      "Batch reads, queries, edits, writes, renames, verify, init. The primary tool for all operations.",
-	"read":    "Read file, symbol (file:sym), or batch. Use edr_do for multiple reads.",
+	"read":    "Read file, symbol (file:sym), or batch. Use edr for multiple reads.",
 	"edit":    "Edit by old_text/new_text, symbol, line range, or move. Returns hash.",
 	"write":   "Create/overwrite file. Supports append, after (symbol), inside (container), mkdir.",
 	"search":  "Symbol or text search. body=true includes source inline.",

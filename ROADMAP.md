@@ -131,11 +131,11 @@ edr simulate edit --file dispatch.go \
 
 Returns: files that will break, callers that need signature updates, tests to run, symbols likely to become stale. No model needed — pure graph walking on the existing refs system.
 
-MCP: `edr_do(edits: [...], simulate: true)` returns the impact report without applying.
+MCP: `edr(edits: [...], simulate: true)` returns the impact report without applying.
 
 ### Speculative edit-verify-rollback
 
-`edr_do(edits: [...], verify: true, speculative: true)`
+`edr(edits: [...], verify: true, speculative: true)`
 
 Internally: snapshot → apply edits → run verify → if fail, rollback and return the error with the diff that caused it. If pass, commit. One call. The agent never sees a broken state.
 
@@ -155,7 +155,7 @@ Agents can recover from a failed edit. They recover badly from a file that chang
 
 ### Targeted test selection
 
-Use the refs graph to answer "which tests are affected by this edit?" Run only those tests instead of the full suite. `edr_do(edits: [...], verify: true)` already runs verify — making it run *only affected tests* turns a 60-second build into a 2-second check. Pure graph walking, no ML.
+Use the refs graph to answer "which tests are affected by this edit?" Run only those tests instead of the full suite. `edr(edits: [...], verify: true)` already runs verify — making it run *only affected tests* turns a 60-second build into a 2-second check. Pure graph walking, no ML.
 
 ```
 edr verify --affected src/dispatch.go   # only tests that transitively depend on changed symbols
