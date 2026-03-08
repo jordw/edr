@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -408,9 +409,15 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, error)
 			continue
 		}
 
-		// Grep filter (case-insensitive name match)
-		if cfg.grep != "" && !strings.Contains(strings.ToLower(s.Name), strings.ToLower(cfg.grep)) {
-			continue
+		// Grep filter: try regex first, fall back to case-insensitive substring
+		if cfg.grep != "" {
+			if re, err := regexp.Compile("(?i)" + cfg.grep); err == nil {
+				if !re.MatchString(s.Name) {
+					continue
+				}
+			} else if !strings.Contains(strings.ToLower(s.Name), strings.ToLower(cfg.grep)) {
+				continue
+			}
 		}
 
 		if _, seen := byFile[s.File]; !seen {

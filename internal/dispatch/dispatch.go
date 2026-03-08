@@ -186,9 +186,22 @@ func runWriteUnified(ctx context.Context, db *index.DB, root string, args []stri
 // runMapUnified routes to repo-map or symbols based on args.
 //
 //	map                                → repo-map
+//	map dir/                           → repo-map scoped to dir
 //	map file.go                        → symbols
 func runMapUnified(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) > 0 {
+		// If the arg is a directory, treat it as --dir for repo-map
+		resolved := args[0]
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(root, resolved)
+		}
+		if info, err := os.Stat(resolved); err == nil && info.IsDir() {
+			if flags == nil {
+				flags = map[string]any{}
+			}
+			flags["dir"] = args[0]
+			return runRepoMap(ctx, db, flags)
+		}
 		return runSymbols(ctx, db, root, args)
 	}
 	return runRepoMap(ctx, db, flags)

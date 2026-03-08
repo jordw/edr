@@ -13,14 +13,27 @@ import (
 
 func runVerify(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
 	command := flagString(flags, "command", "")
+	level := flagString(flags, "level", "build")
 	if command == "" {
 		// Auto-detect based on project files
 		if _, err := os.Stat(root + "/go.mod"); err == nil {
-			command = "go build ./..."
+			if level == "test" {
+				command = "go test ./..."
+			} else {
+				command = "go build ./..."
+			}
 		} else if _, err := os.Stat(root + "/package.json"); err == nil {
-			command = "npx tsc --noEmit"
+			if level == "test" {
+				command = "npm test"
+			} else {
+				command = "npx tsc --noEmit"
+			}
 		} else if _, err := os.Stat(root + "/Cargo.toml"); err == nil {
-			command = "cargo check"
+			if level == "test" {
+				command = "cargo test"
+			} else {
+				command = "cargo check"
+			}
 		} else {
 			return nil, fmt.Errorf("verify: no command specified and could not auto-detect project type")
 		}

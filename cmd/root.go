@@ -19,10 +19,12 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:     "edr",
-	Short:   "Edit, Discover, Refactor — a CLI for coding agents",
-	Long:    "Context-preserving code navigation and editing tool optimized for LLM agents.",
-	Version: Version,
+	Use:           "edr",
+	Short:         "Edit, Discover, Refactor -- a CLI for coding agents",
+	Long:          "Context-preserving code navigation and editing tool optimized for LLM agents.",
+	Version:       Version,
+	SilenceUsage:  true,
+	SilenceErrors: true,
 }
 
 func Execute() {

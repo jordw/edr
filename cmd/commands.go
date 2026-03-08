@@ -246,6 +246,7 @@ var initCmd = &cobra.Command{
 var editPlanCmd = &cobra.Command{
 	Use:   "edit-plan",
 	Short: ToolDesc["plan"],
+	Long:  ToolDesc["plan"] + "\n\nMCP equivalent: edr_do with edits array and optional verify.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
