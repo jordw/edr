@@ -224,22 +224,6 @@ func mcpTools() []mcpTool {
 				Required: []string{"files"},
 			},
 		},
-		{
-			Name:        "edr_map",
-			Description: ToolDesc["map"],
-			InputSchema: mcpSchema{
-				Type: "object",
-				Properties: map[string]mcpProp{
-					"file":   {Type: "string", Description: P("file")},
-					"budget": {Type: "integer", Description: P("budget")},
-					"dir":    {Type: "string", Description: P("dir")},
-					"glob":   {Type: "string", Description: P("glob")},
-					"type":   {Type: "string", Description: P("type")},
-					"grep":   {Type: "string", Description: P("grep")},
-					"locals": {Type: "boolean", Description: P("locals")},
-				},
-			},
-		},
 	}
 }
 
@@ -293,42 +277,6 @@ func routeTool(toolName string, raw json.RawMessage) (cmd string, args []string,
 		}
 		if p.Full != nil && *p.Full {
 			flags["full"] = true
-		}
-
-	case "edr_map":
-		var p struct {
-			File   *string `json:"file"`
-			Budget *int    `json:"budget"`
-			Dir    *string `json:"dir"`
-			Glob   *string `json:"glob"`
-			Type   *string `json:"type"`
-			Grep   *string `json:"grep"`
-			Locals *bool   `json:"locals"`
-		}
-		if err = json.Unmarshal(raw, &p); err != nil {
-			return
-		}
-		cmd = "map"
-		if p.File != nil && *p.File != "" {
-			args = []string{*p.File}
-		}
-		if p.Budget != nil {
-			flags["budget"] = *p.Budget
-		}
-		if p.Dir != nil && *p.Dir != "" {
-			flags["dir"] = *p.Dir
-		}
-		if p.Glob != nil && *p.Glob != "" {
-			flags["glob"] = *p.Glob
-		}
-		if p.Type != nil && *p.Type != "" {
-			flags["type"] = *p.Type
-		}
-		if p.Grep != nil && *p.Grep != "" {
-			flags["grep"] = *p.Grep
-		}
-		if p.Locals != nil && *p.Locals {
-			flags["locals"] = true
 		}
 
 	case "edr_do":

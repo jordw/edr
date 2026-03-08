@@ -89,7 +89,7 @@ git clone https://github.com/jordw/edr.git && cd edr
 ./setup.sh /path/to/your/repo    # installs deps, builds, configures MCP
 ```
 
-Registers 3 tools: `edr_do`, `edr_read`, `edr_map`.
+Registers 2 tools: `edr_do` (primary) and `edr_read` (convenience for quick reads).
 
 ### CLI
 

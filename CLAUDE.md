@@ -22,7 +22,6 @@ edr_do(                                            # Call 2: ALL mutations + ver
 
 **Only fall back to individual tools when:**
 - You need a single quick read (use `edr_read`)
-- You need a quick symbol map overview (use `edr_map`)
 - You need non-text files or shell operations (use built-in tools)
 
 ## Why edr over built-in tools
@@ -283,12 +282,12 @@ Renames and `init: true` clear all tracking state.
 
 ## MCP Tools
 
-3 tools: `edr_do`, `edr_read`, `edr_map`.
+2 tools: `edr_do`, `edr_read`.
 
 `edr_do` handles everything: reads, queries (search/explore/refs/map/find/diff), edits, writes, renames, verify, init.
 `edr_do` reads params: `file`, `symbol?`, `budget?`, `signatures?`, `depth?`, `start_line?`, `end_line?`, `symbols?`, `full?`.
-`edr_read` params: `file`, `symbol?`, `budget?`, `signatures?`, `depth?`, `full?`, `start_line?`, `end_line?`.
-`edr_map` params: `file?`, `budget?`, `dir?`, `glob?`, `type?`, `grep?`, `locals?`.
+`edr_read` is a convenience alias for quick single-file reads.
+`edr_read` params: `files`, `symbol?`, `budget?`, `signatures?`, `depth?`, `full?`, `start_line?`, `end_line?`.
 
 Each tool is self-documenting via its MCP schema (descriptions sourced from `cmd/toolinfo.go`).
 All output is structured JSON. File paths are relative to repo root. Edit commands return `hash`.

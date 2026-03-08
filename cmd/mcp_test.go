@@ -377,20 +377,10 @@ func TestRouteTool_ReadLineRange(t *testing.T) {
 	}
 }
 
-func TestRouteTool_Map(t *testing.T) {
-	raw := json.RawMessage(`{"file":"src/main.go","budget":500,"dir":"internal/","type":"function"}`)
-	cmd, args, flags, err := routeTool("edr_map", raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cmd != "map" {
-		t.Errorf("cmd=%s", cmd)
-	}
-	if len(args) != 1 || args[0] != "src/main.go" {
-		t.Errorf("args = %v", args)
-	}
-	if flags["budget"] != 500 || flags["dir"] != "internal/" || flags["type"] != "function" {
-		t.Errorf("flags = %v", flags)
+func TestRouteTool_MapReturnsError(t *testing.T) {
+	_, _, _, err := routeTool("edr_map", json.RawMessage(`{}`))
+	if err == nil {
+		t.Error("expected error for removed edr_map tool")
 	}
 }
 
@@ -414,14 +404,14 @@ func TestRouteTool_Unknown(t *testing.T) {
 
 func TestMcpTools_Count(t *testing.T) {
 	tools := mcpTools()
-	if len(tools) != 3 {
-		t.Errorf("expected 3 tools, got %d", len(tools))
+	if len(tools) != 2 {
+		t.Errorf("expected 2 tools, got %d", len(tools))
 	}
 	names := map[string]bool{}
 	for _, tool := range tools {
 		names[tool.Name] = true
 	}
-	expected := []string{"edr_do", "edr_read", "edr_map"}
+	expected := []string{"edr_do", "edr_read"}
 	for _, name := range expected {
 		if !names[name] {
 			t.Errorf("missing tool: %s", name)
