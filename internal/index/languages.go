@@ -35,12 +35,27 @@ type ImportNodeConfig struct {
 
 // LangConfig holds the tree-sitter language and the AST node types that
 // represent symbols worth indexing for a given programming language.
+// ContainerStyle describes how a language delimits container bodies (classes, structs, etc.).
+type ContainerStyle int
+
+const (
+	// ContainerBrace uses { } delimiters (Go, JS/TS, C, C++, Rust, Java, PHP, Zig).
+	ContainerBrace ContainerStyle = iota
+	// ContainerIndent uses indentation to define scope (Python).
+	ContainerIndent
+	// ContainerKeyword uses a closing keyword like "end" (Ruby, Lua).
+	ContainerKeyword
+)
+
 type LangConfig struct {
-	Language    *tree_sitter.Language
-	SymbolNodes []string
-	NameField   string
-	Imports     *ImportNodeConfig
-	LangID      string // "go", "python", "javascript", "typescript", etc.
+	Language       *tree_sitter.Language
+	SymbolNodes    []string
+	NameField      string
+	Imports        *ImportNodeConfig
+	LangID         string         // "go", "python", "javascript", "typescript", etc.
+	Container      ContainerStyle // how containers are delimited
+	ContainerClose string         // closing token: "}", "end", "" (indent-based)
+	MethodsOutside bool           // true if methods live outside the struct (Go)
 }
 
 // GetLangConfig returns the language configuration for the given filename
@@ -59,8 +74,11 @@ func GetLangConfig(filename string) *LangConfig {
 				"type_spec",
 				"var_spec",
 			},
-			NameField: "name",
-			LangID:    "go",
+			NameField:      "name",
+			LangID:         "go",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
+			MethodsOutside: true,
 			Imports: &ImportNodeConfig{
 				TopLevel:   []string{"import_declaration"},
 				SpecNode:   "import_spec",
@@ -75,8 +93,10 @@ func GetLangConfig(filename string) *LangConfig {
 				"function_definition",
 				"class_definition",
 			},
-			NameField: "name",
-			LangID:    "python",
+			NameField:      "name",
+			LangID:         "python",
+			Container:      ContainerIndent,
+			ContainerClose: "",
 			Imports: &ImportNodeConfig{
 				TopLevel: []string{"import_statement", "import_from_statement"},
 			},
@@ -90,8 +110,10 @@ func GetLangConfig(filename string) *LangConfig {
 				"method_definition",
 				"arrow_function",
 			},
-			NameField: "name",
-			LangID:    "javascript",
+			NameField:      "name",
+			LangID:         "javascript",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
 			Imports: &ImportNodeConfig{
 				TopLevel:  []string{"import_statement"},
 				PathField: "source",
@@ -104,8 +126,10 @@ func GetLangConfig(filename string) *LangConfig {
 				"function_definition",
 				"struct_specifier",
 			},
-			NameField: "name",
-			LangID:    "c",
+			NameField:      "name",
+			LangID:         "c",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
 		}
 	case ".rs":
 		return &LangConfig{
@@ -116,8 +140,10 @@ func GetLangConfig(filename string) *LangConfig {
 				"impl_item",
 				"enum_item",
 			},
-			NameField: "name",
-			LangID:    "rust",
+			NameField:      "name",
+			LangID:         "rust",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
 		}
 	case ".java":
 		return &LangConfig{
@@ -127,8 +153,10 @@ func GetLangConfig(filename string) *LangConfig {
 				"class_declaration",
 				"interface_declaration",
 			},
-			NameField: "name",
-			LangID:    "java",
+			NameField:      "name",
+			LangID:         "java",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
 		}
 	case ".ts":
 		return &LangConfig{
@@ -142,8 +170,10 @@ func GetLangConfig(filename string) *LangConfig {
 				"enum_declaration",
 				"type_alias_declaration",
 			},
-			NameField: "name",
-			LangID:    "typescript",
+			NameField:      "name",
+			LangID:         "typescript",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
 			Imports: &ImportNodeConfig{
 				TopLevel:  []string{"import_statement"},
 				PathField: "source",
@@ -161,8 +191,10 @@ func GetLangConfig(filename string) *LangConfig {
 				"enum_declaration",
 				"type_alias_declaration",
 			},
-			NameField: "name",
-			LangID:    "typescript",
+			NameField:      "name",
+			LangID:         "typescript",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
 			Imports: &ImportNodeConfig{
 				TopLevel:  []string{"import_statement"},
 				PathField: "source",
@@ -176,8 +208,10 @@ func GetLangConfig(filename string) *LangConfig {
 				"class",
 				"module",
 			},
-			NameField: "name",
-			LangID:    "ruby",
+			NameField:      "name",
+			LangID:         "ruby",
+			Container:      ContainerKeyword,
+			ContainerClose: "end",
 		}
 	case ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh":
 		return &LangConfig{
@@ -190,8 +224,10 @@ func GetLangConfig(filename string) *LangConfig {
 				"namespace_definition",
 				"template_declaration",
 			},
-			NameField: "name",
-			LangID:    "cpp",
+			NameField:      "name",
+			LangID:         "cpp",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
 		}
 	case ".php":
 		return &LangConfig{
@@ -204,8 +240,10 @@ func GetLangConfig(filename string) *LangConfig {
 				"trait_declaration",
 				"enum_declaration",
 			},
-			NameField: "name",
-			LangID:    "php",
+			NameField:      "name",
+			LangID:         "php",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
 		}
 	case ".zig":
 		return &LangConfig{
@@ -218,8 +256,10 @@ func GetLangConfig(filename string) *LangConfig {
 				"enum_declaration",
 				"union_declaration",
 			},
-			NameField: "name",
-			LangID:    "zig",
+			NameField:      "name",
+			LangID:         "zig",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
 		}
 	case ".lua":
 		return &LangConfig{
@@ -229,8 +269,10 @@ func GetLangConfig(filename string) *LangConfig {
 				"function_definition",
 				"local_function",
 			},
-			NameField: "name",
-			LangID:    "lua",
+			NameField:      "name",
+			LangID:         "lua",
+			Container:      ContainerKeyword,
+			ContainerClose: "end",
 		}
 	case ".sh", ".bash":
 		return &LangConfig{
@@ -238,8 +280,10 @@ func GetLangConfig(filename string) *LangConfig {
 			SymbolNodes: []string{
 				"function_definition",
 			},
-			NameField: "name",
-			LangID:    "bash",
+			NameField:      "name",
+			LangID:         "bash",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
 		}
 	default:
 		return nil

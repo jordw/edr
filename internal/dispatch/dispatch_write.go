@@ -154,19 +154,6 @@ func runInsertAfter(ctx context.Context, db *index.DB, root string, args []strin
 	return writeResult(sym.File, cr, fmt.Sprintf("inserted after %s", sym.Name)), nil
 }
 
-// containerClosingDelimiters maps language IDs to the byte that closes a container body.
-// Languages like Python and Ruby use keywords ("end") rather than braces.
-var containerClosingDelimiters = map[string]string{
-	"go":         "}",
-	"javascript": "}",
-	"typescript": "}",
-	"c":          "}",
-	"rust":       "}",
-	"java":       "}",
-	"python":     "",  // indentation-based, no closing delimiter
-	"ruby":       "end",
-}
-
 // containerTypes lists normalized symbol types that are valid containers for --inside.
 var containerTypes = map[string]bool{
 	"class":     true, // Python, JS/TS, Java, Ruby
@@ -201,14 +188,12 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 		return nil, fmt.Errorf("symbol %q is a %s, not a container type (class/struct/impl/module)", containerName, container.Type)
 	}
 
-	// Determine language
-	lang := ""
-	if cfg := index.GetLangConfig(container.File); cfg != nil {
-		lang = cfg.LangID
-	}
+	// Determine language config
+	cfg := index.GetLangConfig(container.File)
 
-	// Go structs: --inside adds fields, not methods. Auto-reroute methods to --after.
-	if lang == "go" && (container.Type == "struct" || container.Type == "type") {
+	// Languages with MethodsOutside (Go): --inside adds fields, not methods.
+	// Auto-reroute methods to --after.
+	if cfg != nil && cfg.MethodsOutside && (container.Type == "struct" || container.Type == "type") {
 		data, readErr := os.ReadFile(container.File)
 		if readErr == nil {
 			body := string(data[container.StartByte:container.EndByte])
@@ -255,7 +240,7 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 	}
 
 	// Find insertion point: just before the closing delimiter
-	insertByte, baseIndent, err := findContainerInsertionPoint(data, container, lang)
+	insertByte, baseIndent, err := findContainerInsertionPoint(data, container, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -264,10 +249,10 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 	content = strings.TrimRight(content, "\n")
 	indentedContent := indentContent(content, baseIndent)
 
-	// Determine separator: for brace languages, insert before closing brace.
-	// For Python/Ruby, insert after the last line of the body.
+	// Determine separator: brace languages insert before closing brace,
+	// indent/keyword languages insert after the last line of the body.
 	insertion := indentedContent + "\n"
-	if lang == "python" || lang == "ruby" {
+	if cfg != nil && cfg.Container != index.ContainerBrace {
 		insertion = "\n" + indentedContent + "\n"
 	}
 
@@ -312,12 +297,17 @@ func insertInsideAfterChild(ctx context.Context, db *index.DB, container *index.
 
 // findContainerInsertionPoint finds the byte offset just before the closing delimiter
 // of a container symbol, and returns the base indentation for content inside it.
-func findContainerInsertionPoint(data []byte, container *index.SymbolInfo, lang string) (int, string, error) {
+func findContainerInsertionPoint(data []byte, container *index.SymbolInfo, cfg *index.LangConfig) (int, string, error) {
 	body := data[container.StartByte:container.EndByte]
 
-	switch lang {
-	case "python":
-		// Python: indentation-based. Insert at end of container body.
+	style := index.ContainerBrace
+	if cfg != nil {
+		style = cfg.Container
+	}
+
+	switch style {
+	case index.ContainerIndent:
+		// Indentation-based (Python). Insert at end of container body.
 		containerIndent := detectIndentAt(data, container.StartByte)
 		indent := containerIndent + "    " // default: 4 spaces deeper
 		lines := strings.Split(string(body), "\n")
@@ -339,10 +329,15 @@ func findContainerInsertionPoint(data []byte, container *index.SymbolInfo, lang 
 		}
 		return insertByte, indent, nil
 
-	case "ruby":
-		endIdx := strings.LastIndex(string(body), "end")
+	case index.ContainerKeyword:
+		// Keyword-delimited (Ruby, Lua). Find the last occurrence of the closing keyword.
+		closeToken := "end"
+		if cfg != nil && cfg.ContainerClose != "" {
+			closeToken = cfg.ContainerClose
+		}
+		endIdx := strings.LastIndex(string(body), closeToken)
 		if endIdx < 0 {
-			return 0, "", fmt.Errorf("cannot find 'end' in Ruby container %s", container.Name)
+			return 0, "", fmt.Errorf("cannot find %q in container %s", closeToken, container.Name)
 		}
 		insertByte := int(container.StartByte) + endIdx
 		containerIndent := detectIndentAt(data, container.StartByte)
