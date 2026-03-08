@@ -46,6 +46,19 @@ Add `edr status` / `edr doctor` that reports:
 
 Also make CLI freshness behavior match MCP: if the repo is stale, auto-reindex before serving queries instead of only indexing when the DB is empty.
 
+### Incremental freshness checks
+
+Auto-reindex on staleness is only practical if the staleness check itself is cheap.
+
+Today, freshness is derived from a full snapshot walk over index-relevant files. That's a good correctness baseline, but too expensive to put on the hot path for every command in large repos.
+
+Add a fast path:
+
+- persist per-file content hashes / mtimes for index-relevant files
+- record the last-seen dirty set instead of recomputing the full repo fingerprint every time
+- let `watch` mode (Phase 5) feed the same dirty-file mechanism when available
+- fall back to the full snapshot only as a correctness check or recovery path
+
 ### Semantic refs for remaining languages
 
 Go, Python, and JS/TS have import extraction and import-aware ref resolution. C, Rust, Java, and Ruby fall back to text-based refs — every `rename`, `refs`, and `explore --callers` is noisier for those languages. Add:
@@ -67,6 +80,32 @@ Add a stable symbol identity layer:
 - parent/child-aware resolution for overloaded or repeated names
 
 Everything in later phases that says "symbol" should eventually mean this identity, not just a raw string.
+
+### API contract hardening
+
+If other tools and agents are going to depend on edr, the JSON surface needs to be treated as a product, not an implementation detail.
+
+Add:
+
+- versioned response schemas for CLI JSON, batch mode, and MCP
+- typed success/error envelopes instead of ad hoc `map[string]any` shapes
+- stable machine-readable error codes (`symbol_not_found`, `ambiguous_symbol`, `verify_failed`, etc.)
+- a compatibility policy so agents can safely upgrade edr without prompt surgery
+
+This is unglamorous work, but it is what turns "handy local tool" into infrastructure.
+
+### Cross-platform runtime primitives
+
+Right now, some core mechanics assume a Unix-like runtime: file locking semantics, shell invocation, and process execution behavior.
+
+Make the foundation explicitly portable:
+
+- replace Unix-only lock assumptions with a portable lock abstraction
+- make `verify` command execution shell-agnostic where possible
+- test read/write/index/verify behavior on macOS, Linux, and Windows
+- document the exact portability boundary for tree-sitter / CGO-dependent features
+
+If edr is going to be the default repo tool for agents, "works on my laptop" is not enough.
 
 ### Git diff integration
 
@@ -137,6 +176,33 @@ The output should distinguish:
 - tests likely affected by the edit
 - full-repo verification still required before commit
 
+### Structured verify diagnostics
+
+Today, `verify` mostly gives the agent a boolean plus raw command output. That's enough for humans reading a terminal; it's not enough for a tool that needs to recover automatically.
+
+Add a diagnostics layer that parses common verifier output into structured failures:
+
+- file / line / column when available
+- owning symbol when resolvable
+- error kind (`compile`, `test`, `lint`, `panic`, `timeout`)
+- normalized message text
+- suggested next-hop symbols/files to inspect
+
+The first version can target Go, TypeScript, and Cargo-style output. The important thing is not perfect parsing; it's turning recovery into one tool call instead of three.
+
+### Failure-driven verify planning
+
+Targeted verification should not stop at "which tests might be affected?" It should also learn from *which checks actually failed*.
+
+Add:
+
+- failing-test and compile-error outputs indexed back onto symbols
+- `edr verify --diagnose` that maps failures to likely edit targets
+- a lightweight failure cache so repeated broken states don't get re-explained from scratch
+- symbol-scoped verification summaries the agent can use to decide whether to retry, widen scope, or roll back
+
+This is the bridge between static blast-radius planning and the later execution-trace work in Phase 6.
+
 ### Counterfactual refs
 
 ```
@@ -186,15 +252,19 @@ Real agent traces are noisy — agents make wrong choices, go down dead ends, re
 
 ## Phase 3.5: Language breadth + performance (weeks 7–8)
 
-### New language support
+### Language-depth parity
 
-8 languages covers most repos but leaves out major ecosystems. Priority order by real-world usage:
+The roadmap should reflect the code as it exists: edr already supports more than the original Go/Python/JS/TS core, including C/C++, PHP, Ruby, Rust, Java, Zig, Lua, and Bash.
 
-- **C++ / C#** — massive codebases, tree-sitter grammars mature, high demand
-- **Kotlin / Swift** — mobile-first shops need these
-- **PHP / Scala** — large legacy codebases where agents add the most value
+The problem now is not just adding grammars. It's making already-supported languages equally trustworthy.
 
-Each language needs: tree-sitter grammar binding, `LangConfig` entry, symbol node types, signature extraction, and (ideally) import resolution. Ship as build tags so users can compile a slim binary with only the languages they need.
+Priority order:
+
+- **Depth for shipped languages** — import extraction, semantic refs, caller/dependency quality, rename precision, and signatures for Rust, Java, Ruby, C/C++, PHP, Zig, Lua, and Bash
+- **Missing high-demand ecosystems** — C#, Kotlin, Swift, Scala
+- **Binary composition story** — build tags or modular bundles so users can ship only the languages they need
+
+Measure success by "can an agent trust `refs`, `rename`, and `explore --callers` in this language?", not by raw language count.
 
 ### Parallel indexing
 
