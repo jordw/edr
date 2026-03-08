@@ -19,6 +19,7 @@ type SearchResult struct {
 	Matches      []output.Match `json:"matches"`
 	TotalMatches int            `json:"total_matches"`
 	Truncated    bool           `json:"truncated"`
+	Hint         string         `json:"hint,omitempty"`
 }
 
 // scoreSymbolMatch scores how well a symbol name matches a search pattern.

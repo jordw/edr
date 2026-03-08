@@ -5,7 +5,7 @@ package cmd
 
 // ToolDesc holds the description for each tool.
 var ToolDesc = map[string]string{
-	"plan":    "Batch reads/queries/edits/writes + verify. Preferred for multi-step tasks.",
+	"plan":    "Batch edits with dry-run preview. Use edr_do for full read/query/edit/write workflows.",
 	"do":      "Batch reads, queries, edits, writes, renames, verify, init. The primary tool for all operations.",
 	"read":    "Read file, symbol (file:sym), or batch. Use edr_do for multiple reads.",
 	"edit":    "Edit by old_text/new_text, symbol, or line range. Returns hash.",
@@ -16,7 +16,7 @@ var ToolDesc = map[string]string{
 	"refs":    "Find references. impact=true for transitive, chain for call path.",
 	"find":    "Find files by glob (supports **). Returns sizes and mod times.",
 	"rename":  "Cross-file rename, import-aware. dry_run to preview.",
-	"verify":  "Run build/typecheck. Auto-detects go/npm/cargo.",
+	"verify":  "Run build/typecheck (--level build) or tests (--level test). Auto-detects go/npm/cargo.",
 	"init":    "Force re-index the repository.",
 	"diff":    "Retrieve stored diff from last large edit.",
 }
@@ -82,6 +82,7 @@ var ParamDesc = map[string]string{
 
 	// verify
 	"command": "Custom command (auto-detect if omitted)",
+	"level":   "Verification level: build (default) or test",
 	"timeout": "Timeout in seconds",
 
 	// do (was plan)

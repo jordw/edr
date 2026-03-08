@@ -300,5 +300,6 @@ var verifyCmd = &cobra.Command{
 
 func init() {
 	verifyCmd.Flags().String("command", "", P("command"))
+	verifyCmd.Flags().String("level", "build", P("level"))
 	verifyCmd.Flags().Int("timeout", 30, P("timeout"))
 }

@@ -36,8 +36,9 @@ func FindFiles(ctx context.Context, root string, pattern string, dir string, bud
 		}
 	}
 
-	// Check if pattern uses ** (recursive glob)
+	// Check if pattern uses ** (recursive glob) or contains path separators
 	hasDoublestar := strings.Contains(pattern, "**")
+	hasPathSep := strings.Contains(pattern, "/")
 
 	var results []FileResult
 	totalSize := 0
@@ -57,8 +58,11 @@ func FindFiles(ctx context.Context, root string, pattern string, dir string, bud
 		var matched bool
 		if hasDoublestar {
 			matched = matchDoublestar(rel, pattern)
+		} else if hasPathSep {
+			// Pattern contains path separators — match against repo-relative path
+			matched, _ = filepath.Match(pattern, rel)
 		} else {
-			// Match against basename only for simple patterns
+			// Simple pattern — match against basename only
 			matched, _ = filepath.Match(pattern, filepath.Base(file))
 		}
 

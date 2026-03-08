@@ -237,7 +237,7 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 	}
 
 	if len(refs) == 0 {
-		return output.RenameResult{OldName: oldName, NewName: newName, DryRun: dryRun}, nil
+		return output.RenameResult{OldName: oldName, NewName: newName, DryRun: dryRun, Noop: true}, nil
 	}
 
 	// Group refs by file
