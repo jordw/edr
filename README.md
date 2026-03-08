@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev)
 
-**88% fewer tokens. Half the tool calls.**
+**On the included fixture: ~89% fewer response bytes. 20 calls down to 9.**
 
 Coding agents waste context. They read entire files to find one function, make three round trips to change one line, and grep symbols into walls of unstructured text.
 
@@ -19,6 +19,7 @@ git clone https://github.com/jordw/edr.git && cd edr
 ```
 
 Registers 1 tool: `edr` — handles reads, queries, edits, writes, renames, and verification.
+The tool schema is ~1,000 tokens. Self-documenting fields (file, symbol, pattern, etc.) omit descriptions to minimize per-conversation overhead.
 
 ### Install from source
 
@@ -72,7 +73,7 @@ Each call can mix any combination of **reads** (files, symbols, signatures, dept
 edr runs tree-sitter over every source file, extracts symbols (functions, classes, structs, etc.) with their byte ranges, and stores them in a SQLite index at `.edr/index.db`. At query time, agents get exactly what they need without reading entire files:
 
 - **Symbol reads** — a function or class, not the whole file
-- **`--signatures`** — class API without implementation (75-90% smaller)
+- **`--signatures`** — class API without implementation (75-86% smaller)
 - **`--depth`** — progressive disclosure, one nesting level at a time
 - **`--inside`** — add a method to a class without reading the file
 - **Budget control** — cap response size to protect context
@@ -111,25 +112,34 @@ internal/
   dispatch/    command routing (CLI, batch, MCP)
   gather/      context collection with token budgets
   session/     MCP session state (deltas, dedup)
+  trace/       session tracing and benchmarks
   output/      structured JSON formatting
 ```
 
 ## The numbers
 
-Across real agent workflows, edr uses **88% fewer response bytes** and **half the tool calls** compared to built-in Read/Edit/Grep/Glob:
+On the included benchmark fixture in `bench/testdata`, `bench/native_comparison.sh`
+shows `edr` using **89% fewer response bytes** and **11 fewer tool calls**
+than simulated Read/Edit/Grep/Glob workflows:
 
 | Workflow | Without edr | With edr | Savings |
 |---|---|---|---|
-| Understand a class API | 13,894B (read whole file) | 1,137B (`--signatures`) | **92%** |
+| Understand a class API | 13,894B (read whole file) | 1,137B (`--signatures`) | **91%** |
 | Read a specific function | 13,894B (read whole file) | 2,155B (symbol read) | **84%** |
-| Orient in codebase | 36,457B / 5 calls (glob + reads) | 2,128B / 1 call (`map`) | **94%** |
+| Find refs | 175B (`grep`) | 406B (`refs`) | **-132%** |
+| Search with context | 12,869B (`grep -C3`) | 4,823B (`search --text --context 3 --budget 500`) | **62%** |
+| Orient in codebase | 36,457B / 5 calls (glob + reads) | 2,149B / 1 call (`map`) | **94%** |
 | Edit a function | 27,988B / 3 calls (read + edit + verify) | 589B / 1 call (inline diff) | **97%** |
 | Add method to a class | 14,094B / 2 calls (read + edit) | 125B / 1 call (`--inside`) | **99%** |
 | Multi-file read | 30,195B / 3 calls | 2,643B / 1 call (batched + budget) | **91%** |
 | Explore a symbol | 19,969B / 3 calls (grep + reads) | 4,566B / 1 call (body + callers + deps) | **77%** |
-| **Total** | **169KB / 20 calls** | **19KB / 9 calls** | **88%** |
+| **Total** | **169,535B / 20 calls** | **18,593B / 9 calls** | **89%** |
 
-Fewer tokens = faster responses, lower cost, and more context for the actual task.
+`refs` is larger than raw `grep` on this fixture because it returns structured,
+symbol-aware results. The tradeoff is precision rather than smaller bytes.
+
+Smaller responses still mean lower context pressure, lower cost, and faster tool
+round trips for the actual task.
 
 ## Agent instructions
 
