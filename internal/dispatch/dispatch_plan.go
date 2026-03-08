@@ -119,6 +119,22 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 			if expectHash == "" {
 				expectHash = edit.HashBytes(data)
 			}
+			// Check for ambiguous matches before proceeding
+			totalMatches := strings.Count(content, e.OldText)
+			if totalMatches > 1 && !e.All {
+				locs := make([][]int, 0, totalMatches)
+				off := 0
+				for {
+					j := strings.Index(content[off:], e.OldText)
+					if j < 0 {
+						break
+					}
+					abs := off + j
+					locs = append(locs, []int{abs, abs + len(e.OldText)})
+					off = abs + len(e.OldText)
+				}
+				return nil, fmt.Errorf("edit-plan: edit %d: %w", i, ambiguousMatchError(content, output.Rel(file), e.OldText, locs))
+			}
 			if e.All {
 				// For replace-all, collect all occurrences (reverse order for offset stability)
 				var offsets []int

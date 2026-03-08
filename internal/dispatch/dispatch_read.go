@@ -182,6 +182,21 @@ func runReadSymbol(ctx context.Context, db *index.DB, root string, args []string
 		}, nil
 	}
 
+	// --signatures on a non-container: fall back to signature-only (depth 1)
+	if flagBool(flags, "signatures", false) {
+		body, err := index.OutlineSymbol(sym.File, *sym, 1)
+		if err != nil {
+			return nil, err
+		}
+		hash, _ := edit.FileHash(sym.File)
+		osym := toOutputSymbol(sym, hash)
+		osym.Size = len(body) / 4
+		return output.ExpandResult{
+			Symbol: osym,
+			Body:   body,
+		}, nil
+	}
+
 	// --depth N: progressive disclosure via AST-aware collapsing
 	depth := flagInt(flags, "depth", 0)
 	if depth > 0 {

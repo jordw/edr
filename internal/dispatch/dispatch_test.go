@@ -607,7 +607,7 @@ func TestWriteRefusesEmptyOverwrite(t *testing.T) {
 	}
 }
 
-func TestEditSingleMatchReportsTotalCount(t *testing.T) {
+func TestEditAmbiguousMatchErrors(t *testing.T) {
 	tmp := t.TempDir()
 	goFile := filepath.Join(tmp, "main.go")
 	if err := os.WriteFile(goFile, []byte("package main\n\nvar x = \"Hello\"\nvar y = \"Hello\"\nvar z = \"Hello\"\n"), 0644); err != nil {
@@ -625,24 +625,35 @@ func TestEditSingleMatchReportsTotalCount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+	// Ambiguous match without all: true should error
+	_, err = dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
 		"old_text": "Hello",
 		"new_text": "World",
 	})
-	if err != nil {
-		t.Fatalf("edit: %v", err)
+	if err == nil {
+		t.Fatal("expected error for ambiguous match, got nil")
+	}
+	if !strings.Contains(err.Error(), "matched 3 locations") {
+		t.Errorf("expected ambiguous match error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "lines") {
+		t.Errorf("expected line numbers in error, got: %v", err)
 	}
 
+	// With all: true should succeed
+	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+		"old_text": "Hello",
+		"new_text": "World",
+		"all":      true,
+	})
+	if err != nil {
+		t.Fatalf("edit with all: %v", err)
+	}
 	raw, _ := json.Marshal(result)
 	var out map[string]any
 	json.Unmarshal(raw, &out)
-
-	total, ok := out["total_matches"]
-	if !ok {
-		t.Fatalf("expected total_matches in response, got: %s", string(raw))
-	}
-	if total != float64(3) {
-		t.Errorf("expected total_matches=3, got %v", total)
+	if count, ok := out["count"]; !ok || count != float64(3) {
+		t.Errorf("expected count=3, got %v (raw: %s)", out["count"], string(raw))
 	}
 }
 

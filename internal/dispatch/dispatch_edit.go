@@ -222,52 +222,49 @@ func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacem
 		if err != nil {
 			return nil, fmt.Errorf("invalid regex: %w", err)
 		}
-		loc := re.FindStringIndex(content)
-		if loc == nil {
+		locs := re.FindAllStringIndex(content, -1)
+		if len(locs) == 0 {
 			return nil, fmt.Errorf("smart-edit: pattern %q not found in %s", matchText, output.Rel(file))
 		}
 		if replaceAll {
 			resultText := re.ReplaceAllString(content, replacement)
-			count := len(re.FindAllStringIndex(content, -1))
-			return applyReplaceAll(ctx, db, file, content, resultText, matchText, count, dryRun)
+			return applyReplaceAll(ctx, db, file, content, resultText, matchText, len(locs), dryRun)
 		}
-		startByte = loc[0]
-		endByte = loc[1]
+		if len(locs) > 1 {
+			return nil, ambiguousMatchError(content, output.Rel(file), matchText, locs)
+		}
+		startByte = locs[0][0]
+		endByte = locs[0][1]
 	} else {
 		idx := strings.Index(content, matchText)
 		if idx < 0 {
 			return nil, fmt.Errorf("smart-edit: text %q not found in %s", matchText, output.Rel(file))
 		}
+		totalMatches := strings.Count(content, matchText)
 		if replaceAll {
-			count := strings.Count(content, matchText)
 			resultText := strings.ReplaceAll(content, matchText, replacement)
-			return applyReplaceAll(ctx, db, file, content, resultText, matchText, count, dryRun)
+			return applyReplaceAll(ctx, db, file, content, resultText, matchText, totalMatches, dryRun)
+		}
+		if totalMatches > 1 {
+			// Build match locations for the error
+			locs := make([][]int, 0, totalMatches)
+			off := 0
+			for {
+				i := strings.Index(content[off:], matchText)
+				if i < 0 {
+					break
+				}
+				abs := off + i
+				locs = append(locs, []int{abs, abs + len(matchText)})
+				off = abs + len(matchText)
+			}
+			return nil, ambiguousMatchError(content, output.Rel(file), matchText, locs)
 		}
 		startByte = idx
 		endByte = idx + len(matchText)
 	}
 
-	result, err := smartEditByteRange(ctx, db, file, uint32(startByte), uint32(endByte), replacement, "", dryRun)
-	if err != nil {
-		return nil, err
-	}
-
-	// Report total occurrences so the caller knows if more remain
-	if m, ok := result.(map[string]any); ok {
-		var totalMatches int
-		if useRegex {
-			re, _ := regexp.Compile(matchText)
-			if re != nil {
-				totalMatches = len(re.FindAllStringIndex(content, -1))
-			}
-		} else {
-			totalMatches = strings.Count(content, matchText)
-		}
-		if totalMatches > 1 {
-			m["total_matches"] = totalMatches
-		}
-	}
-	return result, nil
+	return smartEditByteRange(ctx, db, file, uint32(startByte), uint32(endByte), replacement, "", dryRun)
 }
 
 // smartEditMove moves a symbol to a new position relative to another symbol, atomically.
@@ -440,4 +437,19 @@ func applyReplaceAll(ctx context.Context, db *index.DB, file, oldContent, newCon
 		result["index_error"] = cr.IndexErrors[output.Rel(file)]
 	}
 	return result, nil
+}
+
+// ambiguousMatchError builds an error with line numbers for all match locations.
+func ambiguousMatchError(content, relFile, matchText string, locs [][]int) error {
+	lines := make([]int, 0, len(locs))
+	for _, loc := range locs {
+		line := 1 + strings.Count(content[:loc[0]], "\n")
+		lines = append(lines, line)
+	}
+	lineStrs := make([]string, len(lines))
+	for i, l := range lines {
+		lineStrs[i] = fmt.Sprintf("%d", l)
+	}
+	return fmt.Errorf("old_text %q matched %d locations in %s (lines %s); provide more surrounding context to make it unique, or use all: true to replace all",
+		matchText, len(locs), relFile, strings.Join(lineStrs, ", "))
 }

@@ -75,6 +75,9 @@ func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flag
 	case "multi", "get-diff":
 		return nil, fmt.Errorf("%s is only available in MCP mode (edr mcp)", cmd)
 	default:
+		if suggestion := suggestCommand(cmd); suggestion != "" {
+			return nil, fmt.Errorf("unknown command: %s (did you mean: %s?)", cmd, suggestion)
+		}
 		return nil, fmt.Errorf("unknown command: %s", cmd)
 	}
 
@@ -655,4 +658,51 @@ func flagBool(flags map[string]any, key string, defaultVal bool) bool {
 	default:
 		return defaultVal
 	}
+}
+
+// knownCommands is the list of valid command names for suggestion matching.
+var knownCommands = []string{
+	"read", "write", "edit", "map", "search", "explore", "refs",
+	"init", "rename", "find", "edit-plan", "verify",
+}
+
+// suggestCommand returns the closest known command if within edit distance 2, or "".
+func suggestCommand(input string) string {
+	best := ""
+	bestDist := 3 // only suggest if distance <= 2
+	for _, cmd := range knownCommands {
+		d := levenshtein(input, cmd)
+		if d < bestDist {
+			bestDist = d
+			best = cmd
+		}
+	}
+	return best
+}
+
+// levenshtein computes the edit distance between two strings.
+func levenshtein(a, b string) int {
+	if len(a) == 0 {
+		return len(b)
+	}
+	if len(b) == 0 {
+		return len(a)
+	}
+	prev := make([]int, len(b)+1)
+	curr := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		curr[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			curr[j] = min(curr[j-1]+1, min(prev[j]+1, prev[j-1]+cost))
+		}
+		prev, curr = curr, prev
+	}
+	return prev[len(b)]
 }
