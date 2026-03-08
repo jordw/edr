@@ -15,12 +15,12 @@ import (
 
 // alwaysIgnore contains directories that are always skipped regardless of .gitignore.
 var alwaysIgnore = []string{
-	".git", ".edr",
+	".git", ".edr", ".claude",
 }
 
 // DefaultIgnore is the fallback ignore list used when no .gitignore exists.
 var DefaultIgnore = []string{
-	".git", ".edr", "node_modules", "vendor", "__pycache__",
+	".git", ".edr", ".claude", "node_modules", "vendor", "__pycache__",
 	".venv", "venv", "target", "build", "dist", ".next",
 	".idea", ".vscode", "bin", "obj",
 }

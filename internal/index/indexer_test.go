@@ -8,6 +8,56 @@ import (
 	"testing"
 )
 
+func TestShouldIgnoreClaudeWorktrees(t *testing.T) {
+	tmp := t.TempDir()
+
+	// Create a Go file at the root.
+	if err := os.WriteFile(filepath.Join(tmp, "main.go"), []byte(`package main
+func Hello() {}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a .claude/worktrees/agent-xxx/main.go file that should be excluded.
+	worktreeDir := filepath.Join(tmp, ".claude", "worktrees", "agent-abc123")
+	if err := os.MkdirAll(worktreeDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeDir, "main.go"), []byte(`package main
+func HelloDuplicate() {}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	filesIndexed, _, err := IndexRepo(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Only the root main.go should be indexed, not the one under .claude/
+	if filesIndexed != 1 {
+		t.Errorf("expected 1 file indexed, got %d", filesIndexed)
+	}
+
+	out, err := RepoMap(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "HelloDuplicate") {
+		t.Error(".claude/worktrees/ files should be excluded from indexing")
+	}
+	if !strings.Contains(out, "Hello") {
+		t.Error("root main.go should be indexed")
+	}
+}
+
 func TestRepoMapGrep_AlternationCaseInsensitive(t *testing.T) {
 	tmp := t.TempDir()
 	// Create a Go file with mixed-case symbols that test alternation scoping.
