@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev)
 
-**Up to 90% less context burned and 57% fewer tool calls than simulated default Read/Edit/Grep/Glob workflows.**
+**91–98% less context burned across 6 real-world repos (Go, Python, Ruby, TypeScript). 63% fewer tool calls.**
 
 Coding agents waste context. They read entire files to find one function, make three round trips to change one line, and grep symbols into walls of unstructured text.
 
@@ -118,25 +118,41 @@ internal/
 
 ## The numbers
 
-On the included benchmark fixture in `bench/testdata`, `bench/native_comparison.sh`
-shows `edr` using **90% fewer response bytes** and **12 fewer tool calls**
-than simulated Read/Edit/Grep/Glob workflows:
+Benchmarked against simulated Read/Edit/Grep/Glob workflows across 6 real-world
+repos (`bench/native_comparison.sh`, 9 scenarios each, 3 iterations, median bytes):
+
+| Repo | Language | Native | edr | Savings |
+|---|---|---|---|---|
+| [urfave/cli](https://github.com/urfave/cli) | Go | 322KB / 24 calls | 21KB / 9 calls | **93%** |
+| [vitess/sqlparser](https://github.com/vitessio/vitess) | Go | 660KB / 21 calls | 16KB / 9 calls | **98%** |
+| [vitess/vtgate](https://github.com/vitessio/vitess) | Go | 929KB / 23 calls | 32KB / 9 calls | **97%** |
+| [pallets/click](https://github.com/pallets/click) | Python | 455KB / 24 calls | 21KB / 9 calls | **95%** |
+| [rails/thor](https://github.com/rails/thor) | Ruby | 234KB / 24 calls | 15KB / 9 calls | **94%** |
+| [reduxjs/redux-toolkit](https://github.com/reduxjs/redux-toolkit) | TypeScript | 245KB / 24 calls | 21KB / 9 calls | **91%** |
+
+Scenarios: understand API (`--signatures`), read symbol, find refs, search with context,
+orient (`map`), edit function, add method (`--inside`), multi-file read, explore symbol.
+
+<details>
+<summary>Per-scenario breakdown (urfave/cli)</summary>
 
 | Workflow | Without edr | With edr | Savings |
 |---|---|---|---|
-| Understand a class API | 13,894B (read whole file) | 1,137B (`--signatures`) | **92%** |
-| Read a specific function | 13,894B (read whole file) | 2,155B (symbol read) | **84%** |
-| Find refs | 14,069B / 2 calls (`grep` + read matched file) | 406B / 1 call (`refs`) | **97%** |
-| Search with context | 12,869B (`grep -C3`) | 4,823B (`search --text --context 3 --budget 500`) | **63%** |
-| Orient in codebase | 36,457B / 5 calls (glob + reads) | 2,149B / 1 call (`map`) | **94%** |
-| Edit a function | 27,988B / 3 calls (read + edit + verify) | 589B / 1 call (inline diff) | **98%** |
-| Add method to a class | 14,094B / 2 calls (read + edit) | 125B / 1 call (`--inside`) | **99%** |
-| Multi-file read | 30,195B / 3 calls | 2,643B / 1 call (batched + budget) | **91%** |
-| Explore a symbol | 19,969B / 3 calls (grep + reads) | 4,566B / 1 call (body + callers + deps) | **77%** |
-| **Total** | **183,429B / 21 calls** | **18,593B / 9 calls** | **90%** |
+| Understand a class API | 21,941B (read whole file) | 3,698B (`--signatures`) | **83%** |
+| Read a specific function | 21,927B (read whole file) | 1,955B (symbol read) | **91%** |
+| Find refs | 83,997B / 4 calls (`grep` + read matched files) | 1,055B / 1 call (`refs`) | **99%** |
+| Search with context | 4,634B (`grep -C3`) | 4,153B (`search --text --context 3`) | **10%** |
+| Orient in codebase | 65,238B / 5 calls (glob + reads) | 2,154B / 1 call (`map`) | **97%** |
+| Edit a function | 25,164B / 3 calls (read + edit + verify) | 481B / 1 call (inline diff) | **98%** |
+| Add method to a class | 22,141B / 2 calls (read + edit) | 161B / 1 call (`--inside`) | **99%** |
+| Multi-file read | 42,465B / 3 calls | 2,639B / 1 call (batched + budget) | **94%** |
+| Explore a symbol | 42,536B / 4 calls (grep + reads) | 5,437B / 1 call (body + callers + deps) | **87%** |
+| **Total** | **330,043B / 24 calls** | **21,733B / 9 calls** | **93%** |
 
-Smaller responses still mean lower context pressure, lower cost, and faster tool
-round trips for the actual task.
+</details>
+
+Reproduce: `bash bench/run_real_repo_benchmarks.sh` (clones repos to `/tmp`, ~5 min).
+For the benchmark plan and profile template, see [bench/REAL_REPOS.md](bench/REAL_REPOS.md).
 
 ## Agent instructions
 
