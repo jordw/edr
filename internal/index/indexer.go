@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // alwaysIgnore contains directories that are always skipped regardless of .gitignore.
@@ -67,111 +69,142 @@ func hasStaleFilesByMtime(ctx context.Context, db *DB) (bool, error) {
 	return false, nil
 }
 
+// fileCandidate holds everything needed to parse and index a file.
+type fileCandidate struct {
+	path  string
+	src   []byte
+	hash  string
+	mtime int64
+	lang  *LangConfig
+}
+
+// parsedFile holds the parse result for a file candidate.
+type parsedFile struct {
+	candidate fileCandidate
+	result    *ParseResult
+}
+
 func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 	root := db.Root()
 	gitignore := LoadGitIgnore(root)
-	var filesIndexed, symbolsFound int
 
 	if err := db.Prune(ctx); err != nil {
 		return 0, 0, err
 	}
 
-	// Batch all SQLite writes into a single transaction for ~5x speedup.
-	if err := db.BeginBatch(ctx); err == nil {
-		defer db.RollbackBatch()
-	}
-
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	// Phase 1: Walk and collect candidates that need re-indexing.
+	var candidates []fileCandidate
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // skip errors
+			return nil
 		}
-
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-
-		// Skip ignored directories
 		if d.IsDir() {
-			name := d.Name()
-			if shouldIgnoreDir(name, path, root, gitignore) {
+			if shouldIgnoreDir(d.Name(), path, root, gitignore) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-
-		// Check .gitignore for files
 		if gitignore != nil {
 			rel, _ := filepath.Rel(root, path)
 			if gitignore.IsIgnored(rel, false) {
 				return nil
 			}
 		}
-
-		// Skip non-supported files
 		lang := GetLangConfig(path)
 		if lang == nil {
 			return nil
 		}
-
-		// Skip large files (>1MB)
 		info, err := d.Info()
-		if err != nil {
+		if err != nil || info.Size() > 1<<20 {
 			return nil
 		}
-		if info.Size() > 1<<20 {
-			return nil
-		}
-
-		// Check if file needs re-indexing
 		src, err := os.ReadFile(path)
 		if err != nil {
 			return nil
 		}
-
 		hash := fileHash(src)
 		storedHash, _ := db.GetFileHash(ctx, path)
 		if storedHash == hash {
-			return nil // already indexed, skip
-		}
-
-		// Parse and index with full import/ref extraction
-		result, err := ParseFileComplete(path, src, lang)
-		if err != nil {
-			return nil // skip parse errors
-		}
-
-		// Update database
-		if err := db.UpsertFile(ctx, path, hash, info.ModTime().Unix()); err != nil {
 			return nil
 		}
-		if err := db.ClearFileData(ctx, path); err != nil {
-			return nil
-		}
-
-		symbolIDs, err := db.InsertSymbolsBatch(ctx, result.Symbols)
-		if err != nil {
-			return nil
-		}
-		symbolsFound += len(result.Symbols)
-
-		// Insert imports
-		if err := db.InsertImports(ctx, result.Imports); err != nil {
-			return nil
-		}
-
-		// Extract and insert refs
-		refs := result.ExtractRefs(symbolIDs)
-		if err := db.InsertRefs(ctx, path, refs); err != nil {
-			return nil
-		}
-
-		filesIndexed++
+		candidates = append(candidates, fileCandidate{
+			path:  path,
+			src:   src,
+			hash:  hash,
+			mtime: info.ModTime().Unix(),
+			lang:  lang,
+		})
 		return nil
 	})
 
-	if err != nil {
-		return filesIndexed, symbolsFound, err
+	if ctx.Err() != nil {
+		return 0, 0, ctx.Err()
 	}
+
+	// Phase 2: Parse all candidates in parallel.
+	parsed := make([]parsedFile, len(candidates))
+	workers := runtime.GOMAXPROCS(0)
+	if workers > len(candidates) {
+		workers = len(candidates)
+	}
+	if workers > 0 {
+		var wg sync.WaitGroup
+		work := make(chan int, len(candidates))
+		for i := range candidates {
+			work <- i
+		}
+		close(work)
+		wg.Add(workers)
+		for range workers {
+			go func() {
+				defer wg.Done()
+				for i := range work {
+					c := &candidates[i]
+					result, err := ParseFileComplete(c.path, c.src, c.lang)
+					if err == nil {
+						parsed[i] = parsedFile{candidate: *c, result: result}
+					}
+				}
+			}()
+		}
+		wg.Wait()
+	}
+
+	// Phase 3: Write all results to DB in a single batch transaction.
+	if err := db.BeginBatch(ctx); err == nil {
+		defer db.RollbackBatch()
+	}
+
+	var filesIndexed, symbolsFound int
+	for _, pf := range parsed {
+		if pf.result == nil {
+			continue
+		}
+		c := &pf.candidate
+		if err := db.UpsertFile(ctx, c.path, c.hash, c.mtime); err != nil {
+			continue
+		}
+		if err := db.ClearFileData(ctx, c.path); err != nil {
+			continue
+		}
+		symbolIDs, err := db.InsertSymbolsBatch(ctx, pf.result.Symbols)
+		if err != nil {
+			continue
+		}
+		symbolsFound += len(pf.result.Symbols)
+		if err := db.InsertImports(ctx, pf.result.Imports); err != nil {
+			continue
+		}
+		refs := pf.result.ExtractRefs(symbolIDs)
+		if err := db.InsertRefs(ctx, c.path, refs); err != nil {
+			continue
+		}
+		filesIndexed++
+	}
+
 	if err := db.CommitBatch(); err != nil {
 		return filesIndexed, symbolsFound, fmt.Errorf("commit index batch: %w", err)
 	}
