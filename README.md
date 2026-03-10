@@ -3,47 +3,51 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev)
 
-**91–98% less context burned across 6 real-world repos (Go, Python, Ruby, TypeScript). 63% fewer tool calls.**
+Coding agents burn through context reading entire files to find one function, making three round trips to change one line, and grepping symbols into walls of unstructured text.
 
-Coding agents waste context. They read entire files to find one function, make three round trips to change one line, and grep symbols into walls of unstructured text.
+edr fixes this. It parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-sitter/), stores a symbol index in SQLite, and gives agents exactly what they need: symbol-scoped reads, structured search, and batched mutations. Most tasks collapse into one or two calls.
 
-edr fixes this. It parses your repo with tree-sitter, stores a symbol index in SQLite, and gives agents exactly what they need — symbol-scoped reads, structured search, and batched mutations. Most tasks collapse into one or two `edr` calls.
+**91-98% less context across 6 real-world repos. 63% fewer tool calls.** ([benchmarks](#benchmarks))
 
-## Quick start
-
-### MCP server (Claude Code, Codex, etc.)
-
-```bash
-git clone https://github.com/jordw/edr.git && cd edr
-./setup.sh /path/to/your/repo    # installs deps, builds, configures MCP
-```
-
-Registers 1 tool: `edr` — handles reads, queries, edits, writes, renames, and verification.
-The tool schema is ~1,000 tokens. Self-documenting fields (file, symbol, pattern, etc.) omit descriptions to minimize per-conversation overhead.
-
-### Install from source
+## Install
 
 ```bash
 go install github.com/jordw/edr@latest
-# or: go build -o edr . && go install
 ```
 
-### CLI
+Requires Go 1.25+ and a C compiler (for tree-sitter grammars). edr stores its index in `.edr/` at the repo root — add it to your `.gitignore`.
+
+## Quick start
 
 ```bash
-edr init                   # index the repo
-edr map --budget 500       # orient
-edr read src/config.go:parseConfig
-edr search "handleRequest" --body --budget 300
+cd your-repo
+edr init                                    # build the symbol index
+edr map --budget 500                        # repo overview
+edr read src/config.go:parseConfig          # read one symbol, not the whole file
+edr search "handleRequest" --body           # structured symbol search
+edr refs parseConfig --impact               # who calls this, transitively?
+edr edit src/config.go --old_text x --new_text y   # edit + auto re-index
+edr write src/config.go --inside Config     # add a field without reading the file
+edr rename oldFunc newFunc --dry-run        # cross-file rename with preview
 ```
 
-### Requirements
+## MCP server
 
-Go 1.25+, a C compiler (tree-sitter grammars), write access for `.edr/` in the repo root.
+edr exposes a single MCP tool that handles reads, queries, edits, writes, renames, and verification. Works with any MCP-compatible agent (Claude Code, Codex, Cursor, etc.).
 
-## `edr`: the primary tool
+```bash
+# One command: installs deps, builds, writes .mcp.json for the target repo
+git clone https://github.com/jordw/edr.git && cd edr
+./setup.sh /path/to/your/repo
+```
 
-Gather context, then make changes — two calls instead of seven:
+Or configure manually — run `edr mcp` as the MCP server command with `-r /path/to/repo`.
+
+The tool schema is ~1,000 tokens. Fields are self-documenting to minimize per-conversation overhead.
+
+### The two-call pattern
+
+Agents gather context in one call, then make changes in another:
 
 ```
 # Call 1: gather all context
@@ -66,62 +70,71 @@ edr(
 )
 ```
 
-Each call can mix any combination of **reads** (files, symbols, signatures, depth), **queries** (search, map, explore, refs, find, diff), **edits** (old_text/new_text, symbol replacement, regex), **writes** (create files, `--inside` a class), **renames** (cross-file, import-aware), and **verify** (run tests after mutations). Two calls instead of seven.
+Each call can mix **reads** (files, symbols, signatures, depth), **queries** (search, map, explore, refs, find, diff), **edits** (old_text/new_text, symbol replacement, regex, move), **writes** (create files, append, insert inside a class), **renames** (cross-file, import-aware), and **verify** (build/test after mutations).
+
+For the full agent-facing reference, see [CLAUDE.md](CLAUDE.md).
 
 ## How it works
 
-edr runs tree-sitter over every source file, extracts symbols (functions, classes, structs, etc.) with their byte ranges, and stores them in a SQLite index at `.edr/index.db`. At query time, agents get exactly what they need without reading entire files:
+edr runs tree-sitter over every source file, extracts symbols (functions, classes, structs, etc.) with their byte ranges, and stores them in a SQLite index. At query time, agents get exactly what they need:
 
-- **Symbol reads** — a function or class, not the whole file
-- **`--signatures`** — class API without implementation (75-86% smaller)
+- **Symbol reads** — read a function or class, not the whole file
+- **`--signatures`** — a class's API without implementation (75-86% smaller)
 - **`--depth`** — progressive disclosure, one nesting level at a time
-- **`--inside`** — add a method to a class without reading the file
-- **Budget control** — cap response size to protect context
-- **Semantic refs** — import-aware references, false positives filtered
-- **Session dedup** — re-reads return `{unchanged}` or a delta; seen bodies become `"[in context]"`
+- **`--inside`** — add a method to a class without reading the file first
+- **Budget control** — cap any response to N tokens so large repos degrade gracefully
+- **Semantic refs** — import-aware references with false positives filtered out
+- **Session dedup** — re-reads return `{unchanged: true}` or a delta diff; repeated bodies become `"[in context]"`
 
-## CLI commands
+### Context efficiency
+
+edr combines several mechanisms to minimize context usage:
+
+| Technique | What it does |
+|---|---|
+| Hash-chained edits | Each read/edit returns a file hash; pass it as `expect_hash` to reject stale writes |
+| Incremental indexing | Content hashes skip re-parsing unchanged files |
+| Session delta reads | Re-reading a file returns `{unchanged}` or a diff, not the full content |
+| Body dedup | Repeated symbol bodies in search/explore are replaced with `"[in context]"` |
+| Slim edit responses | Small diffs inline; large diffs summarized with on-demand retrieval |
+| Parallel batching | Independent reads/queries in one call run concurrently |
+| Atomic multi-file edits | Grouped edits validate in memory, write via temp-file rename, reindex in one batch |
+| Parse-tree caching | Repeated tree-sitter parses reuse cached ASTs keyed by content fingerprint |
+
+## CLI reference
 
 | Command | What it does |
 |---|---|
-| `edr '{"reads":[...], "queries":[...]}'` | Batched JSON — same interface as the MCP tool |
+| `edr init` | Build or rebuild the symbol index |
 | `edr map` | Symbol overview of the repo or a directory |
 | `edr read file:Symbol` | Read a specific symbol (function, class, struct) |
 | `edr read file:Class --signatures` | Class API without implementation bodies |
 | `edr search "pattern" --body` | Symbol search with optional body snippets |
+| `edr search "pattern" --text` | Text search (like grep, but structured output) |
 | `edr explore Symbol --gather --body` | Symbol body + callers + deps in one call |
 | `edr refs Symbol --impact` | Transitive impact analysis before refactoring |
 | `edr edit file --old_text x --new_text y` | Edit with inline diff, auto re-index |
-| `edr write file --inside Class` | Add a method without reading the file |
+| `edr write file --inside Class` | Add a method/field without reading the file |
 | `edr rename old new --dry-run` | Cross-file, import-aware rename with preview |
+| `edr find "**/*.go"` | Find files by glob pattern |
+| `edr verify` | Run build/test checks (auto-detects Go/npm/Cargo) |
+| `edr '{"reads":[...], "queries":[...]}'` | Batched JSON (same interface as the MCP tool) |
 
 ## Supported languages
 
+**Full symbol indexing** (map, read, edit, signatures, inside, move):
 Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby, PHP, Zig, Lua, Bash/Shell
 
-All languages support full symbol indexing (functions, classes, structs, enums, etc.), symbol-targeted reads/edits, `--signatures`, `--inside`, `--move`, and `map`. Import-aware semantic refs are available for Go, Python, JavaScript, and TypeScript.
+**Import-aware semantic refs** (refs, rename, explore callers/deps):
+Go, Python, JavaScript, TypeScript — other languages fall back to text-based references.
 
-## Project structure
+edr can read and edit any text file regardless of language support.
 
-```
-cmd/           CLI commands, MCP server
-internal/
-  index/       tree-sitter parsing, SQLite symbol index
-  search/      symbol and text search
-  edit/        file edits, transactions, diffing
-  dispatch/    command routing (CLI, batch, MCP)
-  gather/      context collection with token budgets
-  session/     MCP session state (deltas, dedup)
-  trace/       session tracing and benchmarks
-  output/      structured JSON formatting
-```
+## Benchmarks
 
-## The numbers
+Benchmarked against simulated Read/Edit/Grep/Glob workflows (the tools agents use without edr) across 6 real-world repos — 9 scenarios each, 3 iterations, median bytes:
 
-Benchmarked against simulated Read/Edit/Grep/Glob workflows across 6 real-world
-repos (`bench/native_comparison.sh`, 9 scenarios each, 3 iterations, median bytes):
-
-| Repo | Language | Native | edr | Savings |
+| Repo | Language | Without edr | With edr | Savings |
 |---|---|---|---|---|
 | [urfave/cli](https://github.com/urfave/cli) | Go | 322KB / 24 calls | 21KB / 9 calls | **93%** |
 | [vitess/sqlparser](https://github.com/vitessio/vitess) | Go | 660KB / 21 calls | 16KB / 9 calls | **98%** |
@@ -152,15 +165,44 @@ orient (`map`), edit function, add method (`--inside`), multi-file read, explore
 </details>
 
 Reproduce: `bash bench/run_real_repo_benchmarks.sh` (clones repos to `/tmp`, ~5 min).
-For the benchmark plan and profile template, see [bench/REAL_REPOS.md](bench/REAL_REPOS.md).
 
-## Agent instructions
+## Project structure
 
-For the full agent-facing command reference and CLAUDE.md instructions, see [CLAUDE.md](CLAUDE.md).
+```
+cmd/           CLI commands, MCP server
+internal/
+  index/       tree-sitter parsing, SQLite symbol index
+  search/      symbol and text search
+  edit/        file edits, transactions, diffing
+  dispatch/    command routing (CLI, batch, MCP)
+  gather/      context collection with token budgets
+  session/     MCP session state (deltas, dedup)
+  trace/       session tracing and benchmarks
+  output/      structured JSON formatting
+bench/         benchmarks and multi-language test suite
+```
 
 ## Contributing
 
 Bug reports and pull requests welcome on [GitHub](https://github.com/jordw/edr/issues).
+
+### Development setup
+
+```bash
+git clone https://github.com/jordw/edr.git && cd edr
+go build -o edr .       # build
+go test ./...            # run all tests
+```
+
+After changing Go source files, rebuild with `go build -o edr . && go install`.
+
+### Running benchmarks
+
+```bash
+go test ./bench/ -bench . -benchmem                    # Go benchmarks
+go test ./bench/ -run TestSessionMultiLang -v           # multi-language session test
+bash bench/run_real_repo_benchmarks.sh                  # real-repo comparison (~5 min)
+```
 
 ## License
 

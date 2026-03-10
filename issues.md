@@ -6,7 +6,7 @@
 Fixed: top-level budget now distributed to queries; inferred commands get default budget of 200 tokens.
 
 ### 2. Rename doesn't catch convention-related identifiers
-- **Iterations observed**: 4g (iterations 1-10)
+- **Iterations observed**: 4g (iterations 1-11)
 - **Phase**: 4g (cross-file rename)
 - **Command**: `edr(renames: [{old_name: "Greeter", new_name: "Speaker", ...}])`
 - **Expected**: Also rename `NewGreeter` → `NewSpeaker` (Go constructor convention)
@@ -29,14 +29,8 @@ Fixed: `.claude` added to `alwaysIgnore` and `DefaultIgnore` in `internal/index/
 ### ~~5. Delta reads return diff vs first-seen version instead of unchanged~~ (NOT A BUG)
 Code already correctly updates stored hash after delta delivery. Regression tests added. Intermittent reports were likely due to worktree race conditions.
 
-### 7. Move dry-run preview may use stale index content
-- **Phase**: 4e (move symbol)
-- **Command**: `edr(edits: [{file: "_iter_test.go", move: "Goodbye", before: "Hello"}], dry_run: true)`
-- **Expected**: Preview diff reflects current on-disk file content
-- **Actual**: Preview diff showed pre-edit content instead of the current content written in Phase 4c
-- **Severity**: Bug — misleading preview could cause agents to approve incorrect moves
-- **Area**: `internal/dispatch/dispatch.go:runEditPlan` — move preview should read fresh from disk, not from index/cache
-- **Iterations observed**: 7 (not reproduced in iteration 9 -- preview showed correct post-edit content)
+### ~~7. Move dry-run preview may use stale index content~~ (NOT REPRODUCED)
+Not reproduced in iterations 9-11. Preview consistently shows correct post-edit content. Likely fixed by immediate reindexing on edit.
 
 ### 7. MCP server operates on main repo root, not worktree root
 - **Phase**: 10 (update issues.md)
@@ -103,11 +97,12 @@ Rename `--dry-run` shows file/line/text for each occurrence, but not unified dif
 - **Desired**: show unified diff format (like edit dry-run) so agents see context
 - **Area**: `internal/dispatch/dispatch.go:runRenameSymbol`
 
-### 6. read_after_edit for writes should use delta
-`read_after_edit` after writes forces `full: true`. Delta could save tokens.
-- **Current**: `full: true` forced in post-edit reads
-- **Desired**: normal read with delta awareness
+### 6. read_after_edit should use delta and respect budget
+`read_after_edit` forces `full: true` and ignores budget. For large files this blows context.
+- **Current**: `full: true` forced, no budget control
+- **Desired**: normal delta-aware reads with budget support
 - **Area**: `cmd/mcp.go:handleDo` (~line 826, post-edit reads section)
+- **Iterations observed**: 6, 11
 
 ### 7. Map truncation should show counts and guidance
 When `map` truncates, no hint on how to narrow scope.
@@ -121,11 +116,18 @@ Parallel iteration agents all write to `_iter_test.go` in the shared repo root, 
 - **Desired**: use unique names per worktree or write to worktree directory
 - **Area**: `iteration.md` Phase 4a setup
 
-### ~~9. Text search should default to `group: true` via MCP~~ (DONE)
+### 9. Accept `new_text` as alias for `content` in writes
+Agents switch between edit (uses `new_text`) and write (uses `content`). Accepting both reduces mistakes.
+- **Current**: write requires `content` field
+- **Desired**: accept `new_text` as alias for `content` in write operations
+- **Area**: `cmd/mcp.go:handleDo` (writes section), `internal/dispatch/dispatch.go:runWriteUnified`
+- **Iterations observed**: 11
+
+### ~~10. Text search should default to `group: true` via MCP~~ (DONE)
 Implemented: `doQueryToMultiCmd` now defaults `group=true` when text search mode is detected (text, regex, include, exclude, or context flags) and group wasn't explicitly set.
 
-### ~~10. Symbol-not-found should suggest similar names~~ (DONE)
+### ~~11. Symbol-not-found should suggest similar names~~ (DONE)
 Implemented in `symbolNotFoundError`: file-scoped candidates + camelCase part splitting + similarity ranking.
 
-### ~~11. Add `inferred_cmd` field when query cmd is auto-inferred~~ (DONE)
+### ~~12. Add `inferred_cmd` field when query cmd is auto-inferred~~ (DONE)
 Implemented: `inferred_cmd` field added to query result envelope when cmd was auto-inferred.
