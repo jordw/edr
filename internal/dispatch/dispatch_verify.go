@@ -39,7 +39,7 @@ func runVerify(ctx context.Context, db *index.DB, root string, args []string, fl
 		}
 	}
 
-	timeout := flagInt(flags, "timeout", 30)
+	timeout := flagInt(flags, "timeout", 120)
 	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
@@ -61,7 +61,12 @@ func runVerify(ctx context.Context, db *index.DB, root string, args []string, fl
 
 	if err != nil {
 		result["ok"] = false
-		result["error"] = err.Error()
+		if cmdCtx.Err() == context.DeadlineExceeded {
+			result["error"] = fmt.Sprintf("timeout after %ds (may need longer for cold builds with dependency downloads)", timeout)
+			result["timeout"] = true
+		} else {
+			result["error"] = err.Error()
+		}
 	} else {
 		result["ok"] = true
 	}
