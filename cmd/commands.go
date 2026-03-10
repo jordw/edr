@@ -189,6 +189,7 @@ func init() {
 	writeCmd.Flags().String("inside", "", P("inside"))
 	writeCmd.Flags().String("content", "", "Content to write (alternative to stdin)")
 	writeCmd.Flags().String("new_text", "", "Content to write (alias for --content, consistent with edit)")
+	writeCmd.Flags().Bool("force", false, "Allow overwriting a non-empty file with empty content")
 }
 
 var editCmd = &cobra.Command{

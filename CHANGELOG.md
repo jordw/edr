@@ -1,22 +1,21 @@
 # Changelog
 
-## Done
+## v0.1.0 — 2026-03-09
 
-### Session trace collection
+Initial open source release.
 
-Append-only `traces.db` captures structured traces per MCP session: calls, edit events, verify events, query events, and session optimization stats (delta reads, body dedup, slim edits). Async flush goroutine with buffered channel ensures zero impact on MCP response latency.
+### Features
 
-`edr bench-session` scores a completed session with derived analysis: read efficiency, edit success rate, verify pass rate, optimization rate, tokens per call, edits reverted.
-
-**Benchmark baseline** (55-call multi-language session across Go/Python/Rust/C/Java/Ruby/JS/TSX):
-- 25% read efficiency (8 delta reads / 32 total reads)
-- 27% optimization rate (delta + dedup + slim hits / total optimizable calls)
-- 180 tokens/call average
-- 7 body dedup hits, 8 delta reads
-- ~14ms/session, ~17.5KB total response
-
-### Bug fixes from evaluation
-
-- `explore` with nonexistent symbol returns `ok: true` with empty data instead of an error. Fixed in `gather.go:GatherBySearch` — now returns proper error.
-- `diff` query returns "no diff stored" with no explanation. Error message now explains session-scoping and suggests alternatives.
-- `write --inside` doesn't accept `--new_text` in CLI mode. Added `--content` and `--new_text` flags to write command; fixed stdin fallback logic.
+- **Single MCP tool** (`edr`) — batches reads, queries, edits, writes, renames, and verification in one call
+- **Symbol-aware reads** — read specific functions/classes instead of entire files
+- **Progressive disclosure** — `--signatures` (API only, 75-86% smaller), `--depth` (collapse nesting levels)
+- **Structured search** — symbol search with scoring and body snippets, text search with grouping
+- **Semantic references** — import-aware `refs` with transitive impact analysis (Go, Python, JS, TS)
+- **Smart edits** — old_text/new_text, symbol replacement, line-range, regex, move, atomic multi-file batches
+- **Write inside containers** — add fields/methods to classes/structs without reading the file first
+- **Cross-file rename** — import-aware, scoped, with dry-run preview
+- **Session optimizations** — delta reads, body dedup, slim edit responses
+- **Budget control** — cap any response to N tokens
+- **Session tracing** — `bench-session` scores MCP session efficiency
+- **13 languages** — Go, Python, JS/JSX, TS/TSX, Rust, Java, C, C++, Ruby, PHP, Zig, Lua, Bash
+- **Benchmarks** — 91-98% context savings across 6 real-world repos vs. raw file tools
