@@ -1271,9 +1271,14 @@ func serveMCP(db *index.DB) error {
 				continue
 			}
 
-			// Check for stale files before dispatching
+			// Check for stale files before dispatching.
+			// Re-check inside the lock to avoid duplicate re-indexing when
+			// concurrent requests both see stale before either acquires the lock.
 			if stale, _ := index.HasStaleFiles(ctx, db); stale {
 				if err := db.WithWriteLock(func() error {
+					if still, _ := index.HasStaleFiles(ctx, db); !still {
+						return nil // another goroutine already re-indexed
+					}
 					_, _, err := index.IndexRepo(ctx, db)
 					return err
 				}); err != nil {
