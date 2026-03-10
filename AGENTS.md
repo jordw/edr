@@ -1,24 +1,12 @@
-## Cursor Cloud specific instructions
+# EDR Development
 
-This is a pure Go CLI tool (`edr`) with zero external service dependencies. Go 1.25.0 is required (specified in `go.mod`).
+See [CLAUDE.md](CLAUDE.md) for full command reference and MCP tool documentation.
 
-### Build / Lint / Test
+## Quick Reference
 
 - **Build:** `go build -o edr .`
 - **Lint:** `go vet ./...`
 - **Test:** `go test ./...`
-
-### Running the CLI
-
-After building, the binary is at `./edr`. It operates on the current directory by default (override with `-r <path>`).
-
-- `./edr init` — indexes the repo into `.edr/index.db` (SQLite, embedded, no external DB needed)
-- `./edr map` — full symbol map
-- `./edr search <pattern>` — symbol search
-- See `CLAUDE.md` for the full command reference.
-
-### Notes
-
-- The `.edr/` directory is created at the repo root on first index; it is local state and should be gitignored.
-- SQLite uses pure-Go bindings (`modernc.org/sqlite`); no CGO needed for DB.
-- Tree-sitter grammars require CGO (C compiler) for parsing.
+- **Requires:** Go 1.25+, C compiler (for tree-sitter grammars)
+- **SQLite:** pure-Go bindings (`modernc.org/sqlite`), no CGO needed for DB
+- **Index:** stored in `.edr/index.db`, created on first query (`./edr init` to force)
