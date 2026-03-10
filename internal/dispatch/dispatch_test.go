@@ -978,3 +978,260 @@ func TestEditNoopDetection(t *testing.T) {
 	}
 }
 
+
+func TestEditPlanRegex_SingleMatch(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	if err := os.WriteFile(goFile, []byte(`package main
+
+func hello() string { return "v1.0" }
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	edits := []map[string]any{{
+		"file":     "main.go",
+		"old_text": `v[0-9]+\.[0-9]+`,
+		"new_text": "v2.0",
+		"regex":    true,
+	}}
+	result, err := dispatch.Dispatch(ctx, db, "edit-plan", nil, map[string]any{"edits": edits})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	raw, _ := json.Marshal(result)
+	var out map[string]any
+	json.Unmarshal(raw, &out)
+
+	if out["ok"] != true {
+		t.Fatalf("expected ok=true, got: %s", string(raw))
+	}
+	data, _ := os.ReadFile(goFile)
+	if !strings.Contains(string(data), `"v2.0"`) {
+		t.Fatalf("expected v2.0 in file, got: %s", string(data))
+	}
+}
+
+func TestEditPlanRegex_AllMatches(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	if err := os.WriteFile(goFile, []byte(`package main
+
+func a() string { return "v1.0" }
+func b() string { return "v1.1" }
+func c() string { return "v2.0" }
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	edits := []map[string]any{{
+		"file":     "main.go",
+		"old_text": `v[0-9]+\.[0-9]+`,
+		"new_text": "v9.9",
+		"regex":    true,
+		"all":      true,
+	}}
+	result, err := dispatch.Dispatch(ctx, db, "edit-plan", nil, map[string]any{"edits": edits})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	raw, _ := json.Marshal(result)
+	var out map[string]any
+	json.Unmarshal(raw, &out)
+
+	if out["ok"] != true {
+		t.Fatalf("expected ok=true, got: %s", string(raw))
+	}
+	data, _ := os.ReadFile(goFile)
+	count := strings.Count(string(data), `"v9.9"`)
+	if count != 3 {
+		t.Fatalf("expected 3 replacements, got %d: %s", count, string(data))
+	}
+}
+
+func TestEditPlanRegex_CaptureGroups(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	if err := os.WriteFile(goFile, []byte(`package main
+
+func alpha() {}
+func beta() {}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	edits := []map[string]any{{
+		"file":     "main.go",
+		"old_text": `func (\w+)\(\)`,
+		"new_text": "func do_${1}()",
+		"regex":    true,
+		"all":      true,
+	}}
+	result, err := dispatch.Dispatch(ctx, db, "edit-plan", nil, map[string]any{"edits": edits})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	raw, _ := json.Marshal(result)
+	var out map[string]any
+	json.Unmarshal(raw, &out)
+
+	if out["ok"] != true {
+		t.Fatalf("expected ok=true, got: %s", string(raw))
+	}
+	data, _ := os.ReadFile(goFile)
+	content := string(data)
+	if !strings.Contains(content, "func do_alpha()") {
+		t.Fatalf("expected do_alpha, got: %s", content)
+	}
+	if !strings.Contains(content, "func do_beta()") {
+		t.Fatalf("expected do_beta, got: %s", content)
+	}
+}
+
+func TestEditPlanRegex_AmbiguousWithoutAll(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	if err := os.WriteFile(goFile, []byte(`package main
+
+func a() string { return "v1.0" }
+func b() string { return "v1.1" }
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	edits := []map[string]any{{
+		"file":     "main.go",
+		"old_text": `v[0-9]+\.[0-9]+`,
+		"new_text": "v9.9",
+		"regex":    true,
+		// no "all": true — should error with ambiguous match
+	}}
+	_, err = dispatch.Dispatch(ctx, db, "edit-plan", nil, map[string]any{"edits": edits})
+	if err == nil {
+		t.Fatal("expected ambiguous match error")
+	}
+	if !strings.Contains(err.Error(), "matched") {
+		t.Fatalf("expected ambiguous match error, got: %v", err)
+	}
+}
+
+func TestEditPlanRegex_InvalidPattern(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	if err := os.WriteFile(goFile, []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	edits := []map[string]any{{
+		"file":     "main.go",
+		"old_text": `[invalid`,
+		"new_text": "x",
+		"regex":    true,
+	}}
+	_, err = dispatch.Dispatch(ctx, db, "edit-plan", nil, map[string]any{"edits": edits})
+	if err == nil {
+		t.Fatal("expected invalid regex error")
+	}
+	if !strings.Contains(err.Error(), "invalid regex") {
+		t.Fatalf("expected 'invalid regex' in error, got: %v", err)
+	}
+}
+
+func TestEditPlanRegex_DryRun(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	original := []byte(`package main
+
+func hello() string { return "v1.0" }
+`)
+	if err := os.WriteFile(goFile, original, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	edits := []map[string]any{{
+		"file":     "main.go",
+		"old_text": `v[0-9]+\.[0-9]+`,
+		"new_text": "v9.9",
+		"regex":    true,
+	}}
+	result, err := dispatch.Dispatch(ctx, db, "edit-plan", nil, map[string]any{"edits": edits, "dry_run": true})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	raw, _ := json.Marshal(result)
+	if !strings.Contains(string(raw), "dry_run") {
+		t.Fatalf("expected dry_run in result, got: %s", string(raw))
+	}
+	// File should be unchanged
+	data, _ := os.ReadFile(goFile)
+	if string(data) != string(original) {
+		t.Fatalf("dry_run should not modify file, got: %s", string(data))
+	}
+}
+
