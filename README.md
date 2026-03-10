@@ -102,6 +102,10 @@ edr combines several mechanisms to minimize context usage:
 | Atomic multi-file edits | Grouped edits validate in memory, write via temp-file rename, reindex in one batch |
 | Parse-tree caching | Repeated tree-sitter parses reuse cached ASTs keyed by content fingerprint |
 
+### Local data
+
+edr stores all data in `.edr/` at the repo root (gitignored). This includes the symbol index (`index.db`) and MCP session traces (`traces.db`). Session traces record call shape, timing, and edit metadata to power `edr bench-session` — no data is sent externally. Delete `.edr/` at any time to reset.
+
 ## CLI reference
 
 | Command | What it does |
