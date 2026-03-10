@@ -110,9 +110,10 @@ type mcpProp struct {
 }
 
 type mcpPropItems struct {
-	Type        string             `json:"type"`
-	Description string             `json:"description,omitempty"`
-	Properties  map[string]mcpProp `json:"properties,omitempty"`
+	Type                 string             `json:"type"`
+	Description          string             `json:"description,omitempty"`
+	Properties           map[string]mcpProp `json:"properties,omitempty"`
+	AdditionalProperties *bool              `json:"additionalProperties,omitempty"`
 }
 
 type mcpToolCallParams struct {
@@ -131,6 +132,8 @@ type mcpContent struct {
 
 // --- Tool definitions ---
 
+var additionalPropsTrue = func() *bool { t := true; return &t }()
+
 func mcpTools() []mcpTool {
 	return []mcpTool{
 		{
@@ -139,7 +142,7 @@ func mcpTools() []mcpTool {
 			InputSchema: mcpSchema{
 				Type: "object",
 				Properties: map[string]mcpProp{
-					"reads": {Type: "array", Description: MP("reads"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
+					"reads": {Type: "array", Description: MP("reads"), Items: &mcpPropItems{Type: "object", AdditionalProperties: additionalPropsTrue, Properties: map[string]mcpProp{
 						"file":       {Type: "string"},
 						"symbol":     {Type: "string"},
 						"budget":     {Type: "integer", Description: MP("budget")},
@@ -150,7 +153,7 @@ func mcpTools() []mcpTool {
 						"symbols":    {Type: "boolean", Description: MP("symbols")},
 						"full":       {Type: "boolean", Description: MP("full")},
 					}}},
-					"queries": {Type: "array", Description: MP("queries"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
+					"queries": {Type: "array", Description: MP("queries"), Items: &mcpPropItems{Type: "object", AdditionalProperties: additionalPropsTrue, Properties: map[string]mcpProp{
 						"cmd":        {Type: "string"},
 						"pattern":    {Type: "string"},
 						"symbol":     {Type: "string"},
@@ -176,7 +179,7 @@ func mcpTools() []mcpTool {
 						"locals":     {Type: "boolean", Description: MP("locals")},
 						"group":      {Type: "boolean", Description: MP("group")},
 					}}},
-					"edits": {Type: "array", Description: MP("edits"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
+					"edits": {Type: "array", Description: MP("edits"), Items: &mcpPropItems{Type: "object", AdditionalProperties: additionalPropsTrue, Properties: map[string]mcpProp{
 						"file":         {Type: "string"},
 						"old_text":     {Type: "string"},
 						"new_text":     {Type: "string"},
@@ -190,7 +193,7 @@ func mcpTools() []mcpTool {
 						"before":       {Type: "string", Description: MP("before")},
 						"expect_hash":  {Type: "string", Description: MP("expect_hash")},
 					}}},
-					"writes": {Type: "array", Description: MP("writes"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
+					"writes": {Type: "array", Description: MP("writes"), Items: &mcpPropItems{Type: "object", AdditionalProperties: additionalPropsTrue, Properties: map[string]mcpProp{
 						"file":    {Type: "string"},
 						"content": {Type: "string"},
 						"mkdir":   {Type: "boolean", Description: MP("mkdir")},
@@ -198,7 +201,7 @@ func mcpTools() []mcpTool {
 						"inside":  {Type: "string", Description: MP("inside")},
 						"append":  {Type: "boolean", Description: MP("append")},
 					}}},
-					"renames": {Type: "array", Description: MP("renames"), Items: &mcpPropItems{Type: "object", Properties: map[string]mcpProp{
+					"renames": {Type: "array", Description: MP("renames"), Items: &mcpPropItems{Type: "object", AdditionalProperties: additionalPropsTrue, Properties: map[string]mcpProp{
 						"old_name": {Type: "string"},
 						"new_name": {Type: "string"},
 						"dry_run":  {Type: "boolean", Description: MP("dry_run")},
@@ -536,9 +539,15 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 
 	// 2. Dispatch generalized queries via DispatchMulti (+ diff queries inline)
 	if hasQueries {
-		// Distribute top-level budget to queries that lack individual budgets
+		// Distribute top-level budget to queries that lack individual budgets.
+		// Use 2*budget/(n+1) so each query gets a larger share — matches
+		// the DispatchMulti distribution strategy.
 		if p.Budget != nil && len(p.Queries) > 0 {
-			perQuery := *p.Budget / len(p.Queries)
+			n := len(p.Queries)
+			perQuery := *p.Budget * 2 / (n + 1)
+			if perQuery > *p.Budget {
+				perQuery = *p.Budget
+			}
 			if perQuery < 50 {
 				perQuery = 50
 			}
