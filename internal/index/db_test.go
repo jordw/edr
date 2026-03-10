@@ -362,3 +362,47 @@ func itemE() {}
 		t.Fatalf("expected 5 symbols with limit=0, got %d", len(noLimit))
 	}
 }
+
+func TestSplitCamelCase(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		{"ApplyEdit", []string{"Apply", "Edit"}},
+		{"parseConfig", []string{"parse", "Config"}},
+		{"HTTPServer", []string{"HTTPServer"}}, // no split on consecutive uppercase
+		{"simple", []string{"simple"}},
+		{"getHTTPResponse", []string{"get", "HTTPResponse"}},
+	}
+	for _, tt := range tests {
+		got := splitCamelCase(tt.input)
+		if len(got) != len(tt.want) {
+			t.Errorf("splitCamelCase(%q) = %v, want %v", tt.input, got, tt.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tt.want[i] {
+				t.Errorf("splitCamelCase(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+			}
+		}
+	}
+}
+
+func TestSymbolSimilarity(t *testing.T) {
+	// Substring match should score higher than no match
+	if s := symbolSimilarity("apply", "applyedit"); s <= 0 {
+		t.Errorf("'apply' should be similar to 'applyedit', got score %d", s)
+	}
+	// Shared prefix
+	if s := symbolSimilarity("parse", "parser"); s <= 0 {
+		t.Errorf("'parse' should be similar to 'parser', got score %d", s)
+	}
+	// No similarity
+	if s := symbolSimilarity("xyz", "abc"); s != 0 {
+		t.Errorf("'xyz' should not be similar to 'abc', got score %d", s)
+	}
+	// Reverse substring
+	if s := symbolSimilarity("applyedit", "apply"); s <= 0 {
+		t.Errorf("'applyedit' should be similar to 'apply', got score %d", s)
+	}
+}

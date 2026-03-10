@@ -1081,23 +1081,69 @@ func (d *DB) symbolNotFoundError(ctx context.Context, name, file string) error {
 		msg = fmt.Sprintf("symbol %q not found", name)
 	}
 
-	// Search for similar names
-	suggestions, err := d.SearchSymbols(ctx, name)
-	if err != nil || len(suggestions) == 0 {
+	var candidates []SymbolInfo
+
+	if file != "" {
+		// File-scoped: get all symbols from this file and rank by similarity
+		candidates, _ = d.GetSymbolsByFile(ctx, file)
+	} else {
+		// Global: search by substring first
+		candidates, _ = d.SearchSymbols(ctx, name)
+	}
+
+	// If substring match found nothing, try splitting camelCase/PascalCase
+	// into parts and searching for each part
+	if len(candidates) == 0 && file == "" {
+		parts := splitCamelCase(name)
+		if len(parts) > 1 {
+			for _, part := range parts {
+				if len(part) < 3 {
+					continue
+				}
+				partResults, _ := d.SearchSymbols(ctx, part, 10)
+				candidates = append(candidates, partResults...)
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
 		return fmt.Errorf("%s", msg)
 	}
 
-	// Deduplicate and limit to 5
+	// Rank candidates by similarity to the query name
+	type scored struct {
+		name  string
+		score int
+	}
 	seen := make(map[string]bool)
-	var names []string
-	for _, s := range suggestions {
-		if !seen[s.Name] {
-			seen[s.Name] = true
-			names = append(names, s.Name)
-			if len(names) >= 5 {
-				break
+	var ranked []scored
+	nameL := strings.ToLower(name)
+	for _, s := range candidates {
+		if seen[s.Name] || s.Name == name || len(s.Name) < 3 {
+			continue
+		}
+		seen[s.Name] = true
+		score := symbolSimilarity(nameL, strings.ToLower(s.Name))
+		if score > 0 {
+			ranked = append(ranked, scored{s.Name, score})
+		}
+	}
+
+	// Sort by score descending
+	for i := 0; i < len(ranked); i++ {
+		for j := i + 1; j < len(ranked); j++ {
+			if ranked[j].score > ranked[i].score {
+				ranked[i], ranked[j] = ranked[j], ranked[i]
 			}
 		}
+	}
+
+	var names []string
+	for i, r := range ranked {
+		if i >= 5 {
+			break
+		}
+		names = append(names, r.name)
 	}
 
 	if len(names) == 0 {
@@ -1105,6 +1151,55 @@ func (d *DB) symbolNotFoundError(ctx context.Context, name, file string) error {
 	}
 
 	return fmt.Errorf("%s. Did you mean: %s", msg, strings.Join(names, ", "))
+}
+
+// splitCamelCase splits "ApplyEdit" into ["Apply", "Edit"].
+func splitCamelCase(s string) []string {
+	var parts []string
+	start := 0
+	for i := 1; i < len(s); i++ {
+		if s[i] >= 'A' && s[i] <= 'Z' && s[i-1] >= 'a' && s[i-1] <= 'z' {
+			parts = append(parts, s[start:i])
+			start = i
+		}
+	}
+	parts = append(parts, s[start:])
+	return parts
+}
+
+// symbolSimilarity returns a score for how similar two lowercase symbol names are.
+// Higher is better. Returns 0 for no meaningful similarity.
+func symbolSimilarity(query, candidate string) int {
+	score := 0
+	// Exact substring match (either direction)
+	if strings.Contains(candidate, query) {
+		score += 10
+	} else if strings.Contains(query, candidate) {
+		score += 8
+	}
+	// Shared prefix
+	prefixLen := 0
+	for i := 0; i < len(query) && i < len(candidate); i++ {
+		if query[i] != candidate[i] {
+			break
+		}
+		prefixLen++
+	}
+	if prefixLen >= 3 {
+		score += prefixLen
+	}
+	// Shared suffix
+	suffixLen := 0
+	for i := 0; i < len(query) && i < len(candidate); i++ {
+		if query[len(query)-1-i] != candidate[len(candidate)-1-i] {
+			break
+		}
+		suffixLen++
+	}
+	if suffixLen >= 3 {
+		score += suffixLen
+	}
+	return score
 }
 
 // AmbiguousSymbolError is returned when a symbol name resolves to multiple definitions.

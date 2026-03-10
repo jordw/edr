@@ -558,14 +558,18 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 		var dispatchIdxs []int
 		var diffIdxs []int
 		var errorIdxs []int
+		inferredCmds := make(map[int]string) // index → inferred cmd name
 		for i, q := range p.Queries {
 			if q.Cmd == "diff" {
 				diffIdxs = append(diffIdxs, i)
 			} else {
-				mc := doQueryToMultiCmd(q)
+				mc, wasInferred := doQueryToMultiCmd(q)
 				if mc.Cmd == "" {
 					errorIdxs = append(errorIdxs, i)
 				} else {
+					if wasInferred {
+						inferredCmds[i] = mc.Cmd
+					}
 					dispatchIdxs = append(dispatchIdxs, i)
 				}
 			}
@@ -587,7 +591,7 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 		if len(dispatchIdxs) > 0 {
 			cmds := make([]dispatch.MultiCmd, len(dispatchIdxs))
 			for ci, qi := range dispatchIdxs {
-				cmds[ci] = doQueryToMultiCmd(p.Queries[qi])
+				cmds[ci], _ = doQueryToMultiCmd(p.Queries[qi])
 			}
 			var budgetOpt []int
 			if p.Budget != nil {
@@ -626,9 +630,15 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 			if q.Cmd == "diff" {
 				allCmds[i] = dispatch.MultiCmd{Cmd: "diff"}
 			} else {
-				allCmds[i] = doQueryToMultiCmd(q)
+				allCmds[i], _ = doQueryToMultiCmd(q)
 			}
 		}
+
+		// Annotate inferred_cmd on results where cmd was auto-inferred
+		for qi, inferredCmd := range inferredCmds {
+			allResults[qi].InferredCmd = inferredCmd
+		}
+
 		text := postProcessMultiResults(sess, allCmds, allResults)
 		parts = append(parts, fmt.Sprintf(`"queries":%s`, text))
 
@@ -970,7 +980,9 @@ func inferQueryCmd(q doQuery) string {
 	return "" // will be caught as error below
 }
 
-func doQueryToMultiCmd(q doQuery) dispatch.MultiCmd {
+// doQueryToMultiCmd converts a doQuery to a dispatch.MultiCmd.
+// Returns the MultiCmd and whether the cmd was inferred (not explicitly set).
+func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
 	cmd := q.Cmd
 	inferred := false
 	if cmd == "" {
@@ -1009,7 +1021,7 @@ func doQueryToMultiCmd(q doQuery) dispatch.MultiCmd {
 
 	case "search":
 		if q.Pattern == nil || *q.Pattern == "" {
-			return dispatch.MultiCmd{Cmd: "search", Args: []string{}, Flags: flags}
+			return dispatch.MultiCmd{Cmd: "search", Args: []string{}, Flags: flags}, inferred
 		}
 		args = []string{*q.Pattern}
 		if q.Body != nil && *q.Body {
@@ -1030,7 +1042,14 @@ func doQueryToMultiCmd(q doQuery) dispatch.MultiCmd {
 		if q.Context != nil {
 			flags["context"] = *q.Context
 		}
+		// Default group=true for text search via MCP (saves tokens by grouping matches by file)
+		isTextSearch := (q.Text != nil && *q.Text) ||
+			(q.Regex != nil && *q.Regex) ||
+			q.Include != nil || q.Exclude != nil ||
+			(q.Context != nil && *q.Context > 0)
 		if q.Group != nil && *q.Group {
+			flags["group"] = true
+		} else if isTextSearch && q.Group == nil {
 			flags["group"] = true
 		}
 
@@ -1103,7 +1122,7 @@ func doQueryToMultiCmd(q doQuery) dispatch.MultiCmd {
 		}
 	}
 
-	return dispatch.MultiCmd{Cmd: cmd, Args: args, Flags: flags}
+	return dispatch.MultiCmd{Cmd: cmd, Args: args, Flags: flags}, inferred
 }
 
 
@@ -1113,15 +1132,16 @@ func doQueryToMultiCmd(q doQuery) dispatch.MultiCmd {
 // postProcessMultiResults applies session post-processing to each sub-result.
 func postProcessMultiResults(sess *session.Session, cmds []dispatch.MultiCmd, results []dispatch.MultiResult) string {
 	type processedResult struct {
-		Cmd    string `json:"cmd"`
-		OK     bool   `json:"ok"`
-		Result any    `json:"result,omitempty"`
-		Error  string `json:"error,omitempty"`
+		Cmd         string `json:"cmd"`
+		OK          bool   `json:"ok"`
+		InferredCmd string `json:"inferred_cmd,omitempty"`
+		Result      any    `json:"result,omitempty"`
+		Error       string `json:"error,omitempty"`
 	}
 
 	processed := make([]processedResult, len(results))
 	for i, r := range results {
-		processed[i] = processedResult{Cmd: r.Cmd, OK: r.OK, Error: r.Error}
+		processed[i] = processedResult{Cmd: r.Cmd, OK: r.OK, Error: r.Error, InferredCmd: r.InferredCmd}
 		if !r.OK || r.Result == nil {
 			continue
 		}

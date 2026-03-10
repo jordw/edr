@@ -387,7 +387,7 @@ func TestDoQueryToMultiCmd_Search(t *testing.T) {
 		Pattern: &pattern,
 		Body:    &body,
 	}
-	mc := doQueryToMultiCmd(q)
+	mc, _ := doQueryToMultiCmd(q)
 	if mc.Cmd != "search" {
 		t.Errorf("cmd = %q, want search", mc.Cmd)
 	}
@@ -405,7 +405,7 @@ func TestDoQueryToMultiCmd_SearchEmptyPattern(t *testing.T) {
 		Cmd:     "search",
 		Pattern: &empty,
 	}
-	mc := doQueryToMultiCmd(q)
+	mc, _ := doQueryToMultiCmd(q)
 	if mc.Cmd != "search" {
 		t.Errorf("cmd = %q, want search", mc.Cmd)
 	}
@@ -424,7 +424,7 @@ func TestDoQueryToMultiCmd_Explore(t *testing.T) {
 		Gather: &gather,
 		Body:   &body,
 	}
-	mc := doQueryToMultiCmd(q)
+	mc, _ := doQueryToMultiCmd(q)
 	if mc.Cmd != "explore" {
 		t.Errorf("cmd = %q, want explore", mc.Cmd)
 	}
@@ -446,7 +446,7 @@ func TestDoQueryToMultiCmd_Map(t *testing.T) {
 		Type: &typ,
 		Grep: &grep,
 	}
-	mc := doQueryToMultiCmd(q)
+	mc, _ := doQueryToMultiCmd(q)
 	if mc.Cmd != "map" {
 		t.Errorf("cmd = %q, want map", mc.Cmd)
 	}
@@ -466,7 +466,7 @@ func TestDoQueryToMultiCmd_DefaultsToRead(t *testing.T) {
 	q := doQuery{
 		File: &file,
 	}
-	mc := doQueryToMultiCmd(q)
+	mc, _ := doQueryToMultiCmd(q)
 	if mc.Cmd != "read" {
 		t.Errorf("cmd = %q, want read (default)", mc.Cmd)
 	}
@@ -485,7 +485,7 @@ func TestDoQueryToMultiCmd_Refs(t *testing.T) {
 		Impact: &impact,
 		Depth:  &depth,
 	}
-	mc := doQueryToMultiCmd(q)
+	mc, _ := doQueryToMultiCmd(q)
 	if mc.Cmd != "refs" {
 		t.Errorf("cmd = %q, want refs", mc.Cmd)
 	}
@@ -505,7 +505,7 @@ func TestDoQueryToMultiCmd_InferredDefaultBudget(t *testing.T) {
 		// No Cmd set — will be inferred as "search"
 		// No Budget set — should get default 200
 	}
-	mc := doQueryToMultiCmd(q)
+	mc, _ := doQueryToMultiCmd(q)
 	if mc.Cmd != "search" {
 		t.Errorf("cmd = %q, want search", mc.Cmd)
 	}
@@ -522,7 +522,7 @@ func TestDoQueryToMultiCmd_ExplicitCmdNoBudgetDefault(t *testing.T) {
 		Pattern: &pattern,
 		// Explicit Cmd — should NOT get default budget
 	}
-	mc := doQueryToMultiCmd(q)
+	mc, _ := doQueryToMultiCmd(q)
 	if _, ok := mc.Flags["budget"]; ok {
 		t.Errorf("budget should not be set for explicit cmd, got %v", mc.Flags["budget"])
 	}
@@ -536,9 +536,53 @@ func TestDoQueryToMultiCmd_InferredWithExplicitBudget(t *testing.T) {
 		Pattern: &pattern,
 		Budget:  &budget,
 	}
-	mc := doQueryToMultiCmd(q)
+	mc, _ := doQueryToMultiCmd(q)
 	if mc.Flags["budget"] != 500 {
 		t.Errorf("budget = %v, want 500 (explicit budget should be preserved)", mc.Flags["budget"])
+	}
+}
+
+func TestDoQueryToMultiCmd_InferredReturnValue(t *testing.T) {
+	// When cmd is inferred, second return value should be true
+	pattern := "TODO"
+	q := doQuery{Pattern: &pattern}
+	_, inferred := doQueryToMultiCmd(q)
+	if !inferred {
+		t.Error("expected inferred=true when cmd is not set")
+	}
+
+	// When cmd is explicit, second return value should be false
+	q2 := doQuery{Cmd: "search", Pattern: &pattern}
+	_, inferred2 := doQueryToMultiCmd(q2)
+	if inferred2 {
+		t.Error("expected inferred=false when cmd is explicitly set")
+	}
+}
+
+func TestDoQueryToMultiCmd_TextSearchDefaultsGroupTrue(t *testing.T) {
+	pattern := "TODO"
+	textTrue := true
+
+	// Text search without explicit group should default to group=true
+	q := doQuery{Cmd: "search", Pattern: &pattern, Text: &textTrue}
+	mc, _ := doQueryToMultiCmd(q)
+	if mc.Flags["group"] != true {
+		t.Error("text search should default group=true via MCP")
+	}
+
+	// Symbol search (no text flag) should NOT default group
+	q2 := doQuery{Cmd: "search", Pattern: &pattern}
+	mc2, _ := doQueryToMultiCmd(q2)
+	if _, ok := mc2.Flags["group"]; ok {
+		t.Error("symbol search should not default group=true")
+	}
+
+	// Explicit group=false (Group set to non-nil false) should not override
+	groupFalse := false
+	q3 := doQuery{Cmd: "search", Pattern: &pattern, Text: &textTrue, Group: &groupFalse}
+	mc3, _ := doQueryToMultiCmd(q3)
+	if mc3.Flags["group"] == true {
+		t.Error("explicit group=false should not be overridden")
 	}
 }
 

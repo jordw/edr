@@ -289,10 +289,11 @@ type MultiCmd struct {
 
 // MultiResult holds the result of a single command in a multi-command batch.
 type MultiResult struct {
-	Cmd    string `json:"cmd"`
-	OK     bool   `json:"ok"`
-	Result any    `json:"result,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Cmd         string `json:"cmd"`
+	OK          bool   `json:"ok"`
+	Result      any    `json:"result,omitempty"`
+	Error       string `json:"error,omitempty"`
+	InferredCmd string `json:"-"` // set when cmd was auto-inferred (not serialized by default)
 }
 
 // DispatchMulti runs multiple commands concurrently where safe.

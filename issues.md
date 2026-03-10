@@ -65,6 +65,12 @@ Already fixed: `PRAGMA busy_timeout=5000`, `retryDB` wrapper with exponential ba
 ### ~~Body dedup in search silently drops body instead of marking it~~ (RESOLVED)
 Now shows `"body": "[in context]"` marker and `skipped_bodies` array. Confirmed iterations 5-8.
 
+### ~~10. Silent query cmd inference — no indication in response~~ (FIXED)
+Fixed: `doQueryToMultiCmd` now returns an `inferred` flag. When cmd is auto-inferred, `inferred_cmd` field is added to the query result envelope (alongside `cmd`, `ok`, `result`).
+
+### ~~11. Symbol-not-found errors lack suggestions~~ (FIXED)
+Fixed: `symbolNotFoundError` now uses file-scoped symbol lookup (when file given) and camelCase splitting for global search. Symbols ranked by prefix/suffix/substring similarity.
+
 ## Improvements (priority order)
 
 ### 1. Add `limit` parameter to search queries
@@ -115,9 +121,11 @@ Parallel iteration agents all write to `_iter_test.go` in the shared repo root, 
 - **Desired**: use unique names per worktree or write to worktree directory
 - **Area**: `iteration.md` Phase 4a setup
 
-### 9. Text search should default to `group: true` via MCP
-Text search returns individual matches ungrouped by default, wasting tokens when multiple matches appear in one file. The `group: true` flag exists but agents must know to pass it.
-- **Current**: `group: true` must be explicitly passed; agents rarely know to do this
-- **Desired**: default `group: true` for text search via MCP (CLI can keep current behavior)
-- **Area**: `cmd/mcp.go:doQueryToMultiCmd` (line ~1034), `internal/dispatch/dispatch_search.go`
-- **Iterations observed**: 9, 10
+### ~~9. Text search should default to `group: true` via MCP~~ (DONE)
+Implemented: `doQueryToMultiCmd` now defaults `group=true` when text search mode is detected (text, regex, include, exclude, or context flags) and group wasn't explicitly set.
+
+### ~~10. Symbol-not-found should suggest similar names~~ (DONE)
+Implemented in `symbolNotFoundError`: file-scoped candidates + camelCase part splitting + similarity ranking.
+
+### ~~11. Add `inferred_cmd` field when query cmd is auto-inferred~~ (DONE)
+Implemented: `inferred_cmd` field added to query result envelope when cmd was auto-inferred.
