@@ -53,8 +53,8 @@ func TestOpenDBConcurrencySettings(t *testing.T) {
 	if err := db.db.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
 		t.Fatalf("query busy_timeout: %v", err)
 	}
-	if timeout != 5000 {
-		t.Errorf("busy_timeout = %d, want 5000", timeout)
+	if timeout != 30000 {
+		t.Errorf("busy_timeout = %d, want 30000", timeout)
 	}
 }
 
@@ -308,6 +308,92 @@ func TestCloseReleasesLockFile(t *testing.T) {
 		t.Fatalf("expected flock to succeed after db.Close(), got: %v", err)
 	}
 	syscall.Flock(int(probe.Fd()), syscall.LOCK_UN)
+}
+
+func TestConcurrentFirstUseIndexing(t *testing.T) {
+	// Two goroutines opening the same fresh DB and indexing concurrently
+	// should both succeed without SQLITE_BUSY errors.
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	const N = 4
+	errs := make([]error, N)
+	var wg sync.WaitGroup
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			db, err := OpenDB(root)
+			if err != nil {
+				errs[idx] = fmt.Errorf("OpenDB: %w", err)
+				return
+			}
+			defer db.Close()
+
+			ctx := context.Background()
+			err = db.WithWriteLock(func() error {
+				// Re-check like the real openDB does
+				files, _, _ := db.Stats(ctx)
+				if files > 0 {
+					return nil
+				}
+				_, _, e := IndexRepo(ctx, db)
+				return e
+			})
+			if err != nil {
+				errs[idx] = fmt.Errorf("index: %w", err)
+				return
+			}
+
+			// Verify we can read stats
+			files, _, err := db.Stats(ctx)
+			if err != nil {
+				errs[idx] = fmt.Errorf("Stats: %w", err)
+				return
+			}
+			if files == 0 {
+				errs[idx] = fmt.Errorf("expected files > 0 after indexing")
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d: %v", i, err)
+		}
+	}
+}
+
+func TestRetryRowScanRetries(t *testing.T) {
+	// Verify that retryRow.Scan works for normal queries.
+	root := t.TempDir()
+	db, err := OpenDB(root)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	// Stats uses QueryRowContext (now retryRow) — verify it works
+	files, symbols, err := db.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if files != 0 || symbols != 0 {
+		t.Fatalf("expected 0/0 for fresh DB, got files=%d symbols=%d", files, symbols)
+	}
+
+	// Also test QueryRow (no context)
+	var version int
+	err = db.db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_version").Scan(&version)
+	if err != nil {
+		t.Fatalf("QueryRow: %v", err)
+	}
+	if version != currentSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, currentSchemaVersion)
+	}
 }
 
 func TestSearchSymbolsLimit(t *testing.T) {

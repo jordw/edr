@@ -61,12 +61,27 @@ func (r *retryDB) QueryContext(ctx context.Context, query string, args ...any) (
 	return rows, err
 }
 
-func (r *retryDB) QueryRow(query string, args ...any) *sql.Row {
-	return r.db.QueryRow(query, args...)
+// retryRow wraps sql.Row so that Scan retries on SQLITE_BUSY.
+// sql.Row defers errors to Scan(), so retry must wrap the full query+scan cycle.
+type retryRow struct {
+	db    *sql.DB
+	ctx   context.Context
+	query string
+	args  []any
 }
 
-func (r *retryDB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
-	return r.db.QueryRowContext(ctx, query, args...)
+func (r *retryRow) Scan(dest ...any) error {
+	return retryBusy(func() error {
+		return r.db.QueryRowContext(r.ctx, r.query, r.args...).Scan(dest...)
+	})
+}
+
+func (r *retryDB) QueryRow(query string, args ...any) *retryRow {
+	return &retryRow{db: r.db, ctx: context.Background(), query: query, args: args}
+}
+
+func (r *retryDB) QueryRowContext(ctx context.Context, query string, args ...any) *retryRow {
+	return &retryRow{db: r.db, ctx: ctx, query: query, args: args}
 }
 
 func (r *retryDB) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
@@ -109,12 +124,19 @@ func OpenDB(repoRoot string) (*DB, error) {
 
 	// Set busy_timeout FIRST so subsequent PRAGMAs don't fail with
 	// "database is locked" if another process is mid-write.
-	if _, err := sqlDB.Exec("PRAGMA busy_timeout=5000"); err != nil {
+	// 30s matches the retryBusy deadline so SQLite-level and Go-level
+	// retries cooperate instead of the shorter timeout giving up early.
+	if _, err := sqlDB.Exec("PRAGMA busy_timeout=30000"); err != nil {
 		sqlDB.Close()
 		return nil, err
 	}
-	// Enable WAL mode for better concurrent access
-	if _, err := sqlDB.Exec("PRAGMA journal_mode=WAL"); err != nil {
+	// Enable WAL mode for better concurrent access.
+	// Retry because journal_mode=WAL is a write-like operation that can
+	// hit SQLITE_BUSY if another process is mid-transaction.
+	if err := retryBusy(func() error {
+		_, e := sqlDB.Exec("PRAGMA journal_mode=WAL")
+		return e
+	}); err != nil {
 		sqlDB.Close()
 		return nil, err
 	}
@@ -136,7 +158,11 @@ func OpenDB(repoRoot string) (*DB, error) {
 	}
 
 	d := &DB{db: &retryDB{db: sqlDB}, raw: sqlDB, root: root, lockFile: lockFile}
-	if err := d.migrate(); err != nil {
+	// Run migrations under the writer lock so that two concurrent first-use
+	// processes don't race on schema creation (SQLITE_BUSY).
+	if err := d.WithWriteLock(func() error {
+		return d.migrate()
+	}); err != nil {
 		lockFile.Close()
 		sqlDB.Close()
 		return nil, err

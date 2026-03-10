@@ -1192,6 +1192,125 @@ func TestEditPlanRegex_InvalidPattern(t *testing.T) {
 	}
 }
 
+// === Tests for bug fixes ===
+
+func TestReadLineRangeStartBeyondEnd(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	if err := os.WriteFile(goFile, []byte("package main\n\nfunc hello() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// start_line > end_line should return an error, not panic
+	_, err = dispatch.Dispatch(ctx, db, "read", []string{"main.go", "100", "50"}, map[string]any{})
+	if err == nil {
+		t.Fatal("expected error for start > end line range, got nil")
+	}
+	if !strings.Contains(err.Error(), "beyond end line") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReadLineRangeBeyondEOF(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	if err := os.WriteFile(goFile, []byte("package main\n\nfunc hello() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// start_line beyond EOF should return an error, not panic
+	_, err = dispatch.Dispatch(ctx, db, "read", []string{"main.go", "99999", "100000"}, map[string]any{})
+	if err == nil {
+		t.Fatal("expected error for line range beyond EOF, got nil")
+	}
+	if !strings.Contains(err.Error(), "beyond end line") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEditEmptyNewTextIsDeletion(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	original := "package main\n\nfunc remove() {}\n\nfunc keep() {}\n"
+	if err := os.WriteFile(goFile, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty new_text with old_text should delete the matched text
+	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+		"old_text": "func remove() {}\n\n",
+		"new_text": "",
+	})
+	if err != nil {
+		t.Fatalf("edit with empty new_text returned error: %v", err)
+	}
+
+	raw, _ := json.Marshal(result)
+	if !strings.Contains(string(raw), `"ok":true`) {
+		t.Fatalf("expected ok:true, got: %s", string(raw))
+	}
+
+	data, _ := os.ReadFile(goFile)
+	if strings.Contains(string(data), "remove") {
+		t.Fatalf("deleted text still present: %s", string(data))
+	}
+	if !strings.Contains(string(data), "func keep()") {
+		t.Fatalf("kept text missing: %s", string(data))
+	}
+}
+
+func TestEditEmptyNewTextRequiresEditMode(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	if err := os.WriteFile(goFile, []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty new_text with no edit mode should still error
+	_, err = dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+		"new_text": "",
+	})
+	if err == nil {
+		t.Fatal("expected error for edit with empty new_text and no edit mode")
+	}
+}
+
 func TestEditPlanRegex_DryRun(t *testing.T) {
 	tmp := t.TempDir()
 	goFile := filepath.Join(tmp, "main.go")

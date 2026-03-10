@@ -106,12 +106,13 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 	if endLine > totalLines {
 		endLine = totalLines
 	}
+	if startLine > endLine {
+		return nil, fmt.Errorf("start line %d is beyond end line %d (file has %d lines)", startLine, endLine, totalLines)
+	}
 
 	var numbered strings.Builder
-	if startLine <= endLine {
-		for i, line := range lines[startLine-1 : endLine] {
-			fmt.Fprintf(&numbered, "%d\t%s", startLine+i, line)
-		}
+	for i, line := range lines[startLine-1 : endLine] {
+		fmt.Fprintf(&numbered, "%d\t%s", startLine+i, line)
 	}
 	body := numbered.String()
 

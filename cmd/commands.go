@@ -139,10 +139,11 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	sess := session.New()
 	flags := extractFlags(cmd)
 	// If any content-equivalent flag was provided on CLI, skip stdin.
-	// writeContent() checks "content", "new_text", "body" — mirror that here.
+	// An explicitly-set empty string (e.g. --new_text '') is a valid value
+	// (deletion), so we check existence in the map, not emptiness.
 	hasContent := false
 	for _, key := range []string{stdinKey, "content", "new_text", "body"} {
-		if v, ok := flags[key]; ok && v != nil && v != "" {
+		if _, ok := flags[key]; ok {
 			hasContent = true
 			break
 		}

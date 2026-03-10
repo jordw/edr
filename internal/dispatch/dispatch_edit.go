@@ -53,8 +53,10 @@ func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string,
 	if newText == "" {
 		newText = flagString(flags, "replacement", "")
 	}
-	if newText == "" {
-		return nil, fmt.Errorf("edit requires 'new_text' in flags")
+	// Whether new_text was explicitly provided (even as empty string = deletion).
+	_, newTextSet := flags["new_text"]
+	if !newTextSet {
+		_, newTextSet = flags["replacement"]
 	}
 
 	// Determine targeting mode:
@@ -68,6 +70,11 @@ func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string,
 	oldText := flagString(flags, "old_text", "")
 	if oldText == "" {
 		oldText = flagString(flags, "match", "")
+	}
+
+	// Require new_text if an edit mode is active.
+	if !newTextSet && newText == "" {
+		return nil, fmt.Errorf("edit requires 'new_text' in flags")
 	}
 
 	if startLine > 0 && endLine > 0 {

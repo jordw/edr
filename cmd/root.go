@@ -134,8 +134,12 @@ func openDB(cmd *cobra.Command, quiet bool) (*index.DB, error) {
 			}
 		}
 		err = db.WithWriteLock(func() error {
-			// Re-check staleness after acquiring the lock — another process
-			// may have already completed the re-index while we waited.
+			// Re-check after acquiring the lock — another process may have
+			// already completed the index/re-index while we waited.
+			currentFiles, _, _ := db.Stats(ctx)
+			if firstIndex && currentFiles > 0 {
+				return nil // another process completed the first index
+			}
 			if !firstIndex {
 				if stale, _ := index.HasStaleFiles(ctx, db); !stale {
 					return nil // already up to date

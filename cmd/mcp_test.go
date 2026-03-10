@@ -791,6 +791,98 @@ func TestPostProcess_EditPlanDiff(t *testing.T) {
 	}
 }
 
+func TestHandleDo_ReadLineRangeInvalid(t *testing.T) {
+	// Invalid line ranges in the MCP do path should return errors, not panic.
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+
+	sess := session.New()
+
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "start > end",
+			raw:  `{"reads": [{"file": "main.go", "start_line": 100, "end_line": 50}]}`,
+			want: "beyond end line",
+		},
+		{
+			name: "start beyond EOF",
+			raw:  `{"reads": [{"file": "main.go", "start_line": 99999, "end_line": 100000}]}`,
+			want: "beyond end line",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := handleDo(context.Background(), db, sess, nil, json.RawMessage(tt.raw))
+			if err != nil {
+				t.Fatalf("handleDo returned error: %v", err)
+			}
+			if !strings.Contains(result, tt.want) {
+				t.Errorf("expected %q in result, got: %s", tt.want, result)
+			}
+		})
+	}
+}
+
+func TestHandleDo_EditEmptyNewTextDeletion(t *testing.T) {
+	// Empty new_text with old_text should perform a deletion via MCP do path.
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc remove() {}\n\nfunc keep() {}\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc != nil {
+		defer tc.Close()
+	}
+
+	raw := json.RawMessage(`{
+		"edits": [{"file": "main.go", "old_text": "func remove() {}\n\n", "new_text": ""}]
+	}`)
+
+	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	if !strings.Contains(result, `"ok":true`) {
+		t.Errorf("expected ok:true in result, got: %s", result)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(tmp, "main.go"))
+	if strings.Contains(string(data), "remove") {
+		t.Errorf("deleted text still present: %s", string(data))
+	}
+	if !strings.Contains(string(data), "func keep()") {
+		t.Errorf("kept text missing: %s", string(data))
+	}
+}
+
 func TestHandleDo_SkipsPostEditReadsAndVerifyOnEditFailure(t *testing.T) {
 	// Create a temp dir with a .edr directory for the DB and traces.
 	tmp := t.TempDir()
