@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -25,8 +26,9 @@ type editPlanEntry struct {
 	NewText     string `json:"new_text,omitempty"`    // the replacement content (all modes)
 	Replacement string `json:"replacement,omitempty"` // legacy alias for new_text
 	ExpectHash  string `json:"expect_hash,omitempty"`
-	All         bool   `json:"all,omitempty"` // replace all occurrences (text-based)
-	Move        string `json:"move,omitempty"`   // symbol to move
+	All         bool   `json:"all,omitempty"`   // replace all occurrences (text-based)
+	Regex       bool   `json:"regex,omitempty"` // treat old_text as regex
+	Move        string `json:"move,omitempty"`  // symbol to move
 	After       string `json:"after,omitempty"`  // place after this symbol
 	Before      string `json:"before,omitempty"` // place before this symbol
 }
@@ -98,7 +100,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 
 		case e.OldText != "":
 			// Detect no-op: old_text == new_text means nothing would change
-			if e.OldText == e.resolvedNewText() {
+			if !e.Regex && e.OldText == e.resolvedNewText() {
 				// Even for no-ops, validate expect_hash if provided
 				if e.ExpectHash != "" {
 					currentHash, err := edit.FileHash(file)
@@ -121,56 +123,91 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 				return nil, fmt.Errorf("edit-plan: edit %d: read %s: %w", i, output.Rel(file), err)
 			}
 			content := string(data)
-			idx := strings.Index(content, e.OldText)
-			if idx < 0 {
-				return nil, fmt.Errorf("edit-plan: edit %d: old_text not found in %s", i, output.Rel(file))
-			}
+
 			// Auto-compute hash if caller didn't provide one
 			expectHash := e.ExpectHash
 			if expectHash == "" {
 				expectHash = edit.HashBytes(data)
 			}
-			// Check for ambiguous matches before proceeding
-			totalMatches := strings.Count(content, e.OldText)
-			if totalMatches > 1 && !e.All {
-				locs := make([][]int, 0, totalMatches)
-				off := 0
-				for {
-					j := strings.Index(content[off:], e.OldText)
-					if j < 0 {
-						break
-					}
-					abs := off + j
-					locs = append(locs, []int{abs, abs + len(e.OldText)})
-					off = abs + len(e.OldText)
+
+			if e.Regex {
+				// Regex-based edit
+				re, err := regexp.Compile(e.OldText)
+				if err != nil {
+					return nil, fmt.Errorf("edit-plan: edit %d: invalid regex: %w", i, err)
 				}
-				return nil, fmt.Errorf("edit-plan: edit %d: %w", i, ambiguousMatchError(content, output.Rel(file), e.OldText, locs))
-			}
-			if e.All {
-				// For replace-all, collect all occurrences (reverse order for offset stability)
-				var offsets []int
-				start := 0
-				for {
-					idx := strings.Index(content[start:], e.OldText)
-					if idx < 0 {
-						break
-					}
-					offsets = append(offsets, start+idx)
-					start += idx + len(e.OldText)
+				matches := re.FindAllStringIndex(content, -1)
+				if len(matches) == 0 {
+					return nil, fmt.Errorf("edit-plan: edit %d: regex %q not found in %s", i, e.OldText, output.Rel(file))
 				}
-				for j := len(offsets) - 1; j >= 0; j-- {
+				if len(matches) > 1 && !e.All {
+					locs := make([][]int, len(matches))
+					copy(locs, matches)
+					return nil, fmt.Errorf("edit-plan: edit %d: %w", i, ambiguousMatchError(content, output.Rel(file), e.OldText, locs))
+				}
+				// Build replacements in reverse order for offset stability
+				for j := len(matches) - 1; j >= 0; j-- {
+					m := matches[j]
+					// Support capture group references ($1, $2) in replacement
+					repl := re.ReplaceAllString(content[m[0]:m[1]], e.resolvedNewText())
+					desc := fmt.Sprintf("regex replace in %s", output.Rel(file))
+					if e.All && len(matches) > 1 {
+						desc = fmt.Sprintf("regex replace in %s (occurrence %d)", output.Rel(file), j+1)
+					}
 					resolved = append(resolved, resolvedEdit{
-						File: file, StartByte: uint32(offsets[j]), EndByte: uint32(offsets[j] + len(e.OldText)),
-						Replacement: e.resolvedNewText(), ExpectHash: expectHash,
-						Description: fmt.Sprintf("replace text in %s (occurrence %d)", output.Rel(file), j+1),
+						File: file, StartByte: uint32(m[0]), EndByte: uint32(m[1]),
+						Replacement: repl, ExpectHash: expectHash,
+						Description: desc,
 					})
 				}
 			} else {
-				resolved = append(resolved, resolvedEdit{
-					File: file, StartByte: uint32(idx), EndByte: uint32(idx + len(e.OldText)),
-					Replacement: e.resolvedNewText(), ExpectHash: expectHash,
-					Description: fmt.Sprintf("replace text in %s", output.Rel(file)),
-				})
+				// Literal text-based edit
+				idx := strings.Index(content, e.OldText)
+				if idx < 0 {
+					return nil, fmt.Errorf("edit-plan: edit %d: old_text not found in %s", i, output.Rel(file))
+				}
+				// Check for ambiguous matches before proceeding
+				totalMatches := strings.Count(content, e.OldText)
+				if totalMatches > 1 && !e.All {
+					locs := make([][]int, 0, totalMatches)
+					off := 0
+					for {
+						j := strings.Index(content[off:], e.OldText)
+						if j < 0 {
+							break
+						}
+						abs := off + j
+						locs = append(locs, []int{abs, abs + len(e.OldText)})
+						off = abs + len(e.OldText)
+					}
+					return nil, fmt.Errorf("edit-plan: edit %d: %w", i, ambiguousMatchError(content, output.Rel(file), e.OldText, locs))
+				}
+				if e.All {
+					// For replace-all, collect all occurrences (reverse order for offset stability)
+					var offsets []int
+					start := 0
+					for {
+						idx := strings.Index(content[start:], e.OldText)
+						if idx < 0 {
+							break
+						}
+						offsets = append(offsets, start+idx)
+						start += idx + len(e.OldText)
+					}
+					for j := len(offsets) - 1; j >= 0; j-- {
+						resolved = append(resolved, resolvedEdit{
+							File: file, StartByte: uint32(offsets[j]), EndByte: uint32(offsets[j] + len(e.OldText)),
+							Replacement: e.resolvedNewText(), ExpectHash: expectHash,
+							Description: fmt.Sprintf("replace text in %s (occurrence %d)", output.Rel(file), j+1),
+						})
+					}
+				} else {
+					resolved = append(resolved, resolvedEdit{
+						File: file, StartByte: uint32(idx), EndByte: uint32(idx + len(e.OldText)),
+						Replacement: e.resolvedNewText(), ExpectHash: expectHash,
+						Description: fmt.Sprintf("replace text in %s", output.Rel(file)),
+					})
+				}
 			}
 
 		case e.StartLine > 0 && e.EndLine > 0:
