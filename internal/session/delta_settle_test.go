@@ -169,3 +169,74 @@ func TestDeltaSettlesToUnchanged_MultipleChanges(t *testing.T) {
 		t.Fatalf("C->C should be unchanged, got: %s", r)
 	}
 }
+
+// TestDeltaSkippedWhenOldContentMuchSmaller verifies that when old content is
+// much smaller than new content (e.g. signatures→full body), delta is skipped
+// and full content is returned instead.
+func TestDeltaSkippedWhenOldContentMuchSmaller(t *testing.T) {
+	s := New()
+
+	// Step 1: Store a short signature-like body
+	shortBody := "func handleDo(ctx context.Context) (string, error)"
+	resultSig := map[string]any{
+		"body":   shortBody,
+		"symbol": map[string]any{"file": "cmd/mcp.go", "name": "handleDo", "hash": "abc"},
+	}
+	delta := s.ProcessReadResult("read", resultSig, map[string]any{})
+	if delta != nil {
+		t.Fatalf("first read should return nil (new), got: %v", delta)
+	}
+
+	// Step 2: Read the full body (>4x longer) — should NOT return delta
+	// because the diff would be a near-complete rewrite
+	fullBody := shortBody + " {\n" + strings.Repeat("\tline\n", 100) + "}"
+	resultFull := map[string]any{
+		"body":   fullBody,
+		"symbol": map[string]any{"file": "cmd/mcp.go", "name": "handleDo", "hash": "def"},
+	}
+	delta = s.ProcessReadResult("read", resultFull, map[string]any{})
+	if delta != nil {
+		t.Fatalf("signatures→full body should skip delta (return nil), got: %v", delta)
+	}
+
+	// Step 3: Read same full body again — should be unchanged (content was stored)
+	delta = s.ProcessReadResult("read", resultFull, map[string]any{})
+	if delta == nil {
+		t.Fatal("third read should return unchanged, got nil")
+	}
+	if delta["unchanged"] != true {
+		t.Fatalf("expected unchanged=true, got: %v", delta)
+	}
+}
+
+// TestDeltaStillWorksForSimilarSizedContent verifies that normal edits
+// (similar-sized old and new) still produce useful deltas.
+func TestDeltaStillWorksForSimilarSizedContent(t *testing.T) {
+	s := New()
+
+	// Store a reasonably sized function body
+	oldBody := "func foo() {\n\treturn 1\n}\n" + strings.Repeat("// padding\n", 20)
+	resultA := map[string]any{
+		"body":   oldBody,
+		"symbol": map[string]any{"file": "f.go", "name": "foo", "hash": "aaa"},
+	}
+	s.ProcessReadResult("read", resultA, map[string]any{})
+
+	// Change one line in a similar-sized body
+	newBody := "func foo() {\n\treturn 2\n}\n" + strings.Repeat("// padding\n", 20)
+	resultB := map[string]any{
+		"body":   newBody,
+		"symbol": map[string]any{"file": "f.go", "name": "foo", "hash": "bbb"},
+	}
+	delta := s.ProcessReadResult("read", resultB, map[string]any{})
+	if delta == nil {
+		t.Fatal("similar-sized content change should return delta")
+	}
+	if delta["delta"] != true {
+		t.Fatalf("expected delta=true, got: %v", delta)
+	}
+	if _, ok := delta["diff"]; !ok {
+		t.Fatal("delta should include diff")
+	}
+}
+

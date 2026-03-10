@@ -420,6 +420,12 @@ func (s *Session) ProcessReadResult(cmd string, result map[string]any, flags map
 		if diff == "" {
 			return nil
 		}
+		// If the old content was much smaller (e.g. signatures→full body),
+		// the delta is a near-complete rewrite that wastes tokens vs. just
+		// returning the full response. Skip delta when <25% overlap.
+		if len(oldContent)*4 < len(content) {
+			return nil
+		}
 		s.stats.DeltaReads++
 		file, hash := ExtractFileHash(result)
 		return map[string]any{
