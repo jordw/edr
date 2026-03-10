@@ -141,7 +141,13 @@ func openDB(cmd *cobra.Command, quiet bool) (*index.DB, error) {
 					return nil // already up to date
 				}
 			}
-			_, _, e := index.IndexRepo(ctx, db)
+			var progress index.ProgressFunc
+			if !quiet {
+				progress = func(files, symbols int) {
+					fmt.Fprintf(os.Stderr, "\redr: indexed %d files (%d symbols)...", files, symbols)
+				}
+			}
+			_, _, e := index.IndexRepo(ctx, db, progress)
 			return e
 		})
 		if err != nil {
@@ -152,7 +158,7 @@ func openDB(cmd *cobra.Command, quiet bool) (*index.DB, error) {
 			// Report total index size, not just changed files — avoids
 			// confusing "indexed 0 files" when everything was already current.
 			totalFiles, totalSyms, _ := db.Stats(ctx)
-			fmt.Fprintf(os.Stderr, "edr: index ready (%d files, %d symbols)\n", totalFiles, totalSyms)
+			fmt.Fprintf(os.Stderr, "\redr: index ready (%d files, %d symbols)\n", totalFiles, totalSyms)
 		}
 	}
 

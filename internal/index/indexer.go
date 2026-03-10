@@ -122,11 +122,12 @@ func HasStaleFiles(ctx context.Context, db *DB) (bool, error) {
 
 // fileCandidate holds everything needed to parse and index a file.
 type fileCandidate struct {
-	path  string
-	src   []byte
-	hash  string
-	mtime int64
-	lang  *LangConfig
+	path   string
+	src    []byte
+	hash   string
+	mtime  int64
+	lang   *LangConfig
+	isNew  bool
 }
 
 // parsedFile holds the parse result for a file candidate.
@@ -135,7 +136,14 @@ type parsedFile struct {
 	result    *ParseResult
 }
 
-func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
+// ProgressFunc is called periodically during indexing with (filesIndexed, symbolsFound).
+type ProgressFunc func(files, symbols int)
+
+func IndexRepo(ctx context.Context, db *DB, progress ...ProgressFunc) (int, int, error) {
+	var progressFn ProgressFunc
+	if len(progress) > 0 {
+		progressFn = progress[0]
+	}
 	root := db.Root()
 	gitignore := LoadGitIgnore(root)
 
@@ -191,7 +199,8 @@ func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 				return nil
 			}
 			hash := fileHash(src)
-			if existingHashes[path] == hash {
+			_, existed := existingHashes[path]
+			if existed && existingHashes[path] == hash {
 				return nil
 			}
 			select {
@@ -201,6 +210,7 @@ func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 				hash:  hash,
 				mtime: info.ModTime().UnixNano(),
 				lang:  lang,
+				isNew: !existed,
 			}:
 			case <-ctx.Done():
 				return ctx.Err()
@@ -246,8 +256,10 @@ func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 		if err := db.UpsertFile(ctx, c.path, c.hash, c.mtime); err != nil {
 			continue
 		}
-		if err := db.ClearFileData(ctx, c.path); err != nil {
-			continue
+		if !c.isNew {
+			if err := db.ClearFileData(ctx, c.path); err != nil {
+				continue
+			}
 		}
 		symbolIDs, err := db.InsertSymbolsBatch(ctx, pf.result.Symbols)
 		if err != nil {
@@ -262,6 +274,9 @@ func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 			continue
 		}
 		filesIndexed++
+		if progressFn != nil && filesIndexed%100 == 0 {
+			progressFn(filesIndexed, symbolsFound)
+		}
 	}
 
 	// Persist .gitignore metadata so HasStaleFiles can detect ignore-rule changes.
@@ -374,6 +389,10 @@ func shouldIgnoreDir(name, path, root string, gitignore *GitIgnoreMatcher) bool 
 		if name == ign {
 			return true
 		}
+	}
+	// Skip git submodules (they have a .git file, not a directory)
+	if info, err := os.Stat(filepath.Join(path, ".git")); err == nil && !info.IsDir() {
+		return true
 	}
 	if gitignore != nil {
 		rel, _ := filepath.Rel(root, path)

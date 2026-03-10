@@ -266,7 +266,7 @@ func retryBusy(fn func() error) error {
 }
 
 
-const currentSchemaVersion = 4
+const currentSchemaVersion = 5
 
 func (d *DB) migrate() error {
 	// Create schema_version table if it doesn't exist
@@ -307,6 +307,11 @@ func (d *DB) migrate() error {
 	}
 	if version < 4 {
 		if err := d.migrateV4(); err != nil {
+			return err
+		}
+	}
+	if version < 5 {
+		if err := d.migrateV5(); err != nil {
 			return err
 		}
 	}
@@ -416,6 +421,11 @@ func (d *DB) migrateV4() error {
 		CREATE INDEX IF NOT EXISTS idx_symbols_type ON symbols(type);
 		CREATE INDEX IF NOT EXISTS idx_symbols_parent ON symbols(parent_id);
 	`)
+	return err
+}
+
+func (d *DB) migrateV5() error {
+	_, err := d.db.Exec(`CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file)`)
 	return err
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/pprof"
 	"strings"
 
 	"github.com/jordw/edr/internal/dispatch"
@@ -303,12 +304,28 @@ var findCmd = &cobra.Command{
 func init() {
 	findCmd.Flags().String("dir", "", P("dir"))
 	findCmd.Flags().Int("budget", 0, P("budget"))
+
+	initCmd.Flags().String("cpuprofile", "", "write CPU profile to file")
 }
 
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: ToolDesc["init"],
-	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "init", args) },
+	RunE: func(cmd *cobra.Command, args []string) error {
+		profPath, _ := cmd.Flags().GetString("cpuprofile")
+		if profPath != "" {
+			f, err := os.Create(profPath)
+			if err != nil {
+				return fmt.Errorf("create cpuprofile: %w", err)
+			}
+			pprof.StartCPUProfile(f)
+			defer func() {
+				pprof.StopCPUProfile()
+				f.Close()
+			}()
+		}
+		return dispatchCmd(cmd, "init", args)
+	},
 }
 
 var editPlanCmd = &cobra.Command{
