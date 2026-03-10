@@ -28,13 +28,19 @@ func runRepoMap(ctx context.Context, db *index.DB, flags map[string]any) (any, e
 		opts = append(opts, index.WithHideLocals())
 	}
 
-	repoMap, err := index.RepoMap(ctx, db, opts...)
+	// Pass budget into RepoMap for early-stop rendering,
+	// then do a final truncation pass for exact budget fit.
+	budget := flagInt(flags, "budget", 0)
+	if budget > 0 {
+		opts = append(opts, index.WithBudget(budget))
+	}
+
+	repoMap, earlyStop, err := index.RepoMap(ctx, db, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	budget := flagInt(flags, "budget", 0)
-	truncated := false
+	truncated := earlyStop
 	if budget > 0 {
 		size := len(repoMap) / 4
 		if size > budget {

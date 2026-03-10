@@ -199,3 +199,131 @@ func updateIndexedSnapshot(ctx context.Context, root string) error {
 	}
 	return WriteIndexedSnapshot(root, snap)
 }
+
+// gitignoreMeta stores hashes and mtimes of .gitignore files for stale detection.
+// Persisted separately from the files table to avoid inflating file counts.
+type gitignoreMeta struct {
+	Files map[string]gitignoreEntry `json:"files"` // path → entry
+}
+
+type gitignoreEntry struct {
+	Hash  string `json:"hash"`
+	Mtime int64  `json:"mtime"` // UnixNano
+}
+
+func gitignoreMetaPath(root string) string {
+	return filepath.Join(root, ".edr", "gitignore.json")
+}
+
+// persistGitignoreMeta walks the repo for .gitignore files and stores their
+// hashes and mtimes in a separate metadata file.
+func persistGitignoreMeta(root string) {
+	meta := gitignoreMeta{Files: make(map[string]gitignoreEntry)}
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" || d.Name() == ".edr" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Base(path) != ".gitignore" {
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		h := sha256.Sum256(src)
+		meta.Files[rel] = gitignoreEntry{
+			Hash:  hex.EncodeToString(h[:8]),
+			Mtime: info.ModTime().UnixNano(),
+		}
+		return nil
+	})
+
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return
+	}
+	p := gitignoreMetaPath(root)
+	_ = os.MkdirAll(filepath.Dir(p), 0755)
+	tmp := p + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err == nil {
+		_ = os.Rename(tmp, p)
+	}
+}
+
+// loadGitignoreMeta reads the persisted .gitignore metadata.
+func loadGitignoreMeta(root string) (gitignoreMeta, bool) {
+	data, err := os.ReadFile(gitignoreMetaPath(root))
+	if err != nil {
+		return gitignoreMeta{}, false
+	}
+	var meta gitignoreMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return gitignoreMeta{}, false
+	}
+	return meta, true
+}
+
+// checkGitignoreStale returns true if any .gitignore file has changed
+// since the metadata was persisted.
+func checkGitignoreStale(root string) bool {
+	meta, ok := loadGitignoreMeta(root)
+	if !ok {
+		// No metadata → check if .gitignore exists (first index)
+		_, err := os.Stat(filepath.Join(root, ".gitignore"))
+		return err == nil // stale if gitignore exists but no metadata
+	}
+
+	// Check each known .gitignore
+	for rel, entry := range meta.Files {
+		path := filepath.Join(root, rel)
+		info, err := os.Stat(path)
+		if err != nil {
+			return true // deleted
+		}
+		if info.ModTime().UnixNano() != entry.Mtime {
+			// Mtime changed — verify by content hash
+			src, err := os.ReadFile(path)
+			if err != nil {
+				return true
+			}
+			h := sha256.Sum256(src)
+			if hex.EncodeToString(h[:8]) != entry.Hash {
+				return true
+			}
+		}
+	}
+
+	// Check for new .gitignore files
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" || d.Name() == ".edr" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Base(path) == ".gitignore" {
+			rel, _ := filepath.Rel(root, path)
+			if _, known := meta.Files[rel]; !known {
+				ok = false // reuse ok as "found new" flag
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
+
+	return !ok
+}

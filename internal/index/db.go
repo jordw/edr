@@ -1003,6 +1003,91 @@ func (d *DB) AllSymbols(ctx context.Context) ([]SymbolInfo, error) {
 	return results, nil
 }
 
+// GetAllFileHashes loads all (path → content hash) pairs in a single query.
+func (d *DB) GetAllFileHashes(ctx context.Context) (map[string]string, error) {
+	rows, err := d.db.QueryContext(ctx, "SELECT path, hash FROM files")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]string)
+	for rows.Next() {
+		var path, hash string
+		if err := rows.Scan(&path, &hash); err != nil {
+			return nil, err
+		}
+		result[path] = hash
+	}
+	return result, rows.Err()
+}
+
+// GetAllFileMeta loads all (path → mtime) pairs for stale detection.
+func (d *DB) GetAllFileMeta(ctx context.Context) (map[string]int64, error) {
+	rows, err := d.db.QueryContext(ctx, "SELECT path, mtime FROM files")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]int64)
+	for rows.Next() {
+		var path string
+		var mtime int64
+		if err := rows.Scan(&path, &mtime); err != nil {
+			return nil, err
+		}
+		result[path] = mtime
+	}
+	return result, rows.Err()
+}
+
+// FilteredSymbols returns symbols with optional filters pushed to SQL.
+// dir is an absolute path prefix, symbolType is exact match, namePattern
+// is a case-insensitive substring (use empty string to skip a filter).
+func (d *DB) FilteredSymbols(ctx context.Context, dir, symbolType, namePattern string) ([]SymbolInfo, error) {
+	query := "SELECT name, type, file, start_line, end_line, start_byte, end_byte FROM symbols"
+	var conditions []string
+	var args []any
+
+	if dir != "" {
+		// file paths are absolute; match prefix
+		conditions = append(conditions, "file GLOB ?")
+		args = append(args, dir+"/*")
+	}
+	if symbolType != "" {
+		conditions = append(conditions, "type = ?")
+		args = append(args, symbolType)
+	}
+	if namePattern != "" {
+		// Escape LIKE wildcards so %, _, and \ are treated as literals.
+		esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(namePattern)
+		conditions = append(conditions, "name LIKE ? ESCAPE '\\'")
+		args = append(args, "%"+esc+"%")
+	}
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += " ORDER BY file, start_line"
+
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []SymbolInfo
+	for rows.Next() {
+		var s SymbolInfo
+		if err := rows.Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte); err != nil {
+			return nil, err
+		}
+		results = append(results, s)
+	}
+	return results, rows.Err()
+}
+
 // Stats returns index statistics.
 func (d *DB) Stats(ctx context.Context) (files int, symbols int, err error) {
 	err = d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM files").Scan(&files)

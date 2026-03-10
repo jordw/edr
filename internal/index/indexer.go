@@ -27,45 +27,96 @@ var DefaultIgnore = []string{
 	".idea", ".vscode", "bin", "obj",
 }
 
-// IndexRepo indexes all supported files in the repository.
-// HasStaleFiles checks whether the current repo snapshot differs from the
-// snapshot persisted after indexing. If no snapshot exists yet, it falls back
-// to the legacy mtime-based check.
+// HasStaleFiles checks whether the repo has changed since the last index.
+// Uses a two-tier approach: first compares mtime metadata (no file reads),
+// then only reads files whose mtime changed to verify by content hash.
+// This avoids both full-repo content hashing and false positives from
+// touch-only mtime bumps.
 func HasStaleFiles(ctx context.Context, db *DB) (bool, error) {
-	if snap, ok, err := ReadIndexedSnapshot(db.Root()); err != nil {
-		return false, err
-	} else if ok {
-		current, err := ComputeRepoSnapshot(ctx, db.Root())
-		if err != nil {
-			return false, err
-		}
-		return current.RootHash != snap.RootHash || current.FileCount != snap.FileCount, nil
+	// Quick check: has .gitignore changed? (separate metadata, not in files table)
+	if checkGitignoreStale(db.Root()) {
+		return true, nil
 	}
 
-	return hasStaleFilesByMtime(ctx, db)
-}
-
-func hasStaleFilesByMtime(ctx context.Context, db *DB) (bool, error) {
-	rows, err := db.db.QueryContext(ctx, "SELECT path, mtime FROM files LIMIT 100")
+	// Bulk-load all indexed metadata in two queries (not per-file).
+	indexedMeta, err := db.GetAllFileMeta(ctx)
+	if err != nil || len(indexedMeta) == 0 {
+		return true, nil
+	}
+	indexedHashes, err := db.GetAllFileHashes(ctx)
 	if err != nil {
-		return false, err
+		indexedHashes = make(map[string]string)
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var path string
-		var mtime int64
-		if err := rows.Scan(&path, &mtime); err != nil {
-			continue
-		}
-		info, err := os.Stat(path)
+	root := db.Root()
+	gitignore := LoadGitIgnore(root)
+	seen := make(map[string]bool, len(indexedMeta))
+	var stale bool
+
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return true, nil // file deleted = stale
+			return nil
 		}
-		if info.ModTime().Unix() > mtime {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if d.IsDir() {
+			if shouldIgnoreDir(d.Name(), path, root, gitignore) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if gitignore != nil {
+			rel, _ := filepath.Rel(root, path)
+			if gitignore.IsIgnored(rel, false) {
+				return nil
+			}
+		}
+
+		if GetLangConfig(path) == nil {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil || info.Size() > 1<<20 {
+			return nil
+		}
+
+		seen[path] = true
+		storedMtime, inDB := indexedMeta[path]
+
+		if !inDB {
+			// New file not in index
+			stale = true
+			return filepath.SkipAll
+		}
+		if info.ModTime().UnixNano() <= storedMtime {
+			// Mtime unchanged — skip (no read needed)
+			return nil
+		}
+
+		// Mtime changed — verify by content hash to avoid false positive on touch.
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		if fileHash(src) != indexedHashes[path] {
+			stale = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+
+	if stale {
+		return true, nil
+	}
+
+	// Check for deleted files: any indexed path not seen on disk
+	for path := range indexedMeta {
+		if !seen[path] {
 			return true, nil
 		}
 	}
+
 	return false, nil
 }
 
@@ -92,94 +143,102 @@ func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 		return 0, 0, err
 	}
 
-	// Phase 1: Walk and collect candidates that need re-indexing.
-	var candidates []fileCandidate
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if d.IsDir() {
-			if shouldIgnoreDir(d.Name(), path, root, gitignore) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if gitignore != nil {
-			rel, _ := filepath.Rel(root, path)
-			if gitignore.IsIgnored(rel, false) {
+	// Bulk-load all existing file hashes in one query instead of per-file lookups.
+	existingHashes, err := db.GetAllFileHashes(ctx)
+	if err != nil {
+		existingHashes = make(map[string]string)
+	}
+
+	// Pipeline: walk → parse workers → DB writer.
+	// Bounded channels limit peak memory to ~(buffer * max_file_size).
+	candidates := make(chan fileCandidate, 64)
+	parsed := make(chan parsedFile, 64)
+
+	// Walk goroutine: produces candidates, skipping unchanged files.
+	var walkErr error
+	go func() {
+		defer close(candidates)
+		walkErr = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
 				return nil
 			}
-		}
-		lang := GetLangConfig(path)
-		if lang == nil {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil || info.Size() > 1<<20 {
-			return nil
-		}
-		src, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		hash := fileHash(src)
-		storedHash, _ := db.GetFileHash(ctx, path)
-		if storedHash == hash {
-			return nil
-		}
-		candidates = append(candidates, fileCandidate{
-			path:  path,
-			src:   src,
-			hash:  hash,
-			mtime: info.ModTime().Unix(),
-			lang:  lang,
-		})
-		return nil
-	})
-
-	if ctx.Err() != nil {
-		return 0, 0, ctx.Err()
-	}
-
-	// Phase 2: Parse all candidates in parallel.
-	parsed := make([]parsedFile, len(candidates))
-	workers := runtime.GOMAXPROCS(0)
-	if workers > len(candidates) {
-		workers = len(candidates)
-	}
-	if workers > 0 {
-		var wg sync.WaitGroup
-		work := make(chan int, len(candidates))
-		for i := range candidates {
-			work <- i
-		}
-		close(work)
-		wg.Add(workers)
-		for range workers {
-			go func() {
-				defer wg.Done()
-				for i := range work {
-					c := &candidates[i]
-					result, err := ParseFileComplete(c.path, c.src, c.lang)
-					if err == nil {
-						parsed[i] = parsedFile{candidate: *c, result: result}
-					}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if d.IsDir() {
+				if shouldIgnoreDir(d.Name(), path, root, gitignore) {
+					return filepath.SkipDir
 				}
-			}()
-		}
-		wg.Wait()
-	}
+				return nil
+			}
+			if gitignore != nil {
+				rel, _ := filepath.Rel(root, path)
+				if gitignore.IsIgnored(rel, false) {
+					return nil
+				}
+			}
+			lang := GetLangConfig(path)
+			if lang == nil {
+				return nil
+			}
+			info, err := d.Info()
+			if err != nil || info.Size() > 1<<20 {
+				return nil
+			}
 
-	// Phase 3: Write all results to DB in a single batch transaction.
+			src, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			hash := fileHash(src)
+			if existingHashes[path] == hash {
+				return nil
+			}
+			select {
+			case candidates <- fileCandidate{
+				path:  path,
+				src:   src,
+				hash:  hash,
+				mtime: info.ModTime().UnixNano(),
+				lang:  lang,
+			}:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			return nil
+		})
+	}()
+
+	// Parse workers: read from candidates, write to parsed.
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	var parseWg sync.WaitGroup
+	parseWg.Add(workers)
+	for range workers {
+		go func() {
+			defer parseWg.Done()
+			for c := range candidates {
+				result, err := ParseFileComplete(c.path, c.src, c.lang)
+				if err == nil {
+					parsed <- parsedFile{candidate: c, result: result}
+				}
+			}
+		}()
+	}
+	go func() {
+		parseWg.Wait()
+		close(parsed)
+	}()
+
+	// Writer: consume parsed results into a single batch transaction.
 	if err := db.BeginBatch(ctx); err == nil {
 		defer db.RollbackBatch()
 	}
 
 	var filesIndexed, symbolsFound int
-	for _, pf := range parsed {
+	for pf := range parsed {
 		if pf.result == nil {
 			continue
 		}
@@ -203,6 +262,18 @@ func IndexRepo(ctx context.Context, db *DB) (int, int, error) {
 			continue
 		}
 		filesIndexed++
+	}
+
+	// Persist .gitignore metadata so HasStaleFiles can detect ignore-rule changes.
+	persistGitignoreMeta(root)
+
+	// Abort the transaction if the walk failed or context was cancelled.
+	// The deferred RollbackBatch() handles cleanup.
+	if walkErr != nil {
+		return 0, 0, walkErr
+	}
+	if ctx.Err() != nil {
+		return 0, 0, ctx.Err()
 	}
 
 	if err := db.CommitBatch(); err != nil {
@@ -243,7 +314,7 @@ func IndexFile(ctx context.Context, db *DB, path string) error {
 		return fmt.Errorf("indexfile: parse: %w", err)
 	}
 
-	if err := db.UpsertFile(ctx, path, hash, info.ModTime().Unix()); err != nil {
+	if err := db.UpsertFile(ctx, path, hash, info.ModTime().UnixNano()); err != nil {
 		return err
 	}
 	if err := db.ClearFileData(ctx, path); err != nil {
@@ -332,6 +403,7 @@ type repoMapConfig struct {
 	symbolType string // filter to this symbol type
 	grep       string // only include symbols whose name contains this
 	hideLocals bool   // hide symbols nested inside functions/methods
+	budget     int    // approximate token budget (0 = unlimited)
 }
 
 // RepoMapOption configures RepoMap behavior.
@@ -360,6 +432,12 @@ func WithGrep(grep string) RepoMapOption {
 // WithHideLocals filters out symbols that are nested inside functions/methods.
 func WithHideLocals() RepoMapOption {
 	return func(c *repoMapConfig) { c.hideLocals = true }
+}
+
+// WithBudget sets an approximate token budget for map output.
+// RepoMap stops adding files once the budget is exceeded.
+func WithBudget(budget int) RepoMapOption {
+	return func(c *repoMapConfig) { c.budget = budget }
 }
 
 // matchDoublestarPath matches a relative path against a ** glob pattern.
@@ -391,20 +469,42 @@ func matchDoublestarPath(path, pattern string) bool {
 }
 
 // RepoMap generates a concise map of the repository structure.
-func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, error) {
+// When dir and/or symbolType filters are set, the query is pushed to SQL
+// so only matching rows leave the database. Glob and regex grep are applied
+// in Go after the SQL result set.
+func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, bool, error) {
 	cfg := repoMapConfig{}
 	for _, o := range opts {
 		o(&cfg)
 	}
 
-	symbols, err := db.AllSymbols(ctx)
-	if err != nil {
-		return "", err
-	}
-
 	root := db.Root()
 
-	// Group by file, applying filters
+	// Push dir and type filters into SQL; leave glob and regex grep for Go.
+	sqlDir := ""
+	if cfg.dir != "" {
+		sqlDir = filepath.Join(root, cfg.dir)
+	}
+	sqlName := ""
+	// Only push simple substring grep to SQL; regex patterns stay in Go.
+	var grepRe *regexp.Regexp
+	if cfg.grep != "" {
+		var err error
+		grepRe, err = regexp.Compile("(?i)(?:" + cfg.grep + ")")
+		if err != nil {
+			// Not a regex — push as SQL LIKE substring
+			sqlName = strings.ToLower(cfg.grep)
+		}
+		// If it IS valid regex, we could still push a simplified substring
+		// to SQL as a pre-filter, but for now keep it simple: regex = Go-side.
+	}
+
+	symbols, err := db.FilteredSymbols(ctx, sqlDir, cfg.symbolType, sqlName)
+	if err != nil {
+		return "", false, err
+	}
+
+	// Group by file, applying Go-side filters (glob, regex grep)
 	byFile := make(map[string][]SymbolInfo)
 	var fileOrder []string
 	for _, s := range symbols {
@@ -416,14 +516,7 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, error)
 			rel = s.File
 		}
 
-		// Dir filter
-		if cfg.dir != "" {
-			if !strings.HasPrefix(rel, cfg.dir+"/") && rel != cfg.dir {
-				continue
-			}
-		}
-
-		// Glob filter
+		// Glob filter (Go-side: needs path pattern matching)
 		if cfg.glob != "" {
 			matched := false
 			if strings.Contains(cfg.glob, "**") {
@@ -438,18 +531,9 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, error)
 			}
 		}
 
-		// Symbol type filter
-		if cfg.symbolType != "" && s.Type != cfg.symbolType {
-			continue
-		}
-
-		// Grep filter: try regex first, fall back to case-insensitive substring
-		if cfg.grep != "" {
-			if re, err := regexp.Compile("(?i)(?:" + cfg.grep + ")"); err == nil {
-				if !re.MatchString(s.Name) {
-					continue
-				}
-			} else if !strings.Contains(strings.ToLower(s.Name), strings.ToLower(cfg.grep)) {
+		// Regex grep filter (Go-side when pattern is valid regex)
+		if grepRe != nil {
+			if !grepRe.MatchString(s.Name) {
 				continue
 			}
 		}
@@ -463,7 +547,6 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, error)
 	// Filter out locals (symbols nested inside functions/methods)
 	if cfg.hideLocals {
 		for file, syms := range byFile {
-			// Collect function/method ranges
 			type span struct{ start, end uint32 }
 			var funcSpans []span
 			for _, s := range syms {
@@ -471,7 +554,6 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, error)
 					funcSpans = append(funcSpans, span{s.StartLine, s.EndLine})
 				}
 			}
-			// Filter: keep symbols not contained inside any function/method
 			filtered := syms[:0]
 			for _, s := range syms {
 				isLocal := false
@@ -502,17 +584,21 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, error)
 		ti := isTestOrBenchFile(ri)
 		tj := isTestOrBenchFile(rj)
 		if ti != tj {
-			return !ti // non-test first
+			return !ti
 		}
 		di := strings.Count(ri, string(filepath.Separator))
 		dj := strings.Count(rj, string(filepath.Separator))
 		if di != dj {
-			return di < dj // shallower first
+			return di < dj
 		}
 		return ri < rj
 	})
 
+	// Build output with early-stop budget.
 	var b strings.Builder
+	budgetChars := cfg.budget * 4
+	truncated := false
+	filesRendered := 0
 	for _, file := range fileOrder {
 		syms := byFile[file]
 		if len(syms) == 0 {
@@ -526,9 +612,28 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, error)
 		for _, sym := range syms {
 			fmt.Fprintf(&b, "  %s %s [%d-%d]\n", sym.Type, sym.Name, sym.StartLine, sym.EndLine)
 		}
+		filesRendered++
+		// Early stop: if budget set and exceeded, mark truncated and stop
+		if budgetChars > 0 && b.Len() >= budgetChars {
+			truncated = true
+			break
+		}
 	}
 
-	return b.String(), nil
+	// Also mark truncated if we rendered fewer files than available
+	if !truncated && budgetChars > 0 {
+		totalFiles := 0
+		for _, syms := range byFile {
+			if len(syms) > 0 {
+				totalFiles++
+			}
+		}
+		if filesRendered < totalFiles {
+			truncated = true
+		}
+	}
+
+	return b.String(), truncated, nil
 }
 
 // isTestOrBenchFile returns true for common test/benchmark file patterns.
