@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -37,7 +38,7 @@ func readStdinToFlags(flags map[string]any, key string) error {
 	if (stat.Mode() & os.ModeCharDevice) != 0 {
 		return fmt.Errorf("no input on stdin (pipe content)")
 	}
-	data, err := os.ReadFile("/dev/stdin")
+	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		return err
 	}

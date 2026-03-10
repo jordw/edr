@@ -121,7 +121,10 @@ For write commands, pass file content via "content" or "new_text" in flags.`,
 			}
 
 			var out any
-			json.Unmarshal([]byte(text), &out)
+			if err := json.Unmarshal([]byte(text), &out); err != nil {
+				enc.Encode(BatchResponse{ID: req.ID, OK: false, Error: "invalid JSON output: " + err.Error()})
+				continue
+			}
 			enc.Encode(BatchResponse{ID: req.ID, OK: true, Result: out})
 		}
 

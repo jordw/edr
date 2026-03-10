@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/jordw/edr/internal/edit"
 )
@@ -34,6 +35,7 @@ type PostProcessStats struct {
 }
 
 type Session struct {
+	mu            sync.Mutex
 	Responses     map[string]string       `json:"responses"`
 	Diffs         map[string]string       `json:"diffs"`
 	FileContent   map[string]ContentEntry `json:"file_content"`
@@ -50,11 +52,15 @@ type Session struct {
 
 // ResetStats resets per-call optimization counters.
 func (s *Session) ResetStats() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.stats = PostProcessStats{}
 }
 
 // GetStats returns current optimization counters.
 func (s *Session) GetStats() (deltaReads, bodyDedup, slimEdits int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.stats.DeltaReads, s.stats.BodyDedup, s.stats.SlimEdits
 }
 
@@ -112,6 +118,8 @@ func (s *Session) CacheKey(cmd string, args []string, flags map[string]any) stri
 
 // Check returns true if this response was already sent identically.
 func (s *Session) Check(key, responseText string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	h := ContentHash(responseText)
 	if prev, ok := s.Responses[key]; ok && prev == h {
 		return true
@@ -123,6 +131,12 @@ func (s *Session) Check(key, responseText string) bool {
 // --- Cache invalidation ---
 
 func (s *Session) InvalidateFile(file string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.invalidateFile(file)
+}
+
+func (s *Session) invalidateFile(file string) {
 	for k := range s.Responses {
 		if strings.Contains(k, file) {
 			delete(s.Responses, k)
@@ -131,6 +145,8 @@ func (s *Session) InvalidateFile(file string) {
 }
 
 func (s *Session) InvalidateForEdit(cmd string, args []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if cmd == "rename" || cmd == "init" {
 		s.Responses = make(map[string]string)
 		s.Diffs = make(map[string]string)
@@ -140,7 +156,7 @@ func (s *Session) InvalidateForEdit(cmd string, args []string) {
 		return
 	}
 	if len(args) > 0 {
-		s.InvalidateFile(args[0])
+		s.invalidateFile(args[0])
 	}
 }
 
@@ -164,6 +180,12 @@ func CountDiffLines(diff string) int {
 // Small diffs (<=20 changed lines) are included inline. Large diffs are stored
 // and available via GetDiff. Returns nil if verbose is set.
 func (s *Session) StoreDiff(result map[string]any, flags map[string]any) map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.storeDiff(result, flags)
+}
+
+func (s *Session) storeDiff(result map[string]any, flags map[string]any) map[string]any {
 	diff, ok := result["diff"].(string)
 	if !ok || diff == "" {
 		return nil
@@ -210,6 +232,12 @@ func (s *Session) StoreDiff(result map[string]any, flags map[string]any) map[str
 
 // GetDiff returns a stored diff by file or file:symbol key.
 func (s *Session) GetDiff(args []string) map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.getDiff(args)
+}
+
+func (s *Session) getDiff(args []string) map[string]any {
 	if len(args) == 0 {
 		return map[string]any{"error": "get-diff requires 1-2 arguments: <file> [symbol]"}
 	}
@@ -588,14 +616,16 @@ func (s *Session) trackBodyByName(name, body string) {
 
 // PostProcess applies all session-layer optimizations to a dispatch result.
 func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, result any, text string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var m map[string]any
 	if err := json.Unmarshal([]byte(text), &m); err != nil {
-		return s.PostProcessNonObject(cmd, args, flags, text)
+		return s.postProcessNonObject(cmd, args, flags, text)
 	}
 
 	// Level 1: Slim edit responses
 	if DiffEditCommands[cmd] {
-		if slim := s.StoreDiff(m, flags); slim != nil {
+		if slim := s.storeDiff(m, flags); slim != nil {
 			data, _ := json.Marshal(slim)
 			return string(data)
 		} else if m["diff_available"] == true {
@@ -631,6 +661,13 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 
 // PostProcessNonObject handles array results (batch read).
 func (s *Session) PostProcessNonObject(cmd string, args []string, flags map[string]any, text string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.postProcessNonObject(cmd, args, flags, text)
+}
+
+// postProcessNonObject is the lock-free implementation. Caller must hold s.mu.
+func (s *Session) postProcessNonObject(cmd string, args []string, flags map[string]any, text string) string {
 	if cmd != "read" {
 		return text
 	}

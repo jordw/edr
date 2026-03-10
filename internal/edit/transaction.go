@@ -103,33 +103,34 @@ func (t *Transaction) Commit() error {
 	}
 	var completed []written
 
-	rollback := func() {
+	rollback := func(cause error) error {
 		for _, w := range completed {
-			// Restore original content and permissions from backup
-			if orig, err := os.ReadFile(w.backup); err == nil {
-				os.WriteFile(w.file, orig, w.mode)
+			orig, err := os.ReadFile(w.backup)
+			if err != nil {
+				return fmt.Errorf("%w (additionally, rollback failed: read backup for %s: %v)", cause, w.file, err)
+			}
+			if err := os.WriteFile(w.file, orig, w.mode); err != nil {
+				return fmt.Errorf("%w (additionally, rollback failed: restore %s: %v)", cause, w.file, err)
 			}
 			os.Remove(w.backup)
 		}
+		return cause
 	}
 
 	for file, res := range results {
 		// Save original content to a temp file for rollback
 		origData, err := os.ReadFile(file)
 		if err != nil {
-			rollback()
-			return fmt.Errorf("transaction: re-read %s for backup: %w", file, err)
+			return rollback(fmt.Errorf("transaction: re-read %s for backup: %w", file, err))
 		}
 		backupFile, err := os.CreateTemp(filepath.Dir(file), ".edr-backup-*")
 		if err != nil {
-			rollback()
-			return fmt.Errorf("transaction: create backup for %s: %w", file, err)
+			return rollback(fmt.Errorf("transaction: create backup for %s: %w", file, err))
 		}
 		if _, err := backupFile.Write(origData); err != nil {
 			backupFile.Close()
 			os.Remove(backupFile.Name())
-			rollback()
-			return fmt.Errorf("transaction: write backup for %s: %w", file, err)
+			return rollback(fmt.Errorf("transaction: write backup for %s: %w", file, err))
 		}
 		backupFile.Close()
 
@@ -137,29 +138,25 @@ func (t *Transaction) Commit() error {
 		tmpFile, err := os.CreateTemp(filepath.Dir(file), ".edr-edit-*")
 		if err != nil {
 			os.Remove(backupFile.Name())
-			rollback()
-			return fmt.Errorf("transaction: create temp for %s: %w", file, err)
+			return rollback(fmt.Errorf("transaction: create temp for %s: %w", file, err))
 		}
 		if _, err := tmpFile.Write(res.data); err != nil {
 			tmpFile.Close()
 			os.Remove(tmpFile.Name())
 			os.Remove(backupFile.Name())
-			rollback()
-			return fmt.Errorf("transaction: write temp for %s: %w", file, err)
+			return rollback(fmt.Errorf("transaction: write temp for %s: %w", file, err))
 		}
 		tmpFile.Close()
 
 		if err := os.Chmod(tmpFile.Name(), res.mode); err != nil {
 			os.Remove(tmpFile.Name())
 			os.Remove(backupFile.Name())
-			rollback()
-			return fmt.Errorf("transaction: chmod temp for %s: %w", file, err)
+			return rollback(fmt.Errorf("transaction: chmod temp for %s: %w", file, err))
 		}
 		if err := os.Rename(tmpFile.Name(), file); err != nil {
 			os.Remove(tmpFile.Name())
 			os.Remove(backupFile.Name())
-			rollback()
-			return fmt.Errorf("transaction: rename temp to %s: %w", file, err)
+			return rollback(fmt.Errorf("transaction: rename temp to %s: %w", file, err))
 		}
 
 		completed = append(completed, written{file: file, backup: backupFile.Name(), mode: res.mode})

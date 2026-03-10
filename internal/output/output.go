@@ -100,11 +100,12 @@ type GatherResult struct {
 }
 
 // Print marshals v to indented JSON and writes it to stdout.
+// Falls back to a plain-text error message if marshaling fails.
 func Print(v any) {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "output: marshal error: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stdout, "{\"error\":\"marshal error: %v\"}\n", err)
+		return
 	}
 	fmt.Println(string(data))
 }

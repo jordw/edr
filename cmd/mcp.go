@@ -1211,6 +1211,11 @@ func serveMCP(db *index.DB) error {
 
 		var req jsonRPCRequest
 		if err := json.Unmarshal(line, &req); err != nil {
+			enc.Encode(jsonRPCResponse{
+				JSONRPC: "2.0",
+				ID:      nil,
+				Error:   &jsonRPCError{Code: -32700, Message: "parse error: " + err.Error()},
+			})
 			continue
 		}
 
