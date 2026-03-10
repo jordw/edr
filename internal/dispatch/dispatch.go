@@ -313,9 +313,16 @@ func DispatchMulti(ctx context.Context, db *index.DB, commands []MultiCmd, topBu
 		}
 	}
 
-	// Distribute top-level budget to sub-commands that don't have one
+	// Distribute top-level budget to sub-commands that don't have one.
+	// Use 2*budget/(n+1) instead of budget/n so each command gets a larger
+	// share — failed or small reads won't waste their allocation, and the
+	// slight overshoot is acceptable since budgets are soft truncation limits.
 	if len(topBudget) > 0 && topBudget[0] > 0 && len(commands) > 0 {
-		perCmd := topBudget[0] / len(commands)
+		n := len(commands)
+		perCmd := topBudget[0] * 2 / (n + 1)
+		if perCmd > topBudget[0] {
+			perCmd = topBudget[0]
+		}
 		if perCmd < 50 {
 			perCmd = 50
 		}
