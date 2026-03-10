@@ -110,9 +110,11 @@ func HasStaleFiles(ctx context.Context, db *DB) (bool, error) {
 		return true, nil
 	}
 
-	// Check for deleted files: any indexed path not seen on disk
+	// Check for deleted files: any indexed path not seen on disk.
+	// Only consider paths with a language config — non-source files
+	// (e.g. legacy rows) in the DB should not trigger staleness.
 	for path := range indexedMeta {
-		if !seen[path] {
+		if !seen[path] && GetLangConfig(path) != nil {
 			return true, nil
 		}
 	}

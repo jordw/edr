@@ -80,6 +80,39 @@ func TestHasStaleFilesIgnoresUnsupportedFiles(t *testing.T) {
 	}
 }
 
+func TestHasStaleFilesIgnoresLegacyNonLanguageRows(t *testing.T) {
+	// Regression: non-source rows (e.g. .gitignore) in the files table
+	// should not cause perpetual reindexing.
+	ctx := context.Background()
+	root := t.TempDir()
+	mainFile := filepath.Join(root, "main.go")
+	writeSnapshotTestFile(t, mainFile, "package main\n\nfunc main() {}\n")
+
+	db, err := OpenDB(root)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	if _, _, err := IndexRepo(ctx, db); err != nil {
+		t.Fatalf("IndexRepo: %v", err)
+	}
+
+	// Simulate a legacy non-language row in the files table
+	gitignorePath := filepath.Join(root, ".gitignore")
+	if err := db.UpsertFile(ctx, gitignorePath, "abc123", 1); err != nil {
+		t.Fatalf("UpsertFile: %v", err)
+	}
+
+	stale, err := HasStaleFiles(ctx, db)
+	if err != nil {
+		t.Fatalf("HasStaleFiles: %v", err)
+	}
+	if stale {
+		t.Fatal("legacy non-language row in files table should not trigger staleness")
+	}
+}
+
 func TestHasStaleFilesTracksGitIgnoreChanges(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

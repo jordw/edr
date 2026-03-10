@@ -1,0 +1,5 @@
+.edr/
+.git/
+.claude/
+edr
+*.exe

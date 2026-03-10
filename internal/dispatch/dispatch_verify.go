@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"time"
 
 	"github.com/jordw/edr/internal/index"
@@ -45,13 +44,6 @@ func runVerify(ctx context.Context, db *index.DB, root string, args []string, fl
 
 	cmd := exec.CommandContext(cmdCtx, "sh", "-c", command)
 	cmd.Dir = root
-	// Sandbox Go caches so verify never writes to the user's global state
-	edrCache := filepath.Join(root, ".edr")
-	cmd.Env = append(os.Environ(),
-		"GOCACHE="+filepath.Join(edrCache, "gocache"),
-		"GOMODCACHE="+filepath.Join(edrCache, "modcache"),
-		"GOPATH="+filepath.Join(edrCache, "gopath"),
-	)
 	out, err := cmd.CombinedOutput()
 
 	result := map[string]any{
