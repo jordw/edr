@@ -40,9 +40,14 @@ func parseWith(lang *LangConfig, src []byte, fn func(root *tree_sitter.Node)) {
 	parser := getParser(lang)
 	tree := parser.Parse(src, nil)
 	defer func() {
-		tree.Close()
+		if tree != nil {
+			tree.Close()
+		}
 		putParser(lang, parser)
 	}()
+	if tree == nil {
+		return
+	}
 	fn(tree.RootNode())
 }
 

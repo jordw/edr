@@ -152,6 +152,10 @@ func cachedParseWith(lang *LangConfig, src []byte, fn func(root *tree_sitter.Nod
 	tree := parser.Parse(src, nil)
 	putParser(lang, parser)
 
+	if tree == nil {
+		return
+	}
+
 	// Store in cache — cache owns the tree lifetime now.
 	globalTreeCache.put(key, tree)
 
