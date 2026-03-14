@@ -6,11 +6,10 @@
 #   1. Checks/installs Go and gcc (if missing)
 #   2. Builds the edr binary
 #   3. Installs to PATH (~/.local/bin)
-#   4. Writes .mcp.json for MCP server mode
-#   5. Indexes the target repo
+#   4. Indexes the target repo
 #
-# After running: the `edr` command is available globally, and .mcp.json
-# is configured for the target repo (or cwd if not specified).
+# After running: the `edr` command is available globally and the target
+# repo is indexed (or cwd if not specified).
 
 set -euo pipefail
 
@@ -83,24 +82,10 @@ if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     export PATH="$INSTALL_DIR:$PATH"
 fi
 
-# --- Write .mcp.json in target repo ---
-MCP_CONFIG="$TARGET/.mcp.json"
-cat > "$MCP_CONFIG" <<EOF
-{
-  "mcpServers": {
-    "edr": {
-      "command": "$INSTALL_DIR/edr",
-      "args": ["mcp", "-r", "$TARGET"]
-    }
-  }
-}
-EOF
-echo "    wrote: $MCP_CONFIG"
-
 # --- Index target repo ---
 echo "==> Indexing $TARGET..."
 "$INSTALL_DIR/edr" init -r "$TARGET" 2>/dev/null | head -1
 echo ""
 echo "==> Done. edr is ready."
 echo "    CLI:  edr -r $TARGET <command>"
-echo "    MCP:  configured in $MCP_CONFIG"
+echo "    Session:  edr --session \$PPID -r $TARGET do '{...}'"

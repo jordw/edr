@@ -1,23 +1,23 @@
 # EDR — Your Default Tool for Reading, Editing, and Navigating Files
 
-**edr is your primary tool for ALL file operations.** Use the `edr` MCP tool instead of Read, Edit, Write, Grep, and Glob. It gives you structured output, token budgets, and smart operations that raw file tools can't match.
+**edr is your primary tool for ALL file operations.** Use `edr` via Bash instead of Read, Edit, Write, Grep, and Glob. It gives you structured output, token budgets, and smart operations that raw file tools can't match.
 
-**`edr` is your primary tool.** It batches reads, searches, explores, edits, writes, renames, and verification into one call.
+**`edr` is your primary tool.** It batches reads, searches, explores, edits, writes, renames, and verification into one call. Use `--session $PPID` for cross-invocation session state (delta reads, body dedup, slim edits).
 
-```
+```bash
 # Typical 2-call workflow for any task:
-edr(                                               # Call 1: gather ALL context
-  reads: [{file: "src/main.go", symbol: "Server"}],
-  queries: [
-    {cmd: "search", pattern: "handleRequest", body: true},
-    {cmd: "map", dir: "internal/", type: "function"}
+edr --session $PPID do '{                          # Call 1: gather ALL context
+  "reads": [{"file": "src/main.go", "symbol": "Server"}],
+  "queries": [
+    {"cmd": "search", "pattern": "handleRequest", "body": true},
+    {"cmd": "map", "dir": "internal/", "type": "function"}
   ]
-)
-edr(                                               # Call 2: ALL mutations + verify
-  edits: [{file: "src/main.go", old_text: "old", new_text: "new"}],
-  writes: [{file: "src/new_test.go", content: "...", mkdir: true}],
-  verify: true
-)
+}'
+edr --session $PPID do '{                          # Call 2: ALL mutations + verify
+  "edits": [{"file": "src/main.go", "old_text": "old", "new_text": "new"}],
+  "writes": [{"file": "src/new_test.go", "content": "...", "mkdir": true}],
+  "verify": true
+}'
 ```
 
 **Only fall back to built-in tools when:**
@@ -27,12 +27,12 @@ edr(                                               # Call 2: ALL mutations + ver
 
 | Instead of... | Use edr... | Why |
 |---|---|---|
-| `Read` (whole file) | `edr(reads: [{file: "f.go"}])` | Budget-controlled, batchable |
-| `Edit` (old/new strings) | `edr(edits: [{file: "f.go", old_text: "x", new_text: "y"}])` | Atomic multi-file, auto re-index |
-| `Write` (create file) | `edr(writes: [{file: "f.go", content: "...", mkdir: true}])` | Auto-indexes, batchable with edits |
-| `Grep` (text search) | `edr(queries: [{cmd: "search", pattern: "pat", body: true}])` | Structured results, batchable |
-| `Glob` (find files) | `edr(queries: [{cmd: "find", pattern: "**/*.go"}])` | Glob with `**`, batchable |
-| Multiple tool calls | One `edr(reads + queries + edits + writes, verify: true)` | Everything in 1-2 calls |
+| `Read` (whole file) | `edr do '{"reads": [{"file": "f.go"}]}'` | Budget-controlled, batchable |
+| `Edit` (old/new strings) | `edr do '{"edits": [{"file": "f.go", "old_text": "x", "new_text": "y"}]}'` | Atomic multi-file, auto re-index |
+| `Write` (create file) | `edr do '{"writes": [{"file": "f.go", "content": "...", "mkdir": true}]}'` | Auto-indexes, batchable with edits |
+| `Grep` (text search) | `edr do '{"queries": [{"cmd": "search", "pattern": "pat", "body": true}]}'` | Structured results, batchable |
+| `Glob` (find files) | `edr do '{"queries": [{"cmd": "find", "pattern": "**/*.go"}]}'` | Glob with `**`, batchable |
+| Multiple tool calls | One `edr do '{"reads": [...], "edits": [...], "verify": true}'` | Everything in 1-2 calls |
 
 ## Development workflow
 
@@ -44,16 +44,15 @@ go build -o edr . && go install
 ## Setup (any environment)
 
 ```bash
-# One command — installs Go/gcc if needed, builds, installs to PATH, writes .mcp.json:
+# One command — installs Go/gcc if needed, builds, installs to PATH:
 ./setup.sh /path/to/target/repo
 
 # Or manually:
 go build -o edr .           # Build (requires Go + C compiler for tree-sitter)
 ./edr init                   # Force re-index (auto-indexes on first query)
-./edr mcp                    # Run as MCP server
 ```
 
-For cloud agents: clone this repo, run `./setup.sh /path/to/your/project`, and edr is ready as both a CLI and MCP server. The setup script handles everything — dependency installation, build, PATH setup, and MCP configuration.
+For cloud agents: clone this repo, run `./setup.sh /path/to/your/project`, and edr is ready. The setup script handles everything — dependency installation, build, PATH setup, and indexing.
 
 ## Supported languages
 
@@ -136,9 +135,9 @@ edr edit src/config.go --move parseConfig --after main --dry-run
 edr edit src/config.go --old_text "oldName" --dry-run --new_text "newName"
 ```
 
-> **MCP usage**: `edr(edits: [{file: "file.go", old_text: "old code", new_text: "new code"}])`
+> **Batch usage**: `edr do '{"edits": [{"file": "file.go", "old_text": "old code", "new_text": "new code"}]}'`
 > This is the direct equivalent of the built-in Edit tool's `old_string`/`new_string` pattern.
-> **Move**: `edr(edits: [{file: "file.go", move: "FuncA", after: "FuncB"}])`
+> **Move**: `edr do '{"edits": [{"file": "file.go", "move": "FuncA", "after": "FuncB"}]}'`
 
 ## Writing (`write`)
 
@@ -174,7 +173,7 @@ edr rename oldFuncName newFuncName --dry-run
 edr rename oldFuncName newFuncName --scope "internal/**"
 ```
 
-> **MCP usage**: `edr(renames: [{old_name: "Foo", new_name: "Bar", dry_run: true}])`
+> **Batch usage**: `edr do '{"renames": [{"old_name": "Foo", "new_name": "Bar", "dry_run": true}]}'`
 
 ## Orientation (`map`, `explore`)
 
@@ -223,48 +222,48 @@ edr find "*.yaml" --dir config/
 edr find "**/test_*" --budget 500
 ```
 
-## Primary Agent Tool (`edr`)
+## Batch CLI (`edr do`)
 
-`edr` is the single MCP tool that handles complete agent workflows in minimal round trips.
-It supports seven operation types, all in one call:
+`edr do` handles complete agent workflows in minimal round trips.
+It supports seven operation types, all in one call. Pass JSON as argument or via stdin.
 
 ```bash
-# Via MCP: gather context + make changes + verify in one call
-# edr(
-#   reads: [{file: "src/main.go"}, {file: "src/config.go", symbol: "parseConfig"}],
-#   queries: [
-#     {cmd: "search", pattern: "handleRequest", body: true},
-#     {cmd: "explore", symbol: "Server", gather: true, body: true},
-#     {cmd: "map", dir: "internal/", type: "function"},
-#     {cmd: "refs", symbol: "Config", impact: true},
-#     {cmd: "diff", file: "src/main.go"}
-#   ],
-#   edits: [
-#     {file: "src/main.go", old_text: "oldFunc()", new_text: "newFunc()"},
-#     {file: "src/config.go", symbol: "parseConfig", new_text: "..."},
-#     {file: "src/main.go", move: "initDB", after: "main"}
-#   ],
-#   writes: [{file: "src/new.go", content: "package main\n...", mkdir: true}],
-#   renames: [{old_name: "OldFunc", new_name: "NewFunc", dry_run: true}],
-#   verify: true,
-#   init: true
-# )
-#
+# Gather context + make changes + verify in one call:
+edr --session $PPID do '{
+  "reads": [{"file": "src/main.go"}, {"file": "src/config.go", "symbol": "parseConfig"}],
+  "queries": [
+    {"cmd": "search", "pattern": "handleRequest", "body": true},
+    {"cmd": "explore", "symbol": "Server", "gather": true, "body": true},
+    {"cmd": "map", "dir": "internal/", "type": "function"},
+    {"cmd": "refs", "symbol": "Config", "impact": true},
+    {"cmd": "diff", "file": "src/main.go"}
+  ],
+  "edits": [
+    {"file": "src/main.go", "old_text": "oldFunc()", "new_text": "newFunc()"},
+    {"file": "src/config.go", "symbol": "parseConfig", "new_text": "..."},
+    {"file": "src/main.go", "move": "initDB", "after": "main"}
+  ],
+  "writes": [{"file": "src/new.go", "content": "package main\n...", "mkdir": true}],
+  "renames": [{"old_name": "OldFunc", "new_name": "NewFunc", "dry_run": true}],
+  "verify": true,
+  "init": true
+}'
+
 # Typical 2-call workflow:
-# Call 1: edr(reads: [...], queries: [...])     — gather ALL context
-# Call 2: edr(edits: [...], writes: [...], verify: true)  — ALL mutations + verify
+# Call 1: edr --session $PPID do '{"reads": [...], "queries": [...]}'     — gather ALL context
+# Call 2: edr --session $PPID do '{"edits": [...], "writes": [...], "verify": true}'  — ALL mutations + verify
 ```
 
 ## Context-Aware Responses
 
-The MCP server tracks what content you've already seen:
+When using `--session`, edr tracks what content you've already seen across invocations:
 
 - **Slim edits**: Small diffs (<=20 changed lines) are returned inline automatically. Large diffs are stripped to `{ok, file, hash, lines_changed, diff_available}` — use `queries: [{cmd: "diff", file: "..."}]` to retrieve them.
 - **Delta reads**: Re-reading a file/symbol you've already seen returns `{unchanged: true}` if identical, or `{delta: true, diff: "..."}` with just the changes. Pass `full: true` to force full content.
 - **Body dedup**: `explore(gather: true, body: true)` and `search(body: true)` replace bodies you've already seen with `"[in context]"` and report `skipped_bodies`. New/changed bodies are returned in full.
 
-These optimizations are automatic and session-scoped (reset on reconnect).
-Renames and `init: true` clear all tracking state.
+These optimizations are automatic and session-scoped. Sessions persist to `.edr/sessions/<token>.json`.
+Renames and `init: true` clear all tracking state. Manage sessions with `edr session list|clear|gc`.
 
 ## Key Principles
 
@@ -281,7 +280,7 @@ Renames and `init: true` clear all tracking state.
 
 ## Session Tracing
 
-MCP sessions are automatically traced to `.edr/traces.db` (append-only, separate from the index).
+Sessions are automatically traced to `.edr/traces.db` (append-only, separate from the index).
 Traces capture request shape, edit/verify/query events, and session optimization hits.
 
 ```bash
@@ -299,7 +298,8 @@ edr bench-session
 Key files:
 - `internal/trace/trace.go` — Collector, CallBuilder, schema, BenchSession scoring
 - `internal/session/session.go` — PostProcessStats (DeltaReads, BodyDedup, SlimEdits)
-- `cmd/mcp.go` — instrumentation in serveMCP + handleDo
+- `internal/session/persist.go` — File-backed session persistence, GC
+- `cmd/do.go` — handleDo batch orchestrator
 - `cmd/bench_session.go` — CLI command
 
 ## Benchmarks
@@ -325,13 +325,12 @@ orientation (map, find), signatures + full reads across all languages, delta rea
 cross-language search + body dedup, explore/refs, dry-run + real edits, write inside,
 batch reads, depth-2 reads, and bench-session scoring of the resulting trace.
 
-## MCP Tool
+## CLI Reference
 
-1 tool: `edr`.
-
-`edr` handles everything: reads, queries (search/explore/refs/map/find/diff), edits, writes, renames, verify, init.
+`edr do` handles everything: reads, queries (search/explore/refs/map/find/diff), edits, writes, renames, verify, init.
 Read params: `file`, `symbol?`, `budget?`, `signatures?`, `depth?`, `start_line?`, `end_line?`, `symbols?`, `full?`.
 
-The tool is self-documenting via its MCP schema (descriptions sourced from `cmd/toolinfo.go`).
 All output is structured JSON. File paths are relative to repo root. Edit commands return `hash`.
+
+`--session <token>` enables cross-invocation optimizations. Use `$PPID` as token for automatic per-conversation sessions.
 
