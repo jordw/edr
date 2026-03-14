@@ -1,5 +1,9 @@
 // benchjson runs Go benchmarks and outputs results as JSON.
 //
+// It runs tests and benchmarks as separate processes to avoid the
+// sync.Once(output.SetRoot) reentrancy problem: tests are run once
+// with -count=1, benchmarks are run separately with the user's -count.
+//
 // Usage:
 //
 //	go run ./bench/cmd/benchjson                     # all benchmarks
@@ -25,10 +29,10 @@ import (
 type BenchResult struct {
 	Name       string             `json:"name"`
 	Iterations int                `json:"iterations"`
-	NsOp      float64            `json:"ns_op"`
-	BytesOp   int                `json:"bytes_op,omitempty"`
-	AllocsOp  int                `json:"allocs_op,omitempty"`
-	Custom    map[string]float64 `json:"custom,omitempty"`
+	NsOp       float64            `json:"ns_op"`
+	BytesOp    int                `json:"bytes_op,omitempty"`
+	AllocsOp   int                `json:"allocs_op,omitempty"`
+	Custom     map[string]float64 `json:"custom,omitempty"`
 }
 
 type TestResult struct {
@@ -37,60 +41,39 @@ type TestResult struct {
 }
 
 type Report struct {
-	GitCommit   string         `json:"git_commit"`
-	Timestamp   string         `json:"timestamp"`
-	GoVersion   string         `json:"go_version"`
-	OS          string         `json:"os"`
-	Arch        string         `json:"arch"`
-	Benchmarks  []BenchResult  `json:"benchmarks,omitempty"`
-	Tests       []TestResult   `json:"tests,omitempty"`
-	AllPassed   bool           `json:"all_passed"`
-	RawOutput   string         `json:"raw_output,omitempty"`
+	GitCommit  string        `json:"git_commit"`
+	Timestamp  string        `json:"timestamp"`
+	GoVersion  string        `json:"go_version"`
+	OS         string        `json:"os"`
+	Arch       string        `json:"arch"`
+	Benchmarks []BenchResult `json:"benchmarks,omitempty"`
+	Tests      []TestResult  `json:"tests,omitempty"`
+	AllPassed  bool          `json:"all_passed"`
+	RawOutput  string        `json:"raw_output,omitempty"`
 }
 
 var (
-	// BenchmarkFoo-8   1234   56789 ns/op   1234 B/op   56 allocs/op   789.00 custom_metric
-	benchLine = regexp.MustCompile(`^(Benchmark\S+)\s+(\d+)\s+([\d.]+)\s+ns/op(.*)`)
-	// Standard metrics
-	bytesOp  = regexp.MustCompile(`(\d+)\s+B/op`)
-	allocsOp = regexp.MustCompile(`(\d+)\s+allocs/op`)
-	// Custom metrics: "123.45 metric_name" or "123 metric_name"
+	benchLine    = regexp.MustCompile(`^(Benchmark\S+)\s+(\d+)\s+([\d.]+)\s+ns/op(.*)`)
+	bytesOp      = regexp.MustCompile(`(\d+)\s+B/op`)
+	allocsOp     = regexp.MustCompile(`(\d+)\s+allocs/op`)
 	customMetric = regexp.MustCompile(`([\d.]+)\s+([a-zA-Z_][a-zA-Z0-9_]*)`)
-	// Test results
-	testPass = regexp.MustCompile(`--- PASS: (\S+)`)
-	testFail = regexp.MustCompile(`--- FAIL: (\S+)`)
+	testPass     = regexp.MustCompile(`--- PASS: (\S+)`)
+	testFail     = regexp.MustCompile(`--- FAIL: (\S+)`)
 )
 
 func main() {
 	benchFilter := flag.String("bench", ".", "benchmark filter pattern")
-	count := flag.Int("count", 1, "number of iterations")
+	count := flag.Int("count", 1, "number of benchmark iterations")
 	outFile := flag.String("o", "", "output file (default: stdout)")
 	includeRaw := flag.Bool("raw", false, "include raw output in JSON")
 	flag.Parse()
 
-	// Get git commit
+	repoRoot := findRepoRoot()
+
 	gitCommit := "unknown"
 	if out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output(); err == nil {
 		gitCommit = strings.TrimSpace(string(out))
 	}
-
-	// Run benchmarks + tests
-	args := []string{
-		"test", "./bench/",
-		"-bench", *benchFilter,
-		"-benchmem",
-		"-count", strconv.Itoa(*count),
-		"-run", "^Test", // also run tests for correctness gate
-		"-timeout", "300s",
-		"-v",
-	}
-
-	cmd := exec.Command("go", args...)
-	cmd.Dir = findRepoRoot()
-	cmd.Stderr = os.Stderr
-
-	out, err := cmd.Output()
-	rawOutput := string(out)
 
 	report := Report{
 		GitCommit: gitCommit,
@@ -98,66 +81,56 @@ func main() {
 		GoVersion: runtime.Version(),
 		OS:        runtime.GOOS,
 		Arch:      runtime.GOARCH,
-		AllPassed: err == nil,
+		AllPassed: true,
 	}
+
+	var rawParts []string
+
+	// Step 1: Run tests once in their own process (-count=1).
+	// Each go test invocation gets a fresh process, so the sync.Once
+	// for output.SetRoot does not carry state across runs.
+	testArgs := []string{
+		"test", "./bench/",
+		"-run", "^Test",
+		"-bench", "^$", // no benchmarks
+		"-count", "1",
+		"-timeout", "120s",
+		"-v",
+	}
+	testCmd := exec.Command("go", testArgs...)
+	testCmd.Dir = repoRoot
+	testCmd.Stderr = os.Stderr
+	testOut, testErr := testCmd.Output()
+	rawParts = append(rawParts, string(testOut))
+
+	if testErr != nil {
+		report.AllPassed = false
+	}
+	parseTestResults(string(testOut), &report)
+
+	// Step 2: Run benchmarks in a separate process with the user's -count.
+	// Tests are skipped (-run '^$') so only benchmarks execute.
+	benchArgs := []string{
+		"test", "./bench/",
+		"-run", "^$", // no tests
+		"-bench", *benchFilter,
+		"-benchmem",
+		"-count", strconv.Itoa(*count),
+		"-timeout", "300s",
+	}
+	benchCmd := exec.Command("go", benchArgs...)
+	benchCmd.Dir = repoRoot
+	benchCmd.Stderr = os.Stderr
+	benchOut, benchErr := benchCmd.Output()
+	rawParts = append(rawParts, string(benchOut))
+
+	if benchErr != nil {
+		report.AllPassed = false
+	}
+	parseBenchResults(string(benchOut), &report)
 
 	if *includeRaw {
-		report.RawOutput = rawOutput
-	}
-
-	// Parse output
-	scanner := bufio.NewScanner(strings.NewReader(rawOutput))
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		// Parse benchmark lines
-		if m := benchLine.FindStringSubmatch(line); m != nil {
-			iters, _ := strconv.Atoi(m[2])
-			nsop, _ := strconv.ParseFloat(m[3], 64)
-			br := BenchResult{
-				Name:       m[1],
-				Iterations: iters,
-				NsOp:       nsop,
-			}
-
-			rest := m[4]
-			if bm := bytesOp.FindStringSubmatch(rest); bm != nil {
-				br.BytesOp, _ = strconv.Atoi(bm[1])
-			}
-			if am := allocsOp.FindStringSubmatch(rest); am != nil {
-				br.AllocsOp, _ = strconv.Atoi(am[1])
-			}
-
-			// Extract custom metrics (anything not ns/op, B/op, allocs/op)
-			// Remove known metrics first
-			cleaned := bytesOp.ReplaceAllString(rest, "")
-			cleaned = allocsOp.ReplaceAllString(cleaned, "")
-			cleaned = strings.TrimSpace(cleaned)
-			if cleaned != "" {
-				for _, cm := range customMetric.FindAllStringSubmatch(cleaned, -1) {
-					name := cm[2]
-					if name == "op" || name == "B" || name == "allocs" {
-						continue
-					}
-					val, _ := strconv.ParseFloat(cm[1], 64)
-					if br.Custom == nil {
-						br.Custom = make(map[string]float64)
-					}
-					br.Custom[name] = val
-				}
-			}
-
-			report.Benchmarks = append(report.Benchmarks, br)
-			continue
-		}
-
-		// Parse test results
-		if m := testPass.FindStringSubmatch(line); m != nil {
-			report.Tests = append(report.Tests, TestResult{Name: m[1], Passed: true})
-		} else if m := testFail.FindStringSubmatch(line); m != nil {
-			report.Tests = append(report.Tests, TestResult{Name: m[1], Passed: false})
-			report.AllPassed = false
-		}
+		report.RawOutput = strings.Join(rawParts, "\n---\n")
 	}
 
 	data, _ := json.MarshalIndent(report, "", "  ")
@@ -174,6 +147,65 @@ func main() {
 
 	if !report.AllPassed {
 		os.Exit(1)
+	}
+}
+
+func parseTestResults(output string, report *Report) {
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if m := testPass.FindStringSubmatch(line); m != nil {
+			report.Tests = append(report.Tests, TestResult{Name: m[1], Passed: true})
+		} else if m := testFail.FindStringSubmatch(line); m != nil {
+			report.Tests = append(report.Tests, TestResult{Name: m[1], Passed: false})
+			report.AllPassed = false
+		}
+	}
+}
+
+func parseBenchResults(output string, report *Report) {
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		line := scanner.Text()
+		m := benchLine.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		iters, _ := strconv.Atoi(m[2])
+		nsop, _ := strconv.ParseFloat(m[3], 64)
+		br := BenchResult{
+			Name:       m[1],
+			Iterations: iters,
+			NsOp:       nsop,
+		}
+
+		rest := m[4]
+		if bm := bytesOp.FindStringSubmatch(rest); bm != nil {
+			br.BytesOp, _ = strconv.Atoi(bm[1])
+		}
+		if am := allocsOp.FindStringSubmatch(rest); am != nil {
+			br.AllocsOp, _ = strconv.Atoi(am[1])
+		}
+
+		// Custom metrics: remove known metrics, parse remainder
+		cleaned := bytesOp.ReplaceAllString(rest, "")
+		cleaned = allocsOp.ReplaceAllString(cleaned, "")
+		cleaned = strings.TrimSpace(cleaned)
+		if cleaned != "" {
+			for _, cm := range customMetric.FindAllStringSubmatch(cleaned, -1) {
+				name := cm[2]
+				if name == "op" || name == "B" || name == "allocs" {
+					continue
+				}
+				val, _ := strconv.ParseFloat(cm[1], 64)
+				if br.Custom == nil {
+					br.Custom = make(map[string]float64)
+				}
+				br.Custom[name] = val
+			}
+		}
+
+		report.Benchmarks = append(report.Benchmarks, br)
 	}
 }
 

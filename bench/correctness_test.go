@@ -248,18 +248,43 @@ func TestCorrectnessRepeatedMethodNames(t *testing.T) {
 			t.Errorf("expected different definition files: a=%s b=%s", refsA.Symbol.File, refsB.Symbol.File)
 		}
 
-		// pkg_a Init should be called from main.go (via cfgA.Init())
-		// pkg_b Init should be called from main.go (via cfgB.Init()) and helpers.go
-		aFiles := make(map[string]bool)
+		// pkg_a Init should have refs (called from main.go via cfgA.Init())
+		if len(refsA.References) == 0 {
+			t.Error("pkg_a Init should have at least one reference")
+		}
+
+		// pkg_b Init should have refs (called from helpers.go)
+		if len(refsB.References) == 0 {
+			t.Error("pkg_b Init should have at least one reference")
+		}
+
+		// Cross-contamination check: same precision gate as Validate
+		aLeaks := 0
 		for _, ref := range refsA.References {
-			aFiles[ref.File] = true
+			if strings.Contains(ref.File, "pkg_b") {
+				aLeaks++
+			}
 		}
-		bFiles := make(map[string]bool)
+		bLeaks := 0
 		for _, ref := range refsB.References {
-			bFiles[ref.File] = true
+			if strings.Contains(ref.File, "pkg_a") {
+				bLeaks++
+			}
 		}
-		t.Logf("pkg_a Init ref files: %v", mapKeysStr(aFiles))
-		t.Logf("pkg_b Init ref files: %v", mapKeysStr(bFiles))
+		if len(refsA.References) > 0 {
+			aPrecision := 1.0 - float64(aLeaks)/float64(len(refsA.References))
+			if aPrecision < 0.5 {
+				t.Errorf("pkg_a Init precision %.2f < 0.5", aPrecision)
+			}
+			t.Logf("pkg_a Init: refs=%d leaks=%d precision=%.2f", len(refsA.References), aLeaks, aPrecision)
+		}
+		if len(refsB.References) > 0 {
+			bPrecision := 1.0 - float64(bLeaks)/float64(len(refsB.References))
+			if bPrecision < 0.5 {
+				t.Errorf("pkg_b Init precision %.2f < 0.5", bPrecision)
+			}
+			t.Logf("pkg_b Init: refs=%d leaks=%d precision=%.2f", len(refsB.References), bLeaks, bPrecision)
+		}
 	})
 }
 
@@ -528,31 +553,31 @@ func TestCorrectnessRefsPrecisionRecall(t *testing.T) {
 		}
 		dispatchResult(t, ctx, db, "refs", []string{"go/pkg_a/config.go", "Config"}, nil, &result)
 
-		// Expected: Config is defined in pkg_a/config.go and used in:
-		// - go/pkg_a/config.go (Init returns *Config, Validate receiver)
-		// - go/main.go (Configure returns *cfgA.Config)
-		// - go/pkg_b/helpers.go should NOT appear (different Config)
-		var actual []string
-		for _, ref := range result.References {
-			actual = append(actual, ref.File)
+		if len(result.References) == 0 {
+			t.Fatal("Config (pkg_a) should have at least one reference")
 		}
 
-		// Check that pkg_b/helpers.go is not in refs
-		for _, a := range actual {
-			if strings.Contains(a, "pkg_b/helpers.go") {
-				t.Errorf("pkg_a Config refs should not include pkg_b/helpers.go")
+		// Config is used within pkg_a (Init returns *Config, Validate receiver).
+		// It should NOT include pkg_b/helpers.go (different Config type).
+		for _, ref := range result.References {
+			if strings.Contains(ref.File, "pkg_b/helpers.go") {
+				t.Errorf("pkg_a Config refs must not include pkg_b/helpers.go")
 			}
 		}
 
-		// Should include main.go (uses cfgA.Config)
+		// main.go uses cfgA.Config via aliased import with a fake module path
+		// (example.com/adversarial/pkg_a). The suffix-based Go import resolver
+		// can't match this without a real go.mod, so hasMain=false is expected
+		// here. In real repos with valid module paths, this would resolve.
+		// We track the metric so we notice if/when the resolver improves.
 		hasMain := false
-		for _, a := range actual {
-			if strings.Contains(a, "main.go") {
+		for _, ref := range result.References {
+			if strings.Contains(ref.File, "main.go") {
 				hasMain = true
 			}
 		}
-		t.Logf("Config (pkg_a) refs: def=%s actual=%v hasMain=%v",
-			result.Symbol.File, actual, hasMain)
+
+		t.Logf("Config (pkg_a): refs=%d hasMain=%v (false expected: fake module path)", len(result.References), hasMain)
 	})
 
 	t.Run("validate refs in Python models", func(t *testing.T) {
@@ -562,13 +587,23 @@ func TestCorrectnessRefsPrecisionRecall(t *testing.T) {
 		}
 		dispatchResult(t, ctx, db, "refs", []string{"py/models.py", "validate"}, nil, &result)
 
-		var actual []string
-		for _, ref := range result.References {
-			actual = append(actual, ref.File)
+		if len(result.References) == 0 {
+			t.Fatal("validate (py/models.py) should have at least one reference")
 		}
 
-		// Expected: app.py calls model_cfg.validate()
-		t.Logf("validate (py/models.py) refs: def=%s actual=%v", result.Symbol.File, actual)
+		// app.py imports models.Config and calls model_cfg.validate()
+		hasApp := false
+		for _, ref := range result.References {
+			if strings.Contains(ref.File, "app.py") {
+				hasApp = true
+			}
+		}
+		if !hasApp {
+			t.Errorf("validate (py/models.py) refs should include app.py; got refs in: %v",
+				refFiles(result.References))
+		}
+
+		t.Logf("validate (py/models.py): refs=%d hasApp=%v", len(result.References), hasApp)
 	})
 
 	t.Run("Logger refs in JS types", func(t *testing.T) {
@@ -578,19 +613,23 @@ func TestCorrectnessRefsPrecisionRecall(t *testing.T) {
 		}
 		dispatchResult(t, ctx, db, "refs", []string{"js/types.js", "Logger"}, nil, &result)
 
-		var actual []string
-		for _, ref := range result.References {
-			actual = append(actual, ref.File)
+		if len(result.References) == 0 {
+			t.Fatal("Logger (js/types.js) should have at least one reference")
 		}
 
-		// Logger is only defined in types.js and used in index.js
+		// index.js imports Logger from types.js
 		hasIndex := false
-		for _, a := range actual {
-			if strings.Contains(a, "index.js") {
+		for _, ref := range result.References {
+			if strings.Contains(ref.File, "index.js") {
 				hasIndex = true
 			}
 		}
-		t.Logf("Logger refs: def=%s actual=%v hasIndex=%v", result.Symbol.File, actual, hasIndex)
+		if !hasIndex {
+			t.Errorf("Logger refs should include index.js; got refs in: %v",
+				refFiles(result.References))
+		}
+
+		t.Logf("Logger: refs=%d hasIndex=%v", len(result.References), hasIndex)
 	})
 }
 
@@ -667,11 +706,20 @@ func TestCorrectnessMapConsistency(t *testing.T) {
 	})
 }
 
-// mapKeysStr returns sorted keys of a map[string]bool.
+// mapKeysStr returns keys of a map[string]bool.
 func mapKeysStr(m map[string]bool) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// refFiles extracts file paths from a slice of symbolFile for error messages.
+func refFiles(refs []symbolFile) []string {
+	files := make([]string, len(refs))
+	for i, r := range refs {
+		files[i] = r.File
+	}
+	return files
 }

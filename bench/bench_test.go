@@ -609,9 +609,16 @@ func TestSignaturesSmaller(t *testing.T) {
 	}
 }
 
-// TestScenarioValidation loads the fixture scenario definition and verifies
-// that all declared scenarios can be dispatched successfully.
-func TestScenarioValidation(t *testing.T) {
+// TestScenarioDispatch verifies that the JSON scenario definitions contain
+// valid command parameters that dispatch successfully against the testdata.
+//
+// This does NOT validate end-to-end equivalence with the shell benchmark
+// runner (native_comparison.sh), which uses different path semantics
+// (BENCH_ROOT-relative vs Go test temp dir). The shell runner is the
+// authoritative consumer of scenario files for real-repo benchmarks.
+// This test catches schema/routing breakage: renamed fields, removed
+// commands, or invalid argument shapes.
+func TestScenarioDispatch(t *testing.T) {
 	scenario, err := LoadScenario("scenarios/fixture.json")
 	if err != nil {
 		t.Skipf("scenario file not found: %v", err)
@@ -725,16 +732,15 @@ func TestScenarioValidation(t *testing.T) {
 		if err := scenario.GetScenario("orient_map", &s); err != nil {
 			t.Fatal(err)
 		}
-		// In the Go test, setupRepo copies bench/testdata/* to a temp dir,
-		// so the scenario's dir field (bench/testdata) doesn't apply.
-		// We map the whole repo (which IS the testdata) with the scenario's budget.
+		// Validates: map command accepts budget flag and returns structured output.
+		// The scenario's dir field targets bench/testdata within the real repo;
+		// here the temp dir IS the testdata root, so we omit dir.
 		out, err := dispatchJSON(ctx, db, "map", nil, map[string]any{
 			"budget": s.Budget,
 		})
 		if err != nil {
 			t.Fatalf("dispatch: %v", err)
 		}
-		// Verify the map contains symbol information
 		var result struct {
 			Map     string `json:"map"`
 			Files   int    `json:"files"`
@@ -746,9 +752,6 @@ func TestScenarioValidation(t *testing.T) {
 		}
 		if result.Map == "" {
 			t.Error("map should return a map string")
-		}
-		if s.Dir != "" {
-			t.Logf("orient_map: note: scenario dir=%q not used in Go test (setupRepo is the testdata root)", s.Dir)
 		}
 		t.Logf("orient_map: %dB files=%d symbols=%d", len(out), result.Files, result.Symbols)
 	})

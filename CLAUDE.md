@@ -313,8 +313,8 @@ go test ./bench/ -bench . -benchmem
 # Run correctness tests (adversarial fixtures — gates all optimization work)
 go test ./bench/ -run TestCorrectness -v
 
-# Run scenario validation (verifies JSON scenario definitions dispatch correctly)
-go test ./bench/ -run TestScenarioValidation -v
+# Run scenario dispatch validation (verifies JSON scenario definitions dispatch correctly)
+go test ./bench/ -run TestScenarioDispatch -v
 
 # Run the multi-language session test (55 calls across 8 languages)
 go test ./bench/ -run TestSessionMultiLang -v
