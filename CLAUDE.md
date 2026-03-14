@@ -112,7 +112,7 @@ edr refs src/config.go parseConfig    # scoped to a specific file's symbol
 
 ## Editing (`edit`)
 
-All edit commands return the file's new `hash` for chaining subsequent edits.
+All mutation commands return `status` ("applied", "applied_index_stale") and `hash` for chaining.
 
 ```bash
 # edit: unified edit command — old_text/new_text is the primary mode

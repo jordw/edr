@@ -59,6 +59,7 @@ type EditResult struct {
 	File       string `json:"file"`
 	Message    string `json:"message"`
 	Hash       string `json:"hash,omitempty"`
+	Status     string `json:"status,omitempty"`
 	IndexError string `json:"index_error,omitempty"`
 }
 

@@ -29,7 +29,7 @@ func writeResult(file string, cr *commitResult, message string) output.EditResul
 	if len(cr.IndexErrors) > 0 {
 		indexErr = cr.IndexErrors[rel]
 	}
-	return output.EditResult{OK: true, File: rel, Message: message, Hash: cr.Hashes[rel], IndexError: indexErr}
+	return output.EditResult{OK: true, File: rel, Message: message, Hash: cr.Hashes[rel], Status: cr.Status, IndexError: indexErr}
 }
 
 func runWriteFile(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {

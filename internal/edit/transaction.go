@@ -54,8 +54,9 @@ func (t *Transaction) Commit() error {
 
 	// Phase 1: Read all files, validate hashes and spans, compute new contents.
 	type fileResult struct {
-		data []byte
-		mode os.FileMode
+		data     []byte
+		mode     os.FileMode
+		origHash string // hash of file content at Phase 1 read time
 	}
 	results := make(map[string]fileResult, len(grouped))
 
@@ -91,7 +92,7 @@ func (t *Transaction) Commit() error {
 		if err != nil {
 			return fmt.Errorf("transaction: stat %s: %w", file, err)
 		}
-		results[file] = fileResult{data: data, mode: fi.Mode().Perm()}
+		results[file] = fileResult{data: data, mode: fi.Mode().Perm(), origHash: got}
 	}
 
 	// Phase 2: Write all files atomically using temp files + rename.
@@ -118,10 +119,18 @@ func (t *Transaction) Commit() error {
 	}
 
 	for file, res := range results {
-		// Save original content to a temp file for rollback
+		// Save original content to a temp file for rollback.
+		// Revalidate hash to close TOCTOU window: if an external process
+		// modified the file between Phase 1 (read+validate) and now,
+		// abort rather than silently overwriting their changes.
 		origData, err := os.ReadFile(file)
 		if err != nil {
 			return rollback(fmt.Errorf("transaction: re-read %s for backup: %w", file, err))
+		}
+		revalidateSum := sha256.Sum256(origData)
+		revalidateHash := hex.EncodeToString(revalidateSum[:])[:8]
+		if revalidateHash != res.origHash {
+			return rollback(fmt.Errorf("transaction: file %s was modified externally between read and write (expected %s, got %s)", file, res.origHash, revalidateHash))
 		}
 		backupFile, err := os.CreateTemp(filepath.Dir(file), ".edr-backup-*")
 		if err != nil {

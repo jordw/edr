@@ -374,6 +374,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 
 	result := map[string]any{
 		"ok":          true,
+		"status":      cr.Status,
 		"edits":       cr.EditCount,
 		"files":       cr.FileCount,
 		"hashes":      cr.Hashes,

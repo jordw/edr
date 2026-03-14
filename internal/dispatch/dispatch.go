@@ -509,6 +509,7 @@ type commitResult struct {
 	IndexErrors map[string]string
 	FileCount   int
 	EditCount   int
+	Status      string // "applied", "applied_index_stale"
 }
 
 // commitEdits applies edits via Transaction and reindexes all affected files.
@@ -563,11 +564,17 @@ func commitEdits(ctx context.Context, db *index.DB, edits []resolvedEdit) (*comm
 		}
 	}
 
+	status := "applied"
+	if len(indexErrors) > 0 {
+		status = "applied_index_stale"
+	}
+
 	return &commitResult{
 		Hashes:      hashes,
 		IndexErrors: indexErrors,
 		FileCount:   len(fileSet),
 		EditCount:   len(edits),
+		Status:      status,
 	}, nil
 }
 
