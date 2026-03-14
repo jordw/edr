@@ -54,7 +54,7 @@ func TestHasStaleFilesIgnoresUnsupportedFiles(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	mainFile := filepath.Join(root, "main.go")
-	readme := filepath.Join(root, "README.md")
+	readme := filepath.Join(root, "README.txt")
 	writeSnapshotTestFile(t, mainFile, "package main\n\nfunc main() {}\n")
 	writeSnapshotTestFile(t, readme, "hello\n")
 

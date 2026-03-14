@@ -1,0 +1,37 @@
+# Tree-sitter Grammar Licenses
+
+This directory contains tree-sitter language grammars that are vendored as submodules.
+All included grammars are licensed under the MIT License.
+
+## Vendored Grammars
+
+- tree-sitter-bash (tree-sitter/tree-sitter-bash)
+- tree-sitter-c (tree-sitter/tree-sitter-c)
+- tree-sitter-cpp (tree-sitter/tree-sitter-cpp)
+- tree-sitter-c-sharp (tree-sitter/tree-sitter-c-sharp)
+- tree-sitter-css (tree-sitter/tree-sitter-css)
+- tree-sitter-dockerfile (camdencheek/tree-sitter-dockerfile)
+- tree-sitter-elixir (elixir-lang/tree-sitter-elixir)
+- tree-sitter-go (tree-sitter/tree-sitter-go)
+- tree-sitter-hcl (tree-sitter-grammars/tree-sitter-hcl)
+- tree-sitter-html (tree-sitter/tree-sitter-html)
+- tree-sitter-java (tree-sitter/tree-sitter-java)
+- tree-sitter-javascript (tree-sitter/tree-sitter-javascript)
+- tree-sitter-json (tree-sitter/tree-sitter-json)
+- tree-sitter-kotlin (fwcd/tree-sitter-kotlin)
+- tree-sitter-lua (tree-sitter-grammars/tree-sitter-lua)
+- tree-sitter-markdown (tree-sitter-grammars/tree-sitter-markdown)
+- tree-sitter-php (tree-sitter/tree-sitter-php)
+- tree-sitter-proto (treywood/tree-sitter-proto)
+- tree-sitter-python (tree-sitter/tree-sitter-python)
+- tree-sitter-ruby (tree-sitter/tree-sitter-ruby)
+- tree-sitter-rust (tree-sitter/tree-sitter-rust)
+- tree-sitter-scala (tree-sitter/tree-sitter-scala)
+- tree-sitter-sql/sqlite (dhcmrlchtdj/tree-sitter-sqlite)
+- tree-sitter-toml (tree-sitter-grammars/tree-sitter-toml)
+- tree-sitter-typescript (tree-sitter/tree-sitter-typescript)
+- tree-sitter-yaml (tree-sitter-grammars/tree-sitter-yaml)
+- tree-sitter-zig (tree-sitter-grammars/tree-sitter-zig)
+
+Each grammar is maintained by its respective repository maintainers and released under the MIT License.
+Please refer to the LICENSE file in each grammar's repository for the complete license text.

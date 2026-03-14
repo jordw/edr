@@ -6,19 +6,34 @@ import (
 	"unsafe"
 
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
-	tree_sitter_bash "github.com/tree-sitter/tree-sitter-bash/bindings/go"
-	tree_sitter_c "github.com/tree-sitter/tree-sitter-c/bindings/go"
-	tree_sitter_cpp "github.com/tree-sitter/tree-sitter-cpp/bindings/go"
-	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
-	tree_sitter_java "github.com/tree-sitter/tree-sitter-java/bindings/go"
-	tree_sitter_javascript "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
-	tree_sitter_lua "github.com/tree-sitter-grammars/tree-sitter-lua/bindings/go"
-	tree_sitter_php "github.com/tree-sitter/tree-sitter-php/bindings/go"
-	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
-	tree_sitter_ruby "github.com/tree-sitter/tree-sitter-ruby/bindings/go"
-	tree_sitter_rust "github.com/tree-sitter/tree-sitter-rust/bindings/go"
-	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
-	tree_sitter_zig "github.com/tree-sitter-grammars/tree-sitter-zig/bindings/go"
+
+	bash_lang "github.com/jordw/edr/internal/grammars/bash"
+	"github.com/jordw/edr/internal/grammars/c_lang"
+	"github.com/jordw/edr/internal/grammars/cpp"
+	"github.com/jordw/edr/internal/grammars/csharp"
+	"github.com/jordw/edr/internal/grammars/css"
+	"github.com/jordw/edr/internal/grammars/dockerfile"
+	"github.com/jordw/edr/internal/grammars/elixir"
+	"github.com/jordw/edr/internal/grammars/go_lang"
+	"github.com/jordw/edr/internal/grammars/hcl"
+	"github.com/jordw/edr/internal/grammars/html"
+	"github.com/jordw/edr/internal/grammars/java"
+	"github.com/jordw/edr/internal/grammars/javascript"
+	"github.com/jordw/edr/internal/grammars/json_lang"
+	"github.com/jordw/edr/internal/grammars/kotlin"
+	"github.com/jordw/edr/internal/grammars/lua"
+	"github.com/jordw/edr/internal/grammars/markdown"
+	"github.com/jordw/edr/internal/grammars/php"
+	"github.com/jordw/edr/internal/grammars/proto"
+	"github.com/jordw/edr/internal/grammars/python"
+	"github.com/jordw/edr/internal/grammars/ruby"
+	"github.com/jordw/edr/internal/grammars/rust"
+	"github.com/jordw/edr/internal/grammars/scala"
+	"github.com/jordw/edr/internal/grammars/sql"
+	"github.com/jordw/edr/internal/grammars/toml"
+	"github.com/jordw/edr/internal/grammars/typescript"
+	"github.com/jordw/edr/internal/grammars/yaml"
+	"github.com/jordw/edr/internal/grammars/zig"
 )
 
 // ImportNodeConfig describes how to extract imports from tree-sitter AST.
@@ -66,7 +81,7 @@ func GetLangConfig(filename string) *LangConfig {
 	switch ext {
 	case ".go":
 		return &LangConfig{
-			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_go.Language())),
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(go_lang.Language())),
 			SymbolNodes: []string{
 				"function_declaration",
 				"method_declaration",
@@ -88,7 +103,7 @@ func GetLangConfig(filename string) *LangConfig {
 		}
 	case ".py":
 		return &LangConfig{
-			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_python.Language())),
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(python.Language())),
 			SymbolNodes: []string{
 				"function_definition",
 				"class_definition",
@@ -103,7 +118,7 @@ func GetLangConfig(filename string) *LangConfig {
 		}
 	case ".js", ".jsx":
 		return &LangConfig{
-			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_javascript.Language())),
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(javascript.Language())),
 			SymbolNodes: []string{
 				"function_declaration",
 				"class_declaration",
@@ -121,7 +136,7 @@ func GetLangConfig(filename string) *LangConfig {
 		}
 	case ".c", ".h":
 		return &LangConfig{
-			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_c.Language())),
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(c_lang.Language())),
 			SymbolNodes: []string{
 				"function_definition",
 				"struct_specifier",
@@ -133,7 +148,7 @@ func GetLangConfig(filename string) *LangConfig {
 		}
 	case ".rs":
 		return &LangConfig{
-			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_rust.Language())),
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(rust.Language())),
 			SymbolNodes: []string{
 				"function_item",
 				"struct_item",
@@ -147,7 +162,7 @@ func GetLangConfig(filename string) *LangConfig {
 		}
 	case ".java":
 		return &LangConfig{
-			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_java.Language())),
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(java.Language())),
 			SymbolNodes: []string{
 				"method_declaration",
 				"class_declaration",
@@ -160,7 +175,7 @@ func GetLangConfig(filename string) *LangConfig {
 		}
 	case ".ts":
 		return &LangConfig{
-			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_typescript.LanguageTypescript())),
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(typescript.LanguageTypescript())),
 			SymbolNodes: []string{
 				"function_declaration",
 				"class_declaration",
@@ -181,7 +196,7 @@ func GetLangConfig(filename string) *LangConfig {
 		}
 	case ".tsx":
 		return &LangConfig{
-			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_typescript.LanguageTSX())),
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(typescript.LanguageTSX())),
 			SymbolNodes: []string{
 				"function_declaration",
 				"class_declaration",
@@ -202,7 +217,7 @@ func GetLangConfig(filename string) *LangConfig {
 		}
 	case ".rb":
 		return &LangConfig{
-			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_ruby.Language())),
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(ruby.Language())),
 			SymbolNodes: []string{
 				"method",
 				"class",
@@ -215,7 +230,7 @@ func GetLangConfig(filename string) *LangConfig {
 		}
 	case ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh":
 		return &LangConfig{
-			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_cpp.Language())),
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(cpp.Language())),
 			SymbolNodes: []string{
 				"function_definition",
 				"class_specifier",
@@ -231,7 +246,7 @@ func GetLangConfig(filename string) *LangConfig {
 		}
 	case ".php":
 		return &LangConfig{
-			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_php.LanguagePHP())),
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(php.Language())),
 			SymbolNodes: []string{
 				"function_definition",
 				"method_declaration",
@@ -247,7 +262,7 @@ func GetLangConfig(filename string) *LangConfig {
 		}
 	case ".zig":
 		return &LangConfig{
-			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_zig.Language())),
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(zig.Language())),
 			SymbolNodes: []string{
 				"function_declaration",
 				"test_declaration",
@@ -263,7 +278,7 @@ func GetLangConfig(filename string) *LangConfig {
 		}
 	case ".lua":
 		return &LangConfig{
-			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_lua.Language())),
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(lua.Language())),
 			SymbolNodes: []string{
 				"function_declaration",
 				"function_definition",
@@ -276,7 +291,7 @@ func GetLangConfig(filename string) *LangConfig {
 		}
 	case ".sh", ".bash":
 		return &LangConfig{
-			Language: tree_sitter.NewLanguage(unsafe.Pointer(tree_sitter_bash.Language())),
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(bash_lang.Language())),
 			SymbolNodes: []string{
 				"function_definition",
 			},
@@ -285,7 +300,199 @@ func GetLangConfig(filename string) *LangConfig {
 			Container:      ContainerBrace,
 			ContainerClose: "}",
 		}
+	case ".cs":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(csharp.Language())),
+			SymbolNodes: []string{
+				"class_declaration",
+				"struct_declaration",
+				"interface_declaration",
+				"enum_declaration",
+				"record_declaration",
+				"method_declaration",
+				"constructor_declaration",
+				"namespace_declaration",
+			},
+			NameField:      "name",
+			LangID:         "csharp",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
+		}
+	case ".scala", ".sc":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(scala.Language())),
+			SymbolNodes: []string{
+				"class_definition",
+				"object_definition",
+				"trait_definition",
+				"function_definition",
+				"function_declaration",
+				"val_definition",
+				"type_definition",
+				"enum_definition",
+			},
+			NameField:      "name",
+			LangID:         "scala",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
+		}
+	case ".kt", ".kts":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(kotlin.Language())),
+			SymbolNodes: []string{
+				"class_declaration",
+				"function_declaration",
+				"object_declaration",
+				"property_declaration",
+			},
+			NameField:      "name",
+			LangID:         "kotlin",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
+		}
+	case ".ex", ".exs":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(elixir.Language())),
+			SymbolNodes: []string{
+				"call",
+			},
+			NameField:      "target",
+			LangID:         "elixir",
+			Container:      ContainerKeyword,
+			ContainerClose: "end",
+		}
+	case ".html", ".htm":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(html.Language())),
+			SymbolNodes: []string{
+				"element",
+				"script_element",
+				"style_element",
+			},
+			NameField: "name",
+			LangID:    "html",
+		}
+	case ".css":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(css.Language())),
+			SymbolNodes: []string{
+				"rule_set",
+				"media_statement",
+				"keyframes_statement",
+			},
+			NameField:      "name",
+			LangID:         "css",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
+		}
+	case ".json":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(json_lang.Language())),
+			SymbolNodes: []string{
+				"pair",
+			},
+			NameField: "key",
+			LangID:    "json",
+		}
+	case ".yaml", ".yml":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(yaml.Language())),
+			SymbolNodes: []string{
+				"block_mapping_pair",
+			},
+			NameField:      "key",
+			LangID:         "yaml",
+			Container:      ContainerIndent,
+			ContainerClose: "",
+		}
+	case ".toml":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(toml.Language())),
+			SymbolNodes: []string{
+				"table",
+				"table_array_element",
+			},
+			NameField: "name",
+			LangID:    "toml",
+		}
+	case ".md", ".markdown":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(markdown.Language())),
+			SymbolNodes: []string{
+				"atx_heading",
+				"setext_heading",
+			},
+			NameField: "heading_content",
+			LangID:    "markdown",
+		}
+	case ".proto":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(proto.Language())),
+			SymbolNodes: []string{
+				"message",
+				"service",
+				"rpc",
+				"enum",
+			},
+			NameField:      "name",
+			LangID:         "protobuf",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
+		}
+	case ".sql":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(sql.Language())),
+			SymbolNodes: []string{
+				"create_table_stmt",
+				"create_view_stmt",
+				"create_index_stmt",
+				"create_trigger_stmt",
+			},
+			NameField: "name",
+			LangID:    "sql",
+		}
+	case ".hcl", ".tf", ".tfvars":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(hcl.Language())),
+			SymbolNodes: []string{
+				"block",
+				"attribute",
+			},
+			NameField:      "name",
+			LangID:         "hcl",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
+		}
+	case ".dockerfile":
+		return &LangConfig{
+			Language: tree_sitter.NewLanguage(unsafe.Pointer(dockerfile.Language())),
+			SymbolNodes: []string{
+				"from_instruction",
+				"run_instruction",
+				"copy_instruction",
+				"env_instruction",
+				"arg_instruction",
+			},
+			NameField: "name",
+			LangID:    "dockerfile",
+		}
 	default:
+		// Handle Dockerfile (no extension)
+		base := strings.ToLower(filepath.Base(filename))
+		if base == "dockerfile" || strings.HasPrefix(base, "dockerfile.") {
+			return &LangConfig{
+				Language: tree_sitter.NewLanguage(unsafe.Pointer(dockerfile.Language())),
+				SymbolNodes: []string{
+					"from_instruction",
+					"run_instruction",
+					"copy_instruction",
+					"env_instruction",
+					"arg_instruction",
+				},
+				NameField: "name",
+				LangID:    "dockerfile",
+			}
+		}
 		return nil
 	}
 }

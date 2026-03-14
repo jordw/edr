@@ -3,8 +3,11 @@ package index
 import (
 	"testing"
 
+	"unsafe"
+
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
-	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
+
+	"github.com/jordw/edr/internal/grammars/go_lang"
 )
 
 // parseAndFindFunc is a test helper that parses Go source and returns the root node
@@ -12,7 +15,7 @@ import (
 func parseAndFindFunc(t *testing.T, src []byte) (*tree_sitter.Parser, *tree_sitter.Tree, *tree_sitter.Node) {
 	t.Helper()
 	parser := tree_sitter.NewParser()
-	lang := tree_sitter.NewLanguage(tree_sitter_go.Language())
+	lang := tree_sitter.NewLanguage(unsafe.Pointer(go_lang.Language()))
 	if err := parser.SetLanguage(lang); err != nil {
 		t.Fatal(err)
 	}

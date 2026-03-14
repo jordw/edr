@@ -5,20 +5,7 @@ go 1.25.0
 require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9
-	github.com/tree-sitter-grammars/tree-sitter-lua v0.3.0
-	github.com/tree-sitter-grammars/tree-sitter-zig v1.1.2
 	github.com/tree-sitter/go-tree-sitter v0.24.0
-	github.com/tree-sitter/tree-sitter-bash v0.23.3
-	github.com/tree-sitter/tree-sitter-c v0.23.6
-	github.com/tree-sitter/tree-sitter-cpp v0.23.4
-	github.com/tree-sitter/tree-sitter-go v0.23.4
-	github.com/tree-sitter/tree-sitter-java v0.23.5
-	github.com/tree-sitter/tree-sitter-javascript v0.23.1
-	github.com/tree-sitter/tree-sitter-php v0.23.11
-	github.com/tree-sitter/tree-sitter-python v0.23.6
-	github.com/tree-sitter/tree-sitter-ruby v0.23.1
-	github.com/tree-sitter/tree-sitter-rust v0.23.3
-	github.com/tree-sitter/tree-sitter-typescript v0.23.2
 	modernc.org/sqlite v1.46.1
 )
 
