@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/edit"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
@@ -414,24 +415,15 @@ func dispatchSequential(ctx context.Context, db *index.DB, commands []MultiCmd, 
 // isGlobalMutating returns true for commands that mutate global state
 // (index, multiple files) and cannot safely run alongside anything else.
 func isGlobalMutating(cmd string) bool {
-	switch cmd {
-	case "init", "rename", "rename-symbol", "edit-plan":
-		return true
-	}
-	return false
+	return cmdspec.IsGlobalMutating(cmd)
 }
 
 // commandFileKey extracts the target file from a command's args.
-// Returns "" for global/fileless commands (map, search, repo-map, etc.)
-// so they can run fully in parallel.
+// Returns "" for global/fileless commands so they can run fully in parallel.
 func commandFileKey(cmd string, args []string) string {
-	switch cmd {
-	// Global reads — no file target
-	case "map", "repo-map", "search", "search-text", "find", "find-files",
-		"verify", "init", "rename", "rename-symbol", "edit-plan":
+	if !cmdspec.IsFileScoped(cmd) {
 		return ""
 	}
-	// Most commands take file as first arg (possibly with :symbol suffix)
 	if len(args) > 0 {
 		file := args[0]
 		if idx := strings.IndexByte(file, ':'); idx > 0 {
@@ -672,17 +664,11 @@ func flagBool(flags map[string]any, key string, defaultVal bool) bool {
 	}
 }
 
-// knownCommands is the list of valid command names for suggestion matching.
-var knownCommands = []string{
-	"read", "write", "edit", "map", "search", "explore", "refs",
-	"init", "rename", "find", "edit-plan", "verify",
-}
-
 // suggestCommand returns the closest known command if within edit distance 2, or "".
 func suggestCommand(input string) string {
 	best := ""
 	bestDist := 3 // only suggest if distance <= 2
-	for _, cmd := range knownCommands {
+	for _, cmd := range cmdspec.Names() {
 		d := levenshtein(input, cmd)
 		if d < bestDist {
 			bestDist = d

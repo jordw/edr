@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
@@ -112,44 +113,15 @@ type doRename struct {
 	Scope   *string `json:"scope,omitempty"`
 }
 
-// doKnownKeys are the valid top-level keys for edr_do params.
-var doKnownKeys = map[string]bool{
-	"reads": true, "queries": true, "edits": true, "writes": true,
-	"renames": true, "budget": true, "dry_run": true, "verify": true,
-	"init": true, "read_after_edit": true,
-}
-
-// Known fields for sub-objects, used to warn on typos like "bodies" instead of "body".
-var doQueryKnownKeys = map[string]bool{
-	"cmd": true, "budget": true, "file": true, "symbol": true,
-	"pattern": true, "body": true, "text": true, "regex": true,
-	"include": true, "exclude": true, "context": true, "group": true,
-	"callers": true, "deps": true, "gather": true, "signatures": true,
-	"impact": true, "chain": true, "depth": true,
-	"dir": true, "glob": true, "type": true, "grep": true, "locals": true,
-}
-
-var doEditKnownKeys = map[string]bool{
-	"file": true, "old_text": true, "new_text": true, "symbol": true,
-	"start_line": true, "end_line": true, "regex": true, "all": true,
-	"move": true, "after": true, "before": true, "dry_run": true,
-	"expect_hash": true,
-}
-
-var doWriteKnownKeys = map[string]bool{
-	"file": true, "content": true, "mkdir": true, "after": true,
-	"inside": true, "append": true, "new_text": true, "body": true,
-}
-
-var doRenameKnownKeys = map[string]bool{
-	"old_name": true, "new_name": true, "dry_run": true, "scope": true,
-}
-
-var doReadKnownKeys = map[string]bool{
-	"file": true, "symbol": true, "budget": true, "signatures": true,
-	"depth": true, "start_line": true, "end_line": true, "symbols": true,
-	"full": true,
-}
+// Batch known-key sets — derived from the canonical registry in cmdspec.
+var (
+	doKnownKeys      = cmdspec.DoBatchKeys()
+	doQueryKnownKeys = cmdspec.QueryBatchKeys()
+	doEditKnownKeys  = cmdspec.EditBatchKeys()
+	doWriteKnownKeys = cmdspec.WriteBatchKeys()
+	doRenameKnownKeys = cmdspec.RenameBatchKeys()
+	doReadKnownKeys  = cmdspec.ReadBatchKeys()
+)
 
 // checkSubObjectFields validates fields in JSON sub-objects and returns warnings.
 func checkSubObjectFields(raw json.RawMessage, section string, known map[string]bool) []string {

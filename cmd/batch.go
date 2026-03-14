@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
 	"github.com/jordw/edr/internal/session"
 	"github.com/spf13/cobra"
@@ -98,7 +99,7 @@ For write commands, pass file content via "content" or "new_text" in flags.`,
 				continue
 			}
 
-			if session.EditCommands[req.Cmd] || req.Cmd == "init" {
+			if cmdspec.ModifiesState(req.Cmd) {
 				sess.InvalidateForEdit(req.Cmd, req.Args)
 			}
 
@@ -113,7 +114,7 @@ For write commands, pass file content via "content" or "new_text" in flags.`,
 			text := string(data)
 			text = sess.PostProcess(req.Cmd, req.Args, req.Flags, result, text)
 
-			if session.ReadCommands[req.Cmd] {
+			if cmdspec.IsRead(req.Cmd) {
 				key := sess.CacheKey(req.Cmd, req.Args, req.Flags)
 				if sess.Check(key, text) {
 					text = fmt.Sprintf(`{"cached":true,"message":"identical to previous response for %s %s"}`, req.Cmd, strings.Join(req.Args, " "))

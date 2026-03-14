@@ -296,6 +296,7 @@ edr bench-session
 ```
 
 Key files:
+- `internal/cmdspec/cmdspec.go` — Canonical command registry: names, categories, flags, session behavior, batch keys
 - `internal/trace/trace.go` — Collector, CallBuilder, schema, BenchSession scoring
 - `internal/session/session.go` — PostProcessStats (DeltaReads, BodyDedup, SlimEdits)
 - `internal/session/persist.go` — File-backed session persistence, GC

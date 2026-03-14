@@ -10,6 +10,7 @@ import (
 	"runtime/pprof"
 	"strings"
 
+	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
@@ -90,7 +91,7 @@ Example:
 
 // dispatchWithSession runs a command through the session post-processing pipeline.
 func dispatchWithSession(db *index.DB, sess *session.Session, cmdName string, args []string, flags map[string]any) error {
-	if session.EditCommands[cmdName] || cmdName == "init" {
+	if cmdspec.ModifiesState(cmdName) {
 		sess.InvalidateForEdit(cmdName, args)
 	}
 
@@ -106,7 +107,7 @@ func dispatchWithSession(db *index.DB, sess *session.Session, cmdName string, ar
 	text = sess.PostProcess(cmdName, args, flags, result, text)
 
 	// Working-set dedup for read commands
-	if session.ReadCommands[cmdName] {
+	if cmdspec.IsRead(cmdName) {
 		key := sess.CacheKey(cmdName, args, flags)
 		if sess.Check(key, text) {
 			text = fmt.Sprintf(`{"cached":true,"message":"identical to previous response for %s %s"}`, cmdName, strings.Join(args, " "))

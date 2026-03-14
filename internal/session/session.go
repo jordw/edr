@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/edit"
 )
 
@@ -77,26 +78,22 @@ func New() *Session {
 	}
 }
 
-// Command category maps.
-var ReadCommands = map[string]bool{
-	"read": true, "map": true, "search": true, "explore": true,
-	"refs": true, "find": true,
-}
+// Command category maps — derived from the canonical registry in cmdspec.
+// Exported for backward compatibility; prefer cmdspec helpers in new code.
+var ReadCommands = deriveSet(cmdspec.IsRead)
+var EditCommands = deriveSet(cmdspec.ModifiesState)
+var DiffEditCommands = deriveSet(cmdspec.IsDiffEdit)
+var DeltaReadCommands = deriveSet(cmdspec.IsDeltaRead)
+var BodyCommands = deriveSet(cmdspec.IsBodyTrack)
 
-var EditCommands = map[string]bool{
-	"edit": true, "write": true, "rename": true, "edit-plan": true,
-}
-
-var DiffEditCommands = map[string]bool{
-	"edit": true, "edit-plan": true,
-}
-
-var DeltaReadCommands = map[string]bool{
-	"read": true, "explore": true,
-}
-
-var BodyCommands = map[string]bool{
-	"read": true, "explore": true, "search": true,
+func deriveSet(pred func(string) bool) map[string]bool {
+	m := make(map[string]bool)
+	for _, name := range cmdspec.Names() {
+		if pred(name) {
+			m[name] = true
+		}
+	}
+	return m
 }
 
 // --- Hashing & keys ---
@@ -630,7 +627,7 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 	}
 
 	// Level 1: Slim edit responses
-	if DiffEditCommands[cmd] {
+	if cmdspec.IsDiffEdit(cmd) {
 		if slim := s.storeDiff(m, flags); slim != nil {
 			data, _ := json.Marshal(slim)
 			return string(data)
@@ -641,7 +638,7 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 	}
 
 	// Level 2: Delta reads
-	if DeltaReadCommands[cmd] {
+	if cmdspec.IsDeltaRead(cmd) {
 		if delta := s.ProcessReadResult(cmd, m, flags); delta != nil {
 			data, _ := json.Marshal(delta)
 			return string(data)
@@ -653,7 +650,7 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 	// tracking new ones, so we must NOT call TrackBodies first for these
 	// commands (that would mark current results as "seen" before stripping).
 	willStrip := cmd == "gather" || (cmd == "search" && FlagIsTruthy(flags, "body")) || (cmd == "explore" && FlagIsTruthy(flags, "gather") && FlagIsTruthy(flags, "body"))
-	if BodyCommands[cmd] && !willStrip {
+	if cmdspec.IsBodyTrack(cmd) && !willStrip {
 		s.TrackBodies(m, cmd)
 	}
 	if willStrip {

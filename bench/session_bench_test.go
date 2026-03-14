@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/session"
@@ -33,7 +34,7 @@ func handleDoJSON(t testing.TB, ctx context.Context, db *index.DB, sess *session
 
 	sess.ResetStats()
 
-	if session.EditCommands[cmd] || cmd == "init" {
+	if cmdspec.ModifiesState(cmd) {
 		sess.InvalidateForEdit(cmd, args)
 	}
 
