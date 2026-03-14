@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Convert a JSON scenario file to shell variable assignments.
 
+DEPRECATED: native_comparison.sh now reads JSON directly via jq.
+This script is kept for backward compatibility only.
+
 Usage: python3 json_to_shell.py scenarios/fixture.json [BASE_DIR]
 
 Emits shell variable assignments compatible with native_comparison.sh profiles.

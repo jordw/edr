@@ -16,9 +16,51 @@ if [ ! -f "$PROFILE" ]; then
     exit 1
 fi
 
-# Support both .sh profiles (sourced directly) and .json scenarios (converted).
+# Support both .json scenarios (read via jq) and .sh profiles (sourced directly).
 if [[ "$PROFILE" == *.json ]]; then
-    eval "$(python3 "$SCRIPT_DIR/json_to_shell.py" "$PROFILE" "${BASE_DIR:-/tmp}")"
+    if ! command -v jq &>/dev/null; then
+        echo "jq is required for JSON profiles: brew install jq / apt-get install jq" >&2
+        exit 1
+    fi
+    jq_str()  { jq -r "$1 // empty" "$PROFILE"; }
+    jq_int()  { jq -r "$1 // 0" "$PROFILE"; }
+    jq_arr()  {
+        local -n _ref="$1"
+        _ref=()
+        while IFS= read -r item; do
+            [ -n "$item" ] && _ref+=("$item")
+        done < <(jq -r "$2[]? // empty" "$PROFILE")
+    }
+    _base_dir="${BASE_DIR:-/tmp}"
+    BENCH_NAME="$(jq_str '.name')"
+    BENCH_ROOT="$(jq_str '.root' | sed "s|\${BASE_DIR}|$_base_dir|g")"
+    SCOPE_DIR="$(jq_str '.scope_dir')"
+    API_FILE="$(jq_str '.scenarios.understand_api.file')"
+    API_READ_SPEC="$(jq_str '.scenarios.understand_api.spec')"
+    READ_SYMBOL_FILE="$(jq_str '.scenarios.read_symbol.file')"
+    READ_SYMBOL_SPEC="$(jq_str '.scenarios.read_symbol.spec')"
+    REFS_PATTERN="$(jq_str '.scenarios.find_refs.pattern')"
+    REFS_GREP_ROOT="$(jq_str '.scenarios.find_refs.grep_root')"
+    jq_arr REFS_ARGS '.scenarios.find_refs.args'
+    SEARCH_PATTERN="$(jq_str '.scenarios.search_context.pattern')"
+    SEARCH_ROOT="$(jq_str '.scenarios.search_context.search_root')"
+    SEARCH_BUDGET="$(jq_int '.scenarios.search_context.budget')"
+    ORIENT_DIR="$(jq_str '.scenarios.orient_map.dir')"
+    ORIENT_BUDGET="$(jq_int '.scenarios.orient_map.budget')"
+    jq_arr ORIENT_GLOBS '.scenarios.orient_map.globs'
+    jq_arr ORIENT_READ_FILES '.scenarios.orient_map.read_files'
+    EDIT_FILE="$(jq_str '.scenarios.edit_function.file')"
+    EDIT_OLD_TEXT="$(jq_str '.scenarios.edit_function.old_text')"
+    EDIT_NEW_TEXT="$(jq_str '.scenarios.edit_function.new_text')"
+    WRITE_FILE="$(jq_str '.scenarios.add_method.file')"
+    WRITE_INSIDE="$(jq_str '.scenarios.add_method.inside')"
+    WRITE_CONTENT="$(jq_str '.scenarios.add_method.content')"
+    MULTI_READ_BUDGET="$(jq_int '.scenarios.multi_file_read.budget')"
+    jq_arr MULTI_READ_FILES '.scenarios.multi_file_read.files'
+    EXPLORE_PATTERN="$(jq_str '.scenarios.explore_symbol.pattern')"
+    EXPLORE_GREP_ROOT="$(jq_str '.scenarios.explore_symbol.grep_root')"
+    jq_arr EXPLORE_ARGS '.scenarios.explore_symbol.args'
+    jq_arr EXPLORE_NATIVE_READ_FILES '.scenarios.explore_symbol.native_read_files'
 else
     # shellcheck source=/dev/null
     source "$PROFILE"
@@ -188,19 +230,12 @@ json_add() {
     local name="$1" native_bytes="$2" native_calls="$3" edr_bytes="$4" edr_calls="$5"
     local pct
     pct=$(pct_round "$native_bytes" "$edr_bytes")
-    JSON_SCENARIOS=$(echo "$JSON_SCENARIOS" | NAME="$name" NB="$native_bytes" NC="$native_calls" EB="$edr_bytes" EC="$edr_calls" PCT="$pct" python3 -c "
-import json,sys,os
-s=json.load(sys.stdin)
-s.append({
-    'name': os.environ['NAME'],
-    'native_bytes': int(os.environ['NB']),
-    'native_calls': int(os.environ['NC']),
-    'edr_bytes': int(os.environ['EB']),
-    'edr_calls': int(os.environ['EC']),
-    'savings_pct': int(os.environ['PCT'])
-})
-print(json.dumps(s))
-")
+    JSON_SCENARIOS=$(echo "$JSON_SCENARIOS" | jq \
+        --arg name "$name" \
+        --argjson nb "$native_bytes" --argjson nc "$native_calls" \
+        --argjson eb "$edr_bytes" --argjson ec "$edr_calls" \
+        --argjson pct "$pct" \
+        '. + [{name: $name, native_bytes: $nb, native_calls: $nc, edr_bytes: $eb, edr_calls: $ec, savings_pct: $pct}]')
 }
 
 run_understand_api() {
@@ -405,21 +440,10 @@ run_explore_symbol
 echo ""
 printf "  %-14s─┼─%-19s─┼─%-19s─┼─%5s─┼─%s\n" "──────────────" "───────────────────" "───────────────────" "─────" "──────"
 
-total_native=0
-total_edr=0
-total_native_calls=0
-total_edr_calls=0
-for row in $(echo "$JSON_SCENARIOS" | python3 -c "
-import json,sys
-for s in json.load(sys.stdin):
-    print(f\"{s['native_bytes']},{s['native_calls']},{s['edr_bytes']},{s['edr_calls']}\")
-"); do
-    IFS=',' read -r nb nc eb ec <<< "$row"
-    total_native=$((total_native + nb))
-    total_edr=$((total_edr + eb))
-    total_native_calls=$((total_native_calls + nc))
-    total_edr_calls=$((total_edr_calls + ec))
-done
+total_native=$(echo "$JSON_SCENARIOS" | jq '[.[].native_bytes] | add // 0')
+total_edr=$(echo "$JSON_SCENARIOS" | jq '[.[].edr_bytes] | add // 0')
+total_native_calls=$(echo "$JSON_SCENARIOS" | jq '[.[].native_calls] | add // 0')
+total_edr_calls=$(echo "$JSON_SCENARIOS" | jq '[.[].edr_calls] | add // 0')
 
 total_saved=$((total_native - total_edr))
 total_pct=$(pct_round "$total_native" "$total_edr")
@@ -442,27 +466,26 @@ echo ""
 echo "=================================================================="
 echo "  JSON SUMMARY"
 echo "=================================================================="
-echo "$JSON_SCENARIOS" | \
-    BENCH_NAME="$BENCH_NAME" BENCH_ROOT="$BENCH_ROOT" SCOPE_DIR="${SCOPE_DIR:-}" PROFILE="$PROFILE" ITERS="$ITERS" \
-    python3 -c "
-import json, sys, os
-data = json.load(sys.stdin)
-tn = sum(s['native_bytes'] for s in data)
-te = sum(s['edr_bytes'] for s in data)
-print(json.dumps({
-    'benchmark': 'native_comparison',
-    'benchmark_name': os.environ['BENCH_NAME'],
-    'benchmark_root': os.environ['BENCH_ROOT'],
-    'scope_dir': os.environ['SCOPE_DIR'],
-    'profile': os.environ['PROFILE'],
-    'iterations': int(os.environ['ITERS']),
-    'scenarios': data,
-    'totals': {
-        'native_bytes': tn,
-        'edr_bytes': te,
-        'savings_pct': round((tn-te)*100/tn) if tn else 0,
-        'native_calls': sum(s['native_calls'] for s in data),
-        'edr_calls': sum(s['edr_calls'] for s in data),
-    }
-}, indent=2))
-"
+echo "$JSON_SCENARIOS" | jq \
+    --arg name "$BENCH_NAME" \
+    --arg root "$BENCH_ROOT" \
+    --arg scope "${SCOPE_DIR:-}" \
+    --arg profile "$PROFILE" \
+    --argjson iters "$ITERS" \
+    '{
+        benchmark: "native_comparison",
+        benchmark_name: $name,
+        benchmark_root: $root,
+        scope_dir: $scope,
+        profile: $profile,
+        iterations: $iters,
+        scenarios: .,
+        totals: {
+            native_bytes: ([.[].native_bytes] | add // 0),
+            edr_bytes: ([.[].edr_bytes] | add // 0),
+            savings_pct: (([.[].native_bytes] | add // 0) as $tn | ([.[].edr_bytes] | add // 0) as $te |
+                if $tn > 0 then ((($tn - $te) * 100 / $tn) | round) else 0 end),
+            native_calls: ([.[].native_calls] | add // 0),
+            edr_calls: ([.[].edr_calls] | add // 0)
+        }
+    }'
