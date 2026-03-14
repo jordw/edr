@@ -5,11 +5,22 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/jordw/edr/internal/dispatch"
 	"github.com/jordw/edr/internal/index"
 )
+
+// heapAllocKB returns current heap allocation in kilobytes.
+// Unlike peak RSS (which is process-wide and only grows), this reflects
+// the heap state at the point of measurement and is meaningful per-benchmark.
+func heapAllocKB() float64 {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return float64(m.HeapAlloc) / 1024
+}
 
 // setupRepo creates a temp copy of bench/testdata indexed and ready for queries.
 func setupRepo(tb testing.TB) (*index.DB, string) {
@@ -112,6 +123,15 @@ func BenchmarkIndexRepo(b *testing.B) {
 		ctx := context.Background()
 		if _, _, err := index.IndexRepo(ctx, db); err != nil {
 			b.Fatal(err)
+		}
+		// Report DB and WAL sizes
+		dbPath := filepath.Join(tmp, ".edr", "index.db")
+		if info, err := os.Stat(dbPath); err == nil {
+			b.ReportMetric(float64(info.Size()/1024), "db_size_kb")
+		}
+		walPath := dbPath + "-wal"
+		if info, err := os.Stat(walPath); err == nil {
+			b.ReportMetric(float64(info.Size()/1024), "wal_size_kb")
 		}
 		db.Close()
 	}
@@ -384,6 +404,7 @@ func BenchmarkWorkflowTraditional(b *testing.B) {
 		})
 		totalBytes := len(out1) + len(out2) + len(out3)
 		b.ReportMetric(float64(totalBytes), "response_bytes")
+		b.ReportMetric(heapAllocKB(), "heap_alloc_kb")
 
 		b.StopTimer()
 		os.WriteFile(file, original, 0644)
@@ -412,6 +433,7 @@ func BenchmarkWorkflowProgressive(b *testing.B) {
 		})
 		totalBytes := len(out1) + len(out2) + len(out3)
 		b.ReportMetric(float64(totalBytes), "response_bytes")
+		b.ReportMetric(heapAllocKB(), "heap_alloc_kb")
 
 		b.StopTimer()
 		os.WriteFile(file, original, 0644)
@@ -585,4 +607,227 @@ func TestSignaturesSmaller(t *testing.T) {
 			t.Logf("%s: sigs=%dB", spec, len(sigs))
 		})
 	}
+}
+
+// TestScenarioValidation loads the fixture scenario definition and verifies
+// that all declared scenarios can be dispatched successfully.
+func TestScenarioValidation(t *testing.T) {
+	scenario, err := LoadScenario("scenarios/fixture.json")
+	if err != nil {
+		t.Skipf("scenario file not found: %v", err)
+	}
+
+	db, _ := setupRepo(t)
+	ctx := context.Background()
+
+	t.Run("understand_api", func(t *testing.T) {
+		var s ScenarioReadSignatures
+		if err := scenario.GetScenario("understand_api", &s); err != nil {
+			t.Fatal(err)
+		}
+		out, err := dispatchJSON(ctx, db, "read", []string{s.Spec}, map[string]any{"signatures": true})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		// Verify signatures are returned and contain function/method names
+		var result struct {
+			Body string `json:"body"`
+		}
+		json.Unmarshal(out, &result)
+		if result.Body == "" {
+			t.Error("signatures response should have a body")
+		}
+		// Full read should be larger than signatures
+		full, _ := dispatchJSON(ctx, db, "read", []string{s.Spec}, nil)
+		if len(out) >= len(full) {
+			t.Errorf("signatures (%dB) should be smaller than full read (%dB)", len(out), len(full))
+		}
+		t.Logf("understand_api: sigs=%dB full=%dB savings=%d%%",
+			len(out), len(full), 100-len(out)*100/len(full))
+	})
+
+	t.Run("read_symbol", func(t *testing.T) {
+		var s ScenarioReadSymbol
+		if err := scenario.GetScenario("read_symbol", &s); err != nil {
+			t.Fatal(err)
+		}
+		out, err := dispatchJSON(ctx, db, "read", []string{s.Spec}, nil)
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		// Verify the response contains the symbol's body
+		var result struct {
+			Body string `json:"body"`
+			Symbol struct {
+				Name string `json:"name"`
+			} `json:"symbol"`
+		}
+		json.Unmarshal(out, &result)
+		if result.Body == "" {
+			t.Error("read_symbol should return a body")
+		}
+		// Symbol name should match the part after ":"
+		parts := strings.SplitN(s.Spec, ":", 2)
+		if len(parts) == 2 && result.Symbol.Name != parts[1] {
+			t.Errorf("expected symbol name %q, got %q", parts[1], result.Symbol.Name)
+		}
+		t.Logf("read_symbol: %dB name=%s", len(out), result.Symbol.Name)
+	})
+
+	t.Run("find_refs", func(t *testing.T) {
+		var s ScenarioRefs
+		if err := scenario.GetScenario("find_refs", &s); err != nil {
+			t.Fatal(err)
+		}
+		out, err := dispatchJSON(ctx, db, "refs", s.Args, nil)
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		// Verify refs returns a symbol and at least some references
+		var result struct {
+			Symbol     struct{ Name string } `json:"symbol"`
+			References []json.RawMessage     `json:"references"`
+		}
+		json.Unmarshal(out, &result)
+		if result.Symbol.Name == "" {
+			t.Error("refs should return a symbol definition")
+		}
+		t.Logf("find_refs: %dB symbol=%s refs=%d", len(out), result.Symbol.Name, len(result.References))
+	})
+
+	t.Run("search_context", func(t *testing.T) {
+		var s ScenarioSearch
+		if err := scenario.GetScenario("search_context", &s); err != nil {
+			t.Fatal(err)
+		}
+		// The scenario defines a text search with budget. Use --text and --budget.
+		out, err := dispatchJSON(ctx, db, "search", []string{s.Pattern}, map[string]any{
+			"text":   true,
+			"budget": s.Budget,
+		})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		// Verify matches exist
+		var result struct {
+			Matches      []json.RawMessage `json:"matches"`
+			TotalMatches int               `json:"total_matches"`
+		}
+		json.Unmarshal(out, &result)
+		if result.TotalMatches == 0 {
+			t.Errorf("search for %q should find matches", s.Pattern)
+		}
+		t.Logf("search_context: %dB matches=%d", len(out), result.TotalMatches)
+	})
+
+	t.Run("orient_map", func(t *testing.T) {
+		var s ScenarioMap
+		if err := scenario.GetScenario("orient_map", &s); err != nil {
+			t.Fatal(err)
+		}
+		// In the Go test, setupRepo copies bench/testdata/* to a temp dir,
+		// so the scenario's dir field (bench/testdata) doesn't apply.
+		// We map the whole repo (which IS the testdata) with the scenario's budget.
+		out, err := dispatchJSON(ctx, db, "map", nil, map[string]any{
+			"budget": s.Budget,
+		})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		// Verify the map contains symbol information
+		var result struct {
+			Map     string `json:"map"`
+			Files   int    `json:"files"`
+			Symbols int    `json:"symbols"`
+		}
+		json.Unmarshal(out, &result)
+		if result.Symbols == 0 {
+			t.Error("map should return symbols")
+		}
+		if result.Map == "" {
+			t.Error("map should return a map string")
+		}
+		if s.Dir != "" {
+			t.Logf("orient_map: note: scenario dir=%q not used in Go test (setupRepo is the testdata root)", s.Dir)
+		}
+		t.Logf("orient_map: %dB files=%d symbols=%d", len(out), result.Files, result.Symbols)
+	})
+
+	t.Run("edit_function", func(t *testing.T) {
+		var s ScenarioEdit
+		if err := scenario.GetScenario("edit_function", &s); err != nil {
+			t.Fatal(err)
+		}
+		out, err := dispatchJSON(ctx, db, "edit", []string{s.File}, map[string]any{
+			"old_text": s.OldText,
+			"new_text": s.NewText,
+			"dry-run":  true,
+		})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		// Dry-run edit returns {dry_run: true, file: ..., diff: ...}
+		var result struct {
+			DryRun bool   `json:"dry_run"`
+			File   string `json:"file"`
+			Diff   string `json:"diff"`
+		}
+		json.Unmarshal(out, &result)
+		if !result.DryRun {
+			t.Error("edit should be a dry-run")
+		}
+		if result.File == "" {
+			t.Error("edit should return a file path")
+		}
+		if result.Diff == "" {
+			t.Error("edit dry-run should return a diff")
+		}
+		t.Logf("edit_function: %dB file=%s diff=%dB", len(out), result.File, len(result.Diff))
+	})
+
+	t.Run("multi_file_read", func(t *testing.T) {
+		var s ScenarioMultiRead
+		if err := scenario.GetScenario("multi_file_read", &s); err != nil {
+			t.Fatal(err)
+		}
+		out, err := dispatchJSON(ctx, db, "read", s.Files, map[string]any{"budget": s.Budget})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		// Verify we get results for multiple files
+		var results []json.RawMessage
+		json.Unmarshal(out, &results)
+		if len(results) < len(s.Files) {
+			t.Errorf("expected results for %d files, got %d", len(s.Files), len(results))
+		}
+		t.Logf("multi_file_read: %dB files=%d/%d", len(out), len(results), len(s.Files))
+	})
+
+	t.Run("explore_symbol", func(t *testing.T) {
+		var s ScenarioExplore
+		if err := scenario.GetScenario("explore_symbol", &s); err != nil {
+			t.Fatal(err)
+		}
+		out, err := dispatchJSON(ctx, db, "explore", s.Args, map[string]any{
+			"body":    true,
+			"callers": true,
+			"deps":    true,
+		})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		// Verify explore returns symbol info with body
+		var result struct {
+			Symbol struct{ Name string } `json:"symbol"`
+			Body   string                `json:"body"`
+		}
+		json.Unmarshal(out, &result)
+		if result.Symbol.Name == "" {
+			t.Error("explore should return a symbol")
+		}
+		if result.Body == "" {
+			t.Error("explore with --body should return body content")
+		}
+		t.Logf("explore_symbol: %dB symbol=%s body=%dB", len(out), result.Symbol.Name, len(result.Body))
+	})
 }

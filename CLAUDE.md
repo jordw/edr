@@ -304,21 +304,65 @@ Key files:
 
 ## Benchmarks
 
-Performance and session benchmarks live in `bench/`:
+Performance, correctness, and session benchmarks live in `bench/`:
 
 ```bash
 # Run all benchmarks
 go test ./bench/ -bench . -benchmem
+
+# Run correctness tests (adversarial fixtures — gates all optimization work)
+go test ./bench/ -run TestCorrectness -v
+
+# Run scenario validation (verifies JSON scenario definitions dispatch correctly)
+go test ./bench/ -run TestScenarioValidation -v
 
 # Run the multi-language session test (55 calls across 8 languages)
 go test ./bench/ -run TestSessionMultiLang -v
 
 # Run the session workflow performance benchmark
 go test ./bench/ -bench BenchmarkSessionWorkflow -benchmem
+
+# Emit benchmark results as JSON for automation
+go run ./bench/cmd/benchjson
+go run ./bench/cmd/benchjson -o results.json   # write to file
 ```
+
+### Test data
 
 `bench/testdata/` contains a realistic multi-language task queue system:
 Go, Python, Rust, C/H, Java, Ruby, JS, TSX.
+
+`bench/testdata/adversarial/` contains targeted fixtures for correctness testing:
+ambiguous symbols (Config/Init/Validate defined in 6+ files across Go/Python/JS),
+shadowed locals, aliased imports, and repeated method names on different types.
+
+### Correctness track
+
+`bench/correctness_test.go` runs adversarial tests with precision/recall metrics:
+- **Ambiguous symbols**: bare `Config` must fail with "ambiguous", file-scoped resolves
+- **Repeated method names**: `Validate` in pkg_a vs pkg_b — measures cross-contamination precision
+- **Cross-language search**: `Config`/`validate` found in 3+ languages
+- **Edit + reindex**: edit a symbol, verify index updates, verify refs still resolve
+- **Rename safety**: ambiguous symbols rejected, unique symbols rename across files
+- **Precision/recall**: refs results measured against expected sets (threshold >= 0.5, tighten over time)
+
+### Scenario definitions
+
+`bench/scenarios/` contains JSON scenario definitions that drive both Go tests and shell benchmarks.
+`bench/scenarios/fixture.json` is the canonical definition for the built-in testdata.
+`bench/scenarios/real/*.json` define scenarios for real repos (urfave/cli, vitess, click, etc.).
+
+The shell scripts (`native_comparison.sh`) accept both `.sh` profiles and `.json` scenarios.
+`bench/json_to_shell.py` bridges JSON scenarios to shell variable assignments.
+
+### Runtime metrics
+
+Benchmarks report custom metrics via `b.ReportMetric()`:
+- `response_bytes`: total JSON response size (context-efficiency)
+- `db_size_kb` / `wal_size_kb`: SQLite index + WAL size after indexing
+- `heap_alloc_kb`: current heap allocation at measurement point
+
+### Session tests
 
 **TestSessionMultiLang** exercises the full session lifecycle with trace validation:
 orientation (map, find), signatures + full reads across all languages, delta reads,

@@ -1,0 +1,72 @@
+{
+  "name": "vitess-sqlparser",
+  "root": "${BASE_DIR}/edr-bench-vitess/go/vt/sqlparser",
+  "scope_dir": ".",
+  "scenarios": {
+    "understand_api": {
+      "type": "read_signatures",
+      "file": "parser.go",
+      "spec": "parser.go:Parser"
+    },
+    "read_symbol": {
+      "type": "read_symbol",
+      "file": "analyzer.go",
+      "spec": "analyzer.go:Preview"
+    },
+    "find_refs": {
+      "type": "refs",
+      "pattern": "literalToBindvar",
+      "grep_root": ".",
+      "args": ["normalizer.go", "literalToBindvar"]
+    },
+    "search_context": {
+      "type": "search",
+      "pattern": "partialDDL",
+      "search_root": ".",
+      "budget": 500
+    },
+    "orient_map": {
+      "type": "map",
+      "dir": ".",
+      "budget": 500,
+      "globs": ["*.go"],
+      "read_files": [
+        "parser.go",
+        "ast.go",
+        "analyzer.go",
+        "ast_funcs.go"
+      ]
+    },
+    "edit_function": {
+      "type": "edit",
+      "file": "parser.go",
+      "old_text": "err := checkParseTreesError(tokenizer)\n\tif err != nil {\n\t\treturn nil, nil, err\n\t}",
+      "new_text": "parseTreeErr := checkParseTreesError(tokenizer)\n\tif parseTreeErr != nil {\n\t\treturn nil, nil, parseTreeErr\n\t}"
+    },
+    "add_method": {
+      "type": "write_inside",
+      "file": "parser.go",
+      "inside": "Parser",
+      "content": "func (p *Parser) Version() string {\n\treturn p.version\n}\n"
+    },
+    "multi_file_read": {
+      "type": "multi_read",
+      "budget": 500,
+      "files": [
+        "parser.go",
+        "ast.go",
+        "analyzer.go"
+      ]
+    },
+    "explore_symbol": {
+      "type": "explore",
+      "pattern": "literalToBindvar",
+      "grep_root": ".",
+      "args": ["normalizer.go", "literalToBindvar"],
+      "native_read_files": [
+        "normalizer.go",
+        "normalizer_test.go"
+      ]
+    }
+  }
+}

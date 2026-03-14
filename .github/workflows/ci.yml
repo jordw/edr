@@ -27,3 +27,13 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+      - name: Benchmarks
+        run: go test ./bench/ -bench . -benchmem -count=1 -run '^$' -timeout 300s | tee bench_output.txt
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: bench_output.txt

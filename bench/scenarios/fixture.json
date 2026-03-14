@@ -1,0 +1,72 @@
+{
+  "name": "fixture",
+  "root": "bench/testdata",
+  "scope_dir": "bench/testdata",
+  "scenarios": {
+    "understand_api": {
+      "type": "read_signatures",
+      "file": "lib/scheduler.py",
+      "spec": "lib/scheduler.py:Scheduler"
+    },
+    "read_symbol": {
+      "type": "read_symbol",
+      "file": "lib/scheduler.py",
+      "spec": "lib/scheduler.py:_execute_task"
+    },
+    "find_refs": {
+      "type": "refs",
+      "pattern": "_execute_task",
+      "grep_root": "bench/testdata",
+      "args": ["_execute_task"]
+    },
+    "search_context": {
+      "type": "search",
+      "pattern": "retry",
+      "search_root": "bench/testdata",
+      "budget": 500
+    },
+    "orient_map": {
+      "type": "map",
+      "dir": "bench/testdata",
+      "budget": 500,
+      "globs": ["*.py", "*.go", "*.java", "*.rb", "*.js", "*.tsx", "*.rs", "*.c"],
+      "read_files": [
+        "lib/scheduler.py",
+        "lib/TaskProcessor.java",
+        "internal/worker.go",
+        "main.go"
+      ]
+    },
+    "edit_function": {
+      "type": "edit",
+      "file": "lib/scheduler.py",
+      "old_text": "self._running = True",
+      "new_text": "self._running = False"
+    },
+    "add_method": {
+      "type": "write_inside",
+      "file": "lib/scheduler.py",
+      "inside": "Scheduler",
+      "content": "def drain(self, timeout: float = 5.0) -> int:\n    \"\"\"Drain remaining tasks.\"\"\"\n    return 0\n"
+    },
+    "multi_file_read": {
+      "type": "multi_read",
+      "budget": 500,
+      "files": [
+        "lib/scheduler.py",
+        "lib/TaskProcessor.java",
+        "internal/worker.go"
+      ]
+    },
+    "explore_symbol": {
+      "type": "explore",
+      "pattern": "_execute_task",
+      "grep_root": "bench/testdata",
+      "args": ["_execute_task"],
+      "native_read_files": [
+        "lib/scheduler.py",
+        "main.go"
+      ]
+    }
+  }
+}

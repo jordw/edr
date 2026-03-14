@@ -1,0 +1,73 @@
+{
+  "name": "pallets-click",
+  "root": "${BASE_DIR}/edr-bench-click/src/click",
+  "scope_dir": ".",
+  "scenarios": {
+    "understand_api": {
+      "type": "read_signatures",
+      "file": "formatting.py",
+      "spec": "formatting.py:HelpFormatter"
+    },
+    "read_symbol": {
+      "type": "read_symbol",
+      "file": "_compat.py",
+      "spec": "_compat.py:open_stream"
+    },
+    "find_refs": {
+      "type": "refs",
+      "pattern": "open_stream",
+      "grep_root": ".",
+      "args": ["_compat.py", "open_stream"]
+    },
+    "search_context": {
+      "type": "search",
+      "pattern": "allow_extra_args",
+      "search_root": ".",
+      "budget": 500
+    },
+    "orient_map": {
+      "type": "map",
+      "dir": ".",
+      "budget": 500,
+      "globs": ["*.py"],
+      "read_files": [
+        "formatting.py",
+        "parser.py",
+        "decorators.py",
+        "types.py"
+      ]
+    },
+    "edit_function": {
+      "type": "edit",
+      "file": "formatting.py",
+      "old_text": "    # The arguments will fit to the right of the prefix.",
+      "new_text": "    # Arguments fit to the right of the prefix."
+    },
+    "add_method": {
+      "type": "write_inside",
+      "file": "formatting.py",
+      "inside": "HelpFormatter",
+      "content": "    def has_content(self) -> bool:\n        return bool(self.buffer)\n"
+    },
+    "multi_file_read": {
+      "type": "multi_read",
+      "budget": 500,
+      "files": [
+        "formatting.py",
+        "parser.py",
+        "types.py"
+      ]
+    },
+    "explore_symbol": {
+      "type": "explore",
+      "pattern": "open_stream",
+      "grep_root": ".",
+      "args": ["_compat.py", "open_stream"],
+      "native_read_files": [
+        "_compat.py",
+        "types.py",
+        "utils.py"
+      ]
+    }
+  }
+}

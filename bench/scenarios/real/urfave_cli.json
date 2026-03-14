@@ -1,0 +1,73 @@
+{
+  "name": "urfave-cli",
+  "root": "${BASE_DIR}/edr-bench-urfave-cli",
+  "scope_dir": ".",
+  "scenarios": {
+    "understand_api": {
+      "type": "read_signatures",
+      "file": "command.go",
+      "spec": "command.go:Command"
+    },
+    "read_symbol": {
+      "type": "read_symbol",
+      "file": "help.go",
+      "spec": "help.go:helpCommandAction"
+    },
+    "find_refs": {
+      "type": "refs",
+      "pattern": "helpCommandAction",
+      "grep_root": ".",
+      "args": ["help.go", "helpCommandAction"]
+    },
+    "search_context": {
+      "type": "search",
+      "pattern": "shellCompletion",
+      "search_root": ".",
+      "budget": 500
+    },
+    "orient_map": {
+      "type": "map",
+      "dir": ".",
+      "budget": 500,
+      "globs": ["*.go"],
+      "read_files": [
+        "command.go",
+        "command_run.go",
+        "help.go",
+        "flag.go"
+      ]
+    },
+    "edit_function": {
+      "type": "edit",
+      "file": "command_run.go",
+      "old_text": "tracef(\"using post-parse arguments %[1]q (cmd=%[2]q)\", args, cmd.Name)",
+      "new_text": "tracef(\"using parsed arguments %[1]q (cmd=%[2]q)\", args, cmd.Name)"
+    },
+    "add_method": {
+      "type": "write_inside",
+      "file": "command.go",
+      "inside": "Command",
+      "content": "func (cmd *Command) HasSubcommands() bool {\n\treturn len(cmd.Commands) > 0\n}\n"
+    },
+    "multi_file_read": {
+      "type": "multi_read",
+      "budget": 500,
+      "files": [
+        "command.go",
+        "command_run.go",
+        "command_parse.go"
+      ]
+    },
+    "explore_symbol": {
+      "type": "explore",
+      "pattern": "helpCommandAction",
+      "grep_root": ".",
+      "args": ["help.go", "helpCommandAction"],
+      "native_read_files": [
+        "help.go",
+        "command_run.go",
+        "command_setup.go"
+      ]
+    }
+  }
+}

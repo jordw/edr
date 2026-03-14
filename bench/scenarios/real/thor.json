@@ -1,0 +1,73 @@
+{
+  "name": "rails-thor",
+  "root": "${BASE_DIR}/edr-bench-thor/lib/thor",
+  "scope_dir": ".",
+  "scenarios": {
+    "understand_api": {
+      "type": "read_signatures",
+      "file": "command.rb",
+      "spec": "command.rb:Command"
+    },
+    "read_symbol": {
+      "type": "read_symbol",
+      "file": "runner.rb",
+      "spec": "runner.rb:install"
+    },
+    "find_refs": {
+      "type": "refs",
+      "pattern": "formatted_usage",
+      "grep_root": ".",
+      "args": ["command.rb", "formatted_usage"]
+    },
+    "search_context": {
+      "type": "search",
+      "pattern": "class_option",
+      "search_root": ".",
+      "budget": 500
+    },
+    "orient_map": {
+      "type": "map",
+      "dir": ".",
+      "budget": 500,
+      "globs": ["*.rb"],
+      "read_files": [
+        "base.rb",
+        "command.rb",
+        "parser/options.rb",
+        "parser/option.rb"
+      ]
+    },
+    "edit_function": {
+      "type": "edit",
+      "file": "parser/options.rb",
+      "old_text": "      @extra = []\n      @pile = args.dup",
+      "new_text": "      @extra = []\n      @pile = Array(args).dup"
+    },
+    "add_method": {
+      "type": "write_inside",
+      "file": "parser/options.rb",
+      "inside": "Options",
+      "content": "    def empty?\n      @pile.empty?\n    end\n"
+    },
+    "multi_file_read": {
+      "type": "multi_read",
+      "budget": 500,
+      "files": [
+        "base.rb",
+        "runner.rb",
+        "parser/options.rb"
+      ]
+    },
+    "explore_symbol": {
+      "type": "explore",
+      "pattern": "formatted_usage",
+      "grep_root": ".",
+      "args": ["command.rb", "formatted_usage"],
+      "native_read_files": [
+        "command.rb",
+        "group.rb",
+        "runner.rb"
+      ]
+    }
+  }
+}

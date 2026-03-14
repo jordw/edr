@@ -1,0 +1,73 @@
+{
+  "name": "redux-toolkit",
+  "root": "${BASE_DIR}/edr-bench-redux-toolkit/packages/toolkit/src",
+  "scope_dir": ".",
+  "scenarios": {
+    "understand_api": {
+      "type": "read_signatures",
+      "file": "utils.ts",
+      "spec": "utils.ts:Tuple"
+    },
+    "read_symbol": {
+      "type": "read_symbol",
+      "file": "createReducer.ts",
+      "spec": "createReducer.ts:createReducer"
+    },
+    "find_refs": {
+      "type": "refs",
+      "pattern": "executeReducerBuilderCallback",
+      "grep_root": ".",
+      "args": ["mapBuilders.ts", "executeReducerBuilderCallback"]
+    },
+    "search_context": {
+      "type": "search",
+      "pattern": "TaskAbortError",
+      "search_root": ".",
+      "budget": 500
+    },
+    "orient_map": {
+      "type": "map",
+      "dir": ".",
+      "budget": 500,
+      "globs": ["*.ts", "*.tsx"],
+      "read_files": [
+        "createReducer.ts",
+        "mapBuilders.ts",
+        "utils.ts",
+        "listenerMiddleware/task.ts"
+      ]
+    },
+    "edit_function": {
+      "type": "edit",
+      "file": "createReducer.ts",
+      "old_text": "  // Ensure the initial state gets frozen either way (if draftable)",
+      "new_text": "  // Freeze the initial state either way (if draftable)"
+    },
+    "add_method": {
+      "type": "write_inside",
+      "file": "utils.ts",
+      "inside": "Tuple",
+      "content": "  isEmpty() {\n    return this.length === 0\n  }\n"
+    },
+    "multi_file_read": {
+      "type": "multi_read",
+      "budget": 500,
+      "files": [
+        "createReducer.ts",
+        "mapBuilders.ts",
+        "listenerMiddleware/task.ts"
+      ]
+    },
+    "explore_symbol": {
+      "type": "explore",
+      "pattern": "executeReducerBuilderCallback",
+      "grep_root": ".",
+      "args": ["mapBuilders.ts", "executeReducerBuilderCallback"],
+      "native_read_files": [
+        "mapBuilders.ts",
+        "createReducer.ts",
+        "createSlice.ts"
+      ]
+    }
+  }
+}

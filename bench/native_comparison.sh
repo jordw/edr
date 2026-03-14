@@ -16,8 +16,13 @@ if [ ! -f "$PROFILE" ]; then
     exit 1
 fi
 
-# shellcheck source=/dev/null
-source "$PROFILE"
+# Support both .sh profiles (sourced directly) and .json scenarios (converted).
+if [[ "$PROFILE" == *.json ]]; then
+    eval "$(python3 "$SCRIPT_DIR/json_to_shell.py" "$PROFILE" "${BASE_DIR:-/tmp}")"
+else
+    # shellcheck source=/dev/null
+    source "$PROFILE"
+fi
 
 if [ -z "${BENCH_ROOT:-}" ]; then
     echo "profile must set BENCH_ROOT" >&2
