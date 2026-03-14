@@ -3,7 +3,6 @@ package gather
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
@@ -26,7 +25,7 @@ func Gather(ctx context.Context, db *index.DB, file, symbolName string, budget i
 		return nil, err
 	}
 
-	target := symbolToOutputSig(*sym, showSigs)
+	target := symbolToOutputSig(ctx, *sym, showSigs)
 	result := &output.GatherResult{
 		Target:      target,
 		TotalTokens: target.Size,
@@ -41,7 +40,7 @@ func Gather(ctx context.Context, db *index.DB, file, symbolName string, budget i
 			candidate.StartLine <= sym.StartLine &&
 			candidate.EndLine >= sym.EndLine &&
 			candidate.Name != sym.Name {
-			csym := symbolToOutputSig(candidate, showSigs)
+			csym := symbolToOutputSig(ctx, candidate, showSigs)
 			result.Container = &csym
 			stub := index.ExtractContainerStub(candidate, allFileSyms)
 			result.ContainerStub = stub
@@ -54,7 +53,7 @@ func Gather(ctx context.Context, db *index.DB, file, symbolName string, budget i
 
 	// Include target body
 	if includeBody {
-		body := readSymbolBody(*sym)
+		body := readSymbolBody(ctx, *sym)
 		if body != "" {
 			result.TargetBody = body
 		}
@@ -98,13 +97,13 @@ func Gather(ctx context.Context, db *index.DB, file, symbolName string, budget i
 	// Add callers that fit in budget; track omitted ones
 	const sigTokens = 10 // approximate tokens for a signature-only entry
 	for _, c := range allCallers {
-		caller := symbolToOutputSig(c, showSigs)
+		caller := symbolToOutputSig(ctx, c, showSigs)
 		if remaining-caller.Size < 0 {
 			// Still include signature if space for that
 			if remaining >= sigTokens {
 				caller.Size = sigTokens
 				if !showSigs {
-					caller.Signature = index.ExtractSignature(c)
+					caller.Signature = index.ExtractSignatureCtx(ctx, c)
 				}
 				remaining -= sigTokens
 				result.Callers = append(result.Callers, caller)
@@ -121,7 +120,7 @@ func Gather(ctx context.Context, db *index.DB, file, symbolName string, budget i
 			if result.CallerSnips == nil {
 				result.CallerSnips = make(map[string]string)
 			}
-			result.CallerSnips[c.Name] = readSymbolBody(c)
+			result.CallerSnips[c.Name] = readSymbolBody(ctx, c)
 		}
 	}
 
@@ -131,12 +130,12 @@ func Gather(ctx context.Context, db *index.DB, file, symbolName string, budget i
 	orderedTests := append(testFuncs, testHelpers...)
 
 	for _, t := range orderedTests {
-		ts := symbolToOutputSig(t, showSigs)
+		ts := symbolToOutputSig(ctx, t, showSigs)
 		if remaining-ts.Size < 0 {
 			if remaining >= sigTokens {
 				ts.Size = sigTokens
 				if !showSigs {
-					ts.Signature = index.ExtractSignature(t)
+					ts.Signature = index.ExtractSignatureCtx(ctx, t)
 				}
 				remaining -= sigTokens
 				result.Tests = append(result.Tests, ts)
@@ -153,7 +152,7 @@ func Gather(ctx context.Context, db *index.DB, file, symbolName string, budget i
 			if result.TestSnips == nil {
 				result.TestSnips = make(map[string]string)
 			}
-			result.TestSnips[t.Name] = readSymbolBody(t)
+			result.TestSnips[t.Name] = readSymbolBody(ctx, t)
 		}
 	}
 
@@ -179,8 +178,8 @@ func GatherBySearch(ctx context.Context, db *index.DB, query string, budget int,
 	return Gather(ctx, db, symbols[0].File, symbols[0].Name, budget, includeBody, includeSigs...)
 }
 
-func readSymbolBody(s index.SymbolInfo) string {
-	data, err := os.ReadFile(s.File)
+func readSymbolBody(ctx context.Context, s index.SymbolInfo) string {
+	data, err := index.CachedReadFile(ctx, s.File)
 	if err != nil {
 		return ""
 	}
@@ -190,11 +189,8 @@ func readSymbolBody(s index.SymbolInfo) string {
 	return ""
 }
 
-func symbolToOutput(s index.SymbolInfo) output.Symbol {
-	return symbolToOutputSig(s, false)
-}
 
-func symbolToOutputSig(s index.SymbolInfo, showSig bool) output.Symbol {
+func symbolToOutputSig(ctx context.Context, s index.SymbolInfo, showSig bool) output.Symbol {
 	size := int(s.EndByte-s.StartByte) / 4
 	sym := output.Symbol{
 		Type:  s.Type,
@@ -204,7 +200,7 @@ func symbolToOutputSig(s index.SymbolInfo, showSig bool) output.Symbol {
 		Size:  size,
 	}
 	if showSig {
-		sym.Signature = index.ExtractSignature(s)
+		sym.Signature = index.ExtractSignatureCtx(ctx, s)
 	}
 	return sym
 }

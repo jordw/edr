@@ -3,8 +3,6 @@ package dispatch
 import (
 	"context"
 	"fmt"
-	"os"
-
 	"strings"
 
 	"github.com/jordw/edr/internal/edit"
@@ -36,11 +34,11 @@ func runExpand(ctx context.Context, db *index.DB, root string, args []string, fl
 	}
 
 	if showSigs {
-		result.Symbol.Signature = index.ExtractSignature(*sym)
+		result.Symbol.Signature = index.ExtractSignatureCtx(ctx, *sym)
 	}
 
 	if showBody {
-		src, err := os.ReadFile(sym.File)
+		src, err := index.CachedReadFile(ctx, sym.File)
 		if err != nil {
 			return nil, err
 		}
@@ -79,7 +77,7 @@ func runExpand(ctx context.Context, db *index.DB, root string, args []string, fl
 								seen[key] = true
 								csym := toOutputSymbol(&s, "")
 								if showSigs {
-									csym.Signature = index.ExtractSignature(s)
+									csym.Signature = index.ExtractSignatureCtx(ctx, s)
 								}
 								result.Callers = append(result.Callers, csym)
 							}
@@ -91,7 +89,7 @@ func runExpand(ctx context.Context, db *index.DB, root string, args []string, fl
 			for _, c := range callers {
 				csym := toOutputSymbol(&c, "")
 				if showSigs {
-					csym.Signature = index.ExtractSignature(c)
+					csym.Signature = index.ExtractSignatureCtx(ctx, c)
 				}
 				result.Callers = append(result.Callers, csym)
 			}
@@ -104,7 +102,7 @@ func runExpand(ctx context.Context, db *index.DB, root string, args []string, fl
 			for _, d := range deps {
 				dsym := toOutputSymbol(&d, "")
 				if showSigs {
-					dsym.Signature = index.ExtractSignature(d)
+					dsym.Signature = index.ExtractSignatureCtx(ctx, d)
 				}
 				result.Deps = append(result.Deps, dsym)
 			}

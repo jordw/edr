@@ -2,6 +2,7 @@ package index
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -303,43 +304,72 @@ func FindReferences(ctx context.Context, db *DB, symbolName string) ([]SymbolInf
 // for rename operations. When semantic refs are available, only scans files that
 // import or define the symbol (filtering out unrelated identifiers with the same name).
 func FindIdentifierOccurrences(ctx context.Context, db *DB, symbolName string) ([]SymbolInfo, error) {
+	// Always check for ambiguity first, regardless of refs table state.
+	sym, err := db.ResolveSymbol(ctx, symbolName)
+	if err != nil {
+		// Ambiguous symbol → fail fast instead of guessing with repo-wide scan.
+		var ambErr *AmbiguousSymbolError
+		if errors.As(err, &ambErr) {
+			return nil, err
+		}
+		// Not found → fall back to text-based scan.
+		return findReferencesTextBased(ctx, db, symbolName)
+	}
+
 	if !db.HasRefs(ctx) {
 		return findReferencesTextBased(ctx, db, symbolName)
 	}
 
-	// Resolve the symbol to get its definition file for import filtering.
-	sym, err := db.ResolveSymbol(ctx, symbolName)
-	if err != nil {
-		// Can't resolve — fall back to text-based scan.
-		return findReferencesTextBased(ctx, db, symbolName)
+	// Build allowed byte ranges per file using semantic callers.
+	// This prevents renaming shadowed locals or unrelated same-name identifiers.
+	allowedRanges := make(map[string][][2]uint32)
+
+	// The definition symbol itself — always include its full byte range.
+	allowedRanges[sym.File] = append(allowedRanges[sym.File],
+		[2]uint32{sym.StartByte, sym.EndByte})
+
+	// Get all symbols that semantically reference the target (import-filtered).
+	callers, err := db.FindSemanticCallers(ctx, symbolName, sym.File)
+	if err == nil {
+		for _, c := range callers {
+			allowedRanges[c.File] = append(allowedRanges[c.File],
+				[2]uint32{c.StartByte, c.EndByte})
+		}
 	}
 
-	// Use the refs table to find files that semantically reference this symbol.
-	refFiles, err := db.FindReferencingFiles(ctx, symbolName, sym.File)
-	if err != nil {
-		return findReferencesTextBased(ctx, db, symbolName)
+	// Also include same-file references from the refs table.
+	// FindSemanticCallers skips the symbol itself; we need other symbols in
+	// the definition file that reference this name (e.g., init(), tests).
+	sameFileRefs, _ := db.FindSameFileCallers(ctx, symbolName, sym.File)
+	for _, r := range sameFileRefs {
+		allowedRanges[r.File] = append(allowedRanges[r.File],
+			[2]uint32{r.StartByte, r.EndByte})
 	}
 
-	// Always include the definition file.
-	fileSet := map[string]bool{sym.File: true}
-	for _, f := range refFiles {
-		fileSet[f] = true
-	}
-
-	// Scan only the relevant files for exact identifier byte ranges.
+	// Scan each file but only keep refs within allowed symbol byte ranges.
 	var refs []SymbolInfo
-	for file := range fileSet {
+	for file, ranges := range allowedRanges {
 		lang := GetLangConfig(file)
 		if lang == nil {
 			continue
 		}
-		src, err := os.ReadFile(file)
+		src, err := CachedReadFile(ctx, file)
 		if err != nil {
 			continue
 		}
+		var allRefs []SymbolInfo
 		cachedParseWith(lang, src, func(root *tree_sitter.Node) {
-			findIdentifierRefs(root, src, file, symbolName, &refs)
+			findIdentifierRefs(root, src, file, symbolName, &allRefs)
 		})
+		// Filter to only refs within allowed symbol byte ranges.
+		for _, ref := range allRefs {
+			for _, r := range ranges {
+				if ref.StartByte >= r[0] && ref.EndByte <= r[1] {
+					refs = append(refs, ref)
+					break
+				}
+			}
+		}
 	}
 
 	return refs, nil
@@ -369,7 +399,7 @@ func findReferencesTextBased(ctx context.Context, db *DB, symbolName string) ([]
 			continue
 		}
 
-		src, err := os.ReadFile(file)
+		src, err := CachedReadFile(ctx, file)
 		if err != nil {
 			continue
 		}

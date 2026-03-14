@@ -141,7 +141,7 @@ func runCallChain(ctx context.Context, db *index.DB, root string, args []string,
 	}
 
 	visited := []pathNode{{name: to, file: toSym.File, parent: -1}}
-	seen := map[string]bool{to: true}
+	seen := map[string]bool{toSym.File + ":" + to: true}
 	found := -1
 
 	for front := 0; front < len(visited) && found < 0; front++ {
@@ -173,10 +173,11 @@ func runCallChain(ctx context.Context, db *index.DB, root string, args []string,
 			}
 		}
 		for _, c := range callers {
-			if seen[c.Name] {
+			key := c.File + ":" + c.Name
+			if seen[key] {
 				continue
 			}
-			seen[c.Name] = true
+			seen[key] = true
 			idx := len(visited)
 			visited = append(visited, pathNode{name: c.Name, file: c.File, parent: front})
 			if c.Name == from {

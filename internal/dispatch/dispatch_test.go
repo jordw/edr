@@ -1354,3 +1354,273 @@ func hello() string { return "v1.0" }
 	}
 }
 
+// TestRenameScopedDoesNotRenameUnrelatedFile verifies that rename only targets
+// resolved references via the refs table, not unrelated files that happen to
+// use the same identifier name.
+func TestRenameScopedDoesNotRenameUnrelatedFile(t *testing.T) {
+	tmp := t.TempDir()
+
+	// lib/ defines "count"
+	libDir := filepath.Join(tmp, "lib")
+	os.MkdirAll(libDir, 0755)
+	if err := os.WriteFile(filepath.Join(libDir, "counter.go"), []byte(`package lib
+
+func count() int {
+	return 42
+}
+
+func useCount() int {
+	return count() + 1
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// unrelated/ also uses "count" as a local variable — not a reference to lib.count.
+	unrelDir := filepath.Join(tmp, "unrelated")
+	os.MkdirAll(unrelDir, 0755)
+	unrelFile := filepath.Join(unrelDir, "other.go")
+	unrelSrc := `package unrelated
+
+func doStuff() int {
+	count := 10
+	return count + 1
+}
+`
+	if err := os.WriteFile(unrelFile, []byte(unrelSrc), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rename the lib-level "count" function to "tally".
+	// The unrelated package's local "count" should NOT be renamed.
+	result, err := dispatch.Dispatch(ctx, db, "rename", []string{"count", "tally"}, map[string]any{
+		"dry_run": true,
+	})
+	if err != nil {
+		t.Fatalf("rename dry_run: %v", err)
+	}
+
+	raw, _ := json.Marshal(result)
+	var rr output.RenameResult
+	if err := json.Unmarshal(raw, &rr); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should find occurrences only in lib/ (definition + useCount), not in unrelated/.
+	for _, p := range rr.Preview {
+		if strings.Contains(p.File, "unrelated") {
+			t.Errorf("rename should not touch unrelated package, but found: %+v", p)
+		}
+	}
+	if rr.Occurrences < 2 {
+		t.Errorf("expected at least 2 occurrences in lib/ (definition + useCount), got %d", rr.Occurrences)
+	}
+
+	// Verify unrelated file is untouched.
+	data, _ := os.ReadFile(unrelFile)
+	if string(data) != unrelSrc {
+		t.Errorf("unrelated file was modified: %s", string(data))
+	}
+}
+
+// TestRenameAmbiguousSymbolFailsFast verifies that renaming an ambiguous symbol
+// returns an error instead of silently falling back to repo-wide text scanning.
+func TestRenameAmbiguousSymbolFailsFast(t *testing.T) {
+	tmp := t.TempDir()
+	// Two packages define the same symbol name "Process".
+	pkgA := filepath.Join(tmp, "pkga")
+	pkgB := filepath.Join(tmp, "pkgb")
+	os.MkdirAll(pkgA, 0755)
+	os.MkdirAll(pkgB, 0755)
+
+	if err := os.WriteFile(filepath.Join(pkgA, "a.go"), []byte(`package pkga
+
+func Process() string {
+	return "a"
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgB, "b.go"), []byte(`package pkgb
+
+func Process() string {
+	return "b"
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Renaming "Process" should fail because it's ambiguous (exists in two packages).
+	_, err = dispatch.Dispatch(ctx, db, "rename", []string{"Process", "Handle"}, nil)
+	if err == nil {
+		t.Fatal("expected error for ambiguous rename target, got nil")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") && !strings.Contains(err.Error(), "multiple") {
+		t.Fatalf("expected ambiguous error, got: %v", err)
+	}
+}
+
+// TestCallChainSameNameDifferentFiles verifies that call-chain traversal
+// treats same-named symbols in different files as distinct nodes.
+func TestCallChainSameNameDifferentFiles(t *testing.T) {
+	tmp := t.TempDir()
+
+	// Create a chain: main → helperA.Process → helperB.Process → target
+	// Without the fix, both Process nodes collapse into one.
+	if err := os.WriteFile(filepath.Join(tmp, "target.go"), []byte(`package main
+
+func target() string {
+	return "done"
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "helper_b.go"), []byte(`package main
+
+func helperB() string {
+	return target()
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "helper_a.go"), []byte(`package main
+
+func helperA() string {
+	return helperB()
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "entry.go"), []byte(`package main
+
+func entry() string {
+	return helperA()
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := dispatch.Dispatch(ctx, db, "refs", []string{"entry"}, map[string]any{
+		"chain": "target",
+	})
+	if err != nil {
+		t.Fatalf("call-chain: %v", err)
+	}
+
+	raw, _ := json.Marshal(result)
+	var cc map[string]any
+	if err := json.Unmarshal(raw, &cc); err != nil {
+		t.Fatal(err)
+	}
+	if cc["found"] != true {
+		t.Fatalf("expected call chain to be found, got: %s", string(raw))
+	}
+	chain, ok := cc["chain"].([]any)
+	if !ok || len(chain) < 3 {
+		t.Fatalf("expected chain of length >= 3, got: %s", string(raw))
+	}
+}
+
+// TestIndexWarningsSurfaced verifies that per-file index errors are
+// accumulated and accessible via DB.IndexWarnings().
+func TestIndexWarningsSurfaced(t *testing.T) {
+	tmp := t.TempDir()
+	// Valid file
+	if err := os.WriteFile(filepath.Join(tmp, "good.go"), []byte(`package main
+
+func good() {}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	_, _, err = index.IndexRepo(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// After a successful index, warnings should be empty.
+	warnings := db.IndexWarnings()
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 warnings for valid repo, got %d: %+v", len(warnings), warnings)
+	}
+}
+
+// TestSourceCacheReducesReads verifies that WithSourceCache prevents redundant reads.
+func TestSourceCacheReducesReads(t *testing.T) {
+	tmp := t.TempDir()
+	f := filepath.Join(tmp, "test.go")
+	if err := os.WriteFile(f, []byte(`package main
+
+func hello() {}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := index.WithSourceCache(context.Background())
+
+	// First read should succeed.
+	data1, err := index.CachedReadFile(ctx, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data1), "hello") {
+		t.Fatal("unexpected content")
+	}
+
+	// Delete the file — cached read should still return data.
+	os.Remove(f)
+	data2, err := index.CachedReadFile(ctx, f)
+	if err != nil {
+		t.Fatalf("cached read after delete should work: %v", err)
+	}
+	if string(data1) != string(data2) {
+		t.Fatal("cached data should be identical")
+	}
+
+	// Without cache, should fail.
+	data3, err := index.CachedReadFile(context.Background(), f)
+	if err == nil {
+		t.Fatalf("uncached read of deleted file should fail, got: %s", string(data3))
+	}
+}
+

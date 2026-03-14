@@ -136,6 +136,7 @@ type fileCandidate struct {
 type parsedFile struct {
 	candidate fileCandidate
 	result    *ParseResult
+	err       error // non-nil if parse failed
 }
 
 // ProgressFunc is called periodically during indexing with (filesIndexed, symbolsFound).
@@ -233,9 +234,7 @@ func IndexRepo(ctx context.Context, db *DB, progress ...ProgressFunc) (int, int,
 			defer parseWg.Done()
 			for c := range candidates {
 				result, err := ParseFileComplete(c.path, c.src, c.lang)
-				if err == nil {
-					parsed <- parsedFile{candidate: c, result: result}
-				}
+				parsed <- parsedFile{candidate: c, result: result, err: err}
 			}
 		}()
 	}
@@ -250,29 +249,39 @@ func IndexRepo(ctx context.Context, db *DB, progress ...ProgressFunc) (int, int,
 	}
 
 	var filesIndexed, symbolsFound int
+	var fileErrors []FileError
 	for pf := range parsed {
+		c := &pf.candidate
+		if pf.err != nil {
+			fileErrors = append(fileErrors, FileError{File: c.path, Phase: "parse", Err: pf.err, Msg: pf.err.Error()})
+			continue
+		}
 		if pf.result == nil {
 			continue
 		}
-		c := &pf.candidate
 		if err := db.UpsertFile(ctx, c.path, c.hash, c.mtime); err != nil {
+			fileErrors = append(fileErrors, FileError{File: c.path, Phase: "upsert", Err: err, Msg: err.Error()})
 			continue
 		}
 		if !c.isNew {
 			if err := db.ClearFileData(ctx, c.path); err != nil {
+				fileErrors = append(fileErrors, FileError{File: c.path, Phase: "clear", Err: err, Msg: err.Error()})
 				continue
 			}
 		}
 		symbolIDs, err := db.InsertSymbolsBatch(ctx, pf.result.Symbols)
 		if err != nil {
+			fileErrors = append(fileErrors, FileError{File: c.path, Phase: "symbols", Err: err, Msg: err.Error()})
 			continue
 		}
 		symbolsFound += len(pf.result.Symbols)
 		if err := db.InsertImports(ctx, pf.result.Imports); err != nil {
+			fileErrors = append(fileErrors, FileError{File: c.path, Phase: "imports", Err: err, Msg: err.Error()})
 			continue
 		}
 		refs := pf.result.ExtractRefs(symbolIDs)
 		if err := db.InsertRefs(ctx, c.path, refs); err != nil {
+			fileErrors = append(fileErrors, FileError{File: c.path, Phase: "refs", Err: err, Msg: err.Error()})
 			continue
 		}
 		filesIndexed++
@@ -280,6 +289,7 @@ func IndexRepo(ctx context.Context, db *DB, progress ...ProgressFunc) (int, int,
 			progressFn(filesIndexed, symbolsFound)
 		}
 	}
+	db.indexWarnings = fileErrors
 
 	// Persist .gitignore metadata so HasStaleFiles can detect ignore-rule changes.
 	persistGitignoreMeta(root)

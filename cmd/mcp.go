@@ -400,6 +400,9 @@ func checkSubObjectFields(raw json.RawMessage, section string, known map[string]
 
 // handleDo dispatches edr_do (batch reads/queries/edits/writes/renames/verify).
 func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trace.Collector, raw json.RawMessage) (string, error) {
+	// Inject per-request source cache to avoid repeated os.ReadFile across operations.
+	ctx = index.WithSourceCache(ctx)
+
 	var p doParams
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return "", err

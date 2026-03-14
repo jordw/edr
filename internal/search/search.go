@@ -110,7 +110,7 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int,
 		}
 
 		if showBody {
-			src, err := os.ReadFile(s.File)
+			src, err := index.CachedReadFile(ctx, s.File)
 			if err == nil && int(s.EndByte) <= len(src) {
 				body := string(src[s.StartByte:s.EndByte])
 				if budget > 0 {

@@ -22,7 +22,20 @@ type DB struct {
 	writeMu  sync.Mutex // in-process writer serialization (for MCP goroutines)
 	lockFile *os.File   // cross-process writer lock (.edr/writer.lock)
 	batchTx  *sql.Tx    // optional: if set, write methods join this tx instead of creating their own
+
+	indexWarnings []FileError // per-file errors from last IndexRepo run
 }
+
+// FileError records a per-file failure during indexing.
+type FileError struct {
+	File  string `json:"file"`
+	Phase string `json:"phase"` // "parse", "upsert", "clear", "symbols", "imports", "refs"
+	Err   error  `json:"-"`
+	Msg   string `json:"error"`
+}
+
+// IndexWarnings returns per-file errors from the most recent IndexRepo run.
+func (d *DB) IndexWarnings() []FileError { return d.indexWarnings }
 
 // retryDB wraps sql.DB to automatically retry on SQLITE_BUSY errors.
 // modernc.org/sqlite's PRAGMA busy_timeout doesn't reliably work across
@@ -805,6 +818,38 @@ func (d *DB) FindSemanticCallers(ctx context.Context, symbolName, symbolFile str
 		}
 	}
 
+	return results, nil
+}
+
+// FindSameFileCallers returns symbols in the same file that reference symbolName,
+// including the symbol itself (unlike FindSemanticCallers which skips self-refs).
+// This is used by rename to ensure all same-file references are captured.
+func (d *DB) FindSameFileCallers(ctx context.Context, symbolName, symbolFile string) ([]SymbolInfo, error) {
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT DISTINCT s.name, s.type, s.file, s.start_line, s.end_line, s.start_byte, s.end_byte
+		FROM refs r
+		JOIN symbols s ON s.id = r.from_symbol_id
+		WHERE r.to_name = ? AND r.file = ?
+	`, symbolName, symbolFile)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []SymbolInfo
+	seen := make(map[string]bool)
+	for rows.Next() {
+		var s SymbolInfo
+		if err := rows.Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte); err != nil {
+			return nil, err
+		}
+		key := s.File + ":" + s.Name
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		results = append(results, s)
+	}
 	return results, nil
 }
 

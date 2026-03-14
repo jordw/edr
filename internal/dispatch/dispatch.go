@@ -301,6 +301,9 @@ type MultiResult struct {
 // the same file run sequentially in their original order. Global-mutating
 // commands (init, rename, edit-plan) force fully sequential execution.
 func DispatchMulti(ctx context.Context, db *index.DB, commands []MultiCmd, topBudget ...int) []MultiResult {
+	// Inject per-request source cache if not already present.
+	ctx = index.WithSourceCache(ctx)
+
 	results := make([]MultiResult, len(commands))
 
 	// Normalize nil args/flags
