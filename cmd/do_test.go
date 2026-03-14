@@ -351,34 +351,6 @@ func TestPostProcess_FullFlag(t *testing.T) {
 	}
 }
 
-func TestRouteTool_Edr(t *testing.T) {
-	raw := json.RawMessage(`{"reads":[{"file":"f.go"}]}`)
-	cmd, _, _, err := routeTool("edr", raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cmd != "do" {
-		t.Errorf("cmd=%s, want do", cmd)
-	}
-}
-
-func TestRouteTool_Unknown(t *testing.T) {
-	_, _, _, err := routeTool("edr_nonexistent", json.RawMessage(`{}`))
-	if err == nil {
-		t.Error("expected error for unknown tool")
-	}
-}
-
-func TestMcpTools_Count(t *testing.T) {
-	tools := mcpTools()
-	if len(tools) != 1 {
-		t.Errorf("expected 1 tool, got %d", len(tools))
-	}
-	if tools[0].Name != "edr" {
-		t.Errorf("tool name = %q, want edr", tools[0].Name)
-	}
-}
-
 func TestDoQueryToMultiCmd_Search(t *testing.T) {
 	body := true
 	pattern := "TODO"

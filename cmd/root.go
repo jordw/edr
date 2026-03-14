@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/jordw/edr/internal/index"
@@ -61,7 +62,11 @@ func rootRunE(cmd *cobra.Command, args []string) error {
 	}
 	defer db.Close()
 
-	sess := session.New()
+	sess, err := openSession(cmd, db)
+	if err != nil {
+		return err
+	}
+	defer sess.Close()
 	ctx := context.Background()
 	text, err := handleDo(ctx, db, sess, nil, raw)
 	if err != nil {
@@ -89,6 +94,7 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().StringP("root", "r", ".", "repository root directory")
+	rootCmd.PersistentFlags().String("session", "", "session token for cross-invocation state (default: none, use $PPID for automatic)")
 }
 
 // openAndEnsureIndex opens the DB and bootstraps the index if it does not exist yet.
@@ -179,4 +185,19 @@ func getRoot(cmd *cobra.Command) string {
 		}
 	}
 	return root
+}
+
+// openSession returns a file-backed session if --session is set, otherwise in-memory.
+// The caller must call sess.Close() to persist state.
+func openSession(cmd *cobra.Command, db *index.DB) (*session.Session, error) {
+	tok, _ := cmd.Flags().GetString("session")
+	if tok == "" {
+		return session.New(), nil
+	}
+	edrDir := filepath.Join(db.Root(), ".edr")
+	path, err := session.SessionPath(edrDir, tok)
+	if err != nil {
+		return nil, err
+	}
+	return session.Open(path)
 }

@@ -63,7 +63,11 @@ Example:
 			raw = json.RawMessage(data)
 		}
 
-		sess := session.New()
+		sess, err := openSession(cmd, db)
+		if err != nil {
+			return err
+		}
+		defer sess.Close()
 		ctx := context.Background()
 		text, err := handleDo(ctx, db, sess, nil, raw)
 		if err != nil {
@@ -123,7 +127,11 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	}
 	defer db.Close()
 
-	sess := session.New()
+	sess, err := openSession(cmd, db)
+	if err != nil {
+		return err
+	}
+	defer sess.Close()
 	flags := extractFlags(cmd)
 	return dispatchWithSession(db, sess, cmdName, args, flags)
 }
@@ -136,7 +144,11 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	}
 	defer db.Close()
 
-	sess := session.New()
+	sess, err := openSession(cmd, db)
+	if err != nil {
+		return err
+	}
+	defer sess.Close()
 	flags := extractFlags(cmd)
 	// If any content-equivalent flag was provided on CLI, skip stdin.
 	// An explicitly-set empty string (e.g. --new_text '') is a valid value
@@ -340,7 +352,11 @@ var editPlanCmd = &cobra.Command{
 		}
 		defer db.Close()
 
-		sess := session.New()
+		sess, err := openSession(cmd, db)
+		if err != nil {
+			return err
+		}
+		defer sess.Close()
 		flags := extractFlags(cmd)
 		editsStr, _ := cmd.Flags().GetString("edits")
 		if editsStr != "" {
