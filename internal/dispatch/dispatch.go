@@ -73,7 +73,7 @@ func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flag
 	case "verify":
 		result, err = runVerify(ctx, db, root, args, flags)
 	case "multi", "get-diff":
-		return nil, fmt.Errorf("%s is only available in MCP mode (edr mcp)", cmd)
+		return nil, fmt.Errorf("%s is only available in batch mode (edr do)", cmd)
 	default:
 		if suggestion := suggestCommand(cmd); suggestion != "" {
 			return nil, fmt.Errorf("unknown command: %s (did you mean: %s?)", cmd, suggestion)

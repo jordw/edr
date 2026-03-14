@@ -216,6 +216,28 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 		}
 	}
 
+	// Validate required fields in sub-objects
+	for i, r := range p.Reads {
+		if r.File == "" {
+			warnings = append(warnings, fmt.Sprintf("reads[%d]: missing required field \"file\"", i))
+		}
+	}
+	for i, e := range p.Edits {
+		if e.File == "" {
+			warnings = append(warnings, fmt.Sprintf("edits[%d]: missing required field \"file\"", i))
+		}
+	}
+	for i, w := range p.Writes {
+		if w.File == "" {
+			warnings = append(warnings, fmt.Sprintf("writes[%d]: missing required field \"file\"", i))
+		}
+	}
+	for i, r := range p.Renames {
+		if r.OldName == "" || r.NewName == "" {
+			warnings = append(warnings, fmt.Sprintf("renames[%d]: missing required field \"old_name\" or \"new_name\"", i))
+		}
+	}
+
 	hasInit := p.Init != nil && *p.Init
 	hasReads := len(p.Reads) > 0
 	hasQueries := len(p.Queries) > 0
@@ -571,6 +593,9 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 			if ambErr := asAmbiguousError(err); ambErr != nil {
 				data, _ := json.Marshal(ambErr)
 				parts = append(parts, fmt.Sprintf(`"edits":%s`, string(data)))
+			} else if nfErr := asNotFoundError(err); nfErr != nil {
+				data, _ := json.Marshal(nfErr)
+				parts = append(parts, fmt.Sprintf(`"edits":%s`, string(data)))
 			} else {
 				parts = append(parts, fmt.Sprintf(`"edits":{"error":%q}`, err.Error()))
 			}
@@ -832,7 +857,7 @@ func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
 		if q.Context != nil {
 			flags["context"] = *q.Context
 		}
-		// Default group=true for text search via MCP (saves tokens by grouping matches by file)
+		// Default group=true for text search via batch (saves tokens by grouping matches by file)
 		isTextSearch := (q.Text != nil && *q.Text) ||
 			(q.Regex != nil && *q.Regex) ||
 			q.Include != nil || q.Exclude != nil ||
@@ -997,6 +1022,14 @@ func asAmbiguousError(err error) *ambiguousResult {
 		})
 	}
 	return r
+}
+
+func asNotFoundError(err error) *dispatch.NotFoundError {
+	var nfErr *dispatch.NotFoundError
+	if !errors.As(err, &nfErr) {
+		return nil
+	}
+	return nfErr
 }
 
 // suggestField finds the closest known field name by Levenshtein distance.

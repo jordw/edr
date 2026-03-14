@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime/pprof"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
+	"github.com/jordw/edr/internal/trace"
 	"github.com/spf13/cobra"
 )
 
@@ -34,10 +36,9 @@ func init() {
 
 var doCmd = &cobra.Command{
 	Use:   "do [json]",
-	Short: "Execute a batched operation (same format as the edr MCP tool)",
-	Long: `Accepts the same JSON format as the edr MCP tool. Reads JSON from the
-first argument or stdin. Supports reads, queries, edits, writes, renames,
-verify, and init — all in one call.
+	Short: "Execute a batched operation",
+	Long: `Accepts a JSON object with reads, queries, edits, writes, renames,
+verify, and init — all in one call. Reads JSON from the first argument or stdin.
 
 JSON can also be passed directly to the root command (edr '{...}').
 
@@ -68,8 +69,11 @@ Example:
 			return err
 		}
 		defer sess.Close()
+		edrDir := filepath.Join(db.Root(), ".edr")
+		tc := trace.NewCollector(edrDir, Version+"+"+BuildHash)
+		defer tc.Close()
 		ctx := context.Background()
-		text, err := handleDo(ctx, db, sess, nil, raw)
+		text, err := handleDo(ctx, db, sess, tc, raw)
 		if err != nil {
 			return err
 		}
@@ -344,7 +348,7 @@ var initCmd = &cobra.Command{
 var editPlanCmd = &cobra.Command{
 	Use:   "edit-plan",
 	Short: ToolDesc["plan"],
-	Long:  ToolDesc["plan"] + "\n\nMCP equivalent: edr_do with edits array and optional verify.",
+	Long:  ToolDesc["plan"] + "\n\nBatch equivalent: edr do with edits array and optional verify.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		db, err := openAndEnsureIndex(cmd)
 		if err != nil {

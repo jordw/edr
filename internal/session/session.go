@@ -1,6 +1,6 @@
 // Package session provides context-aware response optimization for edr.
 // It tracks what content the caller has already seen and produces deltas,
-// slim edits, and body dedup — the same logic for MCP, CLI, and batch.
+// slim edits, and body dedup — the same logic for CLI and batch.
 package session
 
 import (
@@ -66,7 +66,7 @@ func (s *Session) GetStats() (deltaReads, bodyDedup, slimEdits int) {
 
 const MaxContentEntries = 200
 
-// New creates an in-memory session (for MCP and batch).
+// New creates an in-memory session.
 func New() *Session {
 	return &Session{
 		Responses:     make(map[string]string),

@@ -539,7 +539,7 @@ func TestDoQueryToMultiCmd_TextSearchDefaultsGroupTrue(t *testing.T) {
 	q := doQuery{Cmd: "search", Pattern: &pattern, Text: &textTrue}
 	mc, _ := doQueryToMultiCmd(q)
 	if mc.Flags["group"] != true {
-		t.Error("text search should default group=true via MCP")
+		t.Error("text search should default group=true via batch")
 	}
 
 	// Symbol search (no text flag) should NOT default group
@@ -764,7 +764,7 @@ func TestPostProcess_EditPlanDiff(t *testing.T) {
 }
 
 func TestHandleDo_ReadLineRangeInvalid(t *testing.T) {
-	// Invalid line ranges in the MCP do path should return errors, not panic.
+	// Invalid line ranges in the do path should return errors, not panic.
 	tmp := t.TempDir()
 	edrDir := filepath.Join(tmp, ".edr")
 	os.MkdirAll(edrDir, 0755)
@@ -812,7 +812,7 @@ func TestHandleDo_ReadLineRangeInvalid(t *testing.T) {
 }
 
 func TestHandleDo_EditEmptyNewTextDeletion(t *testing.T) {
-	// Empty new_text with old_text should perform a deletion via MCP do path.
+	// Empty new_text with old_text should perform a deletion via do path.
 	tmp := t.TempDir()
 	edrDir := filepath.Join(tmp, ".edr")
 	os.MkdirAll(edrDir, 0755)

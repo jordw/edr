@@ -16,7 +16,7 @@ func init() {
 var benchSessionCmd = &cobra.Command{
 	Use:   "bench-session [session-id]",
 	Short: "Score a completed trace session",
-	Long: `Scores a completed MCP session from traces.db.
+	Long: `Scores a completed session from traces.db.
 Without a session-id argument, scores the most recent session.
 
 Outputs structured JSON with call counts, token estimates,

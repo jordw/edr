@@ -164,7 +164,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 				// Literal text-based edit
 				idx := strings.Index(content, e.OldText)
 				if idx < 0 {
-					return nil, fmt.Errorf("edit-plan: edit %d: old_text not found in %s", i, output.Rel(file))
+					return nil, fmt.Errorf("edit-plan: edit %d: %w", i, notFoundError(content, output.Rel(file), e.OldText))
 				}
 				// Check for ambiguous matches before proceeding
 				totalMatches := strings.Count(content, e.OldText)

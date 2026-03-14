@@ -252,7 +252,7 @@ func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacem
 	} else {
 		idx := strings.Index(content, matchText)
 		if idx < 0 {
-			return nil, fmt.Errorf("smart-edit: text %q not found in %s", matchText, output.Rel(file))
+			return nil, notFoundError(content, output.Rel(file), matchText)
 		}
 		totalMatches := strings.Count(content, matchText)
 		if replaceAll {
@@ -458,6 +458,147 @@ func applyReplaceAll(ctx context.Context, db *index.DB, file, oldContent, newCon
 		result["index_error"] = cr.IndexErrors[output.Rel(file)]
 	}
 	return result, nil
+}
+
+// NotFoundError is a structured error returned when old_text doesn't match.
+// It implements error for Go error chains and is detected by asNotFoundError
+// in the batch handler to produce structured JSON output.
+type NotFoundError struct {
+	ErrorType   string         `json:"error"`
+	File        string         `json:"file"`
+	OldText     string         `json:"old_text"`
+	Hint        string         `json:"hint"`
+	NearMatch   *nearMatchInfo `json:"near_match,omitempty"`
+}
+
+type nearMatchInfo struct {
+	Line        int    `json:"line"`
+	Kind        string `json:"kind"` // "whitespace", "indentation", "partial"
+	ActualText  string `json:"actual_text,omitempty"`
+}
+
+func (e *NotFoundError) Error() string {
+	msg := fmt.Sprintf("old_text not found in %s", e.File)
+	if e.NearMatch != nil {
+		msg += fmt.Sprintf(" (%s near line %d)", e.NearMatch.Kind, e.NearMatch.Line)
+	}
+	return msg
+}
+
+// notFoundError builds a NotFoundError with diagnostic hints.
+func notFoundError(content, relFile, matchText string) *NotFoundError {
+	nfe := &NotFoundError{
+		ErrorType: "not_found",
+		File:      relFile,
+		OldText:   matchText,
+		Hint:      "file may have changed since last read — re-read before editing",
+	}
+
+	// Truncate old_text in the struct for JSON output
+	if len(nfe.OldText) > 200 {
+		nfe.OldText = nfe.OldText[:200] + "..."
+	}
+
+	// 1. Check whitespace-normalized match (tabs vs spaces, trailing spaces, etc.)
+	normContent := normalizeWhitespace(content)
+	normMatch := normalizeWhitespace(matchText)
+	if idx := strings.Index(normContent, normMatch); idx >= 0 {
+		line := 1 + strings.Count(content[:findOriginalOffset(content, normContent, idx)], "\n")
+		nfe.Hint = "old_text matches after normalizing whitespace — check tabs vs spaces, trailing spaces, or line endings"
+		nfe.NearMatch = &nearMatchInfo{Line: line, Kind: "whitespace"}
+		return nfe
+	}
+
+	// 2. Check if old_text matches after trimming leading/trailing whitespace from each line
+	trimmedMatch := trimLines(matchText)
+	trimmedContent := trimLines(content)
+	if idx := strings.Index(trimmedContent, trimmedMatch); idx >= 0 {
+		origOff := findOriginalOffset(content, trimmedContent, idx)
+		line := 1 + strings.Count(content[:origOff], "\n")
+		nfe.Hint = "old_text matches after trimming indentation — check leading whitespace on each line"
+		nfe.NearMatch = &nearMatchInfo{Line: line, Kind: "indentation"}
+		return nfe
+	}
+
+	// 3. Find best partial match — first line of old_text
+	firstLine := matchText
+	if nl := strings.Index(matchText, "\n"); nl >= 0 {
+		firstLine = matchText[:nl]
+	}
+	firstLine = strings.TrimSpace(firstLine)
+	if firstLine != "" && len(firstLine) > 5 {
+		if idx := strings.Index(content, firstLine); idx >= 0 {
+			line := 1 + strings.Count(content[:idx], "\n")
+			lineStart := strings.LastIndex(content[:idx], "\n") + 1
+			lineEnd := strings.Index(content[idx:], "\n")
+			if lineEnd < 0 {
+				lineEnd = len(content) - idx
+			}
+			actualLine := content[lineStart : idx+lineEnd]
+			if len(actualLine) > 120 {
+				actualLine = actualLine[:120] + "..."
+			}
+			nfe.Hint = "first line of old_text found but full match failed — content may have diverged"
+			nfe.NearMatch = &nearMatchInfo{Line: line, Kind: "partial", ActualText: actualLine}
+			return nfe
+		}
+	}
+
+	return nfe
+}
+
+// normalizeWhitespace collapses runs of whitespace to single spaces.
+func normalizeWhitespace(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inSpace := false
+	for _, r := range s {
+		if r == ' ' || r == '\t' {
+			if !inSpace {
+				b.WriteByte(' ')
+				inSpace = true
+			}
+		} else {
+			b.WriteRune(r)
+			inSpace = false
+		}
+	}
+	return b.String()
+}
+
+// trimLines trims leading/trailing whitespace from each line.
+func trimLines(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimSpace(l)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// findOriginalOffset maps a position in a normalized string back to the approximate
+// position in the original string by counting non-whitespace characters.
+func findOriginalOffset(original, normalized string, normIdx int) int {
+	// Count characters (non-whitespace) in normalized up to normIdx
+	target := 0
+	for i, r := range normalized {
+		if i >= normIdx {
+			break
+		}
+		if r != ' ' && r != '\t' {
+			target++
+		}
+	}
+	// Find same count in original
+	count := 0
+	for i, r := range original {
+		if r != ' ' && r != '\t' {
+			count++
+		}
+		if count >= target {
+			return i
+		}
+	}
+	return len(original)
 }
 
 // ambiguousMatchError builds an error with line numbers for all match locations.

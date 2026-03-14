@@ -19,7 +19,7 @@ type DB struct {
 	db       *retryDB
 	raw      *sql.DB // underlying sql.DB for Close and pragmas
 	root     string
-	writeMu  sync.Mutex // in-process writer serialization (for MCP goroutines)
+	writeMu  sync.Mutex // in-process writer serialization
 	lockFile *os.File   // cross-process writer lock (.edr/writer.lock)
 	batchTx  *sql.Tx    // optional: if set, write methods join this tx instead of creating their own
 

@@ -40,7 +40,7 @@ var batchCmd = &cobra.Command{
 responses to stdout, one per line. The index database is opened once and
 reused across all commands in the batch.
 
-MCP equivalent: edr with reads/queries/edits/writes arrays.
+Batch equivalent: edr do with reads/queries/edits/writes arrays.
 
 Input format:
   {"id": "1", "cmd": "search", "args": ["Parse"], "flags": {"budget": 500}}

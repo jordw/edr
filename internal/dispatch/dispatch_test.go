@@ -500,7 +500,7 @@ func TestWriteIndexErrorIsSurfaced(t *testing.T) {
 func TestFlagNormalization_DryRunUnderscore(t *testing.T) {
 	// dry_run (underscore) must work the same as dry-run (hyphen)
 	// for all commands. Regression test: edit-plan and rename only
-	// checked "dry-run" but MCP passes "dry_run".
+	// checked "dry-run" but batch JSON passes "dry_run".
 	tmp := t.TempDir()
 	goFile := filepath.Join(tmp, "main.go")
 	original := "package main\n\nfunc hello() {}\n"

@@ -13,7 +13,7 @@ import (
 	"github.com/jordw/edr/internal/trace"
 )
 
-// handleDoJSON simulates an MCP handleDo call: dispatches through the session
+// handleDoJSON simulates a handleDo call: dispatches through the session
 // post-processing pipeline and records trace events. Returns JSON output bytes.
 func handleDoJSON(t testing.TB, ctx context.Context, db *index.DB, sess *session.Session, tc *trace.Collector,
 	cmd string, args []string, flags map[string]any) []byte {

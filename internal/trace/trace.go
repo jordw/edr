@@ -129,7 +129,7 @@ type QueryEvent struct {
 	ResultBytes int
 }
 
-// Collector manages trace collection for an MCP session.
+// Collector manages trace collection for a session.
 type Collector struct {
 	db        *sql.DB
 	sessionID string

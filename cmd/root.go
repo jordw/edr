@@ -84,8 +84,8 @@ func rootRunE(cmd *cobra.Command, args []string) error {
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		// Emit structured JSON error to stdout for machine-friendly parsing,
-		// matching the MCP error shape. Keep non-zero exit code for shell chaining.
+		// Emit structured JSON error to stdout for machine-friendly parsing.
+		// Keep non-zero exit code for shell chaining.
 		errJSON, _ := json.Marshal(err.Error())
 		fmt.Fprintf(os.Stdout, "{\"ok\":false,\"error\":%s}\n", errJSON)
 		os.Exit(1)
@@ -98,12 +98,12 @@ func init() {
 }
 
 // openAndEnsureIndex opens the DB and bootstraps the index if it does not exist yet.
-// It silently indexes without stderr output in quiet mode (batch/MCP).
+// It silently indexes without stderr output in quiet mode.
 func openAndEnsureIndex(cmd *cobra.Command) (*index.DB, error) {
 	return openDB(cmd, false)
 }
 
-// openAndEnsureIndexQuiet opens the DB and indexes silently (for batch/MCP).
+// openAndEnsureIndexQuiet opens the DB and indexes silently (for batch mode).
 func openAndEnsureIndexQuiet(cmd *cobra.Command) (*index.DB, error) {
 	return openDB(cmd, true)
 }
