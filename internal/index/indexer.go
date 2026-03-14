@@ -575,25 +575,25 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, bool, 
 		byFile[s.File] = append(byFile[s.File], s)
 	}
 
-	// Filter out locals (symbols nested inside functions/methods)
+	// Filter out locals: symbols nested inside functions, methods,
+	// or multi-line variable/const blocks (e.g., Cobra command lambdas).
 	if cfg.hideLocals {
 		for file, syms := range byFile {
 			type span struct{ start, end uint32 }
-			var funcSpans []span
+			var containerSpans []span
 			for _, s := range syms {
-				if s.Type == "function" || s.Type == "method" {
-					funcSpans = append(funcSpans, span{s.StartLine, s.EndLine})
+				// Any multi-line symbol can contain locals.
+				if s.StartLine < s.EndLine {
+					containerSpans = append(containerSpans, span{s.StartLine, s.EndLine})
 				}
 			}
 			filtered := syms[:0]
 			for _, s := range syms {
 				isLocal := false
-				if s.Type != "function" && s.Type != "method" {
-					for _, fs := range funcSpans {
-						if s.StartLine > fs.start && s.EndLine <= fs.end {
-							isLocal = true
-							break
-						}
+				for _, cs := range containerSpans {
+					if s.StartLine > cs.start && s.EndLine <= cs.end {
+						isLocal = true
+						break
 					}
 				}
 				if !isLocal {

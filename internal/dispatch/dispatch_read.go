@@ -384,6 +384,17 @@ func runSymbols(ctx context.Context, db *index.DB, root string, args []string, f
 	grepFilter := flagString(flags, "grep", "")
 	hideLocals := !flagBool(flags, "locals", false)
 
+	// Build container spans for locals filtering (same logic as RepoMap).
+	type span struct{ start, end uint32 }
+	var containerSpans []span
+	if hideLocals {
+		for _, s := range syms {
+			if s.StartLine < s.EndLine {
+				containerSpans = append(containerSpans, span{s.StartLine, s.EndLine})
+			}
+		}
+	}
+
 	// Detect duplicate names for disambiguation
 	nameCounts := make(map[string]int)
 	for _, s := range syms {
@@ -399,11 +410,15 @@ func runSymbols(ctx context.Context, db *index.DB, root string, args []string, f
 			continue
 		}
 		if hideLocals {
-			if parentSym, pErr := db.GetContainerAt(ctx, s.File, int(s.StartLine)); pErr == nil && parentSym != nil && parentSym.Name != s.Name {
-				pt := strings.ToLower(parentSym.Type)
-				if pt == "function" || pt == "method" {
-					continue
+			isLocal := false
+			for _, cs := range containerSpans {
+				if s.StartLine > cs.start && s.EndLine <= cs.end {
+					isLocal = true
+					break
 				}
+			}
+			if isLocal {
+				continue
 			}
 		}
 		sym := output.Symbol{
