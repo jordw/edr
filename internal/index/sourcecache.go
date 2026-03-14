@@ -17,7 +17,11 @@ type sourceCacheKey struct{}
 
 // WithSourceCache returns a context that carries a per-request source cache.
 // All CachedReadFile calls using this context will share the cache.
+// If the context already has a cache, it is returned unchanged.
 func WithSourceCache(ctx context.Context) context.Context {
+	if _, ok := ctx.Value(sourceCacheKey{}).(*sourceCache); ok {
+		return ctx
+	}
 	return context.WithValue(ctx, sourceCacheKey{}, &sourceCache{files: make(map[string][]byte)})
 }
 

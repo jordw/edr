@@ -189,7 +189,6 @@ func readSymbolBody(ctx context.Context, s index.SymbolInfo) string {
 	return ""
 }
 
-
 func symbolToOutputSig(ctx context.Context, s index.SymbolInfo, showSig bool) output.Symbol {
 	size := int(s.EndByte-s.StartByte) / 4
 	sym := output.Symbol{
