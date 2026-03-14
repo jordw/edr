@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/jordw/edr/internal/edit"
 	"github.com/jordw/edr/internal/index"
@@ -53,6 +54,7 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 				"content":    body,
 				"hash":       hash,
 				"truncated":  truncated,
+				"mtime":      fileMtime(file),
 			}, nil
 		}
 		// Fall through to normal read for non-code files
@@ -78,6 +80,7 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 				"content":   body,
 				"hash":      hash,
 				"truncated": truncated,
+				"mtime":     fileMtime(file),
 			}, nil
 		}
 		// Fall through to normal read if outline fails (unsupported language etc.)
@@ -138,6 +141,7 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 		"content":     body,
 		"hash":        hash,
 		"truncated":   truncated,
+		"mtime":       fileMtime(file),
 	}
 
 	if flagBool(flags, "symbols", false) {
@@ -419,3 +423,14 @@ func runSymbols(ctx context.Context, db *index.DB, root string, args []string, f
 		"symbols": results,
 	}, nil
 }
+
+
+// fileMtime returns the file modification time as an ISO 8601 string, or empty on error.
+func fileMtime(path string) string {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	return fi.ModTime().Format(time.RFC3339)
+}
+

@@ -94,7 +94,8 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().StringP("root", "r", ".", "repository root directory")
-	rootCmd.PersistentFlags().String("session", "", "session token for cross-invocation state (default: none, use $PPID for automatic)")
+	rootCmd.PersistentFlags().String("session", "", "session token (default: auto from parent PID)")
+	rootCmd.PersistentFlags().Bool("no-session", false, "disable session persistence (in-memory only)")
 }
 
 // openAndEnsureIndex opens the DB and bootstraps the index if it does not exist yet.
@@ -187,14 +188,29 @@ func getRoot(cmd *cobra.Command) string {
 	return root
 }
 
-// openSession returns a file-backed session if --session is set, otherwise in-memory.
-// The caller must call sess.Close() to persist state.
+// openSession returns a file-backed session.
+// By default, sessions auto-derive from the parent PID so agents get delta reads,
+// body dedup, and slim edits without any flags. Use --no-session to opt out.
 func openSession(cmd *cobra.Command, db *index.DB) (*session.Session, error) {
-	tok, _ := cmd.Flags().GetString("session")
-	if tok == "" {
+	noSess, _ := cmd.Flags().GetBool("no-session")
+	if noSess {
 		return session.New(), nil
 	}
+
+	tok, _ := cmd.Flags().GetString("session")
+	if tok == "" {
+		// Auto-session: derive token from parent PID.
+		tok = fmt.Sprintf("%d", os.Getppid())
+	}
+
 	edrDir := filepath.Join(db.Root(), ".edr")
+
+	// Opportunistic GC: clean up dead-PID sessions ~1 in 20 invocations.
+	// Non-blocking — errors are silently ignored.
+	if os.Getpid()%20 == 0 {
+		go session.GCSessions(edrDir)
+	}
+
 	path, err := session.SessionPath(edrDir, tok)
 	if err != nil {
 		return nil, err

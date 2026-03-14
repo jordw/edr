@@ -2,18 +2,18 @@
 
 **edr is your primary tool for ALL file operations.** Use `edr` via Bash instead of Read, Edit, Write, Grep, and Glob. It gives you structured output, token budgets, and smart operations that raw file tools can't match.
 
-**`edr` is your primary tool.** It batches reads, searches, explores, edits, writes, renames, and verification into one call. Use `--session $PPID` for cross-invocation session state (delta reads, body dedup, slim edits).
+**`edr` is your primary tool.** It batches reads, searches, explores, edits, writes, renames, and verification into one call. Sessions are **automatic** (derived from parent PID) — delta reads, body dedup, and slim edits work out of the box.
 
 ```bash
 # Typical 2-call workflow for any task:
-edr --session $PPID do '{                          # Call 1: gather ALL context
+edr do '{                                          # Call 1: gather ALL context
   "reads": [{"file": "src/main.go", "symbol": "Server"}],
   "queries": [
     {"cmd": "search", "pattern": "handleRequest", "body": true},
     {"cmd": "map", "dir": "internal/", "type": "function"}
   ]
 }'
-edr --session $PPID do '{                          # Call 2: ALL mutations + verify
+edr do '{                                          # Call 2: ALL mutations + verify
   "edits": [{"file": "src/main.go", "old_text": "old", "new_text": "new"}],
   "writes": [{"file": "src/new_test.go", "content": "...", "mkdir": true}],
   "verify": true
@@ -229,7 +229,7 @@ It supports seven operation types, all in one call. Pass JSON as argument or via
 
 ```bash
 # Gather context + make changes + verify in one call:
-edr --session $PPID do '{
+edr do '{
   "reads": [{"file": "src/main.go"}, {"file": "src/config.go", "symbol": "parseConfig"}],
   "queries": [
     {"cmd": "search", "pattern": "handleRequest", "body": true},
@@ -250,19 +250,20 @@ edr --session $PPID do '{
 }'
 
 # Typical 2-call workflow:
-# Call 1: edr --session $PPID do '{"reads": [...], "queries": [...]}'     — gather ALL context
-# Call 2: edr --session $PPID do '{"edits": [...], "writes": [...], "verify": true}'  — ALL mutations + verify
+# Call 1: edr do '{"reads": [...], "queries": [...]}'     — gather ALL context
+# Call 2: edr do '{"edits": [...], "writes": [...], "verify": true}'  — ALL mutations + verify
 ```
 
 ## Context-Aware Responses
 
-When using `--session`, edr tracks what content you've already seen across invocations:
+edr automatically tracks what content you've already seen across invocations (via PPID-based sessions):
 
 - **Slim edits**: Small diffs (<=20 changed lines) are returned inline automatically. Large diffs are stripped to `{ok, file, hash, lines_changed, diff_available}` — use `queries: [{cmd: "diff", file: "..."}]` to retrieve them.
 - **Delta reads**: Re-reading a file/symbol you've already seen returns `{unchanged: true}` if identical, or `{delta: true, diff: "..."}` with just the changes. Pass `full: true` to force full content.
 - **Body dedup**: `explore(gather: true, body: true)` and `search(body: true)` replace bodies you've already seen with `"[in context]"` and report `skipped_bodies`. New/changed bodies are returned in full.
 
-These optimizations are automatic and session-scoped. Sessions persist to `.edr/sessions/<token>.json`.
+These optimizations are automatic. Sessions persist to `.edr/sessions/<ppid>.json` and are
+GC'd when the parent process exits. Use `--no-session` to disable, or `--session <token>` to override.
 Renames and `init: true` clear all tracking state. Manage sessions with `edr session list|clear|gc`.
 
 ## Key Principles
@@ -377,5 +378,5 @@ Read params: `file`, `symbol?`, `budget?`, `signatures?`, `depth?`, `start_line?
 
 All output is structured JSON. File paths are relative to repo root. Edit commands return `hash`.
 
-`--session <token>` enables cross-invocation optimizations. Use `$PPID` as token for automatic per-conversation sessions.
+Sessions are automatic (PPID-based). Use `--no-session` to disable or `--session <token>` to override.
 
