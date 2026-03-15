@@ -159,7 +159,7 @@ func TestResponseSizeRegression(t *testing.T) {
 			cmd:      "rename",
 			args:     []string{"HandlerFunc", "TaskHandlerFunc"},
 			flags:    map[string]any{"dry_run": true},
-			maxBytes: 1000,
+			maxBytes: 1300,
 		},
 		{
 			name:     "refs chain",

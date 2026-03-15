@@ -3,11 +3,13 @@ package search
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
@@ -258,14 +260,9 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 		lowerPattern = strings.ToLower(pattern)
 	}
 
-	var allMatches []output.Match
-	totalMatches := 0
-
-	err := index.WalkRepoFiles(root, func(file string) error {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
+	// Phase 1: Collect file paths (fast, sequential walk).
+	var files []string
+	_ = index.WalkRepoFiles(root, func(file string) error {
 		rel, _ := filepath.Rel(root, file)
 		base := filepath.Base(file)
 		if len(cfg.include) > 0 && !matchesAnyPath(base, rel, cfg.include) {
@@ -274,30 +271,69 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 		if len(cfg.exclude) > 0 && matchesAnyPath(base, rel, cfg.exclude) {
 			return nil
 		}
+		files = append(files, file)
+		return nil
+	})
 
-		data, err := os.ReadFile(file)
-		if err != nil {
-			return nil
-		}
-		allLines := strings.Split(string(data), "\n")
+	// Phase 2: Search files in parallel with bounded workers.
+	type fileMatches struct {
+		matches []output.Match
+		count   int
+	}
 
-		for lineIdx, line := range allLines {
-			lineNum := lineIdx + 1
+	const maxMatchesPerFile = 10
+	resultCh := make(chan fileMatches, len(files))
+	var totalMatches atomic.Int64
 
-			var matched bool
-			if re != nil {
-				matched = re.MatchString(line)
-			} else {
-				matched = strings.Contains(strings.ToLower(line), lowerPattern)
-			}
+	nWorkers := runtime.NumCPU()
+	if nWorkers > len(files) {
+		nWorkers = len(files)
+	}
+	if nWorkers < 1 {
+		nWorkers = 1
+	}
 
-			if matched {
-				totalMatches++
+	fileCh := make(chan string, len(files))
+	for _, f := range files {
+		fileCh <- f
+	}
+	close(fileCh)
 
-				// Name is always the single matched line (trimmed)
+	var wg sync.WaitGroup
+	for w := 0; w < nWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for file := range fileCh {
+				if ctx.Err() != nil {
+					return
+				}
+				data, err := index.CachedReadFile(ctx, file)
+				if err != nil {
+					continue
+				}
+				rel, _ := filepath.Rel(root, file)
+				allLines := strings.Split(string(data), "\n")
+
+				var fm fileMatches
+				for lineIdx, line := range allLines {
+				var matched bool
+				if re != nil {
+					matched = re.MatchString(line)
+				} else {
+					matched = strings.Contains(strings.ToLower(line), lowerPattern)
+				}
+				if !matched {
+					continue
+				}
+				fm.count++
+				if len(fm.matches) >= maxMatchesPerFile {
+					continue
+				}
+
+				lineNum := lineIdx + 1
 				matchedLine := strings.TrimSpace(line)
 
-				// Snippet contains context block when --context is used
 				var snippet string
 				displayStart := lineNum
 				displayEnd := lineNum
@@ -328,10 +364,8 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 					size = 1
 				}
 
-				// Compute score: source files rank higher, exact matches rank higher
 				score := scoreTextMatch(rel, line, pattern, lowerPattern, re)
 
-				// Find column offset of match
 				col := 0
 				if re != nil {
 					if loc := re.FindStringIndex(line); loc != nil {
@@ -341,7 +375,7 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 					col = strings.Index(strings.ToLower(line), lowerPattern) + 1
 				}
 
-				allMatches = append(allMatches, output.Match{
+				fm.matches = append(fm.matches, output.Match{
 					Symbol: output.Symbol{
 						Type:  "text",
 						Name:  matchedLine,
@@ -354,27 +388,28 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 					Column:  col,
 				})
 			}
+			if fm.count > 0 {
+				totalMatches.Add(int64(fm.count))
+				resultCh <- fm
+			}
 		}
-		return nil
-	})
+	}()
+	}
+	wg.Wait()
+	close(resultCh)
 
-	// Sort by score descending
+	// Phase 3: Merge, sort, and apply smart budget trimming.
+	var allMatches []output.Match
+	for fm := range resultCh {
+		allMatches = append(allMatches, fm.matches...)
+	}
+
 	sort.Slice(allMatches, func(i, j int) bool {
 		return allMatches[i].Score > allMatches[j].Score
 	})
 
-	// Apply budget trimming after sorting
 	truncated := false
-	var result []output.Match
-	totalTokens := 0
-	for _, m := range allMatches {
-		if budget > 0 && totalTokens+m.Symbol.Size > budget && len(result) > 0 {
-			truncated = true
-			continue
-		}
-		totalTokens += m.Symbol.Size
-		result = append(result, m)
-	}
+	result := budgetTrimText(allMatches, budget, &truncated)
 
 	if result == nil {
 		result = []output.Match{}
@@ -382,9 +417,95 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 	return &SearchResult{
 		Kind:         "text",
 		Matches:      result,
-		TotalMatches: totalMatches,
+		TotalMatches: int(totalMatches.Load()),
 		Truncated:    truncated,
-	}, err
+	}, nil
+}
+
+// budgetTrimText progressively reduces match detail to fit within budget:
+// 1. Try with full context and lines
+// 2. Drop context snippets
+// 3. Truncate long match lines to 160 chars around the match
+// 4. Drop excess matches
+func budgetTrimText(matches []output.Match, budget int, truncated *bool) []output.Match {
+	if budget <= 0 {
+		return matches
+	}
+
+	if totalSize(matches) <= budget {
+		return matches
+	}
+
+	// Pass 2: drop context snippets
+	for i := range matches {
+		if matches[i].Snippet != "" {
+			matches[i].Snippet = ""
+			matches[i].Symbol.Lines = [2]int{matches[i].Symbol.Lines[0], matches[i].Symbol.Lines[0]}
+			matches[i].Symbol.Size = len(matches[i].Symbol.Name) / 4
+			if matches[i].Symbol.Size < 1 {
+				matches[i].Symbol.Size = 1
+			}
+		}
+	}
+	if totalSize(matches) <= budget {
+		*truncated = true
+		return matches
+	}
+
+	// Pass 3: truncate long match lines to 160 chars
+	const maxLineLen = 160
+	for i := range matches {
+		name := matches[i].Symbol.Name
+		if len(name) > maxLineLen {
+			col := matches[i].Column
+			if col > 0 {
+				start := col - maxLineLen/2
+				if start < 0 {
+					start = 0
+				}
+				end := start + maxLineLen
+				if end > len(name) {
+					end = len(name)
+					start = end - maxLineLen
+					if start < 0 {
+						start = 0
+					}
+				}
+				matches[i].Symbol.Name = name[start:end]
+			} else {
+				matches[i].Symbol.Name = name[:maxLineLen]
+			}
+			matches[i].Symbol.Size = len(matches[i].Symbol.Name) / 4
+			if matches[i].Symbol.Size < 1 {
+				matches[i].Symbol.Size = 1
+			}
+		}
+	}
+	if totalSize(matches) <= budget {
+		*truncated = true
+		return matches
+	}
+
+	// Pass 4: drop excess matches
+	*truncated = true
+	var result []output.Match
+	tokens := 0
+	for _, m := range matches {
+		if tokens+m.Symbol.Size > budget && len(result) > 0 {
+			break
+		}
+		tokens += m.Symbol.Size
+		result = append(result, m)
+	}
+	return result
+}
+
+func totalSize(matches []output.Match) int {
+	n := 0
+	for _, m := range matches {
+		n += m.Symbol.Size
+	}
+	return n
 }
 
 // sourceExts contains file extensions for source code files.
