@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Bootstrap edr for any environment (local, cloud, CI, containers).
-# Usage: ./setup.sh [target-repo-path]
+# Usage: ./setup.sh [target-repo-path] [--claude|--cursor|--codex]
 #
 # What it does:
 #   1. Checks/installs Go and gcc (if missing)
 #   2. Builds the edr binary
 #   3. Installs to PATH (~/.local/bin)
-#   4. Indexes the target repo
+#   4. Runs `edr setup` (indexes + injects agent instructions)
 #
-# After running: the `edr` command is available globally and the target
-# repo is indexed (or cwd if not specified).
+# After running: the `edr` command is available globally, the target
+# repo is indexed, and agent instructions are injected.
 
 set -euo pipefail
 
@@ -20,9 +20,23 @@ if [ "$(id -u)" -ne 0 ] && command -v sudo &>/dev/null; then
 fi
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-TARGET="${1:-$(pwd)}"
-TARGET="$(cd "$TARGET" && pwd)"
 INSTALL_DIR="$HOME/.local/bin"
+
+# Parse arguments: positional = target path, --flag = agent target
+AGENT_FLAG=""
+TARGET=""
+for arg in "$@"; do
+    case "$arg" in
+        --claude|--cursor|--codex)
+            AGENT_FLAG="$arg"
+            ;;
+        *)
+            TARGET="$arg"
+            ;;
+    esac
+done
+TARGET="${TARGET:-$(pwd)}"
+TARGET="$(cd "$TARGET" && pwd)"
 
 echo "==> edr setup"
 echo "    edr source: $REPO_DIR"
@@ -90,9 +104,9 @@ if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     export PATH="$INSTALL_DIR:$PATH"
 fi
 
-# --- Index target repo ---
-echo "==> Indexing $TARGET..."
-"$INSTALL_DIR/edr" init -r "$TARGET" 2>/dev/null | head -1
+# --- Setup target repo (index + inject instructions) ---
+echo "==> Setting up $TARGET..."
+"$INSTALL_DIR/edr" setup --root "$TARGET" $AGENT_FLAG
 echo ""
 echo "==> Done. edr is ready."
 echo "    CLI:    edr -r $TARGET <command>"

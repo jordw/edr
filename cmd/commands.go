@@ -29,6 +29,7 @@ func init() {
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(editPlanCmd)
 	rootCmd.AddCommand(initCmd)
+	rootCmd.AddCommand(setupCmd)
 }
 
 // dispatchCmd is the common pattern: open DB, dispatch, print result.

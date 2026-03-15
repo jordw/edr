@@ -63,4 +63,19 @@ jobs:
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           edr --version
-          edr init -r /tmp/target
+          edr init --root /tmp/target
+
+      - name: Verify setup.sh injected instructions
+        run: |
+          test -f /tmp/target/CLAUDE.md || (echo "CLAUDE.md not created by setup.sh" && exit 1)
+          grep -q "edr" /tmp/target/CLAUDE.md || (echo "CLAUDE.md missing edr instructions" && exit 1)
+          grep -q ".edr/" /tmp/target/.gitignore || (echo ".gitignore missing .edr/" && exit 1)
+
+      - name: Verify edr setup targets
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          mkdir /tmp/target2 && cd /tmp/target2 && git init -q
+          edr setup --cursor --root /tmp/target2
+          test -f /tmp/target2/.cursorrules || (echo ".cursorrules not created" && exit 1)
+          edr setup --codex --root /tmp/target2 --skip-index
+          test -f /tmp/target2/AGENTS.md || (echo "AGENTS.md not created" && exit 1)
