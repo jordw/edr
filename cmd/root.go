@@ -82,14 +82,9 @@ func openDBWithRoot(root string, quiet bool) (*index.DB, error) {
 
 	if needsIndex {
 		firstIndex := files == 0
-		if !quiet {
-			if firstIndex {
-				fmt.Fprintf(os.Stderr, "edr: no index found, indexing repository...\n")
-			} else {
-				fmt.Fprintf(os.Stderr, "edr: index stale, re-indexing...\n")
-			}
-		}
+		indexed := false
 		err = db.WithWriteLock(func() error {
+			// Recheck after acquiring lock — another process may have indexed already
 			currentFiles, _, _ := db.Stats(ctx)
 			if firstIndex && currentFiles > 0 {
 				return nil
@@ -99,6 +94,13 @@ func openDBWithRoot(root string, quiet bool) (*index.DB, error) {
 					return nil
 				}
 			}
+			if !quiet {
+				if firstIndex {
+					fmt.Fprintf(os.Stderr, "edr: no index found, indexing repository...\n")
+				} else {
+					fmt.Fprintf(os.Stderr, "edr: index stale, re-indexing...\n")
+				}
+			}
 			var progress index.ProgressFunc
 			if !quiet {
 				progress = func(files, symbols int) {
@@ -106,13 +108,14 @@ func openDBWithRoot(root string, quiet bool) (*index.DB, error) {
 				}
 			}
 			_, _, e := index.IndexRepo(ctx, db, progress)
+			indexed = e == nil
 			return e
 		})
 		if err != nil {
 			db.Close()
 			return nil, err
 		}
-		if !quiet {
+		if !quiet && indexed {
 			totalFiles, totalSyms, _ := db.Stats(ctx)
 			fmt.Fprintf(os.Stderr, "\redr: index ready (%d files, %d symbols)\n", totalFiles, totalSyms)
 		}
