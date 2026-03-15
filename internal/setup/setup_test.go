@@ -151,7 +151,7 @@ func TestInjectInstructionsForce(t *testing.T) {
 	// Content should have exactly one edr block with new hash.
 	data, _ := os.ReadFile(ir.Path)
 	content := string(data)
-	count := strings.Count(content, edrMarker)
+	count := strings.Count(content, edrMarkers[0])
 	if count != 1 {
 		t.Errorf("expected 1 edr marker after force, got %d", count)
 	}

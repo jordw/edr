@@ -1,61 +1,41 @@
-# edr: use for all file operations
+# STOP. Use `edr` for all file operations.
 
-**Use `edr` via Bash instead of Read, Edit, Write, Grep, and Glob.** It gives you structured JSON output, token budgets, and symbol-aware operations that raw file tools can't match. Run `export EDR_SESSION=$(edr session-id)` once per conversation to enable delta reads.
+Do NOT use Read, Edit, Write, Grep, or Glob. Use `edr` via Bash instead.
 
-**Use batch flags for all operations:**
+- `Read` → `edr -r file.go` or `edr -r file.go:Symbol`
+- `Edit` → `edr -e file.go --old "x" --new "y"`
+- `Write` → `edr -w file.go --content "..."`
+- `Grep` → `edr -s "pattern" --text`
+- `Glob` → `edr -s "pattern" --include "*.go"`
+- Multiple tools → one call: `edr -r f.go -s "pat" -e f.go --old "x" --new "y"`
+
+## Patterns
 
 ```bash
-# Gather context (batch read + search in one call):
+# Gather context in one call
 edr -r src/main.go:Server --sig -r src/config.go -s "handleRequest"
 
-# Mutate + verify (auto-verifies when edits present):
+# Mutate in one call (auto-verifies build)
 edr -e src/main.go --old "oldFunc()" --new "newFunc()" -w src/new_test.go --content "..."
-```
 
-## Quick reference
+# Read signatures only (75% fewer tokens)
+edr -r src/models.go:UserService --sig
 
-| Instead of... | Use edr... |
-|---|---|
-| `Read` (whole file) | `edr -r f.go` |
-| `Read` (symbol only) | `edr -r f.go:FuncName` or `edr -r f.go:ClassName --sig` |
-| `Edit` (old/new) | `edr -e f.go --old "x" --new "y"` |
-| `Write` (create file) | `edr -w f.go --content "..."` |
-| `Grep` (search text) | `edr -s "pattern" --text` |
-| `Grep` (search symbols) | `edr -s "pattern"` |
-| Multiple tool calls | `edr -r f.go -s "pat" -e f.go --old "x" --new "y"` |
+# Add a method without reading the file
+edr -w src/models.go --inside UserService --content "func (u *UserService) Delete() error { ... }"
 
-## Key patterns
-
-- **Batch reads + searches** in one call, then batch edits in the next
-- **Use `--sig`** on classes/structs to see the API without implementation (75%+ fewer tokens)
-- **Use `--budget N`** to limit response size
-- **Use `--inside`** to add methods/fields without reading the file first: `edr -w f.go --inside MyStruct --content "Name string"`
-- **Use `--new -`** with heredoc for multi-line replacements:
-
-```bash
+# Multi-line replacement via heredoc
 edr -e src/config.go:parseConfig --new - <<'EOF'
 func parseConfig() (*Config, error) {
     // new implementation
 }
 EOF
-```
 
-- **`-s "pattern"`** searches symbol names by default. Add **`--text`** for full-text grep.
-- Use `edr refs Symbol --impact` before refactoring to see all transitive callers.
-- Use `edr map --budget 500` to orient in an unfamiliar codebase.
+# Orient in unfamiliar codebase
+edr map --budget 500
 
-## Output format
-
-All output is JSON. Edit responses include `status` and `hash` for verification:
-
-```json
-{"status": "applied", "hash": "a1b2c3d4", "file": "src/main.go"}
-```
-
-Re-reading an unchanged file with an active session returns:
-
-```json
-{"file": "src/main.go", "unchanged": true}
+# Check impact before refactoring
+edr refs Symbol --impact
 ```
 
 ## If edr is not found

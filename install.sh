@@ -85,9 +85,11 @@ esac
 # --- Resolve version ---
 if [ -z "$VERSION" ]; then
     echo "==> Finding latest release..."
-    VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | sed -E 's/.*"v?([^"]+)".*/\1/')"
+    VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"v?([^"]+)".*/\1/')"
     if [ -z "$VERSION" ]; then
-        echo "Error: could not determine latest version" >&2
+        echo "Error: no releases found at github.com/${REPO}/releases" >&2
+        echo "       To build from source instead:" >&2
+        echo "       git clone https://github.com/${REPO}.git && ./${REPO##*/}/setup.sh" >&2
         exit 1
     fi
 fi
@@ -113,6 +115,30 @@ curl -fsSL "$URL" -o "$TMP/$ARCHIVE"
 
 echo "==> Extracting..."
 tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
+
+# --- Verify checksum ---
+if [ -n "${EDR_RELEASE_URL:-}" ]; then
+    CHECKSUM_URL="${EDR_RELEASE_URL}/checksums.txt"
+else
+    CHECKSUM_URL="https://github.com/${REPO}/releases/download/v${VERSION_NUM}/checksums.txt"
+fi
+if curl -fsSL "$CHECKSUM_URL" -o "$TMP/checksums.txt" 2>/dev/null; then
+    EXPECTED=$(grep "$ARCHIVE" "$TMP/checksums.txt" | awk '{print $1}')
+    if [ -n "$EXPECTED" ]; then
+        if command -v sha256sum &>/dev/null; then
+            ACTUAL=$(sha256sum "$TMP/$ARCHIVE" | awk '{print $1}')
+        elif command -v shasum &>/dev/null; then
+            ACTUAL=$(shasum -a 256 "$TMP/$ARCHIVE" | awk '{print $1}')
+        fi
+        if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "Error: checksum mismatch (expected $EXPECTED, got $ACTUAL)" >&2
+            exit 1
+        fi
+        echo "==> Checksum verified"
+    fi
+else
+    echo "==> Warning: could not fetch checksums, skipping verification"
+fi
 
 # --- Install binary ---
 mkdir -p "$INSTALL_DIR"

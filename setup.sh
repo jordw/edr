@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bootstrap edr for any environment (local, cloud, CI, containers).
-# Usage: ./setup.sh [target-repo-path] [--claude|--cursor|--codex]
+# Usage: ./setup.sh [target-repo-path] [--claude|--cursor|--codex] [--no-path]
 #
 # What it does:
 #   1. Checks/installs Go and gcc (if missing)
@@ -25,10 +25,14 @@ INSTALL_DIR="$HOME/.local/bin"
 # Parse arguments: positional = target path, --flag = agent target
 AGENT_FLAG=""
 TARGET=""
+NO_PATH=false
 for arg in "$@"; do
     case "$arg" in
         --claude|--cursor|--codex)
             AGENT_FLAG="$arg"
+            ;;
+        --no-path)
+            NO_PATH=true
             ;;
         *)
             TARGET="$arg"
@@ -91,16 +95,18 @@ cp "$REPO_DIR/edr" "$INSTALL_DIR/edr"
 echo "    installed: $INSTALL_DIR/edr"
 
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
-    SHELL_RC=""
-    if [ -f "$HOME/.zshrc" ]; then
-        SHELL_RC="$HOME/.zshrc"
-    elif [ -f "$HOME/.bashrc" ]; then
-        SHELL_RC="$HOME/.bashrc"
-    fi
-    if [ -n "$SHELL_RC" ]; then
-        if ! grep -q "$INSTALL_DIR" "$SHELL_RC" 2>/dev/null; then
-            echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$SHELL_RC"
-            echo "    added $INSTALL_DIR to PATH in $SHELL_RC"
+    if [ "$NO_PATH" = false ]; then
+        SHELL_RC=""
+        if [ -f "$HOME/.zshrc" ]; then
+            SHELL_RC="$HOME/.zshrc"
+        elif [ -f "$HOME/.bashrc" ]; then
+            SHELL_RC="$HOME/.bashrc"
+        fi
+        if [ -n "$SHELL_RC" ]; then
+            if ! grep -q "$INSTALL_DIR" "$SHELL_RC" 2>/dev/null; then
+                echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$SHELL_RC"
+                echo "    added $INSTALL_DIR to PATH in $SHELL_RC"
+            fi
         fi
     fi
     export PATH="$INSTALL_DIR:$PATH"

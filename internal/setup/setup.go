@@ -57,8 +57,22 @@ type InjectResult struct {
 	Updated        bool   // old instructions replaced with new
 }
 
-// edrMarker is the string we look for to detect existing edr instructions.
-const edrMarker = "edr: use for all file operations"
+// edrMarkers are strings we look for to detect existing edr instructions.
+// Matches both old ("# edr: use for all file operations") and new ("# STOP. Use `edr`") headings.
+var edrMarkers = []string{
+	"Use `edr` for all file operations",
+	"edr: use for all file operations",
+}
+
+// containsEdrMarker reports whether content contains any known edr marker.
+func containsEdrMarker(content string) bool {
+	for _, m := range edrMarkers {
+		if strings.Contains(content, m) {
+			return true
+		}
+	}
+	return false
+}
 
 // hashMarkerPrefix is the HTML comment that stamps the build hash.
 const hashMarkerPrefix = "<!-- edr-instructions hash:"
@@ -100,7 +114,7 @@ func InjectInstructions(repoRoot string, target Target, buildHash string, force 
 
 	existing, _ := os.ReadFile(path)
 	content := string(existing)
-	hasMarker := strings.Contains(content, edrMarker)
+	hasMarker := containsEdrMarker(content)
 	installedHash := extractInstalledHash(content)
 
 	// Same hash → already current, nothing to do.
@@ -144,14 +158,14 @@ func InjectInstructions(repoRoot string, target Target, buildHash string, force 
 
 // stripEdrBlock removes the edr instruction block from content.
 // The block starts at the hash marker comment (<!-- edr-instructions hash:... -->)
-// or the heading containing edrMarker, and extends to the next top-level heading
+// or the heading containing an edr marker, and extends to the next top-level heading
 // that isn't part of edr, or end of file.
 func stripEdrBlock(content string) string {
 	lines := strings.Split(content, "\n")
 	var out []string
 	inBlock := false
 	for _, line := range lines {
-		if !inBlock && (strings.HasPrefix(line, hashMarkerPrefix) || strings.Contains(line, edrMarker)) {
+		if !inBlock && (strings.HasPrefix(line, hashMarkerPrefix) || containsEdrMarker(line)) {
 			inBlock = true
 			continue
 		}
@@ -207,6 +221,9 @@ func EnsureGitignore(repoRoot string) error {
 func DetectTarget(repoRoot string) Target {
 	// Check in order of specificity.
 	if _, err := os.Stat(filepath.Join(repoRoot, "CLAUDE.md")); err == nil {
+		return TargetClaude
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, ".claude")); err == nil {
 		return TargetClaude
 	}
 	if _, err := os.Stat(filepath.Join(repoRoot, ".cursorrules")); err == nil {

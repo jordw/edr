@@ -92,9 +92,11 @@ curl -fsSL https://raw.githubusercontent.com/jordw/edr/main/install.sh | sh
 **From source** (requires Go 1.25+ and a C/C++ compiler for tree-sitter):
 
 ```bash
-go install github.com/jordw/edr@latest
+CGO_ENABLED=1 go install github.com/jordw/edr@latest
 edr setup /path/to/your/project
 ```
+
+> `CGO_ENABLED=1` is required — tree-sitter grammars are C libraries. You need `gcc` and `g++` installed.
 
 **Cloud agents and CI** (installs Go/gcc if needed, builds, indexes):
 

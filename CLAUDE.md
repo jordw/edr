@@ -1,32 +1,25 @@
-# EDR: Your Default Tool for Reading, Editing, and Navigating Files
+# STOP. Use edr, not built-in tools.
 
-**edr is your primary tool for ALL file operations.** Use `edr` via Bash instead of Read, Edit, Write, Grep, and Glob. It gives you structured output, token budgets, and smart operations that raw file tools can't match.
-
-Use **batch flags** (`-r`, `-s`, `-e`, `-w`) for all operations:
+**DO NOT use Read, Edit, Write, Grep, or Glob tools.** Use `edr` via Bash for every file operation. No exceptions unless edr is broken or not yet built.
 
 ```bash
-# Gather context (batch read + search in one call):
-edr -r src/main.go:Server --sig -r src/config.go -s "handleRequest"
+edr -r file.go                          # instead of Read
+edr -s "pattern"                        # instead of Grep
+edr -e file.go --old "x" --new "y"     # instead of Edit
+edr -w file.go --content "..."          # instead of Write
+edr -s "pattern" --include "*.go"       # instead of Glob
+```
 
-# Mutate + verify (auto-verifies when edits present):
+Batch everything into one call when possible:
+```bash
+edr -r src/main.go:Server --sig -r src/config.go -s "handleRequest"
 edr -e src/main.go --old "oldFunc()" --new "newFunc()" -w src/new_test.go --content "..."
 ```
 
-**Fall back to built-in tools when:**
-- You need non-text files or shell operations
+**Only fall back to built-in tools when:**
 - edr is not yet built (fresh clone, first setup)
-- You are working on the edr codebase itself and a broken edit prevents rebuild
-
-## Why edr over built-in tools
-
-| Instead of... | Use edr... | Why |
-|---|---|---|
-| `Read` (whole file) | `edr -r f.go` | Budget-controlled, batchable |
-| `Edit` (old/new strings) | `edr -e f.go --old "x" --new "y"` | Atomic multi-file, auto re-index, auto-verify |
-| `Write` (create file) | `edr -w f.go --content "..." --mkdir` | Auto-indexes, batchable with edits |
-| `Grep` (text search) | `edr -s "pat"` | Structured results |
-| `Glob` (find files) | `edr -s "pattern" --include "*.go"` | Text search with glob filter |
-| Multiple tool calls | `edr -r f.go -s "pat" -e f.go --old "x" --new "y"` | Everything in one call |
+- A broken edit prevents `go build` (use built-in to fix, then rebuild)
+- Non-text files or shell operations
 
 ## Development workflow (edr on itself)
 

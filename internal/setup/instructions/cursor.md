@@ -1,39 +1,42 @@
-# edr: use for all file operations
+# STOP. Use `edr` for all file operations.
 
-Use `edr` via terminal instead of built-in file reading and editing tools. It gives you structured JSON output, token budgets, and symbol-aware operations. Run `export EDR_SESSION=$(edr session-id)` once per conversation to enable delta reads.
+Do NOT use built-in file reading or editing tools. Use `edr` via terminal instead.
 
-## Quick reference
+- Read a file → `edr -r file.go` or `edr -r file.go:Symbol`
+- Edit a file → `edr -e file.go --old "x" --new "y"`
+- Create a file → `edr -w file.go --content "..."`
+- Search text → `edr -s "pattern" --text`
+- Search symbols → `edr -s "pattern"`
+- Multiple operations → one call: `edr -r f.go -s "pat" -e f.go --old "x" --new "y"`
+
+## Patterns
 
 ```bash
-# Read a file or symbol (--sig = signatures only, 75% fewer tokens)
-edr -r src/main.go
-edr -r src/main.go:Server --sig
+# Gather context in one call
+edr -r src/main.go:Server --sig -r src/config.go -s "handleRequest"
 
-# Search symbols (default) or text
-edr -s "handleRequest"
-edr -s "TODO" --text --include "*.go"
+# Mutate in one call (auto-verifies build)
+edr -e src/main.go --old "oldFunc()" --new "newFunc()" -w src/new_test.go --content "..."
 
-# Symbol map for orientation
-edr map --dir internal/ --type function
+# Read signatures only (75% fewer tokens)
+edr -r src/models.go:UserService --sig
 
-# Edit + auto-verify in one call
-edr -e src/main.go --old "old" --new "new"
+# Add a method without reading the file
+edr -w src/models.go --inside UserService --content "func (u *UserService) Delete() error { ... }"
 
-# Create a file
-edr -w src/new.go --content "package main" --mkdir
+# Multi-line replacement via heredoc
+edr -e src/config.go:parseConfig --new - <<'EOF'
+func parseConfig() (*Config, error) {
+    // new implementation
+}
+EOF
 
-# Batch everything in one call
-edr -r src/main.go --sig -s "pattern" -e src/main.go --old "x" --new "y"
+# Orient in unfamiliar codebase
+edr map --budget 500
+
+# Check impact before refactoring
+edr refs Symbol --impact
 ```
-
-## Key patterns
-
-- Gather context in one call (`-r`, `-s`), mutate in the next (`-e`, `-w`)
-- Use `--budget N` to limit response size
-- Use `--sig` on classes/structs to see the API without implementation
-- Use `--new -` with heredoc for multi-line replacements
-- `-s "pattern"` searches symbol names; add `--text` for full-text grep
-- Use `edr refs Symbol --impact` before refactoring
 
 ## If edr is not found
 
