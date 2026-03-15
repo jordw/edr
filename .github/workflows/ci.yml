@@ -43,8 +43,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Test clean install via Dockerfile
+      - name: Test clean install (Ubuntu)
         run: docker build -t edr-test-setup .
+
+      - name: Test clean install (Alpine/musl)
+        run: docker build -f Dockerfile.alpine -t edr-test-alpine .
 
   install-macos:
     runs-on: macos-latest

@@ -101,7 +101,7 @@ git clone https://github.com/jordw/edr.git
 ./edr/setup.sh /path/to/your/project
 ```
 
-If you already have Go 1.25+ and a C compiler (required for tree-sitter grammars):
+If you already have Go 1.25+ and C/C++ compilers (required for tree-sitter grammars):
 
 ```bash
 go install github.com/jordw/edr@latest
@@ -153,7 +153,7 @@ All output is structured JSON. Token budgets (`--budget N`) cap any response to 
 | **ripgrep** | Fast text search, zero setup | Symbol-scoped results, batching, sessions | Requires indexing; ripgrep needs nothing |
 | **ctags** | Mature symbol indexing, wide editor support | Reads, edits, sessions on top of the index | Fewer languages than ctags |
 | **LSP** | Deep per-language semantics, refactoring | Single binary across 13 languages, no per-language server | No type info, weaker refactoring |
-| **Built-in agent tools** | No setup, always available | Symbol awareness, batching, context tracking | Build dependency (Go + C compiler) |
+| **Built-in agent tools** | No setup, always available | Symbol awareness, batching, context tracking | Build dependency (Go + C/C++ compilers) |
 
 ## Supported languages
 
@@ -167,7 +167,7 @@ edr can read and edit any text file regardless of language support.
 
 ## Limitations
 
-- **C compiler required.** Tree-sitter grammars need CGO. The setup script handles this, but it is a real dependency.
+- **C/C++ compilers required.** Tree-sitter grammars need CGO, and the HCL grammar needs C++. The setup script handles this, but it is a real dependency.
 - **Semantic refs are partial.** Import-aware reference tracking covers Go, Python, JS, and TS. Other languages use text matching, which can produce false positives.
 - **Tree-sitter, not LSP.** The index captures structure (functions, classes, types) but not full type information. It will not catch everything a language server would.
 - **Indexing cost.** First `edr init` takes a few seconds on small repos, longer on large ones. Incremental re-indexing after edits is fast.

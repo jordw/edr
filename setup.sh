@@ -32,28 +32,28 @@ echo "    target repo: $TARGET"
 if ! command -v go &>/dev/null; then
     echo "==> Go not found. Attempting install..."
     if command -v apt-get &>/dev/null; then
-        $SUDO apt-get update -qq && $SUDO apt-get install -y -qq golang gcc >/dev/null
+        $SUDO apt-get update -qq && $SUDO apt-get install -y -qq golang gcc g++ >/dev/null
     elif command -v brew &>/dev/null; then
         brew install go
     elif command -v apk &>/dev/null; then
-        apk add --no-cache go gcc musl-dev
+        apk add --no-cache go gcc g++ musl-dev
     else
         echo "ERROR: Go not found and no known package manager. Install Go manually."
         exit 1
     fi
 fi
 
-# --- Check gcc (needed for tree-sitter CGO) ---
-if ! command -v gcc &>/dev/null; then
-    echo "==> gcc not found. Attempting install..."
+# --- Check gcc/g++ (needed for tree-sitter CGO and HCL grammar) ---
+if ! command -v gcc &>/dev/null || ! command -v g++ &>/dev/null; then
+    echo "==> C/C++ compiler not found. Attempting install..."
     if command -v apt-get &>/dev/null; then
-        $SUDO apt-get update -qq && $SUDO apt-get install -y -qq gcc >/dev/null
+        $SUDO apt-get update -qq && $SUDO apt-get install -y -qq gcc g++ >/dev/null
     elif command -v brew &>/dev/null; then
         brew install gcc
     elif command -v apk &>/dev/null; then
-        apk add --no-cache gcc musl-dev
+        apk add --no-cache gcc g++ musl-dev
     else
-        echo "ERROR: gcc not found. Install a C compiler for tree-sitter."
+        echo "ERROR: gcc/g++ not found. Install C and C++ compilers for tree-sitter."
         exit 1
     fi
 fi
@@ -61,6 +61,8 @@ fi
 # --- Build ---
 echo "==> Building edr..."
 cd "$REPO_DIR"
+# Distro Go may be older than go.mod requires; let Go download the right version
+export GOTOOLCHAIN=auto
 BUILD_HASH=$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_VERSION=$(git -C "$REPO_DIR" describe --tags --always 2>/dev/null || echo "dev")
 go build -ldflags "-X github.com/jordw/edr/cmd.Version=${BUILD_VERSION} -X github.com/jordw/edr/cmd.BuildHash=${BUILD_HASH}" -o edr .

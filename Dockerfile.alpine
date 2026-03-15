@@ -1,0 +1,15 @@
+# Tests that setup.sh works on Alpine (musl libc, apk).
+# Usage: docker build -f Dockerfile.alpine -t edr-test-alpine .
+FROM alpine:3.21
+
+RUN apk add --no-cache bash git
+
+COPY . /edr
+WORKDIR /tmp/target
+RUN git init -q
+
+RUN /edr/setup.sh /tmp/target
+
+ENV PATH="/root/.local/bin:$PATH"
+RUN edr --version
+RUN edr init -r /tmp/target
