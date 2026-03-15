@@ -85,6 +85,8 @@ type batchState struct {
 	verifyEnabled bool
 	verifyCommand string
 
+	dryRun bool
+
 	root      string
 	stdinUsed bool
 }
@@ -121,6 +123,10 @@ func (s *batchState) toParams() doParams {
 		Queries: s.queries,
 		Edits:   s.edits,
 		Writes:  s.writes,
+	}
+
+	if s.dryRun {
+		p.DryRun = bp(true)
 	}
 
 	// Auto-verify when edits are present, unless explicitly disabled
@@ -447,10 +453,12 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			s.currentEdit.Before = val
 
 		case "--dry-run", "--dry_run":
-			if s.currentOp != opEdit {
-				return nil, fmt.Errorf("--dry-run is only valid after -e")
+			if s.currentOp == opEdit {
+				s.currentEdit.DryRun = bp(true)
+			} else {
+				// Global dry-run: applies to all edits and writes
+				s.dryRun = true
 			}
-			s.currentEdit.DryRun = bp(true)
 
 		// ── write modifiers ──
 

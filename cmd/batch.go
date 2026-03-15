@@ -104,6 +104,7 @@ type doWrite struct {
 	After   *string `json:"after,omitempty"`
 	Inside  *string `json:"inside,omitempty"`
 	Append  *bool   `json:"append,omitempty"`
+	DryRun  *bool   `json:"dry_run,omitempty"`
 }
 
 type doRename struct {
@@ -395,7 +396,7 @@ func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, p 
 }
 
 // executeWrites dispatches write operations and returns typed results.
-func executeWrites(ctx context.Context, db *index.DB, sess *session.Session, p *doParams) []writeResult {
+func executeWrites(ctx context.Context, db *index.DB, sess *session.Session, p *doParams, dryRun bool) []writeResult {
 	results := make([]writeResult, len(p.Writes))
 	for i, w := range p.Writes {
 		flags := map[string]any{"content": w.Content}
@@ -411,12 +412,17 @@ func executeWrites(ctx context.Context, db *index.DB, sess *session.Session, p *
 		if w.Append != nil && *w.Append {
 			flags["append"] = true
 		}
+		if dryRun {
+			flags["dry_run"] = true
+		}
 		result, err := dispatch.Dispatch(ctx, db, "write", []string{w.File}, flags)
 		if err != nil {
 			results[i] = writeResult{File: w.File, OK: false, Error: err.Error()}
 		} else {
 			results[i] = writeResult{File: w.File, OK: true, Result: result}
-			sess.InvalidateFile(w.File) // #17: invalidate session for written files
+			if !dryRun {
+				sess.InvalidateFile(w.File) // #17: invalidate session for written files
+			}
 		}
 	}
 	return results
@@ -701,14 +707,11 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 	}
 	isDryRun := p.DryRun != nil && *p.DryRun
 
-	// 3. Writes (skip if dry-run)
-	if hasWrites && !isDryRun {
-		resp.Writes = executeWrites(ctx, db, sess, &p)
-	} else if hasWrites && isDryRun {
-		resp.Writes = make([]writeResult, len(p.Writes))
-		for i, w := range p.Writes {
-			resp.Writes[i] = writeResult{File: w.File, OK: true, Result: map[string]any{"skipped": "dry_run"}}
-		}
+	// 3. Edits (atomic via transaction — run before writes so failures gate writes)
+	editsFailed := false
+	allNoop := false
+	if hasEdits {
+		resp.Edits, editsFailed, allNoop = executeEdits(ctx, db, sess, &p, &warnings, cb)
 	}
 
 	// 4. Renames
@@ -738,11 +741,14 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 		resp.Renames = json.RawMessage(data)
 	}
 
-	// 5. Edits
-	editsFailed := false
-	allNoop := false
-	if hasEdits {
-		resp.Edits, editsFailed, allNoop = executeEdits(ctx, db, sess, &p, &warnings, cb)
+	// 5. Writes (skip if dry-run or edits failed)
+	if hasWrites && editsFailed {
+		resp.Writes = make([]writeResult, len(p.Writes))
+		for i, w := range p.Writes {
+			resp.Writes[i] = writeResult{File: w.File, OK: false, Error: "skipped: edits failed"}
+		}
+	} else if hasWrites {
+		resp.Writes = executeWrites(ctx, db, sess, &p, isDryRun)
 	}
 
 	// 5b. Post-edit reads

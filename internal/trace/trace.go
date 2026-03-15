@@ -160,7 +160,10 @@ func NewCollector(edrDir, version string) *Collector {
 		return nil
 	}
 
-	sessionID := fmt.Sprintf("%d", time.Now().UnixNano())
+	sessionID := os.Getenv("EDR_SESSION")
+	if sessionID == "" {
+		sessionID = fmt.Sprintf("%d", time.Now().UnixNano())
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := db.Exec("INSERT INTO sessions (id, started_at, edr_version) VALUES (?, ?, ?)",
 		sessionID, now, version); err != nil {

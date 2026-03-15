@@ -217,3 +217,87 @@ func TestOpenTraceDBNotExist(t *testing.T) {
 		t.Error("expected traces.db to exist")
 	}
 }
+
+// --- Issue 4: EDR_SESSION identity ---
+
+func TestCollectorUsesEDRSession(t *testing.T) {
+	// When EDR_SESSION is set, the collector should use it as session ID.
+	dir := t.TempDir()
+
+	t.Setenv("EDR_SESSION", "test-session-42")
+	tc := NewCollector(dir, "test-1.0")
+	if tc == nil {
+		t.Fatal("expected non-nil collector")
+	}
+	defer tc.Close()
+
+	if tc.SessionID() != "test-session-42" {
+		t.Errorf("SessionID() = %q, want %q", tc.SessionID(), "test-session-42")
+	}
+}
+
+func TestCollectorFallsBackToTimestamp(t *testing.T) {
+	// Without EDR_SESSION, the collector should generate a timestamp-based ID.
+	dir := t.TempDir()
+
+	t.Setenv("EDR_SESSION", "")
+	tc := NewCollector(dir, "test-1.0")
+	if tc == nil {
+		t.Fatal("expected non-nil collector")
+	}
+	defer tc.Close()
+
+	if tc.SessionID() == "" {
+		t.Error("expected non-empty session ID fallback")
+	}
+	if tc.SessionID() == "test-session-42" {
+		t.Error("expected timestamp ID, not stale env var")
+	}
+}
+
+func TestBenchSessionRespectsEDRSession(t *testing.T) {
+	// bench-session with EDR_SESSION should score that session, not most recent.
+	dir := t.TempDir()
+
+	// Create two sessions: an older one with EDR_SESSION, and a newer one without.
+	t.Setenv("EDR_SESSION", "target-session")
+	tc1 := NewCollector(dir, "test-1.0")
+	if tc1 == nil {
+		t.Fatal("expected non-nil collector")
+	}
+	cb := tc1.BeginCall()
+	cb.SetRequest(3, 0, 0, 0, 0, false, false, nil)
+	cb.Finish(100, false, 0)
+	tc1.Close()
+
+	// Allow time separation
+	time.Sleep(10 * time.Millisecond)
+
+	t.Setenv("EDR_SESSION", "")
+	tc2 := NewCollector(dir, "test-1.0")
+	if tc2 == nil {
+		t.Fatal("expected non-nil collector")
+	}
+	cb2 := tc2.BeginCall()
+	cb2.SetRequest(1, 0, 0, 0, 0, false, false, nil)
+	cb2.Finish(50, false, 0)
+	tc2.Close()
+
+	// Open DB and score the target session explicitly
+	db, err := OpenTraceDB(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	result, err := BenchSession(db, "target-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TotalReads != 3 {
+		t.Errorf("expected 3 reads from target session, got %d", result.TotalReads)
+	}
+	if result.SessionID != "target-session" {
+		t.Errorf("SessionID = %q, want %q", result.SessionID, "target-session")
+	}
+}

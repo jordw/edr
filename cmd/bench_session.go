@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/jordw/edr/internal/output"
@@ -35,6 +36,8 @@ edit/verify pass rates, and optimization savings.`,
 		sessionID := ""
 		if len(args) > 0 {
 			sessionID = args[0]
+		} else if envID := os.Getenv("EDR_SESSION"); envID != "" {
+			sessionID = envID
 		}
 
 		result, err := trace.BenchSession(db, sessionID)

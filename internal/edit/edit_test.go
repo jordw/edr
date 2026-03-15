@@ -28,7 +28,7 @@ func readFile(t *testing.T, path string) string {
 
 func hashOf(content string) string {
 	sum := sha256.Sum256([]byte(content))
-	return hex.EncodeToString(sum[:])[:8]
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 // --- FileHash ---
@@ -234,5 +234,72 @@ func TestInsertAfterSpan_BeyondEOF(t *testing.T) {
 	err := InsertAfterSpan(path, 100, "XXX")
 	if err == nil {
 		t.Error("expected error for position beyond EOF")
+	}
+}
+
+// --- Issue 1: Hash length (16 hex chars / 64 bits) ---
+
+func TestHashBytes_Length16(t *testing.T) {
+	h := HashBytes([]byte("hello world"))
+	if len(h) != 16 {
+		t.Errorf("HashBytes length = %d, want 16", len(h))
+	}
+	// Verify it's valid hex
+	for _, c := range h {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			t.Errorf("HashBytes contains non-hex char: %c", c)
+		}
+	}
+}
+
+func TestFileHash_Length16(t *testing.T) {
+	path := tmpFile(t, "test content for hash length")
+	h, err := FileHash(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h) != 16 {
+		t.Errorf("FileHash length = %d, want 16", len(h))
+	}
+}
+
+func TestHashBytes_DifferentInputsDiffer(t *testing.T) {
+	h1 := HashBytes([]byte("input one"))
+	h2 := HashBytes([]byte("input two"))
+	if h1 == h2 {
+		t.Error("different inputs produced same hash")
+	}
+}
+
+func TestReplaceSpan_Hash16Chars(t *testing.T) {
+	content := "abcdef"
+	path := tmpFile(t, content)
+
+	// Compute a 16-char hash and verify it works with ReplaceSpan
+	hash := HashBytes([]byte(content))
+	if len(hash) != 16 {
+		t.Fatalf("hash length = %d, want 16", len(hash))
+	}
+
+	err := ReplaceSpan(path, 0, 3, "XXX", hash)
+	if err != nil {
+		t.Fatalf("ReplaceSpan with 16-char hash: %v", err)
+	}
+
+	got := readFile(t, path)
+	if got != "XXXdef" {
+		t.Errorf("got %q, want %q", got, "XXXdef")
+	}
+}
+
+func TestReplaceSpan_OldHash8Rejected(t *testing.T) {
+	content := "abcdef"
+	path := tmpFile(t, content)
+
+	// An old 8-char hash should NOT match the new 16-char comparison
+	oldHash := HashBytes([]byte(content))[:8]
+	err := ReplaceSpan(path, 0, 3, "XXX", oldHash)
+	if err == nil {
+		t.Error("expected hash mismatch error for 8-char hash against 16-char comparison")
 	}
 }

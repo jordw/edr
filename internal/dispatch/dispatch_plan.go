@@ -328,6 +328,33 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 		}
 	}
 
+	// Detect overlapping edits on the same file before applying.
+	// Group by file and check for byte-range overlaps.
+	{
+		byFile := make(map[string][]resolvedEdit)
+		for _, r := range resolved {
+			byFile[r.File] = append(byFile[r.File], r)
+		}
+		for _, edits := range byFile {
+			if len(edits) < 2 {
+				continue
+			}
+			// Sort by StartByte ascending.
+			sort.Slice(edits, func(i, j int) bool {
+				return edits[i].StartByte < edits[j].StartByte
+			})
+			for i := 1; i < len(edits); i++ {
+				prev := edits[i-1]
+				curr := edits[i]
+				// Overlap: curr starts before prev ends (insertions at same point are OK).
+				if curr.StartByte < prev.EndByte && !(prev.StartByte == prev.EndByte || curr.StartByte == curr.EndByte) {
+					return nil, fmt.Errorf("edit-plan: overlapping edits on %s: [%d:%d] and [%d:%d] — split into separate calls",
+						output.Rel(prev.File), prev.StartByte, prev.EndByte, curr.StartByte, curr.EndByte)
+				}
+			}
+		}
+	}
+
 	// Dry-run: apply all edits in memory, produce combined per-file diffs.
 	if dryRun {
 		// Group edits by file, preserving order.

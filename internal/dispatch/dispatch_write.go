@@ -38,6 +38,7 @@ func runWriteFile(ctx context.Context, db *index.DB, root string, args []string,
 	}
 	content := writeContent(flags)
 	mkdir := flagBool(flags, "mkdir", false)
+	dryRun := flagBool(flags, "dry-run", false)
 
 	file := args[0]
 	file, err := db.ResolvePath(file)
@@ -45,7 +46,7 @@ func runWriteFile(ctx context.Context, db *index.DB, root string, args []string,
 		return nil, err
 	}
 
-	if mkdir {
+	if mkdir && !dryRun {
 		dir := file[:strings.LastIndex(file, "/")]
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return nil, fmt.Errorf("mkdir: %w", err)
@@ -59,6 +60,10 @@ func runWriteFile(ctx context.Context, db *index.DB, root string, args []string,
 	}
 
 	if errors.Is(readErr, os.ErrNotExist) {
+		if dryRun {
+			diff := edit.UnifiedDiff(output.Rel(file), nil, []byte(content))
+			return map[string]any{"file": output.Rel(file), "diff": diff, "dry_run": true, "new_file": true}, nil
+		}
 		// New file: create empty, then commit content as insertion
 		if err := os.WriteFile(file, nil, 0644); err != nil {
 			return nil, err
@@ -76,6 +81,11 @@ func runWriteFile(ctx context.Context, db *index.DB, root string, args []string,
 	// Guard: refuse to overwrite a non-empty file with empty content
 	if content == "" && len(existingData) > 0 && !flagBool(flags, "force", false) {
 		return nil, fmt.Errorf("refusing to overwrite non-empty file with empty content (use --force to override)")
+	}
+
+	if dryRun {
+		diff := edit.UnifiedDiff(output.Rel(file), existingData, []byte(content))
+		return map[string]any{"file": output.Rel(file), "diff": diff, "dry_run": true}, nil
 	}
 
 	// Overwrite existing: replace all content
@@ -116,6 +126,12 @@ func runAppendFile(ctx context.Context, db *index.DB, root string, args []string
 	}
 	insertion := sep + content + "\n"
 
+	if flagBool(flags, "dry-run", false) {
+		newData := append(append([]byte{}, data...), []byte(insertion)...)
+		diff := edit.UnifiedDiff(output.Rel(file), data, newData)
+		return map[string]any{"file": output.Rel(file), "diff": diff, "dry_run": true}, nil
+	}
+
 	cr, err := commitEdits(ctx, db, []resolvedEdit{{
 		File: file, StartByte: uint32(len(data)), EndByte: uint32(len(data)),
 		Replacement: insertion, ExpectHash: edit.HashBytes(data),
@@ -144,6 +160,20 @@ func runInsertAfter(ctx context.Context, db *index.DB, root string, args []strin
 
 	// Insert content after the symbol, with a blank line separator
 	insertion := "\n\n" + content
+
+	if flagBool(flags, "dry-run", false) {
+		data, err := os.ReadFile(sym.File)
+		if err != nil {
+			return nil, err
+		}
+		newData := make([]byte, 0, len(data)+len(insertion))
+		newData = append(newData, data[:sym.EndByte]...)
+		newData = append(newData, []byte(insertion)...)
+		newData = append(newData, data[sym.EndByte:]...)
+		diff := edit.UnifiedDiff(output.Rel(sym.File), data, newData)
+		return map[string]any{"file": output.Rel(sym.File), "diff": diff, "dry_run": true}, nil
+	}
+
 	cr, err := commitEdits(ctx, db, []resolvedEdit{{
 		File: sym.File, StartByte: sym.EndByte, EndByte: sym.EndByte,
 		Replacement: insertion, ExpectHash: hash,
@@ -212,8 +242,16 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 						insertAfter = afterSym.EndByte
 						insertLabel = afterSym.Name
 					}
-					hash := edit.HashBytes(data)
 					insertion := "\n\n" + content
+					if flagBool(flags, "dry-run", false) {
+						newData := make([]byte, 0, len(data)+len(insertion))
+						newData = append(newData, data[:insertAfter]...)
+						newData = append(newData, []byte(insertion)...)
+						newData = append(newData, data[insertAfter:]...)
+						diff := edit.UnifiedDiff(output.Rel(container.File), data, newData)
+						return map[string]any{"file": output.Rel(container.File), "diff": diff, "dry_run": true}, nil
+					}
+					hash := edit.HashBytes(data)
 					cr, err := commitEdits(ctx, db, []resolvedEdit{{
 						File: container.File, StartByte: insertAfter, EndByte: insertAfter,
 						Replacement: insertion, ExpectHash: hash,
@@ -254,6 +292,15 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 	insertion := indentedContent + "\n"
 	if cfg != nil && cfg.Container != index.ContainerBrace {
 		insertion = "\n" + indentedContent + "\n"
+	}
+
+	if flagBool(flags, "dry-run", false) {
+		newData := make([]byte, 0, len(data)+len(insertion))
+		newData = append(newData, data[:insertByte]...)
+		newData = append(newData, []byte(insertion)...)
+		newData = append(newData, data[insertByte:]...)
+		diff := edit.UnifiedDiff(output.Rel(container.File), data, newData)
+		return map[string]any{"file": output.Rel(container.File), "diff": diff, "dry_run": true}, nil
 	}
 
 	cr, err := commitEdits(ctx, db, []resolvedEdit{{

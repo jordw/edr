@@ -1027,7 +1027,7 @@ func TestDoStructsMatchCmdspec(t *testing.T) {
 	// doWrite fields
 	writeFields := map[string]bool{
 		"file": true, "content": true, "mkdir": true, "after": true,
-		"inside": true, "append": true,
+		"inside": true, "append": true, "dry_run": true,
 	}
 	// Write has extra batch fields (body, new_text, force) that aren't in the struct
 	for key := range doWriteKnownKeys {
@@ -1147,14 +1147,14 @@ func TestHandleDo_DryRunSkipsWrites(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	// Writes should show skipped
+	// Writes should show dry_run preview (not "skipped")
 	writes, ok := parsed["writes"].([]any)
 	if !ok || len(writes) != 1 {
 		t.Fatalf("expected 1 write result, got: %v", parsed["writes"])
 	}
 	wr := writes[0].(map[string]any)
-	if res, ok := wr["result"].(map[string]any); !ok || res["skipped"] != "dry_run" {
-		t.Errorf("expected write skipped for dry_run, got: %v", wr)
+	if res, ok := wr["result"].(map[string]any); !ok || res["dry_run"] != true {
+		t.Errorf("expected write dry_run preview, got: %v", wr)
 	}
 
 	// Summary should show dry_run status
@@ -1449,6 +1449,254 @@ func TestBuildSummary_EditsFailed(t *testing.T) {
 	s := buildSummary(p, true, nil, false)
 	if s.Status != "failed" {
 		t.Errorf("status = %q, want failed", s.Status)
+	}
+}
+
+// --- Issue 2: Overlapping edit detection ---
+
+func TestHandleDo_OverlappingEditsRejected(t *testing.T) {
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc alpha() {}\n\nfunc beta() {}\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc != nil {
+		defer tc.Close()
+	}
+
+	// Two edits with overlapping byte ranges on the same file
+	raw := json.RawMessage(`{
+		"edits": [
+			{"file": "main.go", "old_text": "func alpha() {}\n\nfunc beta", "new_text": "REPLACED1"},
+			{"file": "main.go", "old_text": "func beta() {}", "new_text": "REPLACED2"}
+		]
+	}`)
+
+	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	if !strings.Contains(result, "overlapping edits") {
+		t.Errorf("expected overlapping edits error, got: %s", result)
+	}
+
+	// File should be unchanged
+	data, _ := os.ReadFile(filepath.Join(tmp, "main.go"))
+	if !strings.Contains(string(data), "func alpha()") {
+		t.Error("file was modified despite overlap rejection")
+	}
+}
+
+func TestHandleDo_NonOverlappingEditsSameFileSucceed(t *testing.T) {
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc alpha() {}\n\nfunc beta() {}\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc != nil {
+		defer tc.Close()
+	}
+
+	// Two non-overlapping edits on the same file
+	raw := json.RawMessage(`{
+		"edits": [
+			{"file": "main.go", "old_text": "func alpha()", "new_text": "func alphaNew()"},
+			{"file": "main.go", "old_text": "func beta()", "new_text": "func betaNew()"}
+		]
+	}`)
+
+	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	if strings.Contains(result, "overlapping") {
+		t.Errorf("non-overlapping edits should not be rejected: %s", result)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(tmp, "main.go"))
+	if !strings.Contains(string(data), "func alphaNew()") || !strings.Contains(string(data), "func betaNew()") {
+		t.Errorf("expected both edits applied, got: %s", string(data))
+	}
+}
+
+// --- Issue 2: Edits run before writes, failed edits skip writes ---
+
+func TestHandleDo_EditFailureSkipsWrites(t *testing.T) {
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc != nil {
+		defer tc.Close()
+	}
+
+	writeTarget := filepath.Join(tmp, "new_file.go")
+	// Edit will fail (old_text not found), write should be skipped
+	raw := json.RawMessage(fmt.Sprintf(`{
+		"edits": [{"file": "main.go", "old_text": "DOES_NOT_EXIST", "new_text": "replaced"}],
+		"writes": [{"file": %q, "content": "package new"}]
+	}`, writeTarget))
+
+	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	// Write target should NOT exist since edits failed
+	if _, statErr := os.Stat(writeTarget); statErr == nil {
+		t.Error("write should not execute when edits fail")
+	}
+
+	// Result should indicate writes were skipped
+	if !strings.Contains(result, "skipped: edits failed") {
+		t.Errorf("expected writes skipped message, got: %s", result)
+	}
+}
+
+// --- Issue 3: Write dry-run produces preview ---
+
+func TestHandleDo_WriteDryRunPreview(t *testing.T) {
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "existing.go"), []byte("package main\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc != nil {
+		defer tc.Close()
+	}
+
+	// Global dry-run with writes only (no edits)
+	raw := json.RawMessage(`{
+		"writes": [{"file": "existing.go", "content": "package updated\n"}],
+		"dry_run": true
+	}`)
+
+	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	writes, ok := parsed["writes"].([]any)
+	if !ok || len(writes) != 1 {
+		t.Fatalf("expected 1 write result, got: %v", parsed["writes"])
+	}
+	wr := writes[0].(map[string]any)
+	res, ok := wr["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result map, got: %v", wr)
+	}
+	if res["dry_run"] != true {
+		t.Errorf("expected dry_run: true, got: %v", res)
+	}
+	if _, hasDiff := res["diff"]; !hasDiff {
+		t.Error("expected diff in dry-run write preview")
+	}
+
+	// File should be unchanged
+	data, _ := os.ReadFile(filepath.Join(tmp, "existing.go"))
+	if string(data) != "package main\n" {
+		t.Errorf("file was modified during dry-run: %q", string(data))
+	}
+}
+
+func TestHandleDo_WriteNewFileDryRun(t *testing.T) {
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc != nil {
+		defer tc.Close()
+	}
+
+	newFile := filepath.Join(tmp, "brand_new.go")
+	raw := json.RawMessage(fmt.Sprintf(`{
+		"writes": [{"file": %q, "content": "package brand_new\n"}],
+		"dry_run": true
+	}`, newFile))
+
+	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	// File should NOT be created
+	if _, statErr := os.Stat(newFile); statErr == nil {
+		t.Error("new file should not be created during dry-run")
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	writes := parsed["writes"].([]any)
+	wr := writes[0].(map[string]any)
+	res := wr["result"].(map[string]any)
+	if res["dry_run"] != true {
+		t.Errorf("expected dry_run: true")
+	}
+	if res["new_file"] != true {
+		t.Errorf("expected new_file: true for new file dry-run preview")
 	}
 }
 

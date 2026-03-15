@@ -542,7 +542,7 @@ func shouldIgnoreDir(name, path, root string, gitignore *GitIgnoreMatcher) bool 
 
 func fileHash(data []byte) string {
 	h := sha256.Sum256(data)
-	return hex.EncodeToString(h[:4]) // first 8 hex chars
+	return hex.EncodeToString(h[:8]) // first 16 hex chars
 }
 
 // repoMapConfig holds filters for RepoMap.

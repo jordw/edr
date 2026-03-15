@@ -86,6 +86,7 @@ var Registry = []*Spec{
 			{Name: "content", Type: FlagString, Default: "", Desc: "Content to write (alternative to stdin)"},
 			{Name: "new_text", Type: FlagString, Default: "", Desc: "Content to write (alias for --content)"},
 			{Name: "force", Type: FlagBool, Default: false, Desc: "Allow overwriting non-empty file with empty content"},
+			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
 		},
 		// "body" accepted as alias for "content" to suppress agent typo warnings
 		BatchFields: []string{"file", "body"},
