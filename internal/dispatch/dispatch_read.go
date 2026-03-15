@@ -60,8 +60,11 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 		// Fall through to normal read for non-code files
 	}
 
-	// --depth N: AST-aware progressive disclosure for the whole file
+	// --skeleton or --depth: AST-aware progressive disclosure
 	depth := flagInt(flags, "depth", 0)
+	if flagBool(flags, "skeleton", false) {
+		depth = 2
+	}
 	if depth > 2 {
 		depth = 2
 	}
@@ -205,8 +208,11 @@ func runReadSymbol(ctx context.Context, db *index.DB, root string, args []string
 		}, nil
 	}
 
-	// --depth N: progressive disclosure via AST-aware collapsing
+	// --skeleton or --depth: progressive disclosure via AST-aware collapsing
 	depth := flagInt(flags, "depth", 0)
+	if flagBool(flags, "skeleton", false) {
+		depth = 2
+	}
 	if depth > 2 {
 		depth = 2
 	}

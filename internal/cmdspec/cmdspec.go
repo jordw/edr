@@ -70,10 +70,10 @@ var Registry = []*Spec{
 			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens"},
 			{Name: "symbols", Type: FlagBool, Default: false, Desc: "Append symbol list"},
 			{Name: "signatures", Type: FlagBool, Default: false, Desc: "Signatures only (75-86% fewer tokens)"},
-			{Name: "depth", Type: FlagInt, Default: 0, Desc: "Depth: 1=sigs, 2=collapsed blocks"},
+			{Name: "skeleton", Type: FlagBool, Default: false, Desc: "Skeleton view: blocks collapsed (one level deeper than signatures)"},
 			{Name: "full", Type: FlagBool, Default: false, Desc: "Force full content (skip delta)"},
 		},
-		BatchFields: []string{"file", "symbol", "start_line", "end_line"},
+		BatchFields: []string{"file", "symbol", "start_line", "end_line", "depth"},
 	},
 	{
 		Name: "write", Desc: "Create/overwrite file. Supports append, after (symbol), inside (container), mkdir.",
@@ -172,7 +172,7 @@ var Registry = []*Spec{
 		BatchFields: []string{"old_name", "new_name"},
 	},
 	{
-		Name: "init", Desc: "Force re-index the repository.",
+		Name: "reindex", Desc: "Force re-index the repository.",
 		Category: CatGlobalMutate, MinArgs: 0, MaxArgs: 0,
 		Flags: []FlagSpec{
 			{Name: "cpuprofile", Type: FlagString, Default: "", Desc: "Write CPU profile to file"},

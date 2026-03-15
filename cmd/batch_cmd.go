@@ -48,6 +48,7 @@ Examples:
 }
 
 func init() {
+	batchCmd.Hidden = true
 	rootCmd.AddCommand(batchCmd)
 }
 
@@ -249,6 +250,12 @@ func parseBatchArgs(args []string) (*batchState, error) {
 				return nil, fmt.Errorf("%s is only valid after -r", arg)
 			}
 			s.currentRead.Signatures = bp(true)
+
+		case "--skeleton":
+			if s.currentOp != opRead {
+				return nil, fmt.Errorf("--skeleton is only valid after -r")
+			}
+			s.currentRead.Skeleton = bp(true)
 
 		case "--depth":
 			n, err := nextInt(arg)

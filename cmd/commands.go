@@ -21,9 +21,11 @@ func init() {
 	rootCmd.AddCommand(editCmd)
 	rootCmd.AddCommand(mapCmd)
 	rootCmd.AddCommand(searchCmd)
+	exploreCmd.Hidden = true
 	rootCmd.AddCommand(exploreCmd)
 	rootCmd.AddCommand(refsCmd)
 	rootCmd.AddCommand(renameCmd)
+	findCmd.Hidden = true
 	rootCmd.AddCommand(findCmd)
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(initCmd)
@@ -222,12 +224,13 @@ var findCmd = &cobra.Command{
 
 func init() {
 	cmdspec.RegisterFlags(findCmd.Flags(), "find")
-	cmdspec.RegisterFlags(initCmd.Flags(), "init")
+	cmdspec.RegisterFlags(initCmd.Flags(), "reindex")
 }
 
 var initCmd = &cobra.Command{
-	Use:   "init",
-	Short: ToolDesc["init"],
+	Use:     "reindex",
+	Aliases: []string{"init"},
+	Short:   ToolDesc["reindex"],
 	RunE: func(cmd *cobra.Command, args []string) error {
 		profPath, _ := cmd.Flags().GetString("cpuprofile")
 		if profPath != "" {
