@@ -224,10 +224,11 @@ edr find "**/test_*" --budget 500
 
 `edr serve` starts a background daemon with a Unix socket (`.edr/serve.sock`).
 All CLI commands automatically proxy through the server for session benefits.
+Sessions are scoped per caller PID — each agent process gets independent delta reads and body dedup.
 
 ```bash
 edr serve          # daemonize, create socket, print PID
-edr serve --stop   # send shutdown, clean up
+edr serve --stop   # graceful shutdown via socket (safe — no PID signal races)
 
 # No server running? CLI commands fall back to ephemeral dispatch.
 # Everything works either way — the server is a performance optimization.
@@ -249,7 +250,7 @@ Operations are specified as ordered flags — modifier flags apply to the preced
 ### Defaults
 
 - **Search body on**: `-s` includes match bodies by default (use `--no-body` to suppress)
-- **Auto-verify**: edits automatically trigger `go build`/`go vet` (use `--no-verify` to skip)
+- **Auto-verify**: edits automatically trigger `go build`/`go vet` (use `--no-verify` to skip; skipped automatically on `--dry-run`)
 - **Exit codes**: non-zero if any operation fails (structured JSON still printed)
 - **`--new -`**: reads replacement text from stdin (for heredoc large content)
 
@@ -296,7 +297,8 @@ When a server is running (`edr serve`), edr tracks what you've already seen acro
 - **Slim edits**: Small diffs (<=20 changed lines) are returned inline. Large diffs are stored; use `edr read --diff file` to retrieve.
 - **Body dedup**: Search and explore replace previously-seen bodies with `"[in context]"`.
 
-These optimizations are automatic and server-scoped. They persist for the server's lifetime.
+These optimizations are automatic and scoped per caller PID. Each agent process gets its own
+session; multiple agents sharing one server won't cross-contaminate each other's caches.
 Without a server, each CLI call uses an ephemeral session (no cross-call tracking).
 
 ## Key Principles
@@ -412,6 +414,7 @@ batch reads, depth-2 reads, and bench-session scoring of the resulting trace.
 **Server**: `edr serve` (start), `edr serve --stop` (stop).
 
 All output is structured JSON. File paths are relative to repo root. Edit commands return `hash`.
-Symbol reads include both `body` and `content` fields (use either). File reads use `content`.
+All reads use `content` for the text field (file reads and symbol reads alike).
 
-Sessions are server-scoped (persist across CLI calls while server runs). Without a server, each call uses an ephemeral session.
+Sessions are per-caller-PID (the CLI sends its PPID; each agent gets independent session state).
+Without a server, each call uses an ephemeral session.

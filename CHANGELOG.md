@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.3.0 — 2026-03-15
+
+### Breaking changes
+
+- **Symbol reads return `content` only** — the duplicate `body` field is removed. All reads (file and symbol) now use `content` consistently. Saves ~50% tokens on symbol reads.
+- **`summary.hints` removed** — edit responses no longer include hints like "use verify:true to check build". Agents know features from CLAUDE.md.
+
+### Fixes
+
+- **Move `--before` dry-run preview** — dry-run now produces a single combined diff per file instead of per-edit diffs against the original. Also fixes `--before` insertion point to include declaration keywords (`type`, `func`, etc.) that tree-sitter doesn't include in StartByte.
+- **PID safety** — `edr serve --stop` now shuts down via the Unix socket (`{"control":"shutdown"}`) instead of signaling a PID that may have been recycled by the OS. PID file cleanup is deferred so it runs even on panic. Stale PID files without sockets are cleaned up on next `edr serve`.
+
+### Features
+
+- **Per-caller sessions** — the server maintains independent sessions per caller PID (the agent's PPID). Multiple agents sharing one server get isolated delta reads and body dedup. Sessions for dead PIDs are garbage-collected every 30 seconds.
+- **Dry-run skips verify** — `--dry-run` edits no longer run `go build ./...` since no files are changed.
+
 ## v0.2.0 — 2026-03-14
 
 ### Breaking changes

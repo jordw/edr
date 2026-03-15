@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/session"
@@ -63,11 +64,71 @@ type serveError struct {
 	Message string `json:"message"`
 }
 
+
+// sessionStore manages per-caller sessions. Each unique caller PID
+// (the agent process, identified by the CLI PPID) gets its own session
+// so that delta reads and body dedup are scoped correctly.
+type sessionStore struct {
+	mu       sync.Mutex
+	sessions map[int]*sessionEntry
+}
+
+type sessionEntry struct {
+	sess     *session.Session
+	lastUsed time.Time
+}
+
+func newSessionStore() *sessionStore {
+	return &sessionStore{sessions: make(map[int]*sessionEntry)}
+}
+
+// get returns the session for a caller PID, creating one if needed.
+// A pid of 0 is used as the fallback for requests without caller_pid.
+func (ss *sessionStore) get(pid int) *session.Session {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+
+	if e, ok := ss.sessions[pid]; ok {
+		e.lastUsed = time.Now()
+		return e.sess
+	}
+	s := session.New()
+	ss.sessions[pid] = &sessionEntry{sess: s, lastUsed: time.Now()}
+	return s
+}
+
+// gc removes sessions whose caller PID is no longer alive.
+// Called periodically from the request path.
+func (ss *sessionStore) gc() {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+
+	for pid := range ss.sessions {
+		if pid == 0 {
+			continue // fallback session, never GC
+		}
+		if !processAlive(pid) {
+			delete(ss.sessions, pid)
+		}
+	}
+}
+
+// processAlive checks if a PID is still running by sending signal 0.
+func processAlive(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+
 // handleRequest processes a single NDJSON request and returns a response.
-func handleRequest(ctx context.Context, db *index.DB, sess *session.Session, tc *trace.Collector, raw json.RawMessage) serveResponse {
+func handleRequest(ctx context.Context, db *index.DB, ss *sessionStore, tc *trace.Collector, raw json.RawMessage) serveResponse {
 	var envelope struct {
 		RequestID string `json:"request_id"`
 		Control   string `json:"control,omitempty"`
+		CallerPID *int   `json:"caller_pid,omitempty"`
 	}
 	json.Unmarshal(raw, &envelope)
 
@@ -81,6 +142,12 @@ func handleRequest(ctx context.Context, db *index.DB, sess *session.Session, tc 
 	if envelope.Control != "" {
 		return handleControl(envelope.RequestID, envelope.Control, db)
 	}
+
+	callerPID := 0
+	if envelope.CallerPID != nil {
+		callerPID = *envelope.CallerPID
+	}
+	sess := ss.get(callerPID)
 
 	batchRaw := stripEnvelopeFields(raw)
 
@@ -134,6 +201,9 @@ func daemonize(root, edrDir string) error {
 		// Stale socket — clean up
 		os.Remove(sockPath)
 		os.Remove(pidPath)
+	} else {
+		// No socket but PID file exists — server crashed before creating socket.
+		os.Remove(pidPath)
 	}
 
 	os.MkdirAll(edrDir, 0755)
@@ -181,13 +251,17 @@ func daemonize(root, edrDir string) error {
 
 // runServeForeground runs the socket server in the current process.
 func runServeForeground(cmd *cobra.Command, edrDir string) error {
+	// Defer PID cleanup so it runs on panic/signal exit, not just clean return.
+	pidPath := filepath.Join(edrDir, "serve.pid")
+	defer os.Remove(pidPath)
+
 	db, err := openAndEnsureIndexQuiet(cmd)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 
-	sess := session.New()
+	ss := newSessionStore()
 	tc := trace.NewCollector(edrDir, Version+"+"+BuildHash)
 	if tc != nil {
 		defer tc.Close()
@@ -204,57 +278,82 @@ func runServeForeground(cmd *cobra.Command, edrDir string) error {
 		cancel()
 	}()
 
+	// Periodically GC sessions for dead caller PIDs
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ss.gc()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	var sessMu sync.Mutex
 	sockPath := filepath.Join(edrDir, "serve.sock")
 
 	fmt.Fprintf(os.Stderr, "edr: serve started (version %s+%s, socket %s)\n", Version, BuildHash, sockPath)
 
 	// Run socket listener (blocking)
-	runSocketListener(ctx, cancel, db, sess, tc, &sessMu, sockPath)
-
-	// Clean up PID file on exit
-	pidPath := filepath.Join(edrDir, "serve.pid")
-	os.Remove(pidPath)
+	runSocketListener(ctx, cancel, db, ss, tc, &sessMu, sockPath)
 
 	fmt.Fprintf(os.Stderr, "edr: serve stopped\n")
 	return nil
 }
 
-// stopServe sends SIGTERM to a running server.
+// stopServe shuts down a running server via the socket, avoiding PID-based
+// signaling which is unsafe (the PID may have been recycled by the OS).
 func stopServe(edrDir string) error {
+	sockPath := filepath.Join(edrDir, "serve.sock")
 	pidPath := filepath.Join(edrDir, "serve.pid")
-	data, err := os.ReadFile(pidPath)
+
+	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
 	if err != nil {
-		return fmt.Errorf("no server running (no PID file at %s)", pidPath)
+		// Socket unreachable — server is dead. Clean up stale files.
+		removed := false
+		if os.Remove(sockPath) == nil {
+			removed = true
+		}
+		if os.Remove(pidPath) == nil {
+			removed = true
+		}
+		if removed {
+			fmt.Fprintf(os.Stderr, "edr: server was not running (cleaned up stale files)\n")
+			return nil
+		}
+		return fmt.Errorf("no server running (no socket at %s)", sockPath)
 	}
 
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		os.Remove(pidPath)
-		return fmt.Errorf("invalid PID file")
-	}
+	// Send shutdown control message over the socket.
+	fmt.Fprintf(conn, "{\"request_id\":\"stop\",\"control\":\"shutdown\"}\n")
 
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		os.Remove(pidPath)
-		return fmt.Errorf("process %d not found", pid)
-	}
+	// Read the response to confirm shutdown was acknowledged.
+	scanner := bufio.NewScanner(conn)
+	scanner.Scan()
+	conn.Close()
 
-	if err := proc.Signal(syscall.SIGTERM); err != nil {
-		os.Remove(pidPath)
-		// Process is already dead — clean up socket too
-		os.Remove(filepath.Join(edrDir, "serve.sock"))
-		fmt.Fprintf(os.Stderr, "edr: server was not running (cleaned up stale files)\n")
-		return nil
+	// Read PID for the status message (best-effort).
+	pidStr := ""
+	if data, err := os.ReadFile(pidPath); err == nil {
+		pidStr = strings.TrimSpace(string(data))
 	}
-
+	// The server defers its own PID file cleanup, but remove here too
+	// in case the server exits before its defer runs.
 	os.Remove(pidPath)
-	fmt.Fprintf(os.Stderr, "edr: server stopped (pid %d)\n", pid)
+
+	if pidStr != "" {
+		fmt.Fprintf(os.Stderr, "edr: server stopped (pid %s)\n", pidStr)
+	} else {
+		fmt.Fprintf(os.Stderr, "edr: server stopped\n")
+	}
 	return nil
 }
 
 // runSocketListener listens on a Unix socket and processes NDJSON requests.
-func runSocketListener(ctx context.Context, cancel context.CancelFunc, db *index.DB, sess *session.Session, tc *trace.Collector, sessMu *sync.Mutex, sockPath string) {
+func runSocketListener(ctx context.Context, cancel context.CancelFunc, db *index.DB, ss *sessionStore, tc *trace.Collector, sessMu *sync.Mutex, sockPath string) {
 	// Clean up stale socket if it exists
 	if _, err := os.Stat(sockPath); err == nil {
 		conn, err := net.Dial("unix", sockPath)
@@ -294,12 +393,12 @@ func runSocketListener(ctx context.Context, cancel context.CancelFunc, db *index
 			continue
 		}
 
-		handleSocketConn(ctx, cancel, db, sess, tc, sessMu, conn)
+		handleSocketConn(ctx, cancel, db, ss, tc, sessMu, conn)
 	}
 }
 
 // handleSocketConn processes all NDJSON lines from a single socket connection.
-func handleSocketConn(ctx context.Context, cancel context.CancelFunc, db *index.DB, sess *session.Session, tc *trace.Collector, sessMu *sync.Mutex, conn net.Conn) {
+func handleSocketConn(ctx context.Context, cancel context.CancelFunc, db *index.DB, ss *sessionStore, tc *trace.Collector, sessMu *sync.Mutex, conn net.Conn) {
 	defer conn.Close()
 
 	scanner := bufio.NewScanner(conn)
@@ -332,7 +431,7 @@ func handleSocketConn(ctx context.Context, cancel context.CancelFunc, db *index.
 		json.Unmarshal(raw, &envelope)
 
 		sessMu.Lock()
-		resp := handleRequest(ctx, db, sess, tc, raw)
+		resp := handleRequest(ctx, db, ss, tc, raw)
 		sessMu.Unlock()
 
 		encoder.Encode(resp)
@@ -354,6 +453,7 @@ func stripEnvelopeFields(raw json.RawMessage) json.RawMessage {
 	}
 	delete(m, "request_id")
 	delete(m, "control")
+	delete(m, "caller_pid")
 	out, err := json.Marshal(m)
 	if err != nil {
 		return raw

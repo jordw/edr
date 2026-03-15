@@ -541,8 +541,6 @@ func buildSummary(p *doParams, editsFailed bool, writeResults []writeResult) *su
 	hasEdits := len(p.Edits) > 0
 	hasWrites := len(p.Writes) > 0
 	hasRenames := len(p.Renames) > 0
-	hasVerify := p.Verify != nil && p.Verify != false
-
 	if !hasEdits && !hasWrites && !hasRenames {
 		return nil
 	}
@@ -575,15 +573,6 @@ func buildSummary(p *doParams, editsFailed bool, writeResults []writeResult) *su
 		s.Status = "applied"
 	}
 
-	if hasEdits && !editsFailed && (p.ReadAfterEdit == nil || !*p.ReadAfterEdit) && (p.DryRun == nil || !*p.DryRun) {
-		s.Hints = append(s.Hints, "use read_after_edit:true to see updated signatures")
-	}
-	if (hasEdits || hasWrites) && !hasVerify && !editsFailed && (p.DryRun == nil || !*p.DryRun) {
-		s.Hints = append(s.Hints, "use verify:true to check build")
-	}
-	if len(s.Hints) == 0 {
-		s.Hints = nil
-	}
 	return s
 }
 
@@ -734,8 +723,11 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 	}
 
 	// 6. Verify
+	isDryRun := p.DryRun != nil && *p.DryRun
 	if editsFailed && hasVerify {
 		resp.Verify = json.RawMessage(`"skipped: edits failed"`)
+	} else if isDryRun && hasVerify {
+		resp.Verify = json.RawMessage(`"skipped: dry run"`)
 	} else if hasVerify {
 		resp.Verify = executeVerify(ctx, db, &p, cb)
 	}
@@ -1064,14 +1056,15 @@ func postProcessMultiResults(sess *session.Session, cmds []dispatch.MultiCmd, re
 			processed[i].Result = r.Result
 		}
 
-		// Normalize read results: add "content" alias for "body" so agents
-		// can always use result.content regardless of file vs symbol reads.
+		// Normalize read results: rename "body" to "content" so agents
+		// always use result.content regardless of file vs symbol reads.
 		if cmds[i].Cmd == "read" {
 			if m, ok := processed[i].Result.(map[string]any); ok {
 				if body, has := m["body"]; has {
 					if _, hasC := m["content"]; !hasC {
 						m["content"] = body
 					}
+					delete(m, "body")
 				}
 			} else {
 				// Struct result (no session delta) — round-trip through JSON
@@ -1081,8 +1074,9 @@ func postProcessMultiResults(sess *session.Session, cmds []dispatch.MultiCmd, re
 					if body, has := m2["body"]; has {
 						if _, hasC := m2["content"]; !hasC {
 							m2["content"] = body
-							processed[i].Result = m2
 						}
+						delete(m2, "body")
+						processed[i].Result = m2
 					}
 				}
 			}

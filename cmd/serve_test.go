@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/jordw/edr/internal/index"
-	"github.com/jordw/edr/internal/session"
 )
 
 // runServeSession sends lines to a serve loop and collects responses.
@@ -85,7 +84,7 @@ func runServeSession(t *testing.T, repoDir string, lines []string) []serveRespon
 
 // runServeLoop is a testable version of the serve main loop.
 func runServeLoop(db *index.DB) error {
-	sess := session.New()
+	ss := newSessionStore()
 	ctx := context.Background()
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
@@ -107,7 +106,7 @@ func runServeLoop(db *index.DB) error {
 			continue
 		}
 
-		resp := handleRequest(ctx, db, sess, nil, raw)
+		resp := handleRequest(ctx, db, ss, nil, raw)
 		encoder.Encode(resp)
 
 		// Check for shutdown
@@ -352,7 +351,7 @@ func startSocketServer(t *testing.T, repoDir string) (string, context.CancelFunc
 	t.Cleanup(func() { os.RemoveAll(sockDir) })
 	sockPath := filepath.Join(sockDir, "s.sock")
 
-	sess := session.New()
+	ss := newSessionStore()
 	ctx, cancel := context.WithCancel(context.Background())
 	var sessMu sync.Mutex
 
@@ -369,7 +368,7 @@ func startSocketServer(t *testing.T, repoDir string) (string, context.CancelFunc
 				time.Sleep(10 * time.Millisecond)
 			}
 		}()
-		runSocketListener(ctx, cancel, db, sess, nil, &sessMu, sockPath)
+		runSocketListener(ctx, cancel, db, ss, nil, &sessMu, sockPath)
 		db.Close()
 	}()
 
@@ -488,7 +487,7 @@ func TestServe_Socket_StaleSocketCleanup(t *testing.T) {
 	}
 	_, _, _ = index.IndexRepo(context.Background(), db)
 
-	sess := session.New()
+	ss := newSessionStore()
 	ctx, cancel := context.WithCancel(context.Background())
 	var sessMu sync.Mutex
 	defer cancel()
@@ -504,7 +503,7 @@ func TestServe_Socket_StaleSocketCleanup(t *testing.T) {
 				time.Sleep(10 * time.Millisecond)
 			}
 		}()
-		runSocketListener(ctx, cancel, db, sess, nil, &sessMu, sockPath)
+		runSocketListener(ctx, cancel, db, ss, nil, &sessMu, sockPath)
 		db.Close()
 	}()
 

@@ -239,9 +239,11 @@ func proxyViaSocket(sockPath string, batchJSON json.RawMessage) (json.RawMessage
 		return nil, fmt.Errorf("invalid batch JSON: %w", err)
 	}
 
-	// Add request_id
+	// Add request_id and caller_pid (PPID identifies the agent process)
 	reqIDJSON, _ := json.Marshal(reqID)
 	envelope["request_id"] = json.RawMessage(reqIDJSON)
+	callerPID, _ := json.Marshal(os.Getppid())
+	envelope["caller_pid"] = json.RawMessage(callerPID)
 
 	line, err := json.Marshal(envelope)
 	if err != nil {

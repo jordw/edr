@@ -356,7 +356,12 @@ func smartEditMove(ctx context.Context, db *index.DB, file, moveSymbol, afterSym
 	if afterSymbol != "" {
 		insertAt = dest.EndByte
 	} else {
-		insertAt = dest.StartByte
+		// Scan back to start of line to include declaration keywords (type, func, etc.)
+		pos := int(dest.StartByte)
+		for pos > 0 && data[pos-1] != '\n' {
+			pos--
+		}
+		insertAt = uint32(pos)
 	}
 
 	// Build the replacement text

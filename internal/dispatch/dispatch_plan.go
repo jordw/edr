@@ -308,7 +308,12 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 				insertAt = dest.EndByte
 				insertion = "\n\n" + symbolText + "\n"
 			} else {
-				insertAt = dest.StartByte
+				// Scan back to start of line to include declaration keywords (type, func, etc.)
+				pos := int(dest.StartByte)
+				for pos > 0 && data[pos-1] != '\n' {
+					pos--
+				}
+				insertAt = uint32(pos)
 				insertion = symbolText + "\n\n"
 			}
 			resolved = append(resolved,
@@ -323,16 +328,54 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 		}
 	}
 
-	// Dry-run: return what would happen
+	// Dry-run: apply all edits in memory, produce combined per-file diffs.
 	if dryRun {
-		var preview []map[string]any
+		// Group edits by file, preserving order.
+		type fileEdits struct {
+			file     string
+			original []byte
+			edits    []resolvedEdit
+			descs    []string
+		}
+		fileOrder := make([]string, 0)
+		byFile := make(map[string]*fileEdits)
 		for _, r := range resolved {
-			entry := map[string]any{
-				"file":        output.Rel(r.File),
-				"description": r.Description,
+			rel := output.Rel(r.File)
+			fe, ok := byFile[rel]
+			if !ok {
+				data, err := os.ReadFile(r.File)
+				if err != nil {
+					return nil, fmt.Errorf("dry-run: read %s: %w", rel, err)
+				}
+				fe = &fileEdits{file: r.File, original: data}
+				byFile[rel] = fe
+				fileOrder = append(fileOrder, rel)
 			}
-			diff, err := edit.DiffPreview(r.File, r.StartByte, r.EndByte, r.Replacement)
-			if err == nil && diff != "" {
+			fe.edits = append(fe.edits, r)
+			fe.descs = append(fe.descs, r.Description)
+		}
+
+		var preview []map[string]any
+		for _, rel := range fileOrder {
+			fe := byFile[rel]
+			// Apply all edits for this file in reverse byte order (highest offset first)
+			// to preserve offsets for earlier edits.
+			result := make([]byte, len(fe.original))
+			copy(result, fe.original)
+			sorted := make([]resolvedEdit, len(fe.edits))
+			copy(sorted, fe.edits)
+			sort.Slice(sorted, func(i, j int) bool {
+				return sorted[i].StartByte > sorted[j].StartByte
+			})
+			for _, r := range sorted {
+				result = append(result[:r.StartByte], append([]byte(r.Replacement), result[r.EndByte:]...)...)
+			}
+			diff := edit.UnifiedDiff(rel, fe.original, result)
+			entry := map[string]any{
+				"file":        rel,
+				"description": fe.descs,
+			}
+			if diff != "" {
 				entry["diff"] = diff
 			}
 			preview = append(preview, entry)
@@ -340,7 +383,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 		return map[string]any{
 			"dry_run": true,
 			"edits":   preview,
-			"count":   len(preview),
+			"count":   len(resolved),
 		}, nil
 	}
 
