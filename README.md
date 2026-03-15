@@ -32,21 +32,7 @@ edr write src/config.go --inside Config     # add a field without reading the fi
 edr rename oldFunc newFunc --dry-run        # cross-file rename with preview
 ```
 
-## MCP server
-
-edr exposes a single MCP tool that handles reads, queries, edits, writes, renames, and verification. Works with any MCP-compatible agent (Claude Code, Codex, Cursor, etc.).
-
-```bash
-# One command: installs deps, builds, writes .mcp.json for the target repo
-git clone https://github.com/jordw/edr.git && cd edr
-./setup.sh /path/to/your/repo
-```
-
-Or configure manually — run `edr mcp` as the MCP server command with `-r /path/to/repo`.
-
-The tool schema is ~1,000 tokens. Fields are self-documenting to minimize per-conversation overhead.
-
-### The two-call pattern
+## The two-call pattern
 
 Agents gather context in one call, then make changes in another:
 
@@ -99,12 +85,18 @@ edr combines several mechanisms to minimize context usage:
 | Body dedup | Repeated symbol bodies in search/explore are replaced with `"[in context]"` |
 | Slim edit responses | Small diffs inline; large diffs summarized with on-demand retrieval |
 | Parallel batching | Independent reads/queries in one call run concurrently |
+| Parallel text search | Files searched concurrently with smart budget trimming (context → line truncation → match cap) |
 | Atomic multi-file edits | Grouped edits validate in memory, write via temp-file rename, reindex in one batch |
+| TOCTOU guard | File hash revalidated before writing; external modifications detected and aborted |
+| Mutation status | Every edit/write returns `status` ("applied", "applied_index_stale") for trustworthy automation |
+| Change summary | Mutation responses include `summary` with counts, status, and actionable `hints` |
+| Auto-sessions | PPID-based sessions by default; `--no-session` to disable |
 | Parse-tree caching | Repeated tree-sitter parses reuse cached ASTs keyed by content fingerprint |
+| Freshness metadata | Read responses include `mtime` so agents can see file age without extra calls |
 
 ### Local data
 
-edr stores all data in `.edr/` at the repo root (gitignored). This includes the symbol index (`index.db`) and MCP session traces (`traces.db`). Session traces record call shape, timing, and edit metadata to power `edr bench-session` — no data is sent externally. Delete `.edr/` at any time to reset.
+edr stores all data in `.edr/` at the repo root (gitignored). This includes the symbol index (`index.db`), session files (`sessions/`), and traces (`traces.db`). Sessions are automatic (PPID-based) — delta reads, body dedup, and slim edits work out of the box. Delete `.edr/` at any time to reset.
 
 ## CLI reference
 
@@ -123,7 +115,7 @@ edr stores all data in `.edr/` at the repo root (gitignored). This includes the 
 | `edr rename old new --dry-run` | Cross-file, import-aware rename with preview |
 | `edr find "**/*.go"` | Find files by glob pattern |
 | `edr verify` | Run build/test checks (auto-detects Go/npm/Cargo) |
-| `edr '{"reads":[...], "queries":[...]}'` | Batched JSON (same interface as the MCP tool) |
+| `edr '{"reads":[...], "edits":[...], "verify":true}'` | Batched JSON — reads, edits, writes, verify in one call |
 
 ## Supported languages
 
@@ -174,14 +166,15 @@ Reproduce: `bash bench/run_real_repo_benchmarks.sh` (clones repos to `/tmp`, ~5 
 ## Project structure
 
 ```
-cmd/           CLI commands, MCP server
+cmd/           CLI commands, batch orchestrator
 internal/
+  cmdspec/     canonical command registry (names, categories, flags)
   index/       tree-sitter parsing, SQLite symbol index
-  search/      symbol and text search
+  search/      symbol and text search (parallel, cached)
   edit/        file edits, transactions, diffing
-  dispatch/    command routing (CLI, batch, MCP)
+  dispatch/    command routing and execution
   gather/      context collection with token budgets
-  session/     MCP session state (deltas, dedup)
+  session/     auto-session state (deltas, dedup, slim edits)
   trace/       session tracing and benchmarks
   output/      structured JSON formatting
 bench/         benchmarks and multi-language test suite
