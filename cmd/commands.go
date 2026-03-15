@@ -164,10 +164,6 @@ var editCmd = &cobra.Command{
 	Short: ToolDesc["edit"],
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// --move doesn't need stdin content; dispatch directly
-		if move, _ := cmd.Flags().GetString("move"); move != "" {
-			return dispatchCmd(cmd, "edit", args)
-		}
 		return dispatchCmdWithStdin(cmd, "edit", args, "new_text")
 	},
 }

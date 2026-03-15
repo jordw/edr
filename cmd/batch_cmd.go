@@ -418,39 +418,15 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			s.currentEdit.All = bp(true)
 
-		case "--move":
-			if s.currentOp != opEdit {
-				return nil, fmt.Errorf("--move is only valid after -e")
-			}
-			val, err := nextArg(arg)
-			if err != nil {
-				return nil, err
-			}
-			s.currentEdit.Move = val
-
 		case "--after":
-			val, err := nextArg(arg)
-			if err != nil {
-				return nil, err
-			}
-			switch s.currentOp {
-			case opEdit:
-				s.currentEdit.After = val
-			case opWrite:
-				s.currentWrite.After = sp(val)
-			default:
-				return nil, fmt.Errorf("--after is only valid after -e or -w")
-			}
-
-		case "--before":
-			if s.currentOp != opEdit {
-				return nil, fmt.Errorf("--before is only valid after -e")
+			if s.currentOp != opWrite {
+				return nil, fmt.Errorf("--after is only valid after -w")
 			}
 			val, err := nextArg(arg)
 			if err != nil {
 				return nil, err
 			}
-			s.currentEdit.Before = val
+			s.currentWrite.After = sp(val)
 
 		case "--dry-run", "--dry_run":
 			if s.currentOp == opEdit {

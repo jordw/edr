@@ -90,9 +90,6 @@ type doEdit struct {
 	EndLine    *int   `json:"end_line,omitempty"`
 	Regex      *bool  `json:"regex,omitempty"`
 	All        *bool  `json:"all,omitempty"`
-	Move       string `json:"move,omitempty"`
-	After      string `json:"after,omitempty"`
-	Before     string `json:"before,omitempty"`
 	DryRun     *bool  `json:"dry_run,omitempty"`
 	ExpectHash string `json:"expect_hash,omitempty"`
 }
@@ -111,7 +108,6 @@ type doRename struct {
 	OldName string  `json:"old_name"`
 	NewName string  `json:"new_name"`
 	DryRun  *bool   `json:"dry_run,omitempty"`
-	Scope   *string `json:"scope,omitempty"`
 }
 
 // Batch known-key sets — derived from the canonical registry in cmdspec.
@@ -459,15 +455,6 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, p *d
 		if e.All != nil && *e.All {
 			m["all"] = true
 		}
-		if e.Move != "" {
-			m["move"] = e.Move
-		}
-		if e.After != "" {
-			m["after"] = e.After
-		}
-		if e.Before != "" {
-			m["before"] = e.Before
-		}
 		if e.ExpectHash != "" {
 			m["expect_hash"] = e.ExpectHash
 		}
@@ -722,9 +709,6 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 			renameFlags := map[string]any{}
 			if r.DryRun != nil && *r.DryRun {
 				renameFlags["dry_run"] = true
-			}
-			if r.Scope != nil && *r.Scope != "" {
-				renameFlags["scope"] = *r.Scope
 			}
 			result, err := dispatch.Dispatch(ctx, db, "rename", []string{r.OldName, r.NewName}, renameFlags)
 			if err != nil {

@@ -28,9 +28,6 @@ type editPlanEntry struct {
 	ExpectHash  string `json:"expect_hash,omitempty"`
 	All         bool   `json:"all,omitempty"`   // replace all occurrences (text-based)
 	Regex       bool   `json:"regex,omitempty"` // treat old_text as regex
-	Move        string `json:"move,omitempty"`  // symbol to move
-	After       string `json:"after,omitempty"`  // place after this symbol
-	Before      string `json:"before,omitempty"` // place before this symbol
 }
 
 // resolvedNewText returns the effective replacement text, preferring new_text over replacement.
@@ -258,73 +255,8 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 				Description: fmt.Sprintf("replace lines %d-%d in %s", e.StartLine, e.EndLine, output.Rel(file)),
 			})
 
-		case e.Move != "":
-			// Move-symbol edit — resolves to a delete + insert pair
-			if e.After == "" && e.Before == "" {
-				return nil, fmt.Errorf("edit-plan: edit %d: move requires 'after' or 'before'", i)
-			}
-			src, err := db.GetSymbol(ctx, file, e.Move)
-			if err != nil {
-				return nil, fmt.Errorf("edit-plan: edit %d: move source %q: %w", i, e.Move, err)
-			}
-			destName := e.After
-			if destName == "" {
-				destName = e.Before
-			}
-			dest, err := db.GetSymbol(ctx, file, destName)
-			if err != nil {
-				return nil, fmt.Errorf("edit-plan: edit %d: move destination %q: %w", i, destName, err)
-			}
-			if src.StartByte < dest.EndByte && dest.StartByte < src.EndByte {
-				return nil, fmt.Errorf("edit-plan: edit %d: cannot move %s: overlaps with %s", i, e.Move, destName)
-			}
-			data, err := os.ReadFile(file)
-			if err != nil {
-				return nil, fmt.Errorf("edit-plan: edit %d: read %s: %w", i, output.Rel(file), err)
-			}
-			expectHash := e.ExpectHash
-			if expectHash == "" {
-				expectHash = edit.HashBytes(data)
-			}
-			// Compute delete range (consume surrounding blank lines)
-			delStart, delEnd := src.StartByte, src.EndByte
-			if pos := int(delStart); pos > 0 && data[pos-1] == '\n' {
-				pos--
-				if pos > 0 && data[pos-1] == '\n' {
-					pos--
-				}
-				delStart = uint32(pos + 1)
-			}
-			if pos := int(delEnd); pos < len(data) {
-				for pos < len(data) && data[pos] == '\n' {
-					pos++
-				}
-				delEnd = uint32(pos)
-			}
-			symbolText := strings.TrimRight(string(data[src.StartByte:src.EndByte]), "\n")
-			var insertAt uint32
-			var insertion string
-			if e.After != "" {
-				insertAt = dest.EndByte
-				insertion = "\n\n" + symbolText + "\n"
-			} else {
-				// Scan back to start of line to include declaration keywords (type, func, etc.)
-				pos := int(dest.StartByte)
-				for pos > 0 && data[pos-1] != '\n' {
-					pos--
-				}
-				insertAt = uint32(pos)
-				insertion = symbolText + "\n\n"
-			}
-			resolved = append(resolved,
-				resolvedEdit{File: file, StartByte: delStart, EndByte: delEnd, Replacement: "", ExpectHash: expectHash,
-					Description: fmt.Sprintf("move %s (delete)", e.Move)},
-				resolvedEdit{File: file, StartByte: insertAt, EndByte: insertAt, Replacement: insertion, ExpectHash: expectHash,
-					Description: fmt.Sprintf("move %s (insert %s %s)", e.Move, map[bool]string{true: "after", false: "before"}[e.After != ""], destName)},
-			)
-
 		default:
-			return nil, fmt.Errorf("edit-plan: edit %d: must specify symbol, old_text, start_line/end_line, or move", i)
+			return nil, fmt.Errorf("edit-plan: edit %d: must specify symbol, old_text, or start_line/end_line", i)
 		}
 	}
 
@@ -484,23 +416,6 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 	refs, err := index.FindIdentifierOccurrences(ctx, db, oldName)
 	if err != nil {
 		return nil, err
-	}
-
-	// Apply --scope filter (glob pattern on relative paths)
-	if scope := flagString(flags, "scope", ""); scope != "" {
-		var filtered []index.SymbolInfo
-		for _, r := range refs {
-			rel := output.Rel(r.File)
-			if matched, _ := filepath.Match(scope, rel); matched {
-				filtered = append(filtered, r)
-			} else if matched, _ := filepath.Match(scope, filepath.Base(rel)); matched {
-				filtered = append(filtered, r)
-			} else if strings.HasPrefix(rel, strings.TrimSuffix(scope, "**")) {
-				// Support "dir/**" style patterns
-				filtered = append(filtered, r)
-			}
-		}
-		refs = filtered
 	}
 
 	if len(refs) == 0 {

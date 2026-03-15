@@ -628,7 +628,7 @@ func TestDoParams_Writes(t *testing.T) {
 }
 
 func TestDoParams_Renames(t *testing.T) {
-	raw := `{"renames": [{"old_name": "Foo", "new_name": "Bar", "dry_run": true, "scope": "internal/**"}]}`
+	raw := `{"renames": [{"old_name": "Foo", "new_name": "Bar", "dry_run": true}]}`
 	var p doParams
 	if err := json.Unmarshal([]byte(raw), &p); err != nil {
 		t.Fatal(err)
@@ -642,9 +642,6 @@ func TestDoParams_Renames(t *testing.T) {
 	}
 	if r.DryRun == nil || !*r.DryRun {
 		t.Error("dry_run should be true")
-	}
-	if r.Scope == nil || *r.Scope != "internal/**" {
-		t.Error("scope should be internal/**")
 	}
 }
 
@@ -1020,7 +1017,7 @@ func TestDoStructsMatchCmdspec(t *testing.T) {
 	editFields := map[string]bool{
 		"file": true, "old_text": true, "new_text": true, "symbol": true,
 		"start_line": true, "end_line": true, "regex": true, "all": true,
-		"move": true, "after": true, "before": true, "dry_run": true, "expect_hash": true,
+		"dry_run": true, "expect_hash": true,
 	}
 	checkStructFields(t, "doEdit", doEditKnownKeys, editFields)
 
@@ -1046,7 +1043,7 @@ func TestDoStructsMatchCmdspec(t *testing.T) {
 
 	// doRename fields
 	renameFields := map[string]bool{
-		"old_name": true, "new_name": true, "dry_run": true, "scope": true,
+		"old_name": true, "new_name": true, "dry_run": true,
 	}
 	checkStructFields(t, "doRename", doRenameKnownKeys, renameFields)
 }

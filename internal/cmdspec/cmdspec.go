@@ -104,9 +104,6 @@ var Registry = []*Spec{
 			{Name: "all", Type: FlagBool, Default: false, Desc: "Replace all matches"},
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
 			{Name: "expect_hash", Type: FlagString, Default: "", Desc: "Reject edit if file hash doesn't match"},
-			{Name: "move", Type: FlagString, Default: "", Desc: "Symbol to move"},
-			{Name: "after", Type: FlagString, Default: "", Desc: "Place after this symbol (use with --move)"},
-			{Name: "before", Type: FlagString, Default: "", Desc: "Place before this symbol (use with --move)"},
 		},
 		BatchFields: []string{"file", "symbol"},
 	},
@@ -173,7 +170,6 @@ var Registry = []*Spec{
 		Category: CatGlobalMutate, MinArgs: 2, MaxArgs: 2,
 		Flags: []FlagSpec{
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
-			{Name: "scope", Type: FlagString, Default: "", Desc: "Limit to glob pattern"},
 		},
 		BatchFields: []string{"old_name", "new_name"},
 	},

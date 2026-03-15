@@ -31,7 +31,7 @@ var ParamDesc = func() map[string]string {
 	// Batch fields.
 	m["reads"] = "Read queries: [{file, symbol?, budget?, signatures?, depth?}]"
 	m["queries"] = "Any query: [{cmd: search|explore|refs|map|find|diff, ...params}]"
-	m["edits"] = "Atomic edits: [{file, old_text, new_text}] or [{file, symbol, new_text}] or [{file, start_line, end_line, new_text}] or [{file, move, after/before}]. Supports regex, all flags."
+	m["edits"] = "Atomic edits: [{file, old_text, new_text}] or [{file, symbol, new_text}] or [{file, start_line, end_line, new_text}] Supports all flag."
 	m["writes"] = "File writes: [{file, content, mkdir?, after?, inside?}]"
 	m["renames"] = "Cross-file renames: [{old_name, new_name, dry_run?, scope?}]"
 	m["verify"] = `true = auto-detect build check, "build"/"test" = shortcut for level, other string = custom command`
