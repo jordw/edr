@@ -47,17 +47,35 @@ With edr, 2 requests over `edr serve --stdio`:
 
 ## Install
 
-If you already have Go 1.25+ and a C/C++ compiler (required for tree-sitter grammars):
+**One-liner** (downloads prebuilt binary, no dependencies):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jordw/edr/main/install.sh | sh
+```
+
+**Homebrew:**
+
+```bash
+brew install jordw/tap/edr
+```
+
+**From source** (requires Go 1.25+ and a C/C++ compiler for tree-sitter):
 
 ```bash
 go install github.com/jordw/edr@latest
 ```
 
-For cloud agents and CI where Go may not be installed, the setup script handles dependencies, builds, PATH, and indexing:
+**Cloud agents and CI** (installs Go/gcc if needed, builds, indexes your project):
 
 ```bash
 git clone https://github.com/jordw/edr.git
 ./edr/setup.sh /path/to/your/project
+```
+
+After installing, set up a project:
+
+```bash
+edr setup /path/to/your/project        # indexes + injects agent instructions
 ```
 
 edr stores its index in `.edr/` at the repo root. Add `.edr/` to your `.gitignore`. The index rebuilds automatically if deleted.

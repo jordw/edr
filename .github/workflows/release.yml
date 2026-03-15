@@ -1,0 +1,160 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            cc: gcc
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            cc: aarch64-linux-gnu-gcc
+          - os: macos-13
+            goos: darwin
+            goarch: amd64
+            cc: cc
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            cc: cc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Install cross-compiler
+        if: matrix.goarch == 'arm64' && matrix.goos == 'linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Build
+        env:
+          CGO_ENABLED: "1"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CC: ${{ matrix.cc }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          COMMIT="$(git rev-parse --short HEAD)"
+          go build -ldflags "-s -w -X github.com/jordw/edr/cmd.Version=${VERSION} -X github.com/jordw/edr/cmd.BuildHash=${COMMIT}" -o edr .
+
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARCHIVE="edr_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz"
+          tar -czf "$ARCHIVE" edr LICENSE README.md
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: edr-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ env.ARCHIVE }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd dist/
+          sha256sum *.tar.gz > checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+  homebrew:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Homebrew formula
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BASE_URL="https://github.com/jordw/edr/releases/download/${GITHUB_REF_NAME}"
+
+          # Download checksums
+          curl -fsSL "${BASE_URL}/checksums.txt" -o checksums.txt
+
+          DARWIN_AMD64_SHA=$(grep "darwin_amd64" checksums.txt | awk '{print $1}')
+          DARWIN_ARM64_SHA=$(grep "darwin_arm64" checksums.txt | awk '{print $1}')
+          LINUX_AMD64_SHA=$(grep "linux_amd64" checksums.txt | awk '{print $1}')
+          LINUX_ARM64_SHA=$(grep "linux_arm64" checksums.txt | awk '{print $1}')
+
+          cat > edr.rb <<FORMULA
+          class Edr < Formula
+            desc "The editor for agents — context-preserving code navigation and editing"
+            homepage "https://github.com/jordw/edr"
+            license "MIT"
+            version "${VERSION}"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "${BASE_URL}/edr_${VERSION}_darwin_arm64.tar.gz"
+                sha256 "${DARWIN_ARM64_SHA}"
+              else
+                url "${BASE_URL}/edr_${VERSION}_darwin_amd64.tar.gz"
+                sha256 "${DARWIN_AMD64_SHA}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "${BASE_URL}/edr_${VERSION}_linux_arm64.tar.gz"
+                sha256 "${LINUX_ARM64_SHA}"
+              else
+                url "${BASE_URL}/edr_${VERSION}_linux_amd64.tar.gz"
+                sha256 "${LINUX_AMD64_SHA}"
+              end
+            end
+
+            def install
+              bin.install "edr"
+            end
+
+            test do
+              system "#{bin}/edr", "--version"
+            end
+          end
+          FORMULA
+
+          # Push formula to tap repo
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/jordw/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp edr.rb tap/Formula/edr.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/edr.rb
+          git commit -m "Update edr to ${VERSION}"
+          git push
