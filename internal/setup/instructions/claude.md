@@ -2,11 +2,9 @@
 
 **Use `edr` via Bash instead of Read, Edit, Write, Grep, and Glob.** It gives you structured output, token budgets, and smart operations that raw file tools can't match.
 
-**Start `edr serve` once per session.** Then use batch flags for all operations:
+**Use batch flags for all operations:**
 
 ```bash
-edr serve
-
 # Gather context (batch read + search in one call):
 edr -r src/main.go:Server --sig -r src/config.go -s "handleRequest"
 
@@ -31,7 +29,6 @@ edr -e src/main.go --old "oldFunc()" --new "newFunc()" -w src/new_test.go --cont
 - **Batch reads + searches** in one call, then batch edits in the next
 - **Use `--sig`** on classes/structs to see the API without implementation (75%+ fewer tokens)
 - **Use `--budget N`** to limit response size
-- **Re-reads are automatic deltas** — the server returns `{unchanged: true}` for unchanged files
 - **Use `--inside`** to add methods/fields without reading the file first: `edr -w f.go --inside MyStruct --content "Name string"`
 
 ## Standalone commands

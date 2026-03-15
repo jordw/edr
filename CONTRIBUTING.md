@@ -23,7 +23,7 @@ After changing Go source files, rebuild with `go build -o edr . && go install`.
 ## Reporting bugs
 
 Open an issue with:
-- What you ran (command or `edr serve` request)
+- What you ran (command or batch flags)
 - What you expected
 - What actually happened
 - Go version (`go version`) and OS
@@ -39,7 +39,7 @@ internal/
   edit/        file edits, transactions, diffing
   dispatch/    command routing and execution
   gather/      context collection with token budgets
-  session/     auto-session state (deltas, dedup, slim edits)
+  session/     file-backed session state (deltas, body dedup)
   trace/       session tracing and benchmarks
   output/      structured JSON formatting
 bench/         benchmarks and multi-language test suite

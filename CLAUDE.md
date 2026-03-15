@@ -2,12 +2,9 @@
 
 **edr is your primary tool for ALL file operations.** Use `edr` via Bash instead of Read, Edit, Write, Grep, and Glob. It gives you structured output, token budgets, and smart operations that raw file tools can't match.
 
-**`edr serve`** starts a background server. Then use **batch flags** (`-r`, `-s`, `-e`, `-w`) for all operations. Session optimizations (delta reads, body dedup, slim edits) work automatically across CLI calls.
+Use **batch flags** (`-r`, `-s`, `-e`, `-w`) for all operations:
 
 ```bash
-# Start the server once per agent session:
-edr serve
-
 # Gather context (batch read + search in one call):
 edr -r src/main.go:Server --sig -r src/config.go -s "handleRequest"
 
@@ -36,7 +33,6 @@ edr -e src/main.go --old "oldFunc()" --new "newFunc()" -w src/new_test.go --cont
 **This is the edr codebase.** When working here, edr is both the tool and the target.
 
 - **Rebuild after every Go source change:** `go build -o edr . && go install`
-- **The running `edr serve` process is the old binary.** Source edits do not take effect until you rebuild. If you need the new behavior (e.g. to test a fix), run `edr serve --stop && go build -o edr . && edr serve`.
 - **If a broken edit prevents `go build`:** fall back to built-in Read/Edit tools to fix the compile error, then rebuild.
 
 ## Setup (any environment)
@@ -54,7 +50,7 @@ For cloud agents: clone this repo, run `./setup.sh /path/to/your/project`, and e
 
 ## Supported languages
 
-**Symbol indexing** (map, read, edit, signatures, inside, move): Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby, PHP, Zig, Lua, Bash/Shell.
+**Symbol indexing** (map, read, edit, signatures, inside, move): Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby, PHP, Zig, Lua, Bash/Shell, C#, Kotlin.
 
 **Import-aware semantic refs** (refs, rename, explore callers/deps): Go, Python, JavaScript, TypeScript. Other languages fall back to text-based refs.
 
@@ -220,19 +216,24 @@ edr find "*.yaml" --dir config/
 edr find "**/test_*" --budget 500
 ```
 
-## Server (`edr serve`)
+## Sessions
 
-`edr serve` starts a background daemon with a Unix socket (`.edr/serve.sock`).
-All CLI commands automatically proxy through the server for session benefits.
-Sessions are scoped per caller PID — each agent process gets independent delta reads and body dedup.
+Sessions track what the agent has already seen, enabling two optimizations:
+
+- **Delta reads**: Re-reading a file/symbol returns `{unchanged: true}` if identical. Use `--full` to force full content.
+- **Body dedup**: Search and explore replace previously-seen bodies with `"[in context]"`.
+
+Sessions are file-backed and keyed by the `EDR_SESSION` env var:
 
 ```bash
-edr serve          # daemonize, create socket, print PID
-edr serve --stop   # graceful shutdown via socket (safe — no PID signal races)
+# Set once per agent conversation:
+export EDR_SESSION=$(uuidgen)
 
-# No server running? CLI commands fall back to ephemeral dispatch.
-# Everything works either way — the server is a performance optimization.
+# All subsequent edr calls share the session automatically.
+# Session state is stored in .edr/sessions/<id>.json
 ```
+
+Without `EDR_SESSION`, each CLI call uses an ephemeral session (no cross-call tracking).
 
 ## Batch Operations
 
@@ -289,30 +290,17 @@ edr -r src/config.go:parseConfig --sig -r src/main.go:Server -s "handleRequest"
 edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "package main"
 ```
 
-## Context-Aware Responses
-
-When a server is running (`edr serve`), edr tracks what you've already seen across CLI calls:
-
-- **Delta reads**: Re-reading a file/symbol returns `{unchanged: true}` if identical. Use `--full` to force full content.
-- **Slim edits**: Small diffs (<=20 changed lines) are returned inline. Large diffs are stored; use `edr read --diff file` to retrieve.
-- **Body dedup**: Search and explore replace previously-seen bodies with `"[in context]"`.
-
-These optimizations are automatic and scoped per caller PID. Each agent process gets its own
-session; multiple agents sharing one server won't cross-contaminate each other's caches.
-Without a server, each CLI call uses an ephemeral session (no cross-call tracking).
-
 ## Key Principles
 
-1. **Start with `edr serve`.** One-time setup. Then use batch flags for everything.
-2. **Batch reads + searches** in one call: `edr -r file.go --sig -r other.go:Func -s "pattern"`.
-3. **Batch edits + verify** in one call: `edr -e file.go --old "x" --new "y" -e other.go --old "a" --new "b"`. Verify runs automatically.
-4. **Use `--sig`** to understand a container's API without reading implementation (75-86% fewer tokens).
-5. **Use `--budget`** to control context size. Don't dump entire files.
-6. **Use `--inside`** to add fields/methods to a class without reading the file first.
-7. **Preview renames:** `edr rename oldName newName --dry-run`.
-8. **Check impact before refactoring:** `edr refs Symbol --impact`.
-9. **Re-reads are delta** (with server). `{unchanged: true}` saves tokens. Use `--full` to force.
-10. **Use `--new -`** with heredoc for large replacement text.
+1. **Use batch flags for everything**: `edr -r file.go --sig -r other.go:Func -s "pattern"`.
+2. **Batch edits + verify** in one call: `edr -e file.go --old "x" --new "y" -e other.go --old "a" --new "b"`. Verify runs automatically.
+3. **Use `--sig`** to understand a container's API without reading implementation (75-86% fewer tokens).
+4. **Use `--budget`** to control context size. Don't dump entire files.
+5. **Use `--inside`** to add fields/methods to a class without reading the file first.
+6. **Preview renames:** `edr rename oldName newName --dry-run`.
+7. **Check impact before refactoring:** `edr refs Symbol --impact`.
+8. **Set `EDR_SESSION`** to enable delta reads across calls. `{unchanged: true}` saves tokens. Use `--full` to force.
+9. **Use `--new -`** with heredoc for large replacement text.
 
 ## Session Tracing
 
@@ -326,7 +314,7 @@ edr bench-session
 # Output includes raw counts + derived analysis:
 # - read_efficiency: delta hits / total reads
 # - edit_success_rate, verify_pass_rate
-# - optimization_rate: (delta + dedup + slim) / total calls
+# - optimization_rate: (delta + dedup) / total calls
 # - tokens_per_call, avg_call_duration_ms
 # - edits_reverted: files where final hash == first hash (wasted work)
 ```
@@ -334,8 +322,7 @@ edr bench-session
 Key files:
 - `internal/cmdspec/cmdspec.go`: Canonical command registry (names, categories, flags, session behavior, batch keys)
 - `internal/trace/trace.go`: Collector, CallBuilder, schema, BenchSession scoring
-- `internal/session/session.go`: PostProcessStats (DeltaReads, BodyDedup, SlimEdits)
-- `cmd/serve.go`: Daemon server, socket listener, request/response envelope types
+- `internal/session/session.go`: File-backed sessions, PostProcessStats (DeltaReads, BodyDedup)
 - `cmd/batch_cmd.go`: Batch CLI command (`-r`, `-s`, `-e`, `-w`) and ordered-flag parser
 - `cmd/batch.go`: handleDo batch orchestrator, execute helpers
 - `cmd/bench_session.go`: CLI command
@@ -411,10 +398,47 @@ batch reads, depth-2 reads, and bench-session scoring of the resulting trace.
 
 **Batch** (primary interface): `edr -r file -s pattern -e file --old x --new y` (or `edr batch ...`).
 **Standalone commands**: `edr read`, `edr search`, `edr edit`, `edr write`, `edr map`, `edr find`, `edr refs`, `edr rename`, `edr explore`, `edr verify`, `edr init`.
-**Server**: `edr serve` (start), `edr serve --stop` (stop).
 
 All output is structured JSON. File paths are relative to repo root. Edit commands return `hash`.
 All reads use `content` for the text field (file reads and symbol reads alike).
 
-Sessions are per-caller-PID (the CLI sends its PPID; each agent gets independent session state).
-Without a server, each call uses an ephemeral session.
+Sessions are file-backed via `EDR_SESSION` env var. Without it, each call uses an ephemeral session.
+
+# edr: use for all file operations
+
+**Use `edr` via Bash instead of Read, Edit, Write, Grep, and Glob.** It gives you structured output, token budgets, and smart operations that raw file tools can't match.
+
+**Use batch flags for all operations:**
+
+```bash
+# Gather context (batch read + search in one call):
+edr -r src/main.go:Server --sig -r src/config.go -s "handleRequest"
+
+# Mutate + verify (auto-verifies when edits present):
+edr -e src/main.go --old "oldFunc()" --new "newFunc()" -w src/new_test.go --content "..."
+```
+
+## Quick reference
+
+| Instead of... | Use edr... |
+|---|---|
+| `Read` (whole file) | `edr -r f.go` |
+| `Read` (symbol only) | `edr -r f.go:FuncName` or `edr -r f.go:ClassName --sig` |
+| `Edit` (old/new) | `edr -e f.go --old "x" --new "y"` |
+| `Write` (create file) | `edr -w f.go --content "..."` |
+| `Grep` (search) | `edr -s "pattern"` |
+| `Glob` (find files) | `edr find "**/*.go"` |
+| Multiple tool calls | `edr -r f.go -s "pat" -e f.go --old "x" --new "y"` |
+
+## Key patterns
+
+- **Batch reads + searches** in one call, then batch edits in the next
+- **Use `--sig`** on classes/structs to see the API without implementation (75%+ fewer tokens)
+- **Use `--budget N`** to limit response size
+- **Use `--inside`** to add methods/fields without reading the file first: `edr -w f.go --inside MyStruct --content "Name string"`
+
+## Standalone commands
+
+`edr read`, `edr search`, `edr map`, `edr edit`, `edr write`, `edr find`, `edr refs`, `edr explore`, `edr rename`, `edr verify`.
+
+Run `edr <command> --help` for flags. All output is structured JSON.

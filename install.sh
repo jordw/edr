@@ -146,7 +146,7 @@ if [ "$SKIP_SETUP" = false ] && [ -n "$TARGET" ]; then
     edr setup --root "$TARGET" $AGENT_FLAG
     echo ""
     echo "==> Done! edr is ready in ${TARGET}"
-    echo "    Start: edr serve --root $TARGET"
+    echo "    Usage: edr --root $TARGET <command>"
 elif [ "$SKIP_SETUP" = false ]; then
     echo ""
     echo "==> Done! edr is installed."

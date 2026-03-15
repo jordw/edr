@@ -29,15 +29,15 @@ edr refs Server --impact
 
 ## Batch mode (more efficient)
 
-Start `edr serve --stdio` and send NDJSON requests:
+Use batch flags to combine operations in one call:
 
-```jsonc
-// Gather context
-{"request_id":"1","reads":[{"file":"src/main.go","symbol":"Server"}],"queries":[{"cmd":"search","pattern":"handleRequest","body":true}]}
+```bash
+# Gather context
+edr -r src/main.go:Server --sig -s "handleRequest"
 
-// Edit + verify
-{"request_id":"2","edits":[{"file":"src/main.go","old_text":"old","new_text":"new"}],"verify":true}
+# Edit + verify
+edr -e src/main.go --old "old" --new "new" -v
 ```
 
-Use `budget` to limit response size. Use `signatures: true` on classes to see the API without bodies.
+Use `--budget N` to limit response size. Use `--sig` on classes to see the API without bodies.
 All output is structured JSON. Run `edr <command> --help` for details.
