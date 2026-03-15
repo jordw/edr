@@ -4,54 +4,16 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev)
 
-A CLI tool that gives coding agents (Claude, Copilot, Cursor, etc.) symbol-level access to your codebase — so they read one function instead of an entire file, make changes in one call instead of three, and get structured results instead of walls of text.
+A file-access CLI for coding agents. Agents read one function instead of a whole file, and batch complex workflows — context gathering, multi-file edits, new files, verification — into a single transactional call.
 
-edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-sitter/), stores a symbol index in SQLite, and exposes it through a batch-friendly CLI. Agents get symbol-scoped reads, structured search, atomic multi-file edits, and session-aware deduplication. Most tasks collapse into one or two calls.
+edr indexes your codebase by symbol and exposes it through a batch JSON interface with automatic session tracking, token budgets, and deduplication so repeated reads shrink to diffs.
 
-**91-98% less context across 6 real-world repos** ([benchmarks](#benchmarks))
+## What it looks like
 
-## Who is this for?
-
-- **Coding agent users** — Claude Code, Codex, Cursor, and similar tools. Install edr, add its commands to your agent's system prompt, and it uses less context, makes fewer calls, and gets structured results.
-- **Agent builders** — a file-access layer that speaks JSON and handles batching, sessions, and symbol resolution out of the box.
-
-## Install
+Agents typically gather context in one call, then make changes in another:
 
 ```bash
-go install github.com/jordw/edr@latest
-```
-
-Requires Go 1.25+ and a C compiler (for tree-sitter grammars).
-
-For cloud agents and CI environments, the setup script handles everything (installs Go/gcc if needed, builds, adds to PATH):
-
-```bash
-git clone https://github.com/jordw/edr.git
-./edr/setup.sh /path/to/your/project
-```
-
-edr stores its index in `.edr/` at the repo root — add it to your `.gitignore`.
-
-## Quick start
-
-```bash
-cd your-repo
-edr init                                    # build the symbol index
-edr map --budget 500                        # repo overview
-edr read src/config.go:parseConfig          # read one symbol, not the whole file
-edr search "handleRequest" --body           # structured symbol search
-edr refs parseConfig --impact               # who calls this, transitively?
-edr edit src/config.go --old_text x --new_text y   # edit + auto re-index
-edr write src/config.go --inside Config     # add a field without reading the file
-edr rename oldFunc newFunc --dry-run        # cross-file rename with preview
-```
-
-## The two-call pattern
-
-Agents gather context in one call, then make changes in another:
-
-```bash
-# Call 1: gather all context
+# Call 1: gather context
 edr do '{
   "reads": [
     {"file": "lib/scheduler.py", "symbol": "Scheduler", "signatures": true},
@@ -73,66 +35,17 @@ edr do '{
 
 Each call can mix **reads** (files, symbols, signatures, depth), **queries** (search, map, explore, refs, find, diff), **edits** (old_text/new_text, symbol replacement, regex, move), **writes** (create files, append, insert inside a class), **renames** (cross-file, import-aware), and **verify** (build/test after mutations).
 
-Individual commands also work standalone — `edr read`, `edr search`, `edr edit`, etc. See the [CLI reference](#cli-reference) below.
+Individual commands also work standalone:
 
-## How it works
-
-edr runs tree-sitter over every source file, extracts symbols (functions, classes, structs, etc.) with their byte ranges, and stores them in a SQLite index. At query time, agents get exactly what they need:
-
-- **Symbol reads** — read a function or class, not the whole file
-- **`--signatures`** — a class's API without implementation (75-86% smaller)
-- **`--depth`** — progressive disclosure, one nesting level at a time
-- **`--inside`** — add a method to a class without reading the file first
-- **Budget control** — cap any response to N tokens so large repos degrade gracefully
-- **Semantic refs** — import-aware references with false positives filtered out
-- **Session dedup** — re-reads return `{unchanged: true}` or a delta diff; repeated bodies become `"[in context]"`
-
-### Context efficiency
-
-| Technique | What it does |
-|---|---|
-| Session delta reads | Re-reading a file returns `{unchanged}` or a diff, not the full content |
-| Body dedup | Repeated symbol bodies in search/explore replaced with `"[in context]"` |
-| Slim edit responses | Small diffs inline; large diffs summarized with on-demand retrieval |
-| Hash-chained edits | Reads/edits return a file hash; pass `expect_hash` to reject stale writes |
-| Atomic multi-file edits | Grouped edits validate in memory, write atomically, reindex in one batch |
-| Parallel batching | Independent reads/queries in one call run concurrently |
-
-Sessions are PPID-based and automatic — `--no-session` to disable.
-
-### Local data
-
-edr stores all data in `.edr/` at the repo root (gitignored): symbol index (`index.db`), session files (`sessions/`), and traces (`traces.db`). Delete `.edr/` at any time to reset.
-
-## CLI reference
-
-| Command | What it does |
-|---|---|
-| `edr init` | Build or rebuild the symbol index |
-| `edr map` | Symbol overview of the repo or a directory |
-| `edr read file:Symbol` | Read a specific symbol (function, class, struct) |
-| `edr read file:Class --signatures` | Class API without implementation bodies |
-| `edr search "pattern" --body` | Symbol search with optional body snippets |
-| `edr search "pattern" --text` | Text search (like grep, but structured output) |
-| `edr explore Symbol --gather --body` | Symbol body + callers + deps in one call |
-| `edr refs Symbol --impact` | Transitive impact analysis before refactoring |
-| `edr edit file --old_text x --new_text y` | Edit with inline diff, auto re-index |
-| `edr write file --inside Class` | Add a method/field without reading the file |
-| `edr rename old new --dry-run` | Cross-file, import-aware rename with preview |
-| `edr find "**/*.go"` | Find files by glob pattern |
-| `edr verify` | Run build/test checks (auto-detects Go/npm/Cargo) |
-| `edr do '{"reads":[...], "edits":[...], "verify":true}'` | Batched JSON — reads, edits, writes, verify in one call |
-| `edr bench-session` | Score a session's efficiency (delta hits, edit success rate) |
-
-## Supported languages
-
-**Full symbol indexing** (map, read, edit, signatures, inside, move):
-Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby, PHP, Zig, Lua, Bash/Shell
-
-**Import-aware semantic refs** (refs, rename, explore callers/deps):
-Go, Python, JavaScript, TypeScript — other languages fall back to text-based references.
-
-edr can read and edit any text file regardless of language support.
+```bash
+edr map --budget 500                        # repo overview
+edr read src/config.go:parseConfig          # one symbol, not the whole file
+edr search "handleRequest" --body           # structured symbol search
+edr refs parseConfig --impact               # transitive callers
+edr edit src/config.go --old_text x --new_text y   # edit + auto re-index
+edr write src/config.go --inside Config     # add a field without reading the file
+edr rename oldFunc newFunc --dry-run        # cross-file rename with preview
+```
 
 ## Benchmarks
 
@@ -146,9 +59,6 @@ Benchmarked against simulated baseline workflows that model how agents typically
 | [pallets/click](https://github.com/pallets/click) | Python | 455KB / 24 calls | 21KB / 9 calls | **95%** |
 | [rails/thor](https://github.com/rails/thor) | Ruby | 234KB / 24 calls | 15KB / 9 calls | **94%** |
 | [reduxjs/redux-toolkit](https://github.com/reduxjs/redux-toolkit) | TypeScript | 245KB / 24 calls | 21KB / 9 calls | **91%** |
-
-Scenarios: understand API (`--signatures`), read symbol, find refs, search with context,
-orient (`map`), edit function, add method (`--inside`), multi-file read, explore symbol.
 
 <details>
 <summary>Per-scenario breakdown (urfave/cli)</summary>
@@ -170,6 +80,89 @@ orient (`map`), edit function, add method (`--inside`), multi-file read, explore
 
 Reproduce: `bash bench/run_real_repo_benchmarks.sh` (clones repos to `/tmp`, ~5 min). Baseline workflows and edr equivalents are defined in [`bench/scenarios/`](bench/scenarios/) — inspect them to judge fairness.
 
+## Install
+
+```bash
+go install github.com/jordw/edr@latest
+```
+
+Requires Go 1.25+ and a C compiler (for tree-sitter grammars).
+
+For cloud agents and CI environments, the setup script handles everything (installs Go/gcc if needed, builds, adds to PATH):
+
+```bash
+git clone https://github.com/jordw/edr.git
+./edr/setup.sh /path/to/your/project
+```
+
+edr stores its index in `.edr/` at the repo root (symbol index, session files, traces). Add `.edr/` to your `.gitignore`. Delete it at any time to reset.
+
+## How it works
+
+edr uses [tree-sitter](https://tree-sitter.github.io/tree-sitter/) to parse source files, extracts symbols (functions, classes, structs, etc.) with their byte ranges, and stores them in a SQLite index. On top of that index, it layers session tracking and batching:
+
+| Capability | What it does |
+|---|---|
+| Symbol reads | Read a function or class by name, not the whole file |
+| `--signatures` | A class's API without implementation bodies (75-86% smaller) |
+| `--depth` | Progressive disclosure — one nesting level at a time |
+| `--inside` | Add a method to a class without reading the file first |
+| Token budgets | Cap any response to N tokens so large repos degrade gracefully |
+| Semantic refs | Import-aware references with false positives filtered out (Go, Python, JS, TS) |
+| Delta reads | Re-reading a file/symbol returns `{unchanged: true}` or a diff |
+| Body dedup | Repeated symbol bodies in search/explore replaced with `"[in context]"` |
+| Slim edits | Small diffs inline; large diffs summarized with on-demand retrieval |
+| Hash-chained edits | File hashes detect stale writes; `expect_hash` rejects them |
+| Atomic batching | Grouped edits validate in memory, write atomically, reindex in one pass |
+
+Sessions are PPID-based and automatic — no setup required. `--no-session` to disable.
+
+## CLI reference
+
+| Command | What it does |
+|---|---|
+| `edr init` | Build or rebuild the symbol index |
+| `edr map` | Symbol overview of the repo or a directory |
+| `edr read file:Symbol` | Read a specific symbol (function, class, struct) |
+| `edr read file:Class --signatures` | Class API without implementation bodies |
+| `edr search "pattern" --body` | Symbol search with optional body snippets |
+| `edr search "pattern" --text` | Text search (like grep, but structured output) |
+| `edr explore Symbol --gather --body` | Symbol body + callers + deps in one call |
+| `edr refs Symbol --impact` | Transitive impact analysis before refactoring |
+| `edr edit file --old_text x --new_text y` | Edit with inline diff, auto re-index |
+| `edr write file --inside Class` | Add a method/field without reading the file |
+| `edr rename old new --dry-run` | Cross-file, import-aware rename with preview |
+| `edr find "**/*.go"` | Find files by glob pattern |
+| `edr verify` | Run build/test checks (auto-detects Go/npm/Cargo) |
+| `edr do '{"reads":[...], "edits":[...], "verify":true}'` | Batch operations in one call |
+| `edr bench-session` | Score a session's efficiency (delta hits, edit success rate) |
+
+## Supported languages
+
+**Full symbol indexing** (map, read, edit, signatures, inside, move):
+Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby, PHP, Zig, Lua, Bash/Shell
+
+**Import-aware semantic refs** (refs, rename, explore callers/deps):
+Go, Python, JavaScript, TypeScript — other languages fall back to text-based references.
+
+edr can read and edit any text file regardless of language support.
+
+## Limitations
+
+- **C compiler required** — tree-sitter grammars need CGO. The setup script handles this, but it's a real dependency.
+- **Semantic refs are partial** — import-aware reference tracking covers Go, Python, JS, and TS. Other languages fall back to text matching, which can produce false positives.
+- **Tree-sitter, not LSP** — the index captures structure (functions, classes, types) but not full type information. It won't catch everything a language server would.
+- **Indexing cost** — first `edr init` takes a few seconds on small repos, longer on large ones. Incremental re-indexing after edits is fast.
+
+## How edr compares
+
+| Tool | What it does well | Tradeoff vs. edr |
+|---|---|---|
+| **ripgrep** | Fast text search, zero setup, universal | No symbol awareness or structured output. edr adds scoping but requires indexing |
+| **ctags** | Mature symbol indexing, wide editor support | Index only — no reads, edits, or sessions. edr is the index *and* the access layer, but with fewer languages than ctags |
+| **LSP** | Deep per-language semantics, refactoring | Richer type info than edr, but requires a running server per language. edr is a single binary across 13 languages |
+| **Built-in agent tools** | No setup, always available | File-at-a-time with no symbol awareness. edr reduces context but adds a build dependency |
+
 ## Project structure
 
 ```
@@ -186,15 +179,6 @@ internal/
   output/      structured JSON formatting
 bench/         benchmarks and multi-language test suite
 ```
-
-## How edr compares
-
-| Tool | Strengths | What edr adds |
-|---|---|---|
-| **ripgrep / grep** | Fast, universal, zero setup | Text-only — no symbol awareness, no structured output. edr adds symbol scoping and import-aware ref filtering |
-| **ctags / etags** | Mature symbol indexing, wide editor support | Index only — no reads, edits, batching, or session state. edr is the index *and* the access layer |
-| **LSP** | Deep per-language semantics, refactoring support | Designed for interactive editors. Requires a running server per language. edr is a single stateless binary across 13 languages |
-| **Built-in agent tools** (Read/Edit/Grep/Glob) | No setup, always available | File-at-a-time with no symbol awareness. edr reads one function instead of one file, batches operations, and deduplicates across a session |
 
 ## Contributing
 
