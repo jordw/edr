@@ -80,6 +80,9 @@ type doQuery struct {
 	Type   *string `json:"type,omitempty"`
 	Grep   *string `json:"grep,omitempty"`
 	Locals *bool   `json:"locals,omitempty"`
+
+	// shared
+	Full *bool `json:"full,omitempty"`
 }
 
 type doEdit struct {
@@ -145,44 +148,6 @@ func checkSubObjectFields(raw json.RawMessage, section string, known map[string]
 	return warnings
 }
 
-// doResponse is the typed response struct for handleDo.
-// Using a struct instead of string concatenation enables structural checks
-// (e.g., write failure detection) and proper json.Marshal output.
-type doResponse struct {
-	Init          any                `json:"init,omitempty"`
-	Reads         json.RawMessage    `json:"reads,omitempty"`
-	Queries       json.RawMessage    `json:"queries,omitempty"`
-	Writes        []writeResult      `json:"writes,omitempty"`
-	Renames       json.RawMessage    `json:"renames,omitempty"`
-	Edits         json.RawMessage    `json:"edits,omitempty"`
-	PostEditReads json.RawMessage    `json:"post_edit_reads,omitempty"`
-	Verify        json.RawMessage    `json:"verify,omitempty"`
-	Summary       *summaryResult     `json:"summary,omitempty"`
-	Warnings      []string           `json:"warnings,omitempty"`
-	Error         string             `json:"error,omitempty"`
-	Truncated     bool               `json:"truncated,omitempty"`
-	TruncReason   string             `json:"truncated_reason,omitempty"`
-	Dropped       []string           `json:"sections_dropped,omitempty"`
-}
-
-type writeResult struct {
-	File   string `json:"file"`
-	OK     bool   `json:"ok"`
-	Error  string `json:"error,omitempty"`
-	Result any    `json:"result,omitempty"`
-}
-
-type summaryResult struct {
-	Edits       int      `json:"edits,omitempty"`
-	Writes      int      `json:"writes,omitempty"`
-	Renames     int      `json:"renames,omitempty"`
-	Status      string   `json:"status"`
-	Applied     *bool    `json:"applied,omitempty"`
-	Verified    *bool    `json:"verified,omitempty"`
-	VerifyError string   `json:"verify_error,omitempty"`
-	Hints       []string `json:"hints,omitempty"`
-}
-
 // parseDo parses and validates batch params, returning warnings for unknown/missing fields.
 func parseDo(raw json.RawMessage) (doParams, []string, error) {
 	var p doParams
@@ -240,8 +205,8 @@ func parseDo(raw json.RawMessage) (doParams, []string, error) {
 	return p, warnings, nil
 }
 
-// executeReads dispatches read operations and returns post-processed JSON.
-func executeReads(ctx context.Context, db *index.DB, sess *session.Session, p *doParams) json.RawMessage {
+// executeReads dispatches read operations and adds results as ops on the envelope.
+func executeReads(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams) {
 	cmds := make([]dispatch.MultiCmd, len(p.Reads))
 	for i, r := range p.Reads {
 		readArgs := []string{r.File}
@@ -286,11 +251,11 @@ func executeReads(ctx context.Context, db *index.DB, sess *session.Session, p *d
 		budgetOpt = []int{*p.Budget}
 	}
 	results := dispatch.DispatchMulti(ctx, db, cmds, budgetOpt...)
-	return json.RawMessage(postProcessMultiResults(sess, cmds, results))
+	addMultiResultOps(env, sess, cmds, results, "r")
 }
 
-// executeQueries dispatches query operations and returns post-processed JSON + trace data.
-func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, p *doParams, cb *trace.CallBuilder) json.RawMessage {
+// executeQueries dispatches query operations and adds results as ops on the envelope.
+func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams, cb *trace.CallBuilder) {
 	// Distribute top-level budget to queries that lack individual budgets.
 	if p.Budget != nil && len(p.Queries) > 0 {
 		n := len(p.Queries)
@@ -384,7 +349,8 @@ func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, p 
 		allResults[qi].InferredCmd = inferredCmd
 	}
 
-	text := postProcessMultiResults(sess, allCmds, allResults)
+	// Add ops to envelope
+	addMultiResultOps(env, sess, allCmds, allResults, "")
 
 	// Trace query events
 	for _, r := range allResults {
@@ -396,14 +362,14 @@ func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, p 
 		}
 		cb.AddQueryEvent(r.Cmd, r.OK, resultBytes)
 	}
-
-	return json.RawMessage(text)
 }
 
-// executeWrites dispatches write operations and returns typed results.
-func executeWrites(ctx context.Context, db *index.DB, sess *session.Session, p *doParams, dryRun bool) []writeResult {
-	results := make([]writeResult, len(p.Writes))
+// executeWrites dispatches write operations and adds results as ops on the envelope.
+// Returns whether any write failed.
+func executeWrites(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams, dryRun bool) bool {
+	anyFailed := false
 	for i, w := range p.Writes {
+		opID := fmt.Sprintf("w%d", i)
 		flags := map[string]any{"content": w.Content}
 		if w.Mkdir != nil && *w.Mkdir {
 			flags["mkdir"] = true
@@ -422,23 +388,22 @@ func executeWrites(ctx context.Context, db *index.DB, sess *session.Session, p *
 		}
 		result, err := dispatch.Dispatch(ctx, db, "write", []string{w.File}, flags)
 		if err != nil {
-			results[i] = writeResult{File: w.File, OK: false, Error: err.Error()}
+			env.AddFailedOp(opID, "write", err.Error())
+			anyFailed = true
 		} else {
-			results[i] = writeResult{File: w.File, OK: true, Result: result}
+			env.AddOp(opID, "write", result)
 			if !dryRun {
-				sess.InvalidateFile(w.File) // #17: invalidate session for written files
+				sess.InvalidateFile(w.File)
 			}
 		}
 	}
-	return results
+	return anyFailed
 }
 
-// executeEdits dispatches edit operations via edit-plan and returns the result JSON + failure status.
-// executeEdits returns (result JSON, editsFailed, allNoop).
-func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, p *doParams, warnings *[]string, cb *trace.CallBuilder) (json.RawMessage, bool, bool) {
+// executeEdits dispatches edit operations via edit-plan and emits per-edit ops.
+// Returns (editsFailed, allNoop).
+func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams, warnings *[]string, cb *trace.CallBuilder) (bool, bool) {
 	editFlags := map[string]any{}
-
-	// Dry-run promotion is now handled in handleDo before writes execute.
 
 	editsRaw := make([]map[string]any, len(p.Edits))
 	for i, e := range p.Edits {
@@ -475,38 +440,114 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, p *d
 
 	result, err := dispatch.Dispatch(ctx, db, "edit-plan", []string{}, editFlags)
 	if err != nil {
-		// Record failed edit trace events
-		for _, e := range p.Edits {
+		for i, e := range p.Edits {
 			cb.AddEditEvent(e.File, 0, "", "", false)
+			env.AddFailedOp(fmt.Sprintf("e%d", i), "edit", err.Error())
 		}
-		if ambErr := asAmbiguousError(err); ambErr != nil {
-			data, _ := json.Marshal(ambErr)
-			return json.RawMessage(data), true, false
-		}
-		if nfErr := asNotFoundError(err); nfErr != nil {
-			data, _ := json.Marshal(nfErr)
-			return json.RawMessage(data), true, false
-		}
-		data, _ := json.Marshal(map[string]string{"error": err.Error()})
-		return json.RawMessage(data), true, false
+		return true, false
 	}
 
-	// Check if result is a no-op (#19)
+	// Apply session post-processing
+	data, _ := json.Marshal(result)
+	text := sess.PostProcess("edit-plan", []string{}, editFlags, result, string(data))
+	var processed any
+	if json.Unmarshal([]byte(text), &processed) == nil {
+		result = processed
+	}
+	traceEditEvents(cb, result)
+
+	// Decompose the aggregate edit-plan result into per-edit ops.
 	allNoop := false
-	if m, ok := result.(map[string]any); ok {
+	m, _ := result.(map[string]any)
+	if m != nil {
 		if noop, _ := m["noop"].(bool); noop {
 			allNoop = true
 		}
 	}
-
-	data, _ := json.Marshal(result)
-	text := sess.PostProcess("edit-plan", []string{}, editFlags, result, string(data))
-	traceEditEvents(cb, result)
-	return json.RawMessage(text), false, allNoop
+	emitPerEditOps(env, p.Edits, m)
+	return false, allNoop
 }
 
-// executeVerify dispatches the verify command and returns result JSON.
-func executeVerify(ctx context.Context, db *index.DB, p *doParams, cb *trace.CallBuilder) json.RawMessage {
+// emitPerEditOps creates one op per original edit request from the aggregate edit-plan result.
+func emitPerEditOps(env *output.Envelope, edits []doEdit, result map[string]any) {
+	if result == nil {
+		// Shouldn't happen if dispatch succeeded, but be safe
+		for i, e := range edits {
+			env.AddOp(fmt.Sprintf("e%d", i), "edit", map[string]any{
+				"file":   e.File,
+				"status": "applied",
+			})
+		}
+		return
+	}
+
+	// Extract shared fields from aggregate result
+	status, _ := result["status"].(string)
+	if status == "" {
+		if _, isDry := result["dry_run"]; isDry {
+			status = "dry_run"
+		} else {
+			status = "applied"
+		}
+	}
+	hashes, _ := result["hashes"].(map[string]any)
+	descriptions, _ := result["description"].([]any)
+	diff, _ := result["diff"].(string)
+	noop, _ := result["noop"].(bool)
+
+	// For dry-run, extract per-file preview entries
+	var dryEdits []any
+	if de, ok := result["edits"].([]any); ok {
+		dryEdits = de
+	}
+
+	for i, e := range edits {
+		opID := fmt.Sprintf("e%d", i)
+		op := map[string]any{
+			"file":   e.File,
+			"status": status,
+		}
+
+		if noop {
+			op["status"] = "noop"
+		}
+
+		// Per-edit description
+		if i < len(descriptions) {
+			op["description"] = descriptions[i]
+		}
+
+		// File hash
+		if hashes != nil {
+			if h, ok := hashes[e.File]; ok {
+				op["hash"] = h
+			}
+		}
+
+		// For dry-run, attach the per-file preview if available
+		if len(dryEdits) > 0 {
+			// Match by file name
+			for _, de := range dryEdits {
+				if dm, ok := de.(map[string]any); ok {
+					if f, _ := dm["file"].(string); f == e.File {
+						if d, ok := dm["diff"].(string); ok {
+							op["diff"] = d
+						}
+						break
+					}
+				}
+			}
+		} else if len(edits) == 1 && diff != "" {
+			// Single edit: attach the aggregate diff directly
+			op["diff"] = diff
+		}
+
+		env.AddOp(opID, "edit", op)
+	}
+}
+
+// executeVerify dispatches the verify command and sets verify on the envelope.
+func executeVerify(ctx context.Context, db *index.DB, env *output.Envelope, p *doParams, cb *trace.CallBuilder) {
 	verifyFlags := map[string]any{}
 
 	// Collect edited/written file paths so verify can scope to relevant packages
@@ -540,105 +581,20 @@ func executeVerify(ctx context.Context, db *index.DB, p *doParams, cb *trace.Cal
 	result, err := dispatch.Dispatch(ctx, db, "verify", []string{}, verifyFlags)
 	if err != nil {
 		cb.AddVerifyEvent("", false, 0, 0)
-		data, _ := json.Marshal(map[string]string{"error": err.Error()})
-		return json.RawMessage(data)
+		env.SetVerify(map[string]any{"ok": false, "error": err.Error()})
+		return
 	}
-	data, _ := json.Marshal(result)
 	traceVerifyEvent(cb, result)
-	return json.RawMessage(data)
+	env.SetVerify(result)
 }
 
-// buildSummary constructs the mutation summary with status and hints.
-// isVerifyFailed checks if a verify result JSON indicates failure.
-func isVerifyFailed(verifyJSON json.RawMessage) bool {
-	if verifyJSON == nil {
-		return false
-	}
-	var vm map[string]any
-	if json.Unmarshal(verifyJSON, &vm) != nil {
-		return false
-	}
-	if ok, _ := vm["ok"].(bool); !ok {
-		// Only count as failed if there's an actual verify result (not a skip message)
-		_, hasError := vm["error"]
-		_, hasOK := vm["ok"]
-		return hasError || hasOK
-	}
-	return false
-}
-
-func buildSummary(p *doParams, editsFailed bool, writeResults []writeResult, verifyJSON json.RawMessage, allNoop bool) *summaryResult {
-	hasEdits := len(p.Edits) > 0
-	hasWrites := len(p.Writes) > 0
-	hasRenames := len(p.Renames) > 0
-	if !hasEdits && !hasWrites && !hasRenames {
-		return nil
-	}
-
-	s := &summaryResult{}
-	if hasEdits {
-		s.Edits = len(p.Edits)
-	}
-	if hasWrites {
-		s.Writes = len(p.Writes)
-	}
-	if hasRenames {
-		s.Renames = len(p.Renames)
-	}
-
-	// Structural write failure check — no more string scanning
-	writesFailed := false
-	for _, wr := range writeResults {
-		if !wr.OK {
-			writesFailed = true
-			break
-		}
-	}
-
-	verifyFailed := isVerifyFailed(verifyJSON)
-
-	if editsFailed || writesFailed {
-		s.Status = "failed"
-		f := false
-		s.Applied = &f
-	} else if p.DryRun != nil && *p.DryRun {
-		s.Status = "dry_run"
-	} else if verifyFailed {
-		s.Status = "verify_failed"
-		t := true
-		s.Applied = &t
-		f := false
-		s.Verified = &f
-		// Extract verify error message
-		if verifyJSON != nil {
-			var vm map[string]any
-			if json.Unmarshal(verifyJSON, &vm) == nil {
-				if errMsg, ok := vm["error"].(string); ok {
-					s.VerifyError = errMsg
-				}
-			}
-		}
-	} else if allNoop {
-		s.Status = "noop"
-	} else {
-		s.Status = "applied"
-		t := true
-		s.Applied = &t
-		if verifyJSON != nil {
-			s.Verified = &t
-		}
-	}
-
-	return s
-}
-
-// handleDo dispatches batch operations (reads/queries/edits/writes/renames/verify).
-func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trace.Collector, raw json.RawMessage) (string, error) {
+// handleDo dispatches batch operations and builds an *output.Envelope directly.
+func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trace.Collector, env *output.Envelope, raw json.RawMessage) error {
 	ctx = index.WithSourceCache(ctx)
 
 	p, warnings, err := parseDo(raw)
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	hasInit := p.Init != nil && *p.Init
@@ -675,18 +631,9 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 	}
 
 	if !hasInit && !hasReads && !hasQueries && !hasEdits && !hasWrites && !hasRenames && !hasVerify {
-		resp := &doResponse{
-			Error:    "request requires at least one of: reads, queries, edits, writes, renames, verify, init",
-			Warnings: warnings,
-		}
-		if len(resp.Warnings) == 0 {
-			resp.Warnings = nil
-		}
-		data, _ := json.Marshal(resp)
-		return string(data), nil
+		env.AddError("empty_request", "request requires at least one of: reads, queries, edits, writes, renames, verify, init")
+		return nil
 	}
-
-	resp := &doResponse{}
 
 	// 0. Init
 	if hasInit {
@@ -695,24 +642,23 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 			_, _, err := index.IndexRepo(ctx, db)
 			return err
 		}); err != nil {
-			resp.Init = map[string]any{"ok": false, "error": err.Error()}
+			env.AddFailedOp("i0", "init", err.Error())
 		} else {
-			resp.Init = map[string]any{"ok": true, "version": Version + "+" + BuildHash}
+			env.AddOp("i0", "init", map[string]any{"version": Version + "+" + BuildHash})
 		}
 	}
 
 	// 1. Reads
 	if hasReads {
-		resp.Reads = executeReads(ctx, db, sess, &p)
+		executeReads(ctx, db, sess, env, &p)
 	}
 
 	// 2. Queries
 	if hasQueries {
-		resp.Queries = executeQueries(ctx, db, sess, &p, cb)
+		executeQueries(ctx, db, sess, env, &p, cb)
 	}
 
 	// Pre-promote per-edit dry_run to batch level before writes execute.
-	// This ensures writes are skipped when any edit is dry-run (#12).
 	if p.DryRun == nil || !*p.DryRun {
 		for _, e := range p.Edits {
 			if e.DryRun != nil && *e.DryRun {
@@ -728,13 +674,13 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 	editsFailed := false
 	allNoop := false
 	if hasEdits {
-		resp.Edits, editsFailed, allNoop = executeEdits(ctx, db, sess, &p, &warnings, cb)
+		editsFailed, allNoop = executeEdits(ctx, db, sess, env, &p, &warnings, cb)
 	}
 
 	// 4. Renames
 	if hasRenames {
-		var renameResults []map[string]any
-		for _, r := range p.Renames {
+		for i, r := range p.Renames {
+			opID := fmt.Sprintf("n%d", i)
 			sess.InvalidateForEdit("rename", []string{r.OldName, r.NewName})
 			renameFlags := map[string]any{}
 			if r.DryRun != nil && *r.DryRun {
@@ -742,33 +688,24 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 			}
 			result, err := dispatch.Dispatch(ctx, db, "rename", []string{r.OldName, r.NewName}, renameFlags)
 			if err != nil {
-				renameResults = append(renameResults, map[string]any{
-					"old_name": r.OldName, "new_name": r.NewName, "ok": false, "error": err.Error(),
-				})
+				env.AddFailedOp(opID, "rename", err.Error())
 			} else {
-				renameResults = append(renameResults, map[string]any{
-					"old_name": r.OldName, "new_name": r.NewName, "ok": true, "result": result,
-				})
+				env.AddOp(opID, "rename", result)
 			}
 		}
-		data, _ := json.Marshal(renameResults)
-		resp.Renames = json.RawMessage(data)
 	}
 
-	// 5. Writes (skip if dry-run or edits failed)
+	// 5. Writes (skip if edits failed)
 	if hasWrites && editsFailed {
-		resp.Writes = make([]writeResult, len(p.Writes))
-		for i, w := range p.Writes {
-			resp.Writes[i] = writeResult{File: w.File, OK: false, Error: "skipped: edits failed"}
+		for i := range p.Writes {
+			env.AddSkippedOp(fmt.Sprintf("w%d", i), "write", "edits failed")
 		}
 	} else if hasWrites {
-		resp.Writes = executeWrites(ctx, db, sess, &p, isDryRun)
+		executeWrites(ctx, db, sess, env, &p, isDryRun)
 	}
 
 	// 5b. Post-edit reads
-	if editsFailed && p.ReadAfterEdit != nil && *p.ReadAfterEdit {
-		resp.PostEditReads = json.RawMessage(`"skipped: edits failed"`)
-	} else if (hasEdits || hasWrites) && p.ReadAfterEdit != nil && *p.ReadAfterEdit && !isDryRun {
+	if !editsFailed && (hasEdits || hasWrites) && p.ReadAfterEdit != nil && *p.ReadAfterEdit && !isDryRun {
 		editedFiles := make(map[string]bool)
 		for _, e := range p.Edits {
 			editedFiles[e.File] = true
@@ -790,70 +727,37 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 				budgetOpt = []int{*p.Budget}
 			}
 			results := dispatch.DispatchMulti(ctx, db, readCmds, budgetOpt...)
-			resp.PostEditReads = json.RawMessage(postProcessMultiResults(sess, readCmds, results))
+			addMultiResultOps(env, sess, readCmds, results, "pr")
 		}
 	}
 
 	// 6. Verify — skip for failed edits, dry-run, or all-noop (#19)
 	if editsFailed && hasVerify {
-		resp.Verify = json.RawMessage(`"skipped: edits failed"`)
+		env.SetVerify(map[string]any{"skipped": "edits failed"})
 	} else if isDryRun && hasVerify {
-		resp.Verify = json.RawMessage(`"skipped: dry run"`)
+		env.SetVerify(map[string]any{"skipped": "dry run"})
 	} else if allNoop && hasVerify {
-		resp.Verify = json.RawMessage(`"skipped: no-op edit"`)
+		env.SetVerify(map[string]any{"skipped": "no-op edit"})
 	} else if hasVerify {
-		resp.Verify = executeVerify(ctx, db, &p, cb)
+		executeVerify(ctx, db, env, &p, cb)
 	}
 
-	// 7. Summary
-	resp.Summary = buildSummary(&p, editsFailed, resp.Writes, resp.Verify, allNoop)
-
-	if len(warnings) > 0 {
-		resp.Warnings = warnings
+	// Add warnings as envelope errors
+	for _, w := range warnings {
+		env.Errors = append(env.Errors, output.OpError{Code: "warning", Message: w})
 	}
 
-	// Marshal and truncate
-	result, _ := json.Marshal(resp)
-	resultStr := string(result)
-
-	const maxResponseBytes = 100_000
-	wasTruncated := false
-	if len(resultStr) > maxResponseBytes {
-		wasTruncated = true
-		fullSize := len(resultStr)
-
-		// Drop fields by priority (last = least critical) until it fits.
-		// Try dropping in order: post_edit_reads, verify, queries, reads
-		dropOrder := []func(){
-			func() { resp.PostEditReads = nil },
-			func() { resp.Verify = nil },
-			func() { resp.Queries = nil },
-			func() { resp.Reads = nil },
-		}
-		dropNames := []string{"post_edit_reads", "verify", "queries", "reads"}
-		var dropped []string
-		for i, drop := range dropOrder {
-			drop()
-			dropped = append(dropped, dropNames[i])
-			result, _ = json.Marshal(resp)
-			if len(result) <= maxResponseBytes-200 {
-				break
-			}
-		}
-		resp.Truncated = true
-		resp.TruncReason = fmt.Sprintf("response exceeded %d bytes (%d actual)", maxResponseBytes, fullSize)
-		resp.Dropped = dropped
-		result, _ = json.Marshal(resp)
-		resultStr = string(result)
-	}
+	env.ComputeOK()
 
 	// Trace: record session stats and finish
+	resultData, _ := json.Marshal(env)
 	dr, bd, se := sess.GetStats()
 	cb.SetSessionStats(dr, bd, se)
-	cb.Finish(len(resultStr), wasTruncated, len(warnings))
+	cb.Finish(len(resultData), false, len(warnings))
 
-	return resultStr, nil
+	return nil
 }
+
 
 // traceEditEvents extracts per-file edit results and records them on the CallBuilder.
 func traceEditEvents(cb *trace.CallBuilder, result any) {
@@ -960,6 +864,9 @@ func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
 
 	if q.Budget != nil {
 		flags["budget"] = *q.Budget
+	}
+	if q.Full != nil && *q.Full {
+		flags["full"] = true
 	}
 
 	switch cmd {
@@ -1079,29 +986,39 @@ func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
 	return dispatch.MultiCmd{Cmd: cmd, Args: args, Flags: flags}, inferred
 }
 
-// postProcessMultiResults applies session post-processing to each sub-result.
-func postProcessMultiResults(sess *session.Session, cmds []dispatch.MultiCmd, results []dispatch.MultiResult) string {
-	type processedResult struct {
-		Cmd         string `json:"cmd"`
-		OK          bool   `json:"ok"`
-		InferredCmd string `json:"inferred_cmd,omitempty"`
-		Result      any    `json:"result,omitempty"`
-		Error       string `json:"error,omitempty"`
-	}
+// addMultiResultOps applies session post-processing to each result and adds them as ops.
+// prefix is the op_id prefix (e.g. "r" for reads). If empty, uses the first char of the command.
+func addMultiResultOps(env *output.Envelope, sess *session.Session, cmds []dispatch.MultiCmd, results []dispatch.MultiResult, prefix string) {
+	// Track counters per prefix for op_id generation
+	counters := map[string]int{}
 
-	processed := make([]processedResult, len(results))
 	for i, r := range results {
-		processed[i] = processedResult{Cmd: r.Cmd, OK: r.OK, Error: r.Error, InferredCmd: r.InferredCmd}
-		if !r.OK || r.Result == nil {
+		cmdName := r.Cmd
+		if cmdName == "" {
+			cmdName = cmds[i].Cmd
+		}
+		p := prefix
+		if p == "" {
+			p = string(cmdName[0])
+		}
+		opID := fmt.Sprintf("%s%d", p, counters[p])
+		counters[p]++
+
+		if !r.OK {
+			env.AddFailedOp(opID, cmdName, r.Error)
+			continue
+		}
+		if r.Result == nil {
+			env.AddOp(opID, cmdName, map[string]any{})
 			continue
 		}
 
+		// Apply session post-processing
 		data, err := json.Marshal(r.Result)
 		if err != nil {
-			processed[i].Result = r.Result
+			env.AddOp(opID, cmdName, r.Result)
 			continue
 		}
-
 		cmd := cmds[i].Cmd
 		flags := cmds[i].Flags
 		if flags == nil {
@@ -1111,48 +1028,48 @@ func postProcessMultiResults(sess *session.Session, cmds []dispatch.MultiCmd, re
 		if cArgs == nil {
 			cArgs = []string{}
 		}
-
+		result := r.Result
 		newText := sess.PostProcess(cmd, cArgs, flags, r.Result, string(data))
 		if newText != string(data) {
 			var newResult any
-			if err := json.Unmarshal([]byte(newText), &newResult); err == nil {
-				processed[i].Result = newResult
-			} else {
-				processed[i].Result = r.Result
+			if json.Unmarshal([]byte(newText), &newResult) == nil {
+				result = newResult
 			}
-		} else {
-			processed[i].Result = r.Result
 		}
 
-		// Normalize read results: rename "body" to "content" so agents
-		// always use result.content regardless of file vs symbol reads.
-		if cmds[i].Cmd == "read" {
-			if m, ok := processed[i].Result.(map[string]any); ok {
-				if body, has := m["body"]; has {
-					if _, hasC := m["content"]; !hasC {
-						m["content"] = body
-					}
-					delete(m, "body")
-				}
-			} else {
-				// Struct result (no session delta) — round-trip through JSON
-				d2, _ := json.Marshal(processed[i].Result)
-				var m2 map[string]any
-				if json.Unmarshal(d2, &m2) == nil {
-					if body, has := m2["body"]; has {
-						if _, hasC := m2["content"]; !hasC {
-							m2["content"] = body
-						}
-						delete(m2, "body")
-						processed[i].Result = m2
-					}
-				}
+		// Normalize read results: rename "body" to "content"
+		if cmd == "read" {
+			result = normalizeReadBody(result)
+		}
+
+		env.AddOp(opID, cmdName, result)
+	}
+}
+
+// normalizeReadBody renames "body" to "content" in read results.
+func normalizeReadBody(result any) any {
+	if m, ok := result.(map[string]any); ok {
+		if body, has := m["body"]; has {
+			if _, hasC := m["content"]; !hasC {
+				m["content"] = body
 			}
+			delete(m, "body")
+		}
+		return m
+	}
+	// Struct result — round-trip through JSON
+	d2, _ := json.Marshal(result)
+	var m2 map[string]any
+	if json.Unmarshal(d2, &m2) == nil {
+		if body, has := m2["body"]; has {
+			if _, hasC := m2["content"]; !hasC {
+				m2["content"] = body
+			}
+			delete(m2, "body")
+			return m2
 		}
 	}
-
-	out, _ := json.Marshal(processed)
-	return string(out)
+	return result
 }
 
 // ambiguousResult is the structured JSON response for ambiguous symbol errors.

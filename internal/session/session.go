@@ -123,9 +123,25 @@ func (s *Session) SaveToFile(path string) error {
 	return os.Rename(tmp, path)
 }
 
-// ResolveSessionID returns the session ID from EDR_SESSION, or "" if unset.
+// ResolveSessionID returns the session ID.
+// Priority: EDR_SESSION env var > auto-detected from parent PID.
+// Falls back to "" if detection is ambiguous (no session is safer than wrong session).
 func ResolveSessionID() string {
-	return os.Getenv("EDR_SESSION")
+	if id := os.Getenv("EDR_SESSION"); id != "" {
+		return id
+	}
+	return autoSessionID()
+}
+
+// autoSessionID derives a stable session ID from the parent process.
+// The parent PID is typically the agent process (Claude, Cursor, etc.)
+// which stays alive across multiple edr invocations in one conversation.
+func autoSessionID() string {
+	ppid := os.Getppid()
+	if ppid <= 1 {
+		return "" // init/launchd — ambiguous
+	}
+	return fmt.Sprintf("auto_%d", ppid)
 }
 
 // LoadSession loads the session identified by EDR_SESSION env var.
@@ -174,7 +190,7 @@ func ContentHash(data string) string {
 
 func (s *Session) CacheKey(cmd string, args []string, flags map[string]any) string {
 	key := cmd + "\x00" + strings.Join(args, "\x00")
-	for _, f := range []string{"budget", "body", "callers", "deps", "depth", "signatures", "context", "regex", "include", "exclude", "dir", "glob", "type", "grep", "symbols", "full", "verbose"} {
+	for _, f := range []string{"budget", "body", "callers", "deps", "depth", "signatures", "context", "regex", "include", "exclude", "dir", "glob", "type", "grep", "symbols", "full", "verbose", "text", "impact", "chain", "limit", "no_group"} {
 		if v, ok := flags[f]; ok {
 			key += fmt.Sprintf("\x00%s=%v", f, v)
 		}
@@ -431,12 +447,13 @@ func (s *Session) ProcessReadResult(cmd string, result map[string]any, flags map
 	switch status {
 	case "new":
 		s.StoreContent(key, content, isSymbol)
+		result["session"] = "new"
 		return nil
 
 	case "unchanged":
 		s.stats.DeltaReads++
 		file, hash := ExtractFileHash(result)
-		return map[string]any{"unchanged": true, "file": file, "hash": hash}
+		return map[string]any{"unchanged": true, "file": file, "hash": hash, "session": "unchanged"}
 	}
 	return nil
 }
@@ -641,6 +658,26 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 			data, _ := json.Marshal(delta)
 			return string(data)
 		}
+		// ProcessReadResult may have added "session" field to m
+		if _, has := m["session"]; has {
+			data, _ := json.Marshal(m)
+			text = string(data)
+		}
+	}
+
+	// Level 2b: Content-hash session tracking for search/map/refs
+	// Hash the visible payload and return "unchanged" if agent already has it.
+	if cmd == "search" || cmd == "map" || cmd == "refs" {
+		cacheKey := s.CacheKey(cmd, args, flags)
+		status, _ := s.CheckContent(cacheKey, text, false)
+		if status == "unchanged" {
+			s.stats.DeltaReads++
+			return `{"session":"unchanged"}`
+		}
+		s.StoreContent(cacheKey, text, false)
+		m["session"] = "new"
+		data, _ := json.Marshal(m)
+		text = string(data)
 	}
 
 	// Level 3: Strip seen bodies from gather/search.

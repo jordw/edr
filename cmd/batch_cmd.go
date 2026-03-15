@@ -223,7 +223,6 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			s.currentQuery = doQuery{
 				Cmd:     "search",
 				Pattern: sp(val),
-				Body:    bp(true), // body on by default
 			}
 
 		case "-e", "--edit":
@@ -312,10 +311,14 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 
 		case "--full":
-			if s.currentOp != opRead {
-				return nil, fmt.Errorf("--full is only valid after -r")
+			switch s.currentOp {
+			case opRead:
+				s.currentRead.Full = bp(true)
+			case opSearch:
+				s.currentQuery.Full = bp(true)
+			default:
+				return nil, fmt.Errorf("--full is only valid after -r or -s")
 			}
-			s.currentRead.Full = bp(true)
 
 		case "--symbols":
 			if s.currentOp != opRead {
@@ -587,7 +590,8 @@ func runBatch(args []string) error {
 		root, _ = os.Getwd()
 	}
 
-	db, err := openDBWithRoot(root, true)
+	db, err := openDBWithRoot(root, !verbose)
+
 	if err != nil {
 		return err
 	}
@@ -600,81 +604,21 @@ func runBatch(args []string) error {
 	tc := trace.NewCollector(edrDir, Version)
 	defer tc.Close()
 
-	result, err := handleDo(context.Background(), db, sess, tc, json.RawMessage(paramsJSON))
-	if err != nil {
+	env := output.NewEnvelope("batch")
+	if err := handleDo(context.Background(), db, sess, tc, env, json.RawMessage(paramsJSON)); err != nil {
 		return err
 	}
-	output.Print(json.RawMessage(result))
-	return batchResultError(json.RawMessage(result))
-}
 
-// batchResultError checks if any operation in the batch result failed,
-// returning a silent error (already printed) to trigger non-zero exit.
-func batchResultError(result json.RawMessage) error {
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(result, &m); err != nil {
-		return nil
-	}
+	output.PrintEnvelope(env)
 
-	// Check reads array for ok:false
-	if reads, ok := m["reads"]; ok {
-		var arr []map[string]any
-		if json.Unmarshal(reads, &arr) == nil {
-			for _, r := range arr {
-				if ok, _ := r["ok"].(bool); !ok {
-					return silentError{}
-				}
-			}
+	if !env.OK {
+		if env.IsVerifyOnlyFailure() {
+			return silentError{code: 2}
 		}
+		return silentError{code: 1}
 	}
-
-	// Check queries array for ok:false
-	if queries, ok := m["queries"]; ok {
-		var arr []map[string]any
-		if json.Unmarshal(queries, &arr) == nil {
-			for _, q := range arr {
-				if ok, _ := q["ok"].(bool); !ok {
-					return silentError{}
-				}
-			}
-		}
-	}
-
-	// Check edits for error
-	if edits, ok := m["edits"]; ok {
-		var em map[string]any
-		if json.Unmarshal(edits, &em) == nil {
-			if _, hasErr := em["error"]; hasErr {
-				return silentError{}
-			}
-		}
-	}
-
-	// Check writes array for ok:false
-	if writes, ok := m["writes"]; ok {
-		var arr []map[string]any
-		if json.Unmarshal(writes, &arr) == nil {
-			for _, w := range arr {
-				if ok, _ := w["ok"].(bool); !ok {
-					return silentError{}
-				}
-			}
-		}
-	}
-
-	// Check verify for ok:false (exit code 2 to distinguish from operation failures)
-	if verify, ok := m["verify"]; ok {
-		var vm map[string]any
-		if json.Unmarshal(verify, &vm) == nil {
-			if ok, _ := vm["ok"].(bool); !ok {
-				return silentError{code: 2}
-			}
-		}
-	}
-
 	return nil
 }
-
 // appendStringSlice appends val to an existing include/exclude field.
 // The field may be nil, a string, or []string; the result is always []string.
 func appendStringSlice(existing any, val string) []string {

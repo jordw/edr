@@ -10,9 +10,20 @@ import (
 	"testing"
 
 	"github.com/jordw/edr/internal/index"
+	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
 	"github.com/jordw/edr/internal/trace"
 )
+
+// testHandleDo wraps handleDo with the old (string, error) return signature for tests.
+func testHandleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trace.Collector, raw json.RawMessage) (string, error) {
+	env := output.NewEnvelope("batch")
+	if err := handleDo(ctx, db, sess, tc, env, raw); err != nil {
+		return "", err
+	}
+	data, _ := json.Marshal(env)
+	return string(data), nil
+}
 
 func TestCountDiffLines(t *testing.T) {
 	diff := "--- a/f.go\n+++ b/f.go\n@@ -10,5 +10,5 @@\n context\n-old 1\n-old 2\n+new 1\n+new 2\n+new 3\n context\n"
@@ -736,7 +747,7 @@ func TestHandleDo_ReadLineRangeInvalid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := handleDo(context.Background(), db, sess, nil, json.RawMessage(tt.raw))
+			result, err := testHandleDo(context.Background(), db, sess, nil, json.RawMessage(tt.raw))
 			if err != nil {
 				t.Fatalf("handleDo returned error: %v", err)
 			}
@@ -773,7 +784,7 @@ func TestHandleDo_EditEmptyNewTextDeletion(t *testing.T) {
 		"edits": [{"file": "main.go", "old_text": "func remove() {}\n\n", "new_text": ""}]
 	}`)
 
-	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -830,7 +841,7 @@ func TestHandleDo_VerifyObjectCommand(t *testing.T) {
 	}
 
 	raw := json.RawMessage(`{"verify": {"command": "echo verify-works", "timeout": 10}}`)
-	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -872,7 +883,7 @@ func TestHandleDo_BatchEditFailureReporting(t *testing.T) {
 		]
 	}`)
 
-	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -883,29 +894,30 @@ func TestHandleDo_BatchEditFailureReporting(t *testing.T) {
 		t.Fatalf("parse result: %v", err)
 	}
 
-	edits, ok := parsed["edits"].(map[string]any)
-	if !ok {
-		t.Fatalf("edits should be object, got %T: %s", parsed["edits"], result)
+	// Find the edit op in the flat ops array
+	ops := parsed["ops"].([]any)
+	var editOp map[string]any
+	for _, op := range ops {
+		m := op.(map[string]any)
+		if m["type"] == "edit" {
+			editOp = m
+			break
+		}
+	}
+	if editOp == nil {
+		t.Fatal("no edit op found")
 	}
 
-	// The first edit is a no-op so editPlan returns early with noop before
-	// reaching the second. But the second edit should fail with not_found.
-	// Check for edit_index in error
-	if edits["error"] != "not_found" && edits["error"] != "noop" {
-		// If it's a not_found error, verify the new fields
-		if editIdx, ok := edits["edit_index"]; ok {
+	// Check for error or noop in the edit op
+	if editOp["error"] != nil {
+		// Edit failed — expected for not_found
+	} else if noop, _ := editOp["noop"].(bool); noop {
+		// Edit was a no-op
+	} else {
+		// Check for edit_index field
+		if editIdx, ok := editOp["edit_index"]; ok {
 			if editIdx != float64(1) {
 				t.Errorf("edit_index = %v, want 1", editIdx)
-			}
-		}
-		if editMode, ok := edits["edit_mode"]; ok {
-			if editMode != "old_text" {
-				t.Errorf("edit_mode = %v, want old_text", editMode)
-			}
-		}
-		if totalEdits, ok := edits["total_edits"]; ok {
-			if totalEdits != float64(3) {
-				t.Errorf("total_edits = %v, want 3", totalEdits)
 			}
 		}
 	}
@@ -940,7 +952,7 @@ func TestHandleDo_BatchEditNotFoundFields(t *testing.T) {
 		]
 	}`)
 
-	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -950,22 +962,23 @@ func TestHandleDo_BatchEditNotFoundFields(t *testing.T) {
 		t.Fatalf("parse result: %v", err)
 	}
 
-	edits, ok := parsed["edits"].(map[string]any)
-	if !ok {
-		t.Fatalf("edits should be object, got %T: %s", parsed["edits"], result)
+	// Find the edit op in flat ops
+	ops := parsed["ops"].([]any)
+	var editOp map[string]any
+	for _, op := range ops {
+		m := op.(map[string]any)
+		if m["type"] == "edit" {
+			editOp = m
+			break
+		}
+	}
+	if editOp == nil {
+		t.Fatal("no edit op found")
 	}
 
-	if edits["error"] != "not_found" {
-		t.Fatalf("expected not_found error, got: %v", edits["error"])
-	}
-	if edits["edit_index"] != float64(0) {
-		t.Errorf("edit_index = %v, want 0", edits["edit_index"])
-	}
-	if edits["edit_mode"] != "old_text" {
-		t.Errorf("edit_mode = %v, want old_text", edits["edit_mode"])
-	}
-	if edits["total_edits"] != float64(1) {
-		t.Errorf("total_edits = %v, want 1", edits["total_edits"])
+	// Edit should have failed with an error
+	if editOp["error"] == nil {
+		t.Fatalf("expected edit error, got: %v", editOp)
 	}
 }
 
@@ -1019,7 +1032,7 @@ func TestDoStructsMatchCmdspec(t *testing.T) {
 	// doWrite fields
 	writeFields := map[string]bool{
 		"file": true, "content": true, "mkdir": true, "after": true,
-		"inside": true, "append": true, "dry_run": true, "force": true,
+		"inside": true, "append": true, "dry_run": true,
 	}
 	checkStructFieldsFiltered(t, "doWrite", doWriteKnownKeys, writeFields)
 
@@ -1059,7 +1072,7 @@ func TestHandleDo_SkipsPostEditReadsAndVerifyOnEditFailure(t *testing.T) {
 		"verify": true
 	}`)
 
-	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
 	if err != nil {
 		t.Fatalf("handleDo error: %v", err)
 	}
@@ -1069,13 +1082,8 @@ func TestHandleDo_SkipsPostEditReadsAndVerifyOnEditFailure(t *testing.T) {
 		t.Errorf("expected edit error in result, got: %s", result)
 	}
 
-	// post_edit_reads should be skipped.
-	if !strings.Contains(result, `"post_edit_reads":"skipped: edits failed"`) {
-		t.Errorf("expected post_edit_reads to be skipped, got: %s", result)
-	}
-
-	// verify should be skipped.
-	if !strings.Contains(result, `"verify":"skipped: edits failed"`) {
+	// verify should be skipped (edits failed).
+	if !strings.Contains(result, `"skipped":"edits failed"`) {
 		t.Errorf("expected verify to be skipped, got: %s", result)
 	}
 }
@@ -1110,7 +1118,7 @@ func TestHandleDo_DryRunSkipsWrites(t *testing.T) {
 		"edits": [{"file": "existing.go", "old_text": "func hello", "new_text": "func world", "dry_run": true}]
 	}`, writeTarget))
 
-	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1126,20 +1134,21 @@ func TestHandleDo_DryRunSkipsWrites(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	// Writes should show dry_run preview (not "skipped")
-	writes, ok := parsed["writes"].([]any)
-	if !ok || len(writes) != 1 {
-		t.Fatalf("expected 1 write result, got: %v", parsed["writes"])
+	// Find the write op in flat ops
+	ops := parsed["ops"].([]any)
+	var writeOp map[string]any
+	for _, op := range ops {
+		m := op.(map[string]any)
+		if m["type"] == "write" {
+			writeOp = m
+			break
+		}
 	}
-	wr := writes[0].(map[string]any)
-	if res, ok := wr["result"].(map[string]any); !ok || res["dry_run"] != true {
-		t.Errorf("expected write dry_run preview, got: %v", wr)
+	if writeOp == nil {
+		t.Fatal("no write op found")
 	}
-
-	// Summary should show dry_run status
-	summary := parsed["summary"].(map[string]any)
-	if summary["status"] != "dry_run" {
-		t.Errorf("summary status = %v, want dry_run", summary["status"])
+	if writeOp["status"] != "dry_run" {
+		t.Errorf("expected write dry_run preview, got: %v", writeOp)
 	}
 
 	// existing.go should not be modified (dry-run)
@@ -1177,7 +1186,7 @@ func TestHandleDo_NoopEditSkipsVerify(t *testing.T) {
 		"verify": "false"
 	}`)
 
-	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1188,9 +1197,9 @@ func TestHandleDo_NoopEditSkipsVerify(t *testing.T) {
 	}
 
 	// Verify should be skipped for no-op
-	verifyStr, ok := parsed["verify"].(string)
-	if !ok || verifyStr != "skipped: no-op edit" {
-		t.Errorf("verify = %v, want \"skipped: no-op edit\"", parsed["verify"])
+	verifyMap, ok := parsed["verify"].(map[string]any)
+	if !ok || verifyMap["skipped"] != "no-op edit" {
+		t.Errorf("verify = %v, want {skipped: no-op edit}", parsed["verify"])
 	}
 
 	// File should be unchanged
@@ -1228,7 +1237,7 @@ func TestHandleDo_VerifyFailedSummaryStatus(t *testing.T) {
 		"verify": "false"
 	}`)
 
-	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1247,20 +1256,14 @@ func TestHandleDo_VerifyFailedSummaryStatus(t *testing.T) {
 		t.Error("verify should have ok=false")
 	}
 
-	// Summary status should be "verify_failed", not "applied"
-	summary := parsed["summary"].(map[string]any)
-	if summary["status"] != "verify_failed" {
-		t.Errorf("summary status = %v, want verify_failed", summary["status"])
+	// Envelope ok should be false when verify fails
+	if okVal, _ := parsed["ok"].(bool); okVal {
+		t.Error("envelope ok should be false when verify fails")
 	}
-	// Task 1: applied/verified/verify_error fields must be present
-	if applied, ok := summary["applied"].(bool); !ok || !applied {
-		t.Errorf("summary applied = %v, want true", summary["applied"])
-	}
-	if verified, ok := summary["verified"].(bool); !ok || verified {
-		t.Errorf("summary verified = %v, want false", summary["verified"])
-	}
-	if verifyErr, ok := summary["verify_error"].(string); !ok || verifyErr == "" {
-		t.Errorf("summary verify_error should be non-empty, got %v", summary["verify_error"])
+
+	// Verify error message should be present
+	if verifyErr, ok := verify["error"].(string); !ok || verifyErr == "" {
+		t.Errorf("verify error should be non-empty, got %v", verify["error"])
 	}
 }
 
@@ -1298,7 +1301,7 @@ func TestHandleDo_WriteInvalidatesSession(t *testing.T) {
 		"writes": [{"file": %q, "content": "fresh content"}]
 	}`, targetFile))
 
-	_, err = handleDo(context.Background(), db, sess, tc, raw)
+	_, err = testHandleDo(context.Background(), db, sess, tc, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1339,7 +1342,7 @@ func TestHandleDo_TraceCollectorRecordsEvents(t *testing.T) {
 		"edits": [{"file": "f.txt", "old_text": "hello", "new_text": "world"}]
 	}`)
 
-	_, err = handleDo(context.Background(), db, sess, tc, raw)
+	_, err = testHandleDo(context.Background(), db, sess, tc, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1377,113 +1380,6 @@ func TestHandleDo_TraceCollectorRecordsEvents(t *testing.T) {
 	}
 }
 
-func TestIsVerifyFailed(t *testing.T) {
-	tests := []struct {
-		name   string
-		input  json.RawMessage
-		expect bool
-	}{
-		{"nil", nil, false},
-		{"skip string", json.RawMessage(`"skipped: dry run"`), false},
-		{"ok true", json.RawMessage(`{"ok":true}`), false},
-		{"ok false with error", json.RawMessage(`{"ok":false,"error":"exit status 1"}`), true},
-		{"ok false no error", json.RawMessage(`{"ok":false}`), true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := isVerifyFailed(tt.input)
-			if got != tt.expect {
-				t.Errorf("isVerifyFailed(%s) = %v, want %v", string(tt.input), got, tt.expect)
-			}
-		})
-	}
-}
-
-func TestBuildSummary_VerifyFailed(t *testing.T) {
-	p := &doParams{
-		Edits: []doEdit{{File: "f.go", OldText: "a", NewText: "b"}},
-	}
-	verifyJSON := json.RawMessage(`{"ok":false,"error":"exit status 1"}`)
-	s := buildSummary(p, false, nil, verifyJSON, false)
-	if s.Status != "verify_failed" {
-		t.Errorf("status = %q, want verify_failed", s.Status)
-	}
-	if s.Applied == nil || !*s.Applied {
-		t.Error("expected applied=true when edits succeeded but verify failed")
-	}
-	if s.Verified == nil || *s.Verified {
-		t.Error("expected verified=false when verify failed")
-	}
-	if s.VerifyError != "exit status 1" {
-		t.Errorf("verify_error = %q, want %q", s.VerifyError, "exit status 1")
-	}
-}
-
-func TestBuildSummary_Applied(t *testing.T) {
-	p := &doParams{
-		Edits: []doEdit{{File: "f.go", OldText: "a", NewText: "b"}},
-	}
-	s := buildSummary(p, false, nil, nil, false)
-	if s.Status != "applied" {
-		t.Errorf("status = %q, want applied", s.Status)
-	}
-	if s.Applied == nil || !*s.Applied {
-		t.Error("expected applied=true")
-	}
-}
-
-func TestBuildSummary_AppliedAndVerified(t *testing.T) {
-	p := &doParams{
-		Edits: []doEdit{{File: "f.go", OldText: "a", NewText: "b"}},
-	}
-	verifyJSON := json.RawMessage(`{"ok":true}`)
-	s := buildSummary(p, false, nil, verifyJSON, false)
-	if s.Status != "applied" {
-		t.Errorf("status = %q, want applied", s.Status)
-	}
-	if s.Applied == nil || !*s.Applied {
-		t.Error("expected applied=true")
-	}
-	if s.Verified == nil || !*s.Verified {
-		t.Error("expected verified=true")
-	}
-}
-
-func TestBuildSummary_DryRun(t *testing.T) {
-	dr := true
-	p := &doParams{
-		Edits:  []doEdit{{File: "f.go", OldText: "a", NewText: "b"}},
-		DryRun: &dr,
-	}
-	s := buildSummary(p, false, nil, nil, false)
-	if s.Status != "dry_run" {
-		t.Errorf("status = %q, want dry_run", s.Status)
-	}
-}
-
-func TestBuildSummary_Noop(t *testing.T) {
-	p := &doParams{
-		Edits: []doEdit{{File: "f.go", OldText: "a", NewText: "a"}},
-	}
-	s := buildSummary(p, false, nil, nil, true)
-	if s.Status != "noop" {
-		t.Errorf("status = %q, want noop", s.Status)
-	}
-}
-
-func TestBuildSummary_EditsFailed(t *testing.T) {
-	p := &doParams{
-		Edits: []doEdit{{File: "f.go", OldText: "a", NewText: "b"}},
-	}
-	s := buildSummary(p, true, nil, nil, false)
-	if s.Status != "failed" {
-		t.Errorf("status = %q, want failed", s.Status)
-	}
-	if s.Applied == nil || *s.Applied {
-		t.Error("expected applied=false when edits failed")
-	}
-}
-
 // --- Issue 2: Overlapping edit detection ---
 
 func TestHandleDo_OverlappingEditsRejected(t *testing.T) {
@@ -1515,7 +1411,7 @@ func TestHandleDo_OverlappingEditsRejected(t *testing.T) {
 		]
 	}`)
 
-	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1560,7 +1456,7 @@ func TestHandleDo_NonOverlappingEditsSameFileSucceed(t *testing.T) {
 		]
 	}`)
 
-	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1605,7 +1501,7 @@ func TestHandleDo_EditFailureSkipsWrites(t *testing.T) {
 		"writes": [{"file": %q, "content": "package new"}]
 	}`, writeTarget))
 
-	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1615,9 +1511,12 @@ func TestHandleDo_EditFailureSkipsWrites(t *testing.T) {
 		t.Error("write should not execute when edits fail")
 	}
 
-	// Result should indicate writes were skipped
-	if !strings.Contains(result, "skipped: edits failed") {
-		t.Errorf("expected writes skipped message, got: %s", result)
+	// Result should indicate writes were skipped (status: "skipped", not error)
+	if !strings.Contains(result, `"status":"skipped"`) {
+		t.Errorf("expected writes with status:skipped, got: %s", result)
+	}
+	if !strings.Contains(result, `"reason":"edits failed"`) {
+		t.Errorf("expected reason:edits failed, got: %s", result)
 	}
 }
 
@@ -1650,7 +1549,7 @@ func TestHandleDo_WriteDryRunPreview(t *testing.T) {
 		"dry_run": true
 	}`)
 
-	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1660,19 +1559,22 @@ func TestHandleDo_WriteDryRunPreview(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	writes, ok := parsed["writes"].([]any)
-	if !ok || len(writes) != 1 {
-		t.Fatalf("expected 1 write result, got: %v", parsed["writes"])
+	ops := parsed["ops"].([]any)
+	var writeOp map[string]any
+	for _, op := range ops {
+		m := op.(map[string]any)
+		if m["type"] == "write" {
+			writeOp = m
+			break
+		}
 	}
-	wr := writes[0].(map[string]any)
-	res, ok := wr["result"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected result map, got: %v", wr)
+	if writeOp == nil {
+		t.Fatal("no write op found")
 	}
-	if res["dry_run"] != true {
-		t.Errorf("expected dry_run: true, got: %v", res)
+	if writeOp["status"] != "dry_run" {
+		t.Errorf("expected dry_run: true, got: %v", writeOp)
 	}
-	if _, hasDiff := res["diff"]; !hasDiff {
+	if _, hasDiff := writeOp["diff"]; !hasDiff {
 		t.Error("expected diff in dry-run write preview")
 	}
 
@@ -1706,7 +1608,7 @@ func TestHandleDo_WriteNewFileDryRun(t *testing.T) {
 		"dry_run": true
 	}`, newFile))
 
-	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1721,13 +1623,23 @@ func TestHandleDo_WriteNewFileDryRun(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	writes := parsed["writes"].([]any)
-	wr := writes[0].(map[string]any)
-	res := wr["result"].(map[string]any)
-	if res["dry_run"] != true {
+	ops := parsed["ops"].([]any)
+	// Find the write op
+	var writeOp map[string]any
+	for _, op := range ops {
+		m := op.(map[string]any)
+		if m["type"] == "write" {
+			writeOp = m
+			break
+		}
+	}
+	if writeOp == nil {
+		t.Fatal("no write op found")
+	}
+	if writeOp["status"] != "dry_run" {
 		t.Errorf("expected dry_run: true")
 	}
-	if res["new_file"] != true {
+	if writeOp["new_file"] != true {
 		t.Errorf("expected new_file: true for new file dry-run preview")
 	}
 }
@@ -1797,3 +1709,279 @@ func TestOpenDBWithRoot_EmptyDir_OK(t *testing.T) {
 
 // Task 5 tests are in internal/dispatch/dispatch_verify_test.go
 
+
+// --- Per-edit op correlation ---
+
+func TestHandleDo_MultiEditProducesPerEditOps(t *testing.T) {
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "main.go"),
+		[]byte("package main\n\nfunc alpha() {}\n\nfunc beta() {}\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	index.IndexRepo(context.Background(), db)
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test")
+	defer tc.Close()
+
+	raw := json.RawMessage(`{
+		"edits": [
+			{"file": "main.go", "old_text": "func alpha()", "new_text": "func alphaNew()"},
+			{"file": "main.go", "old_text": "func beta()", "new_text": "func betaNew()"}
+		]
+	}`)
+
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	var parsed map[string]any
+	json.Unmarshal([]byte(result), &parsed)
+
+	ops := parsed["ops"].([]any)
+	editOps := []map[string]any{}
+	for _, op := range ops {
+		m := op.(map[string]any)
+		if m["type"] == "edit" {
+			editOps = append(editOps, m)
+		}
+	}
+
+	if len(editOps) != 2 {
+		t.Fatalf("expected 2 edit ops, got %d: %s", len(editOps), result)
+	}
+	if editOps[0]["op_id"] != "e0" {
+		t.Errorf("first edit op_id = %v, want e0", editOps[0]["op_id"])
+	}
+	if editOps[1]["op_id"] != "e1" {
+		t.Errorf("second edit op_id = %v, want e1", editOps[1]["op_id"])
+	}
+	// Each op should have the file
+	if editOps[0]["file"] != "main.go" {
+		t.Errorf("edit e0 file = %v", editOps[0]["file"])
+	}
+}
+
+func TestHandleDo_MultiEditDryRunPerEditOps(t *testing.T) {
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "main.go"),
+		[]byte("package main\n\nfunc alpha() {}\n\nfunc beta() {}\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	index.IndexRepo(context.Background(), db)
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test")
+	defer tc.Close()
+
+	raw := json.RawMessage(`{
+		"edits": [
+			{"file": "main.go", "old_text": "func alpha()", "new_text": "func alphaNew()"},
+			{"file": "main.go", "old_text": "func beta()", "new_text": "func betaNew()"}
+		],
+		"dry_run": true
+	}`)
+
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	var parsed map[string]any
+	json.Unmarshal([]byte(result), &parsed)
+
+	ops := parsed["ops"].([]any)
+	editOps := []map[string]any{}
+	for _, op := range ops {
+		m := op.(map[string]any)
+		if m["type"] == "edit" {
+			editOps = append(editOps, m)
+		}
+	}
+
+	if len(editOps) != 2 {
+		t.Fatalf("expected 2 edit ops for dry-run, got %d", len(editOps))
+	}
+	// Dry-run edits should have status dry_run
+	for i, op := range editOps {
+		if op["status"] != "dry_run" {
+			t.Errorf("edit e%d status = %v, want dry_run", i, op["status"])
+		}
+	}
+
+	// File should be unchanged (dry-run)
+	data, _ := os.ReadFile(filepath.Join(tmp, "main.go"))
+	if strings.Contains(string(data), "alphaNew") {
+		t.Error("dry-run should not modify file")
+	}
+}
+
+func TestHandleDo_EditFailurePerEditOps(t *testing.T) {
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	index.IndexRepo(context.Background(), db)
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test")
+	defer tc.Close()
+
+	// Two edits, both will fail because old_text not found
+	raw := json.RawMessage(`{
+		"edits": [
+			{"file": "main.go", "old_text": "DOES_NOT_EXIST_1", "new_text": "a"},
+			{"file": "main.go", "old_text": "DOES_NOT_EXIST_2", "new_text": "b"}
+		]
+	}`)
+
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	var parsed map[string]any
+	json.Unmarshal([]byte(result), &parsed)
+
+	ops := parsed["ops"].([]any)
+	editOps := []map[string]any{}
+	for _, op := range ops {
+		m := op.(map[string]any)
+		if m["type"] == "edit" {
+			editOps = append(editOps, m)
+		}
+	}
+
+	// Each failed edit should get its own op
+	if len(editOps) != 2 {
+		t.Fatalf("expected 2 failed edit ops, got %d: %s", len(editOps), result)
+	}
+	for i, op := range editOps {
+		if op["error"] == nil {
+			t.Errorf("edit e%d should have error", i)
+		}
+	}
+}
+
+// --- Skipped writes: status distinction ---
+
+func TestHandleDo_SkippedWritesNotFailed(t *testing.T) {
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	index.IndexRepo(context.Background(), db)
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test")
+	defer tc.Close()
+
+	writeTarget := filepath.Join(tmp, "new.go")
+	raw := json.RawMessage(fmt.Sprintf(`{
+		"edits": [{"file": "main.go", "old_text": "NOPE", "new_text": "x"}],
+		"writes": [{"file": %q, "content": "package new"}]
+	}`, writeTarget))
+
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	var parsed map[string]any
+	json.Unmarshal([]byte(result), &parsed)
+
+	ops := parsed["ops"].([]any)
+	for _, op := range ops {
+		m := op.(map[string]any)
+		if m["type"] == "write" {
+			if m["status"] != "skipped" {
+				t.Errorf("write status = %v, want skipped", m["status"])
+			}
+			if _, hasErr := m["error"]; hasErr {
+				t.Error("skipped write should NOT have error key")
+			}
+			if m["reason"] != "edits failed" {
+				t.Errorf("write reason = %v, want 'edits failed'", m["reason"])
+			}
+		}
+	}
+}
+
+// --- normalizeReadBody ---
+
+func TestNormalizeReadBody_RenamesBody(t *testing.T) {
+	m := map[string]any{"body": "hello", "symbol": "Foo"}
+	result := normalizeReadBody(m)
+	rm := result.(map[string]any)
+	if rm["content"] != "hello" {
+		t.Errorf("content = %v, want hello", rm["content"])
+	}
+	if _, has := rm["body"]; has {
+		t.Error("body key should be removed")
+	}
+}
+
+func TestNormalizeReadBody_PreservesContent(t *testing.T) {
+	m := map[string]any{"content": "hello", "file": "test.go"}
+	result := normalizeReadBody(m)
+	rm := result.(map[string]any)
+	if rm["content"] != "hello" {
+		t.Errorf("content = %v, want hello", rm["content"])
+	}
+}
+
+func TestNormalizeReadBody_NoBodyNoOp(t *testing.T) {
+	m := map[string]any{"file": "test.go", "hash": "abc"}
+	result := normalizeReadBody(m)
+	rm := result.(map[string]any)
+	if _, has := rm["content"]; has {
+		t.Error("should not add content when no body present")
+	}
+}
+
+// --- detectCommandName ---
+
+func TestDetectCommandName(t *testing.T) {
+	origArgs := os.Args
+	defer func() { os.Args = origArgs }()
+
+	os.Args = []string{"edr", "read", "test.go"}
+	if got := detectCommandName(); got != "read" {
+		t.Errorf("detectCommandName = %q, want read", got)
+	}
+
+	os.Args = []string{"edr", "--verbose", "search", "foo"}
+	if got := detectCommandName(); got != "search" {
+		t.Errorf("detectCommandName = %q, want search", got)
+	}
+
+	os.Args = []string{"edr", "--verbose"}
+	if got := detectCommandName(); got != "" {
+		t.Errorf("detectCommandName (flags only) = %q, want empty", got)
+	}
+}

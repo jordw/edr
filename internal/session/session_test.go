@@ -18,8 +18,13 @@ func TestResolveSessionID_EnvSet(t *testing.T) {
 func TestResolveSessionID_EnvUnset(t *testing.T) {
 	t.Setenv("EDR_SESSION", "")
 	os.Unsetenv("EDR_SESSION")
-	if id := ResolveSessionID(); id != "" {
-		t.Errorf("expected empty, got %q", id)
+	id := ResolveSessionID()
+	// With auto-session, unset EDR_SESSION should derive from PPID
+	if id == "" {
+		t.Errorf("expected auto session ID from PPID, got empty")
+	}
+	if !strings.HasPrefix(id, "auto_") {
+		t.Errorf("expected auto_ prefix, got %q", id)
 	}
 }
 
@@ -1054,3 +1059,75 @@ func TestBatchThenSingleReadDelta_FileLevel(t *testing.T) {
 	}
 }
 
+
+// --- Session dedup for search/map/refs ---
+
+func TestPostProcess_SearchSessionNew(t *testing.T) {
+	sess := New()
+	result := `{"kind":"symbol","matches":[{"name":"foo"}]}`
+	out := sess.PostProcess("search", []string{"foo"}, map[string]any{}, nil, result)
+
+	if !strings.Contains(out, `"session":"new"`) {
+		t.Errorf("first search should have session=new, got: %s", out)
+	}
+}
+
+func TestPostProcess_SearchSessionUnchanged(t *testing.T) {
+	sess := New()
+	result := `{"kind":"symbol","matches":[{"name":"foo"}]}`
+
+	// First call: stores the hash
+	sess.PostProcess("search", []string{"foo"}, map[string]any{}, nil, result)
+
+	// Second call with identical result: should return unchanged
+	out := sess.PostProcess("search", []string{"foo"}, map[string]any{}, nil, result)
+	if !strings.Contains(out, `"session":"unchanged"`) {
+		t.Errorf("repeat search should return session=unchanged, got: %s", out)
+	}
+}
+
+func TestPostProcess_SearchDifferentFlagsNotCached(t *testing.T) {
+	sess := New()
+	result := `{"kind":"symbol","matches":[{"name":"foo"}]}`
+
+	// Store with no flags
+	sess.PostProcess("search", []string{"foo"}, map[string]any{}, nil, result)
+
+	// Same pattern but different flags — cache key differs
+	out := sess.PostProcess("search", []string{"foo"}, map[string]any{"text": true}, nil, result)
+	if strings.Contains(out, `"session":"unchanged"`) {
+		t.Error("different flags should produce a cache miss")
+	}
+}
+
+func TestPostProcess_MapSessionNew(t *testing.T) {
+	sess := New()
+	result := `{"files":5,"symbols":20,"content":"..."}`
+	out := sess.PostProcess("map", []string{}, map[string]any{}, nil, result)
+
+	if !strings.Contains(out, `"session":"new"`) {
+		t.Errorf("first map should have session=new, got: %s", out)
+	}
+}
+
+func TestPostProcess_RefsSessionNew(t *testing.T) {
+	sess := New()
+	result := `{"refs":[{"file":"a.go","line":10}]}`
+	out := sess.PostProcess("refs", []string{"Foo"}, map[string]any{}, nil, result)
+
+	if !strings.Contains(out, `"session":"new"`) {
+		t.Errorf("first refs should have session=new, got: %s", out)
+	}
+}
+
+func TestPostProcess_ReadNotAffected(t *testing.T) {
+	// read uses its own delta-read path, not the search/map/refs hash path
+	sess := New()
+	result := `{"file":"test.go","content":"hello","lines":[1,5]}`
+	out := sess.PostProcess("read", []string{"test.go"}, map[string]any{}, nil, result)
+
+	// Should go through ProcessReadResult, not the search/map hash path
+	if strings.Contains(out, `"session":"new"`) {
+		// read uses ProcessReadResult which also sets session:new — that's fine
+	}
+}

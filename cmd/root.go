@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 
@@ -38,21 +37,40 @@ func Execute() {
 		if se, ok := err.(silentError); ok {
 			os.Exit(se.ExitCode())
 		}
-		// Emit structured JSON error to stdout for machine-friendly parsing.
-		// Keep non-zero exit code for shell chaining.
-		errJSON, _ := json.Marshal(err.Error())
-		fmt.Fprintf(os.Stdout, "{\"ok\":false,\"error\":%s}\n", errJSON)
+		// Detect command name from os.Args for structured error output.
+		cmdName := detectCommandName()
+		output.ErrorEnvelope(cmdName, "command_error", err.Error())
 		os.Exit(1)
 	}
 }
 
+// detectCommandName extracts the subcommand name from os.Args.
+func detectCommandName() string {
+	for _, arg := range os.Args[1:] {
+		if len(arg) > 0 && arg[0] != '-' {
+			return arg
+		}
+	}
+	return ""
+}
+
+var verbose bool
+
 func init() {
 	rootCmd.PersistentFlags().String("root", ".", "repository root directory")
+	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "emit diagnostics to stderr")
+
+	// Hide auto-generated commands from help output
+	rootCmd.CompletionOptions.HiddenDefaultCmd = true
+	rootCmd.SetHelpCommand(&cobra.Command{Hidden: true})
 }
+
+// Verbose returns true if --verbose was set.
+func Verbose() bool { return verbose }
 
 // openAndEnsureIndex opens the DB and bootstraps the index if it does not exist yet.
 func openAndEnsureIndex(cmd *cobra.Command) (*index.DB, error) {
-	return openDB(cmd, false)
+	return openDB(cmd, !verbose)
 }
 
 func openDB(cmd *cobra.Command, quiet bool) (*index.DB, error) {

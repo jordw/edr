@@ -595,16 +595,10 @@ func TestWriteRefusesEmptyOverwrite(t *testing.T) {
 		t.Fatalf("file was clobbered: %q", string(data))
 	}
 
-	// With --force, should succeed
-	_, err = dispatch.Dispatch(ctx, db, "write", []string{"main.go"}, map[string]any{
-		"force": true,
-	})
-	if err != nil {
-		t.Fatalf("write with --force should succeed: %v", err)
-	}
-	data, _ = os.ReadFile(goFile)
-	if string(data) != "" {
-		t.Fatalf("expected empty file with --force, got: %q", string(data))
+	// Empty write on non-empty file should always error now (--force removed)
+	_, err = dispatch.Dispatch(ctx, db, "write", []string{"main.go"}, map[string]any{})
+	if err == nil {
+		t.Fatalf("empty write on non-empty file should error")
 	}
 }
 
@@ -1381,5 +1375,121 @@ func TestSymbolNotFoundHintForUnindexedFile(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "gitignored") {
 		t.Errorf("expected 'gitignored' in error, got: %v", err)
+	}
+}
+
+// --- Signatures on non-container returns error ---
+
+func TestReadSymbol_SignaturesOnFunction_ReturnsError(t *testing.T) {
+	tmp := t.TempDir()
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc Execute() {\n\tfmt.Println(\"hi\")\n}\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	index.IndexRepo(ctx, db)
+	output.SetRoot(db.Root())
+
+	_, err = dispatch.Dispatch(ctx, db, "read", []string{"main.go:Execute"}, map[string]any{"signatures": true})
+	if err == nil {
+		t.Fatal("expected error for --signatures on a function")
+	}
+	if !strings.Contains(err.Error(), "not a container") {
+		t.Errorf("error should mention 'not a container', got: %v", err)
+	}
+}
+
+// --- Default budget on search/map ---
+
+func TestSearch_DefaultBudgetApplied(t *testing.T) {
+	tmp := t.TempDir()
+	// Create enough files to exceed 2000 tokens if unbounded
+	for i := 0; i < 50; i++ {
+		name := fmt.Sprintf("file%d.go", i)
+		content := fmt.Sprintf("package main\n\nfunc Handler%d() {\n\t// handler implementation %d\n}\n", i, i)
+		os.WriteFile(filepath.Join(tmp, name), []byte(content), 0644)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	index.IndexRepo(ctx, db)
+	output.SetRoot(db.Root())
+
+	// Search without --budget or --full: should apply default cap
+	result, err := dispatch.Dispatch(ctx, db, "search", []string{"Handler"}, map[string]any{})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+
+	data, _ := json.Marshal(result)
+	if len(data) > 20000 {
+		t.Errorf("search without budget should be capped, got %d bytes", len(data))
+	}
+}
+
+func TestSearch_FullBypassesDefaultBudget(t *testing.T) {
+	tmp := t.TempDir()
+	for i := 0; i < 10; i++ {
+		name := fmt.Sprintf("file%d.go", i)
+		content := fmt.Sprintf("package main\n\nfunc Handler%d() {}\n", i)
+		os.WriteFile(filepath.Join(tmp, name), []byte(content), 0644)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	index.IndexRepo(ctx, db)
+	output.SetRoot(db.Root())
+
+	// With --full, no default budget
+	result, err := dispatch.Dispatch(ctx, db, "search", []string{"Handler"}, map[string]any{"full": true})
+	if err != nil {
+		t.Fatalf("search --full: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+}
+
+func TestRead_NoBudgetCapByDefault(t *testing.T) {
+	tmp := t.TempDir()
+	// Create a file larger than 2000 tokens
+	var content strings.Builder
+	content.WriteString("package main\n\n")
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&content, "func Function%d() {\n\t// implementation %d\n}\n\n", i, i)
+	}
+	os.WriteFile(filepath.Join(tmp, "big.go"), []byte(content.String()), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	index.IndexRepo(ctx, db)
+	output.SetRoot(db.Root())
+
+	// Read without --budget: should NOT truncate (read has no default cap)
+	result, err := dispatch.Dispatch(ctx, db, "read", []string{"big.go"}, map[string]any{})
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", result)
+	}
+	if trunc, _ := m["truncated"].(bool); trunc {
+		t.Error("read should NOT truncate by default — only search/map have default budget cap")
 	}
 }

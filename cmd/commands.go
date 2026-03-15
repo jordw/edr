@@ -25,10 +25,11 @@ func init() {
 	rootCmd.AddCommand(renameCmd)
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(initCmd)
+	setupCmd.Hidden = true
 	rootCmd.AddCommand(setupCmd)
 }
 
-// dispatchCmd is the common pattern: open DB, dispatch, print result.
+// dispatchCmd is the common pattern: open DB, dispatch, wrap in envelope, print.
 // Loads a file-backed session when EDR_SESSION is set.
 func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	flags := extractFlags(cmd)
@@ -43,20 +44,13 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	sess, saveSess := session.LoadSession(edrDir)
 	defer saveSess()
 
+	env := output.NewEnvelope(cmdName)
+
 	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
 	if err != nil {
-		var nfErr *dispatch.NotFoundError
-		if errors.As(err, &nfErr) {
-			data, _ := json.Marshal(map[string]any{"ok": false, "error": nfErr})
-			output.Print(json.RawMessage(data))
-			return nil
-		}
-		if ambErr := asAmbiguousError(err); ambErr != nil {
-			data, _ := json.Marshal(map[string]any{"ok": false, "error": ambErr})
-			output.Print(json.RawMessage(data))
-			return nil
-		}
-		return err
+		addDispatchError(env, err)
+		output.PrintEnvelope(env)
+		return nil
 	}
 
 	// Apply session post-processing (delta reads, body dedup)
@@ -64,12 +58,16 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	if marshalErr == nil {
 		processed := sess.PostProcess(cmdName, args, flags, result, string(data))
 		if processed != string(data) {
-			output.Print(json.RawMessage(processed))
-			return nil
+			var postResult any
+			json.Unmarshal([]byte(processed), &postResult)
+			result = postResult
 		}
 	}
 
-	output.Print(result)
+	opID := cmdName[:1] + "0"
+	env.AddOp(opID, cmdName, result)
+	env.ComputeOK()
+	output.PrintEnvelope(env)
 	return nil
 }
 
@@ -101,20 +99,13 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	sess, saveSess := session.LoadSession(edrDir)
 	defer saveSess()
 
+	env := output.NewEnvelope(cmdName)
+
 	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
 	if err != nil {
-		var nfErr *dispatch.NotFoundError
-		if errors.As(err, &nfErr) {
-			data, _ := json.Marshal(map[string]any{"ok": false, "error": nfErr})
-			output.Print(json.RawMessage(data))
-			return nil
-		}
-		if ambErr := asAmbiguousError(err); ambErr != nil {
-			data, _ := json.Marshal(map[string]any{"ok": false, "error": ambErr})
-			output.Print(json.RawMessage(data))
-			return nil
-		}
-		return err
+		addDispatchError(env, err)
+		output.PrintEnvelope(env)
+		return nil
 	}
 
 	// Apply session post-processing
@@ -122,12 +113,16 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	if marshalErr == nil {
 		processed := sess.PostProcess(cmdName, args, flags, result, string(data))
 		if processed != string(data) {
-			output.Print(json.RawMessage(processed))
-			return nil
+			var postResult any
+			json.Unmarshal([]byte(processed), &postResult)
+			result = postResult
 		}
 	}
 
-	output.Print(result)
+	opID := cmdName[:1] + "0"
+	env.AddOp(opID, cmdName, result)
+	env.ComputeOK()
+	output.PrintEnvelope(env)
 	return nil
 }
 
@@ -236,3 +231,28 @@ var verifyCmd = &cobra.Command{
 }
 
 func init() { cmdspec.RegisterFlags(verifyCmd.Flags(), "verify") }
+
+// addDispatchError converts a dispatch error into a structured envelope error
+// with optional metadata (candidates, suggestion).
+func addDispatchError(env *output.Envelope, err error) {
+	var nfErr *dispatch.NotFoundError
+	if errors.As(err, &nfErr) {
+		opErr := output.OpError{Code: "not_found", Message: nfErr.Error()}
+		if nfErr.Hint != "" {
+			opErr.Suggestion = nfErr.Hint
+		}
+		env.OK = false
+		env.Errors = append(env.Errors, opErr)
+		return
+	}
+	if ambErr := asAmbiguousError(err); ambErr != nil {
+		opErr := output.OpError{Code: "ambiguous_symbol", Message: ambErr.Error}
+		for _, c := range ambErr.Candidates {
+			opErr.Candidates = append(opErr.Candidates, c)
+		}
+		env.OK = false
+		env.Errors = append(env.Errors, opErr)
+		return
+	}
+	env.AddError("command_error", err.Error())
+}

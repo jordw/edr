@@ -5,9 +5,10 @@ import (
 	"fmt"
 
 	"github.com/jordw/edr/internal/index"
-	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/search"
 )
+
+const defaultSearchBudget = 2000
 
 func runRepoMap(ctx context.Context, db *index.DB, flags map[string]any) (any, error) {
 	var opts []index.RepoMapOption
@@ -23,42 +24,38 @@ func runRepoMap(ctx context.Context, db *index.DB, flags map[string]any) (any, e
 	if grep := flagString(flags, "grep", ""); grep != "" {
 		opts = append(opts, index.WithGrep(grep))
 	}
+	if lang := flagString(flags, "lang", ""); lang != "" {
+		opts = append(opts, index.WithLang(lang))
+	}
 	// Hide locals by default; pass --locals to include them
 	if !flagBool(flags, "locals", false) {
 		opts = append(opts, index.WithHideLocals())
 	}
 
-	// Pass budget into RepoMap for early-stop rendering,
-	// then do a final truncation pass for exact budget fit.
+	// Apply default budget unless --budget specified or --full
 	budget := flagInt(flags, "budget", 0)
+	if budget == 0 && !flagBool(flags, "full", false) {
+		budget = defaultSearchBudget
+	}
 	if budget > 0 {
 		opts = append(opts, index.WithBudget(budget))
 	}
 
-	repoMap, stats, err := index.RepoMap(ctx, db, opts...)
+	_, stats, err := index.RepoMap(ctx, db, opts...)
 	if err != nil {
 		return nil, err
-	}
-
-	truncated := stats.Truncated
-	if budget > 0 {
-		size := len(repoMap) / 4
-		if size > budget {
-			chars := budget * 4
-			repoMap, truncated = output.TruncateAtLine(repoMap, chars)
-		}
 	}
 
 	result := map[string]any{
 		"files":     stats.TotalFiles,
 		"symbols":   stats.TotalSymbols,
-		"map":       repoMap,
-		"truncated": truncated,
+		"content":   stats.Files,
+		"truncated": stats.Truncated,
 	}
-	if truncated {
+	if stats.Truncated {
 		result["shown_files"] = stats.ShownFiles
 		result["shown_symbols"] = stats.ShownSymbols
-		result["hint"] = "use --dir, --type, or --grep to narrow scope"
+		result["hint"] = "use --dir, --type, --lang, or --grep to narrow scope"
 	}
 	return result, nil
 }
@@ -68,7 +65,10 @@ func runSearch(ctx context.Context, db *index.DB, args []string, flags map[strin
 		return nil, fmt.Errorf("search requires a non-empty pattern")
 	}
 	budget := flagInt(flags, "budget", 0)
-	showBody := flagBool(flags, "body", false)
+	if budget == 0 && !flagBool(flags, "full", false) {
+		budget = defaultSearchBudget
+	}
+	showBody := flagBool(flags, "body", true) // body on by default for agent use
 	limit := flagInt(flags, "limit", 0)
 	return search.SearchSymbol(ctx, db, args[0], budget, showBody, limit)
 }
@@ -78,6 +78,9 @@ func runSearchText(ctx context.Context, db *index.DB, args []string, flags map[s
 		return nil, fmt.Errorf("search requires a non-empty pattern")
 	}
 	budget := flagInt(flags, "budget", 0)
+	if budget == 0 && !flagBool(flags, "full", false) {
+		budget = defaultSearchBudget
+	}
 	useRegex := flagBool(flags, "regex", false)
 	var opts []search.SearchTextOption
 	if inc := flagStringSlice(flags, "include"); len(inc) > 0 {
