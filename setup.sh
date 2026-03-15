@@ -87,5 +87,5 @@ echo "==> Indexing $TARGET..."
 "$INSTALL_DIR/edr" init -r "$TARGET" 2>/dev/null | head -1
 echo ""
 echo "==> Done. edr is ready."
-echo "    CLI:  edr -r $TARGET <command>"
-echo "    Session:  edr --session \$PPID -r $TARGET do '{...}'"
+echo "    CLI:    edr -r $TARGET <command>"
+echo "    Server: edr -r $TARGET serve --stdio"

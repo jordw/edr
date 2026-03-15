@@ -4,13 +4,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev)
 
-Coding agents waste most of their context on content they never use. They read entire files to find one function, grep then re-read every match, and edit files one at a time with no verification.
+Coding agents spend most of their context on content they don't need. They read entire files to find one function, grep then re-read every match, and edit files one at a time with no verification.
 
 edr indexes your codebase by symbol so agents can read exactly what they need. It batches multiple operations into single requests and tracks what the agent has already seen, so repeated reads return diffs instead of full content.
 
 ## Before and after
 
-Adding a retry parameter to a scheduler. Without edr, 8 tool calls:
+Adding a retry parameter to a scheduler takes 8 tool calls without edr:
 
 ```
 Read src/scheduler.py              # 35KB whole file for one class
@@ -59,7 +59,7 @@ Individual CLI commands (`edr read`, `edr search`, etc.) also work standalone wi
 
 ## Benchmarks
 
-Each baseline reproduces how agents interact with standard tool-calling interfaces: `Read` returns whole files, `Grep` returns unstructured line matches, edits require a separate read-then-write. All numbers are median bytes of structured output across 3 iterations. Scenarios defined in [`bench/scenarios/`](bench/scenarios/).
+Baselines reproduce how agents use standard tool-calling interfaces: `Read` returns whole files, `Grep` returns unstructured line matches, edits need a separate read-then-write. All numbers are median response bytes across 3 iterations. Scenarios defined in [`bench/scenarios/`](bench/scenarios/).
 
 6 real-world repos, 9 scenarios each:
 
@@ -108,6 +108,21 @@ go install github.com/jordw/edr@latest
 ```
 
 edr stores its index in `.edr/` at the repo root. Add `.edr/` to your `.gitignore`. The index rebuilds automatically if deleted.
+
+To make an agent use edr, add instructions to whatever file your agent reads at startup (e.g., `CLAUDE.md`, `.cursorrules`, `AGENTS.md`). At minimum:
+
+```markdown
+Use `edr serve --stdio` for all file operations instead of built-in Read/Edit/Grep/Glob tools.
+Start the server once, then send NDJSON requests on stdin.
+
+# Read a symbol
+{"request_id":"1","reads":[{"file":"src/main.go","symbol":"Server"}]}
+
+# Edit + verify
+{"request_id":"2","edits":[{"file":"src/main.go","old_text":"old","new_text":"new"}],"verify":true}
+```
+
+This repo's own [CLAUDE.md](CLAUDE.md) is a complete working example with the full command reference.
 
 ## CLI reference
 
