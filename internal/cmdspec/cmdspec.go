@@ -48,11 +48,13 @@ type Spec struct {
 	MaxArgs    int      // cobra max args (-1 = unlimited)
 	StdinKey   string   // non-empty = command reads content from stdin under this flag name
 	FileScoped bool     // first arg is a file path (enables DispatchMulti parallelism)
+	Internal   bool     // not a public command (no cobra registration, dispatch-only)
 	Flags      []FlagSpec
 
-	// BatchFields are extra JSON keys accepted in batch mode beyond Flags.
-	// Structural fields (file, symbol) and aliases (body for write) go here.
-	BatchFields []string
+	// CompatFields are JSON keys accepted in batch mode that are not public CLI flags.
+	// Includes: structural fields (file, symbol), deprecated flags (depth, symbols),
+	// and aliases (body for write content). These are not registered as cobra flags.
+	CompatFields []string
 
 	// Session behavior flags — which post-processing stages apply.
 	DiffEdit  bool // slim edit responses (stores large diffs for retrieval)
@@ -63,19 +65,19 @@ type Spec struct {
 // Registry is the canonical list of all edr commands.
 var Registry = []*Spec{
 	{
-		Name: "read", Desc: "Read file or symbol. Supports file:symbol syntax, --signatures, --skeleton.",
+		Name: "read", Desc: "Read file or symbol. Use file:symbol for targeted reads.",
 		Category: CatRead, MinArgs: 1, MaxArgs: -1, FileScoped: true,
 		DeltaRead: true, BodyTrack: true,
 		Flags: []FlagSpec{
 			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens"},
 			{Name: "signatures", Type: FlagBool, Default: false, Desc: "Signatures only (75-86% fewer tokens)"},
-			{Name: "skeleton", Type: FlagBool, Default: false, Desc: "Skeleton view: blocks collapsed (one level deeper than signatures)"},
-			{Name: "full", Type: FlagBool, Default: false, Desc: "Force full content (skip delta)"},
+			{Name: "skeleton", Type: FlagBool, Default: false, Desc: "Skeleton view: blocks collapsed"},
+			{Name: "lines", Type: FlagString, Default: "", Desc: "Line range (e.g. 10:50)"},
 		},
-		BatchFields: []string{"file", "symbol", "start_line", "end_line", "depth", "symbols"},
+		CompatFields: []string{"file", "symbol", "start_line", "end_line", "depth", "symbols", "full"},
 	},
 	{
-		Name: "write", Desc: "Create or overwrite file. Supports --after, --inside, --mkdir.",
+		Name: "write", Desc: "Write file. Modes: plain write, --inside container, --after symbol.",
 		Category: CatWrite, MinArgs: 1, MaxArgs: 1, StdinKey: "content", FileScoped: true,
 		Flags: []FlagSpec{
 			{Name: "mkdir", Type: FlagBool, Default: false, Desc: "Create parent dirs"},
@@ -85,7 +87,7 @@ var Registry = []*Spec{
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
 		},
 		// backward-compat JSON fields not in CLI
-		BatchFields: []string{"file", "body", "append", "new_text", "force"},
+		CompatFields: []string{"file", "body", "append", "new_text", "force"},
 	},
 	{
 		Name: "edit", Desc: "Edit file by exact text match, symbol replacement, or line range.",
@@ -100,7 +102,7 @@ var Registry = []*Spec{
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
 			{Name: "expect_hash", Type: FlagString, Default: "", Desc: "Reject edit if file hash doesn't match"},
 		},
-		BatchFields: []string{"file", "symbol"},
+		CompatFields: []string{"file", "symbol"},
 	},
 	{
 		Name: "map", Desc: "Symbol map of repo or file. Filters: dir, glob, type, grep.",
@@ -125,11 +127,11 @@ var Registry = []*Spec{
 			{Name: "context", Type: FlagInt, Default: 0, Desc: "Lines of context"},
 			{Name: "limit", Type: FlagInt, Default: 0, Desc: "Max number of results to return"},
 		},
-		BatchFields: []string{"body", "regex", "no_group"},
+		CompatFields: []string{"body", "regex", "no_group"},
 	},
 	{
-		Name: "explore", Desc: "Symbol body, callers, deps. gather=true bundles callers+tests.",
-		Category: CatRead, MinArgs: 1, MaxArgs: 2, FileScoped: true,
+		Name: "explore", Desc: "Symbol body, callers, deps.",
+		Category: CatRead, MinArgs: 1, MaxArgs: 2, FileScoped: true, Internal: true,
 		DeltaRead: true, BodyTrack: true,
 		Flags: []FlagSpec{
 			{Name: "body", Type: FlagBool, Default: false, Desc: "Include source in results"},
@@ -149,8 +151,8 @@ var Registry = []*Spec{
 		},
 	},
 	{
-		Name: "find", Desc: "Find files by glob (supports **). Returns sizes and mod times.",
-		Category: CatRead, MinArgs: 1, MaxArgs: 1,
+		Name: "find", Desc: "Find files by glob pattern.",
+		Category: CatRead, MinArgs: 1, MaxArgs: 1, Internal: true,
 		Flags: []FlagSpec{
 			{Name: "dir", Type: FlagString, Default: "", Desc: "Filter by directory"},
 			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens"},
@@ -162,7 +164,7 @@ var Registry = []*Spec{
 		Flags: []FlagSpec{
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
 		},
-		BatchFields: []string{"old_name", "new_name"},
+		CompatFields: []string{"old_name", "new_name"},
 	},
 	{
 		Name: "reindex", Desc: "Force re-index the repository.",
@@ -262,11 +264,11 @@ func flagNames(name string) map[string]bool {
 	if s == nil {
 		return nil
 	}
-	m := make(map[string]bool, len(s.Flags)+len(s.BatchFields))
+	m := make(map[string]bool, len(s.Flags)+len(s.CompatFields))
 	for _, f := range s.Flags {
 		m[f.Name] = true
 	}
-	for _, k := range s.BatchFields {
+	for _, k := range s.CompatFields {
 		m[k] = true
 	}
 	return m
@@ -306,7 +308,7 @@ func QueryBatchKeys() map[string]bool {
 			for _, f := range s.Flags {
 				m[f.Name] = true
 			}
-			for _, k := range s.BatchFields {
+			for _, k := range s.CompatFields {
 				m[k] = true
 			}
 		}

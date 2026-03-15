@@ -21,12 +21,8 @@ func init() {
 	rootCmd.AddCommand(editCmd)
 	rootCmd.AddCommand(mapCmd)
 	rootCmd.AddCommand(searchCmd)
-	exploreCmd.Hidden = true
-	rootCmd.AddCommand(exploreCmd)
 	rootCmd.AddCommand(refsCmd)
 	rootCmd.AddCommand(renameCmd)
-	findCmd.Hidden = true
-	rootCmd.AddCommand(findCmd)
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(setupCmd)
@@ -140,7 +136,7 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 // =====================================================================
 
 var readCmd = &cobra.Command{
-	Use:   "read <file> [start] [end] | <file> <symbol> | <file>:<symbol> ...",
+	Use:   "read <file>[:<symbol>] [<file>...] [flags]",
 	Short: ToolDesc["read"],
 	Args:  cobra.MinimumNArgs(1),
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "read", args) },
@@ -188,15 +184,6 @@ var searchCmd = &cobra.Command{
 
 func init() { cmdspec.RegisterFlags(searchCmd.Flags(), "search") }
 
-var exploreCmd = &cobra.Command{
-	Use:   "explore [file] <symbol>",
-	Short: ToolDesc["explore"],
-	Args:  cobra.RangeArgs(1, 2),
-	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "explore", args) },
-}
-
-func init() { cmdspec.RegisterFlags(exploreCmd.Flags(), "explore") }
-
 var refsCmd = &cobra.Command{
 	Use:   "refs [file] <symbol>",
 	Short: ToolDesc["refs"],
@@ -215,15 +202,7 @@ var renameCmd = &cobra.Command{
 
 func init() { cmdspec.RegisterFlags(renameCmd.Flags(), "rename") }
 
-var findCmd = &cobra.Command{
-	Use:   "find <pattern>",
-	Short: ToolDesc["find"],
-	Args:  cobra.ExactArgs(1),
-	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "find", args) },
-}
-
 func init() {
-	cmdspec.RegisterFlags(findCmd.Flags(), "find")
 	cmdspec.RegisterFlags(initCmd.Flags(), "reindex")
 	initCmd.Flags().String("cpuprofile", "", "Write CPU profile to file")
 	initCmd.Flags().MarkHidden("cpuprofile")

@@ -34,7 +34,8 @@ type doRead struct {
 	Symbol     string `json:"symbol,omitempty"`
 	Budget     *int   `json:"budget,omitempty"`
 	Signatures *bool  `json:"signatures,omitempty"`
-	Skeleton   *bool  `json:"skeleton,omitempty"`
+	Skeleton   *bool   `json:"skeleton,omitempty"`
+	Lines      string `json:"lines,omitempty"`
 	Depth      *int   `json:"depth,omitempty"`
 	StartLine  *int   `json:"start_line,omitempty"`
 	EndLine    *int   `json:"end_line,omitempty"`
@@ -256,6 +257,9 @@ func executeReads(ctx context.Context, db *index.DB, sess *session.Session, p *d
 		}
 		if r.Skeleton != nil && *r.Skeleton {
 			readFlags["skeleton"] = true
+		}
+		if r.Lines != "" {
+			readFlags["lines"] = r.Lines
 		}
 		if r.Depth != nil {
 			readFlags["depth"] = *r.Depth

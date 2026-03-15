@@ -520,9 +520,13 @@ func parseBatchArgs(args []string) (*batchState, error) {
 
 // parseLineRange parses "N-M" into start and end line numbers.
 func parseLineRange(s string) (int, int, error) {
-	parts := strings.SplitN(s, "-", 2)
+	sep := "-"
+	if strings.Contains(s, ":") {
+		sep = ":"
+	}
+	parts := strings.SplitN(s, sep, 2)
 	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("expected N-M format, got %q", s)
+		return 0, 0, fmt.Errorf("expected start:end format, got %q", s)
 	}
 	start, err := strconv.Atoi(parts[0])
 	if err != nil {

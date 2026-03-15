@@ -131,18 +131,31 @@ func (e *relPathError) Unwrap() error { return e.wrapped }
 //	read file.go:sym file2.go:sym2     → batch-read (multiple file:symbol)
 func runReadUnified(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) == 0 {
-		return nil, fmt.Errorf("read requires at least 1 argument: <file> [start] [end], [file] <symbol>, or <file>:<symbol> ...")
+		return nil, fmt.Errorf("read requires at least 1 argument: <file>, <file>:<symbol>, or multiple files")
 	}
 
-	// Multiple args: check if it's a line range or batch
+	// Enforce --signatures and --skeleton are mutually exclusive
+	if flagBool(flags, "signatures", false) && flagBool(flags, "skeleton", false) {
+		return nil, fmt.Errorf("--signatures and --skeleton are mutually exclusive")
+	}
+
+	// --lines flag: parse "start:end" into start_line/end_line flags
+	if linesStr := flagString(flags, "lines", ""); linesStr != "" {
+		start, end, err := parseColonRange(linesStr)
+		if err != nil {
+			return nil, fmt.Errorf("--lines: %w", err)
+		}
+		flags["start_line"] = start
+		flags["end_line"] = end
+	}
+
+	// Multiple args: check if it is a line range (compat) or batch
 	if len(args) > 1 {
-		// 2-3 args where second is numeric → file read with line range
+		// 2-3 args where second is numeric → file read with line range (compat)
 		if _, err := strconv.Atoi(args[1]); err == nil {
 			return runReadFile(ctx, db, root, args, flags)
 		}
-		// 2 args, second non-numeric, no colons → file+symbol or batch?
-		// If the second arg looks like a file path (has a path separator or
-		// a recognized file extension), treat both as batch read.
+		// 2 args, second non-numeric, no colons → file+symbol (compat) or batch
 		if len(args) == 2 && !strings.Contains(args[0], ":") && !strings.Contains(args[1], ":") {
 			if looksLikeFilePath(args[1]) {
 				return runBatchRead(ctx, db, root, args, flags)
@@ -153,20 +166,17 @@ func runReadUnified(ctx context.Context, db *index.DB, root string, args []strin
 		return runBatchRead(ctx, db, root, args, flags)
 	}
 
-	// Single arg with colon → file:symbol
+	// Single arg with colon → file:symbol (canonical syntax)
 	arg := args[0]
 	if idx := strings.LastIndex(arg, ":"); idx > 0 && idx < len(arg)-1 {
-		// Ensure it's not a Windows drive letter (C:\...)
 		suffix := arg[idx+1:]
 		if _, err := strconv.Atoi(suffix); err != nil {
-			// Non-numeric after colon → symbol
 			return runReadSymbol(ctx, db, root, []string{arg[:idx], suffix}, flags)
 		}
 	}
 
-	// Single arg: try as file first, fall back to symbol if it doesn't look like a path
+	// Single arg: try as file first, fall back to symbol if it does not look like a path
 	if !looksLikeFilePath(arg) && !strings.Contains(arg, "/") {
-		// Check if file actually exists on disk before trying symbol resolution
 		resolved, resolveErr := db.ResolvePath(arg)
 		if resolveErr != nil {
 			return runReadSymbol(ctx, db, root, args, flags)
@@ -176,6 +186,27 @@ func runReadUnified(ctx context.Context, db *index.DB, root string, args []strin
 		}
 	}
 	return runReadFile(ctx, db, root, args, flags)
+}
+
+// parseColonRange parses "start:end" into two ints.
+func parseColonRange(s string) (int, int, error) {
+	sep := ":"
+	if !strings.Contains(s, ":") {
+		sep = "-" // also accept N-M for compat
+	}
+	parts := strings.SplitN(s, sep, 2)
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("expected start:end format, got %q", s)
+	}
+	start, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid start %q", parts[0])
+	}
+	end, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid end %q", parts[1])
+	}
+	return start, end, nil
 }
 
 // runWriteUnified routes to write-file, append-file, or insert-after based on flags.
@@ -189,26 +220,31 @@ func runWriteUnified(ctx context.Context, db *index.DB, root string, args []stri
 	}
 
 	insideSymbol := flagString(flags, "inside", "")
-	if insideSymbol != "" {
-		return runInsertInside(ctx, db, root, args[0], insideSymbol, flags)
-	}
-	if _, hasInside := flagLookup(flags, "inside"); hasInside && insideSymbol == "" {
-		return nil, fmt.Errorf("write --inside requires a non-empty container name")
-	}
-
 	afterSymbol := flagString(flags, "after", "")
-	if afterSymbol != "" {
+	appendMode := flagBool(flags, "append", false)
+
+	// Enforce: --after and --append are mutually exclusive top-level modes.
+	// --inside may combine with --after (insert inside container after a child).
+	if afterSymbol != "" && appendMode {
+		return nil, fmt.Errorf("write: --after and --append are mutually exclusive")
+	}
+	if insideSymbol == "" && afterSymbol != "" && appendMode {
+		return nil, fmt.Errorf("write: --after and --append are mutually exclusive")
+	}
+	if appendMode && insideSymbol != "" {
+		return nil, fmt.Errorf("write: --append and --inside are mutually exclusive")
+	}
+
+	switch {
+	case insideSymbol != "":
+		return runInsertInside(ctx, db, root, args[0], insideSymbol, flags)
+	case afterSymbol != "":
 		return runInsertAfter(ctx, db, root, []string{args[0], afterSymbol}, flags)
-	}
-	if _, hasAfter := flagLookup(flags, "after"); hasAfter && afterSymbol == "" {
-		return nil, fmt.Errorf("write --after requires a non-empty symbol name")
-	}
-
-	if flagBool(flags, "append", false) {
+	case appendMode:
 		return runAppendFile(ctx, db, root, args, flags)
+	default:
+		return runWriteFile(ctx, db, root, args, flags)
 	}
-
-	return runWriteFile(ctx, db, root, args, flags)
 }
 
 // runMapUnified routes to repo-map or symbols based on args.
