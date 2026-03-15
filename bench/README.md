@@ -7,7 +7,7 @@
 | `runtime_test.go` | Runtime | Wall time, allocations, DB size for individual commands | `go test ./bench/ -bench . -benchmem` |
 | `context_test.go` | Context efficiency | Workflow response sizes, regression gates | `go test ./bench/ -run 'Test(ResponseSize\|Signatures)' -v` |
 | `correctness_test.go` | Correctness | Ambiguous symbols, refs precision, rename safety, edit+reindex | `go test ./bench/ -run TestCorrectness -v` |
-| `session_bench_test.go` | Session lifecycle | 55-call multi-language session with trace validation | `go test ./bench/ -run TestSessionMultiLang -v` |
+| `session_bench_test.go` | Session lifecycle | 55-call multi-language session with in-memory session and trace validation | `go test ./bench/ -run TestSessionMultiLang -v` |
 | `scenario_test.go` | Scenario validation | JSON scenario schema/routing validation | `go test ./bench/ -run TestScenarioDispatch -v` |
 | `native_comparison.sh` | Shell comparison | edr vs native tools (Read/Grep/Glob) on real repos | `bash bench/native_comparison.sh bench/scenarios/fixture.json` |
 

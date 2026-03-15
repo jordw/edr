@@ -7,21 +7,16 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"runtime/pprof"
-	"strings"
 
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
-	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
-	"github.com/jordw/edr/internal/session"
-	"github.com/jordw/edr/internal/trace"
 	"github.com/spf13/cobra"
 )
 
 func init() {
-	rootCmd.AddCommand(doCmd)
+	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(readCmd)
 	rootCmd.AddCommand(writeCmd)
 	rootCmd.AddCommand(editCmd)
@@ -36,69 +31,25 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 }
 
-var doCmd = &cobra.Command{
-	Use:   "do [json]",
-	Short: "Execute a batched operation",
-	Long: `Accepts a JSON object with reads, queries, edits, writes, renames,
-verify, and init — all in one call. Reads JSON from the first argument or stdin.
+// dispatchCmd is the common pattern: open DB, dispatch, print result.
+// If a running serve socket is available, proxies through it for session
+// benefits. Otherwise falls back to ephemeral dispatch.
+func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
+	flags := extractFlags(cmd)
 
-JSON can also be passed directly to the root command (edr '{...}').
-
-Example:
-  edr '{"reads":[{"file":"src/main.go","symbol":"Server"}]}'
-  edr do '{"reads":[{"file":"src/main.go","symbol":"Server"}]}'
-  echo '{"edits":[{"file":"f.go","old_text":"x","new_text":"y"}],"verify":true}' | edr`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		db, err := openAndEnsureIndex(cmd)
-		if err != nil {
-			return err
-		}
-		defer db.Close()
-
-		var raw json.RawMessage
-		if len(args) > 0 {
-			raw = json.RawMessage(args[0])
-		} else {
-			data, err := io.ReadAll(os.Stdin)
-			if err != nil {
-				return fmt.Errorf("reading stdin: %w", err)
-			}
-			raw = json.RawMessage(data)
-		}
-
-		sess, err := openSession(cmd, db)
-		if err != nil {
-			return err
-		}
-		defer sess.Close()
-		edrDir := filepath.Join(db.Root(), ".edr")
-		tc := trace.NewCollector(edrDir, Version+"+"+BuildHash)
-		defer tc.Close()
-		ctx := context.Background()
-		text, err := handleDo(ctx, db, sess, tc, raw)
-		if err != nil {
-			return err
-		}
-
-		var out any
-		if err := json.Unmarshal([]byte(text), &out); err != nil {
-			fmt.Println(text)
-		} else {
-			output.Print(out)
-		}
-		return nil
-	},
-}
-
-// dispatchWithSession runs a command through the session post-processing pipeline.
-func dispatchWithSession(db *index.DB, sess *session.Session, cmdName string, args []string, flags map[string]any) error {
-	if cmdspec.ModifiesState(cmdName) {
-		sess.InvalidateForEdit(cmdName, args)
+	// Proxy through running server if available
+	if sockPath := findSocket(cmd); sockPath != "" {
+		return proxyCmd(cmd, sockPath, cmdName, args, flags)
 	}
+
+	db, err := openAndEnsureIndex(cmd)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
 
 	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
 	if err != nil {
-		// Surface structured errors as JSON instead of bare strings
 		var nfErr *dispatch.NotFoundError
 		if errors.As(err, &nfErr) {
 			data, _ := json.Marshal(map[string]any{"ok": false, "error": nfErr})
@@ -112,62 +63,35 @@ func dispatchWithSession(db *index.DB, sess *session.Session, cmdName string, ar
 		}
 		return err
 	}
-
-	data, _ := json.Marshal(result)
-	text := string(data)
-
-	// Apply session post-processing (slim edits, delta reads, body stripping)
-	text = sess.PostProcess(cmdName, args, flags, result, text)
-
-	// Working-set dedup for read commands
-	if cmdspec.IsRead(cmdName) {
-		key := sess.CacheKey(cmdName, args, flags)
-		if sess.Check(key, text) {
-			text = fmt.Sprintf(`{"cached":true,"message":"identical to previous response for %s %s"}`, cmdName, strings.Join(args, " "))
-		}
-	}
-
-	// Print the post-processed result
-	var out any
-	if err := json.Unmarshal([]byte(text), &out); err != nil {
-		output.Print(result)
-	} else {
-		output.Print(out)
-	}
+	output.Print(result)
 	return nil
-}
-
-// dispatchCmd is the common pattern: open DB, dispatch, post-process.
-func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
-	db, err := openAndEnsureIndex(cmd)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	sess, err := openSession(cmd, db)
-	if err != nil {
-		return err
-	}
-	defer sess.Close()
-	flags := extractFlags(cmd)
-	return dispatchWithSession(db, sess, cmdName, args, flags)
 }
 
 // dispatchCmdWithStdin is like dispatchCmd but reads stdin into a flag first.
 func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, stdinKey string) error {
-	db, err := openAndEnsureIndex(cmd)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	sess, err := openSession(cmd, db)
-	if err != nil {
-		return err
-	}
-	defer sess.Close()
 	flags := extractFlags(cmd)
+
+	// Proxy through running server if available (check before stdin read —
+	// proxy doesn't need stdin fallback and it breaks without a pipe).
+	if sockPath := findSocket(cmd); sockPath != "" {
+		// Still need stdin if no content flag was provided
+		hasContent := false
+		for _, key := range []string{stdinKey, "content", "new_text", "body"} {
+			if _, ok := flags[key]; ok {
+				hasContent = true
+				break
+			}
+		}
+		if !hasContent {
+			// Best-effort stdin read; skip if not piped
+			stat, _ := os.Stdin.Stat()
+			if (stat.Mode() & os.ModeCharDevice) == 0 {
+				_ = readStdinToFlags(flags, stdinKey)
+			}
+		}
+		return proxyCmd(cmd, sockPath, cmdName, args, flags)
+	}
+
 	// If any content-equivalent flag was provided on CLI, skip stdin.
 	// An explicitly-set empty string (e.g. --new_text '') is a valid value
 	// (deletion), so we check existence in the map, not emptiness.
@@ -183,7 +107,30 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 			return err
 		}
 	}
-	return dispatchWithSession(db, sess, cmdName, args, flags)
+
+	db, err := openAndEnsureIndex(cmd)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
+	if err != nil {
+		var nfErr *dispatch.NotFoundError
+		if errors.As(err, &nfErr) {
+			data, _ := json.Marshal(map[string]any{"ok": false, "error": nfErr})
+			output.Print(json.RawMessage(data))
+			return nil
+		}
+		if ambErr := asAmbiguousError(err); ambErr != nil {
+			data, _ := json.Marshal(map[string]any{"ok": false, "error": ambErr})
+			output.Print(json.RawMessage(data))
+			return nil
+		}
+		return err
+	}
+	output.Print(result)
+	return nil
 }
 
 // =====================================================================
@@ -305,7 +252,7 @@ var initCmd = &cobra.Command{
 var editPlanCmd = &cobra.Command{
 	Use:   "edit-plan",
 	Short: ToolDesc["plan"],
-	Long:  ToolDesc["plan"] + "\n\nBatch equivalent: edr do with edits array and optional verify.",
+	Long:  ToolDesc["plan"] + "\n\nBatch equivalent: edr serve with edits array and optional verify.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
@@ -313,11 +260,6 @@ var editPlanCmd = &cobra.Command{
 		}
 		defer db.Close()
 
-		sess, err := openSession(cmd, db)
-		if err != nil {
-			return err
-		}
-		defer sess.Close()
 		flags := extractFlags(cmd)
 		editsStr, _ := cmd.Flags().GetString("edits")
 		if editsStr != "" {
@@ -346,7 +288,23 @@ var editPlanCmd = &cobra.Command{
 			}
 		}
 
-		return dispatchWithSession(db, sess, "edit-plan", args, flags)
+		result, err := dispatch.Dispatch(context.Background(), db, "edit-plan", args, flags)
+		if err != nil {
+			var nfErr *dispatch.NotFoundError
+			if errors.As(err, &nfErr) {
+				data, _ := json.Marshal(map[string]any{"ok": false, "error": nfErr})
+				output.Print(json.RawMessage(data))
+				return nil
+			}
+			if ambErr := asAmbiguousError(err); ambErr != nil {
+				data, _ := json.Marshal(map[string]any{"ok": false, "error": ambErr})
+				output.Print(json.RawMessage(data))
+				return nil
+			}
+			return err
+		}
+		output.Print(result)
+		return nil
 	},
 }
 

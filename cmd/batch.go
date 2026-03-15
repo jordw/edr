@@ -15,7 +15,7 @@ import (
 	"github.com/jordw/edr/internal/trace"
 )
 
-// doParams holds the parsed params for edr_do.
+// doParams holds the parsed params for batch operations (edr serve).
 type doParams struct {
 	Reads         []doRead   `json:"reads"`
 	Queries       []doQuery  `json:"queries"`
@@ -41,7 +41,7 @@ type doRead struct {
 	Full       *bool  `json:"full,omitempty"`
 }
 
-// doQuery is a generalized read-only command for use in edr_do.
+// doQuery is a generalized read-only command for use in batch operations.
 // Cmd selects the operation: search, explore, refs, map, find, diff, read (default).
 type doQuery struct {
 	Cmd string `json:"cmd"` // search, explore, refs, map, find, diff, read
@@ -587,7 +587,7 @@ func buildSummary(p *doParams, editsFailed bool, writeResults []writeResult) *su
 	return s
 }
 
-// handleDo dispatches edr_do (batch reads/queries/edits/writes/renames/verify).
+// handleDo dispatches batch operations (reads/queries/edits/writes/renames/verify).
 func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trace.Collector, raw json.RawMessage) (string, error) {
 	ctx = index.WithSourceCache(ctx)
 
@@ -631,7 +631,7 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 
 	if !hasInit && !hasReads && !hasQueries && !hasEdits && !hasWrites && !hasRenames && !hasVerify {
 		resp := &doResponse{
-			Error:    "edr_do requires at least one of: reads, queries, edits, writes, renames, verify, init",
+			Error:    "request requires at least one of: reads, queries, edits, writes, renames, verify, init",
 			Warnings: warnings,
 		}
 		if len(resp.Warnings) == 0 {

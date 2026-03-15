@@ -4,19 +4,19 @@ import "github.com/jordw/edr/internal/cmdspec"
 
 // toolinfo.go — tool descriptions and parameter help text.
 // ToolDesc is derived from the canonical registry in cmdspec.
-// ParamDesc merges registry-derived descriptions with batch-only entries.
+// ParamDesc merges registry-derived descriptions with serve-mode entries.
 
 // ToolDesc holds the description for each tool.
 var ToolDesc = func() map[string]string {
 	m := cmdspec.ToolDescs()
-	// Extra entries not in the registry (aliases / batch-only).
-	m["plan"] = "Batch edits with dry-run preview. Use edr for full read/query/edit/write workflows."
-	m["do"] = "Batch reads, queries, edits, writes, renames, verify, init."
+	// Extra entries not in the registry (aliases / serve-only).
+	m["plan"] = "Batch edits with dry-run preview. Use edr serve for full read/query/edit/write workflows."
+	m["serve"] = "Persistent stdio server for NDJSON batch operations."
 	return m
 }()
 
 // ParamDesc holds parameter descriptions for CLI help text.
-// Most entries are derived from cmdspec; batch-only and structural fields are added here.
+// Most entries are derived from cmdspec; serve-mode and structural fields are added here.
 var ParamDesc = func() map[string]string {
 	m := cmdspec.ParamDescs()
 	// Structural / shared fields not tied to a specific command.
@@ -29,7 +29,7 @@ var ParamDesc = func() map[string]string {
 	m["new_name"] = "New name"
 	m["start_line"] = "Start line"
 	m["end_line"] = "End line"
-	// Batch-only (edr do) fields.
+	// Serve-mode (edr serve) batch fields.
 	m["reads"] = "Read queries: [{file, symbol?, budget?, signatures?, depth?}]"
 	m["queries"] = "Any query: [{cmd: search|explore|refs|map|find|diff, ...params}]"
 	m["edits"] = "Atomic edits: [{file, old_text, new_text}] or [{file, symbol, new_text}] or [{file, start_line, end_line, new_text}] or [{file, move, after/before}]. Supports regex, all flags."

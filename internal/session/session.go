@@ -44,9 +44,6 @@ type Session struct {
 	ContentOrder  int                     `json:"content_order"`
 	SeenBodies    map[string]string       `json:"seen_bodies"`
 
-	// filePath is set for file-backed sessions. Empty = in-memory only.
-	filePath string
-
 	// stats tracks optimization hits per handleDo call (reset between calls).
 	stats PostProcessStats
 }

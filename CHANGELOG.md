@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.0 — 2026-03-14
+
+### Breaking changes
+
+- **`edr do` replaced by `edr serve --stdio`** — persistent NDJSON stdio server replaces one-shot batch CLI. Sessions are now connection-scoped (process lifetime) instead of file-backed with PPID hacking. Requests use the same JSON shape but wrapped in a `{request_id, ...}` envelope.
+- **Session persistence removed** — `--session`, `--no-session` flags, `edr session list/clear/gc` subcommands, and `.edr/sessions/` directory are all gone. Single commands use ephemeral in-memory sessions. Persistent sessions live for the `edr serve` process lifetime.
+- **JSON-on-root removed** — `edr '{...}'` no longer routes to batch mode. Use `edr serve --stdio` instead.
+
+### Features
+
+- **Stdio server** (`edr serve --stdio`) — persistent NDJSON server with connection-scoped sessions. Control messages: `ping`/`pong`, `status`, `shutdown`.
+- **Protocol envelope** — every request has `request_id` (required) and optional `control`; every response has `request_id`, `ok`, and optional `error`.
+
 ## v0.1.0 — 2026-03-09
 
 Initial open source release.
