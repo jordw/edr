@@ -8,13 +8,12 @@ A CLI tool that gives coding agents (Claude, Copilot, Cursor, etc.) symbol-level
 
 edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-sitter/), stores a symbol index in SQLite, and exposes it through a batch-friendly CLI. Agents get symbol-scoped reads, structured search, atomic multi-file edits, and session-aware deduplication. Most tasks collapse into one or two calls.
 
-**91-98% less context across 6 real-world repos. 63% fewer tool calls.** ([benchmarks](#benchmarks))
+**91-98% less context across 6 real-world repos** ([benchmarks](#benchmarks))
 
 ## Who is this for?
 
-- **Agent users** — drop [CLAUDE.md](CLAUDE.md) into your project and your agent starts using edr automatically. Works with any agent that can run shell commands.
-- **Agent framework builders** — integrate edr as the file-access layer. All output is structured JSON. Batch interface (`edr do`) handles complete read-edit-verify workflows in one call.
-- **Developers** — use edr directly for symbol-aware grep, codebase maps, and impact analysis. It works as a better `ctags` + `grep` even without an agent.
+- **Coding agent users** — Claude Code, Codex, Cursor, and similar tools. Install edr, add its commands to your agent's system prompt, and it uses less context, makes fewer calls, and gets structured results.
+- **Agent builders** — a file-access layer that speaks JSON and handles batching, sessions, and symbol resolution out of the box.
 
 ## Install
 
@@ -76,8 +75,6 @@ Each call can mix **reads** (files, symbols, signatures, depth), **queries** (se
 
 Individual commands also work standalone — `edr read`, `edr search`, `edr edit`, etc. See the [CLI reference](#cli-reference) below.
 
-For the full agent-facing reference, see [CLAUDE.md](CLAUDE.md).
-
 ## How it works
 
 edr runs tree-sitter over every source file, extracts symbols (functions, classes, structs, etc.) with their byte ranges, and stores them in a SQLite index. At query time, agents get exactly what they need:
@@ -92,28 +89,20 @@ edr runs tree-sitter over every source file, extracts symbols (functions, classe
 
 ### Context efficiency
 
-edr combines several mechanisms to minimize context usage:
-
 | Technique | What it does |
 |---|---|
-| Hash-chained edits | Each read/edit returns a file hash; pass it as `expect_hash` to reject stale writes |
-| Incremental indexing | Content hashes skip re-parsing unchanged files |
 | Session delta reads | Re-reading a file returns `{unchanged}` or a diff, not the full content |
-| Body dedup | Repeated symbol bodies in search/explore are replaced with `"[in context]"` |
+| Body dedup | Repeated symbol bodies in search/explore replaced with `"[in context]"` |
 | Slim edit responses | Small diffs inline; large diffs summarized with on-demand retrieval |
+| Hash-chained edits | Reads/edits return a file hash; pass `expect_hash` to reject stale writes |
+| Atomic multi-file edits | Grouped edits validate in memory, write atomically, reindex in one batch |
 | Parallel batching | Independent reads/queries in one call run concurrently |
-| Parallel text search | Files searched concurrently with smart budget trimming (context → line truncation → match cap) |
-| Atomic multi-file edits | Grouped edits validate in memory, write via temp-file rename, reindex in one batch |
-| TOCTOU guard | File hash revalidated before writing; external modifications detected and aborted |
-| Mutation status | Every edit/write returns `status` ("applied", "applied_index_stale") for trustworthy automation |
-| Change summary | Mutation responses include `summary` with counts, status, and actionable `hints` |
-| Auto-sessions | PPID-based sessions by default; `--no-session` to disable |
-| Parse-tree caching | Repeated tree-sitter parses reuse cached ASTs keyed by content fingerprint |
-| Freshness metadata | Read responses include `mtime` so agents can see file age without extra calls |
+
+Sessions are PPID-based and automatic — `--no-session` to disable.
 
 ### Local data
 
-edr stores all data in `.edr/` at the repo root (gitignored). This includes the symbol index (`index.db`), session files (`sessions/`), and traces (`traces.db`). Sessions are automatic (PPID-based) — delta reads, body dedup, and slim edits work out of the box. Delete `.edr/` at any time to reset.
+edr stores all data in `.edr/` at the repo root (gitignored): symbol index (`index.db`), session files (`sessions/`), and traces (`traces.db`). Delete `.edr/` at any time to reset.
 
 ## CLI reference
 
@@ -147,7 +136,7 @@ edr can read and edit any text file regardless of language support.
 
 ## Benchmarks
 
-Benchmarked against simulated Read/Edit/Grep/Glob workflows (the tools agents use without edr) across 6 real-world repos — 9 scenarios each, 3 iterations, median bytes:
+Benchmarked against simulated baseline workflows that model how agents typically use Read/Edit/Grep/Glob (e.g., reading a whole file to get one function, grepping then reading each matched file). 6 real-world repos, 9 scenarios each, 3 iterations, median response bytes:
 
 | Repo | Language | Without edr | With edr | Savings |
 |---|---|---|---|---|
@@ -179,7 +168,7 @@ orient (`map`), edit function, add method (`--inside`), multi-file read, explore
 
 </details>
 
-Reproduce: `bash bench/run_real_repo_benchmarks.sh` (clones repos to `/tmp`, ~5 min).
+Reproduce: `bash bench/run_real_repo_benchmarks.sh` (clones repos to `/tmp`, ~5 min). Baseline workflows and edr equivalents are defined in [`bench/scenarios/`](bench/scenarios/) — inspect them to judge fairness.
 
 ## Project structure
 
@@ -198,12 +187,14 @@ internal/
 bench/         benchmarks and multi-language test suite
 ```
 
-## How edr differs from...
+## How edr compares
 
-- **ripgrep / grep** — text search only, no symbol awareness, no structured output. edr's `search` returns symbols with scores, types, and optional bodies; `refs` filters false positives via import analysis.
-- **ctags / etags** — symbol index but no reads, edits, batching, or session dedup. edr is the index *and* the access layer.
-- **LSP** — designed for interactive editors, not batch agents. Requires a running server per language. edr is a single binary that handles 13 languages and works in stateless CLI calls.
-- **Built-in agent tools (Read/Edit/Grep/Glob)** — work file-at-a-time with no symbol awareness. edr reads one function instead of one file, batches operations, and deduplicates across a session.
+| Tool | Strengths | What edr adds |
+|---|---|---|
+| **ripgrep / grep** | Fast, universal, zero setup | Text-only — no symbol awareness, no structured output. edr adds symbol scoping and import-aware ref filtering |
+| **ctags / etags** | Mature symbol indexing, wide editor support | Index only — no reads, edits, batching, or session state. edr is the index *and* the access layer |
+| **LSP** | Deep per-language semantics, refactoring support | Designed for interactive editors. Requires a running server per language. edr is a single stateless binary across 13 languages |
+| **Built-in agent tools** (Read/Edit/Grep/Glob) | No setup, always available | File-at-a-time with no symbol awareness. edr reads one function instead of one file, batches operations, and deduplicates across a session |
 
 ## Contributing
 
