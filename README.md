@@ -10,20 +10,20 @@ edr indexes your codebase by symbol and lets agents read exactly what they need,
 
 ## Before and after
 
-Adding a retry parameter to a scheduler. Without edr (8 tool calls, ~180KB of context):
+Adding a retry parameter to a scheduler. Without edr, 8 tool calls:
 
 ```bash
-Read src/scheduler.py              # 14KB, whole file for one class
+Read src/scheduler.py              # 35KB, whole file for one class
 Grep "retry" src/                  # file:line list, no structure
-Read src/config.py                 # 11KB, whole file for one function
-Read src/worker.py                 # 9KB, whole file for the API shape
-Read src/retry.py                  # 6KB, whole file for one call site
+Read src/config.py                 # 22KB, whole file for one function
+Read src/worker.py                 # 18KB, whole file for the API shape
+Read src/retry.py                  # 12KB, whole file for one call site
 Edit src/scheduler.py              # old_text/new_text, no verification
 Read src/scheduler.py              # re-read to confirm the edit took
 Run "python -m pytest"             # separate verify step
 ```
 
-With edr (2 calls, ~8KB of context):
+With edr, 2 calls:
 
 ```bash
 # Call 1: gather exactly what's needed
@@ -52,11 +52,9 @@ edr do '{
 }'
 ```
 
-Symbol reads return the function or class asked for, not the whole file. `--signatures` returns a container's public API without implementation bodies (75-86% smaller). Refs are import-aware. Multi-file edits are atomic and auto-reindex. Sessions track what's already in context so repeated reads return diffs instead of full content.
-
 ## Benchmarks
 
-Baselines model how agents use built-in tools: `Read` returns whole files, `Grep` returns line matches without symbol context, edits require a separate read-then-write. Both baselines and edr equivalents are defined in [`bench/scenarios/`](bench/scenarios/).
+Baselines model how agents use built-in tools: `Read` returns whole files, `Grep` returns line matches without symbol context, edits require a separate read-then-write. Scenarios are defined in [`bench/scenarios/`](bench/scenarios/).
 
 6 real-world repos, 9 scenarios each, 3 iterations, median response bytes:
 
@@ -136,20 +134,7 @@ All output is structured JSON. Token budgets (`--budget N`) cap any response to 
 
 ## Batch interface
 
-Individual commands work standalone, but the batch interface is how agents typically use edr, gathering context and making changes in minimal round trips:
-
-```bash
-edr do '{
-  "reads": [{"file": "src/scheduler.py", "symbol": "Scheduler", "signatures": true}],
-  "queries": [{"cmd": "search", "pattern": "retry", "body": true}],
-  "edits": [{"file": "src/scheduler.py", "old_text": "old", "new_text": "new"}],
-  "writes": [{"file": "tests/test_retry.py", "content": "...", "mkdir": true}],
-  "renames": [{"old_name": "OldFunc", "new_name": "NewFunc", "dry_run": true}],
-  "verify": true
-}'
-```
-
-A single `edr do` call can mix **reads**, **queries** (search, map, explore, refs, find, diff), **edits** (old_text/new_text, symbol replacement, regex, move), **writes** (create, append, insert inside a class), **renames** (cross-file, import-aware), and **verify** (build/test).
+Individual commands work standalone, but `edr do` is how agents typically use edr. It batches any combination of **reads**, **queries** (search, map, explore, refs, find, diff), **edits** (old_text/new_text, symbol replacement, regex, move), **writes** (create, append, insert inside a class), **renames** (cross-file, import-aware), and **verify** (build/test) into a single call. The before/after example above shows the typical two-call pattern: gather context, then mutate and verify.
 
 ## How edr compares
 
