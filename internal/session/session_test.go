@@ -8,30 +8,29 @@ import (
 
 // --- ResolveSessionID ---
 
-func TestResolveSessionID_EnvOverride(t *testing.T) {
-	t.Setenv("EDR_SESSION", "my-explicit-session")
-	id := ResolveSessionID()
-	if id != "my-explicit-session" {
-		t.Errorf("expected explicit session ID, got %q", id)
+func TestResolveSessionID_EnvSet(t *testing.T) {
+	t.Setenv("EDR_SESSION", "my-session")
+	if id := ResolveSessionID(); id != "my-session" {
+		t.Errorf("expected 'my-session', got %q", id)
 	}
 }
 
-func TestResolveSessionID_AutoPPID(t *testing.T) {
+func TestResolveSessionID_EnvUnset(t *testing.T) {
 	t.Setenv("EDR_SESSION", "")
 	os.Unsetenv("EDR_SESSION")
-	id := ResolveSessionID()
-	if !strings.HasPrefix(id, "ppid-") {
-		t.Errorf("expected ppid-based session ID, got %q", id)
+	if id := ResolveSessionID(); id != "" {
+		t.Errorf("expected empty, got %q", id)
 	}
 }
 
-func TestResolveSessionID_Deterministic(t *testing.T) {
-	t.Setenv("EDR_SESSION", "")
+func TestHasSession(t *testing.T) {
+	t.Setenv("EDR_SESSION", "abc")
+	if !HasSession() {
+		t.Error("expected HasSession=true when EDR_SESSION is set")
+	}
 	os.Unsetenv("EDR_SESSION")
-	id1 := ResolveSessionID()
-	id2 := ResolveSessionID()
-	if id1 != id2 {
-		t.Errorf("same process should get same session ID: %q != %q", id1, id2)
+	if HasSession() {
+		t.Error("expected HasSession=false when EDR_SESSION is unset")
 	}
 }
 

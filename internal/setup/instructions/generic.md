@@ -1,6 +1,6 @@
 # edr: use for all file operations
 
-Use `edr` for reading, editing, searching, and navigating code. It gives you structured JSON output, token budgets, and symbol-aware operations. Fully local — no network required. Sessions are automatic — re-reading unchanged files returns `{unchanged: true}`.
+Use `edr` for reading, editing, searching, and navigating code. It gives you structured JSON output, token budgets, and symbol-aware operations. Fully local — no network required. If edr output includes `session_hint`, run that command once to enable delta reads across calls.
 
 ## Quick reference
 

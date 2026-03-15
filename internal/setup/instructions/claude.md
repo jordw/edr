@@ -1,6 +1,6 @@
 # edr: use for all file operations
 
-**Use `edr` via Bash instead of Read, Edit, Write, Grep, and Glob.** It gives you structured JSON output, token budgets, and symbol-aware operations that raw file tools can't match. Sessions are automatic — re-reading unchanged files returns `{unchanged: true}`.
+**Use `edr` via Bash instead of Read, Edit, Write, Grep, and Glob.** It gives you structured JSON output, token budgets, and symbol-aware operations that raw file tools can't match. If edr output includes `session_hint`, run that command once to enable delta reads across calls.
 
 **Use batch flags for all operations:**
 

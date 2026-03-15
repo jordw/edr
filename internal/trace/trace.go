@@ -162,6 +162,9 @@ func NewCollector(edrDir, version string) *Collector {
 	}
 
 	sessionID := session.ResolveSessionID()
+	if sessionID == "" {
+		sessionID = fmt.Sprintf("anon-%d", time.Now().UnixNano())
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, _ = db.Exec("INSERT OR IGNORE INTO sessions (id, started_at, edr_version) VALUES (?, ?, ?)",
 		sessionID, now, version)
