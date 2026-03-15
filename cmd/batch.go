@@ -969,15 +969,10 @@ func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
 		if q.Context != nil {
 			flags["context"] = *q.Context
 		}
-		// Default group=true for text search via batch (saves tokens by grouping matches by file)
-		isTextSearch := (q.Text != nil && *q.Text) ||
-			(q.Regex != nil && *q.Regex) ||
-			q.Include != nil || q.Exclude != nil ||
-			(q.Context != nil && *q.Context > 0)
-		if q.Group != nil && *q.Group {
-			flags["group"] = true
-		} else if isTextSearch && q.Group == nil {
-			flags["group"] = true
+		// Grouping is now default in dispatch for text search.
+		// Only pass no_group if explicitly disabled.
+		if q.Group != nil && !*q.Group {
+			flags["no_group"] = true
 		}
 
 	case "explore":

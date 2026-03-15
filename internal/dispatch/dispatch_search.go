@@ -88,8 +88,9 @@ func runSearchText(ctx context.Context, db *index.DB, args []string, flags map[s
 		return nil, err
 	}
 
-	// Group text results by file for compact output
-	if flagBool(flags, "group", false) && result.Kind == "text" && len(result.Matches) > 0 {
+	// Group text results by file for compact output (default on, --no-group to disable)
+	noGroup := flagBool(flags, "no_group", false) || flagBool(flags, "no-group", false)
+	if !noGroup && result.Kind == "text" && len(result.Matches) > 0 {
 		return groupTextResults(result), nil
 	}
 	return result, nil
@@ -106,12 +107,24 @@ type groupedLine struct {
 	Column  int     `json:"column,omitempty"`
 	Text    string  `json:"text"`
 	Snippet string  `json:"snippet,omitempty"`
-	Score   float64 `json:"score"`
+	Score   float64 `json:"score,omitempty"`
 }
 
 func groupTextResults(result *search.SearchResult) map[string]any {
 	fileOrder := []string{}
 	groups := map[string]*groupedFileMatch{}
+
+	// Check if all scores are uniform — if so, omit them (no information value)
+	uniformScore := len(result.Matches) > 0
+	if uniformScore {
+		first := result.Matches[0].Score
+		for _, m := range result.Matches[1:] {
+			if m.Score != first {
+				uniformScore = false
+				break
+			}
+		}
+	}
 
 	for _, m := range result.Matches {
 		f := m.Symbol.File
@@ -122,13 +135,16 @@ func groupTextResults(result *search.SearchResult) map[string]any {
 			fileOrder = append(fileOrder, f)
 		}
 		g.Count++
-		g.Matches = append(g.Matches, groupedLine{
+		gl := groupedLine{
 			Line:    m.Symbol.Lines[0],
 			Column:  m.Column,
 			Text:    m.Symbol.Name,
 			Snippet: m.Snippet,
-			Score:   m.Score,
-		})
+		}
+		if !uniformScore {
+			gl.Score = m.Score
+		}
+		g.Matches = append(g.Matches, gl)
 	}
 
 	resultGroups := make([]groupedFileMatch, 0, len(fileOrder))
@@ -136,14 +152,17 @@ func groupTextResults(result *search.SearchResult) map[string]any {
 		resultGroups = append(resultGroups, *groups[f])
 	}
 
-	return map[string]any{
+	out := map[string]any{
 		"kind":          "text_grouped",
 		"files":         resultGroups,
 		"total_files":   len(fileOrder),
 		"total_matches": result.TotalMatches,
 		"truncated":     result.Truncated,
-		"hint":          result.Hint,
 	}
+	if result.Hint != "" {
+		out["hint"] = result.Hint
+	}
+	return out
 }
 
 func runFindFiles(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {

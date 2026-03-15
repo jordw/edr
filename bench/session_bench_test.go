@@ -165,8 +165,9 @@ func TestSessionMultiLang(t *testing.T) {
 
 	t.Run("search/text_cross_lang", func(t *testing.T) {
 		// "retry" is a concept in every language's code
+		// Text search defaults to grouped output (key is "files", not "matches")
 		out := handleDoJSON(t, ctx, db, sess, tc, "search", []string{"retry"}, map[string]any{"text": true, "budget": 300})
-		assertJSONHas(t, out, "matches")
+		assertJSONHas(t, out, "files")
 	})
 
 	t.Run("search/body_dedup", func(t *testing.T) {

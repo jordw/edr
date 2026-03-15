@@ -491,30 +491,27 @@ func TestDoQueryToMultiCmd_InferredReturnValue(t *testing.T) {
 	}
 }
 
-func TestDoQueryToMultiCmd_TextSearchDefaultsGroupTrue(t *testing.T) {
+func TestDoQueryToMultiCmd_TextSearchGrouping(t *testing.T) {
 	pattern := "TODO"
 	textTrue := true
 
-	// Text search without explicit group should default to group=true
+	// Text search without explicit group: grouping is now default in dispatch,
+	// so batch should NOT set any group flag (dispatch handles the default)
 	q := doQuery{Cmd: "search", Pattern: &pattern, Text: &textTrue}
 	mc, _ := doQueryToMultiCmd(q)
-	if mc.Flags["group"] != true {
-		t.Error("text search should default group=true via batch")
+	if _, ok := mc.Flags["group"]; ok {
+		t.Error("text search should not set group flag (default is in dispatch)")
+	}
+	if _, ok := mc.Flags["no_group"]; ok {
+		t.Error("text search should not set no_group flag by default")
 	}
 
-	// Symbol search (no text flag) should NOT default group
-	q2 := doQuery{Cmd: "search", Pattern: &pattern}
-	mc2, _ := doQueryToMultiCmd(q2)
-	if _, ok := mc2.Flags["group"]; ok {
-		t.Error("symbol search should not default group=true")
-	}
-
-	// Explicit group=false (Group set to non-nil false) should not override
+	// Explicit group=false should pass no_group=true to dispatch
 	groupFalse := false
-	q3 := doQuery{Cmd: "search", Pattern: &pattern, Text: &textTrue, Group: &groupFalse}
-	mc3, _ := doQueryToMultiCmd(q3)
-	if mc3.Flags["group"] == true {
-		t.Error("explicit group=false should not be overridden")
+	q2 := doQuery{Cmd: "search", Pattern: &pattern, Text: &textTrue, Group: &groupFalse}
+	mc2, _ := doQueryToMultiCmd(q2)
+	if mc2.Flags["no_group"] != true {
+		t.Error("explicit group=false should set no_group=true")
 	}
 }
 

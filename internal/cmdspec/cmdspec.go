@@ -133,7 +133,7 @@ var Registry = []*Spec{
 			{Name: "include", Type: FlagStringSlice, Default: []string(nil), Desc: "File glob(s) to include"},
 			{Name: "exclude", Type: FlagStringSlice, Default: []string(nil), Desc: "File glob(s) to exclude"},
 			{Name: "context", Type: FlagInt, Default: 0, Desc: "Lines of context"},
-			{Name: "group", Type: FlagBool, Default: false, Desc: "Group text search results by file"},
+			{Name: "no_group", Type: FlagBool, Default: false, Desc: "Disable grouping text results by file (grouped by default)"},
 		},
 	},
 	{
