@@ -4,11 +4,17 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev)
 
-Coding agents burn through context reading entire files to find one function, making three round trips to change one line, and grepping symbols into walls of unstructured text.
+A CLI tool that gives coding agents (Claude, Copilot, Cursor, etc.) symbol-level access to your codebase — so they read one function instead of an entire file, make changes in one call instead of three, and get structured results instead of walls of text.
 
-edr fixes this. It parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-sitter/), stores a symbol index in SQLite, and gives agents exactly what they need: symbol-scoped reads, structured search, and batched mutations. Most tasks collapse into one or two calls.
+edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-sitter/), stores a symbol index in SQLite, and exposes it through a batch-friendly CLI. Agents get symbol-scoped reads, structured search, atomic multi-file edits, and session-aware deduplication. Most tasks collapse into one or two calls.
 
 **91-98% less context across 6 real-world repos. 63% fewer tool calls.** ([benchmarks](#benchmarks))
+
+## Who is this for?
+
+- **Agent users** — drop [CLAUDE.md](CLAUDE.md) into your project and your agent starts using edr automatically. Works with any agent that can run shell commands.
+- **Agent framework builders** — integrate edr as the file-access layer. All output is structured JSON. Batch interface (`edr do`) handles complete read-edit-verify workflows in one call.
+- **Developers** — use edr directly for symbol-aware grep, codebase maps, and impact analysis. It works as a better `ctags` + `grep` even without an agent.
 
 ## Install
 
@@ -16,7 +22,16 @@ edr fixes this. It parses your codebase with [tree-sitter](https://tree-sitter.g
 go install github.com/jordw/edr@latest
 ```
 
-Requires Go 1.25+ and a C compiler (for tree-sitter grammars). edr stores its index in `.edr/` at the repo root — add it to your `.gitignore`.
+Requires Go 1.25+ and a C compiler (for tree-sitter grammars).
+
+For cloud agents and CI environments, the setup script handles everything (installs Go/gcc if needed, builds, adds to PATH):
+
+```bash
+git clone https://github.com/jordw/edr.git
+./edr/setup.sh /path/to/your/project
+```
+
+edr stores its index in `.edr/` at the repo root — add it to your `.gitignore`.
 
 ## Quick start
 
@@ -36,28 +51,30 @@ edr rename oldFunc newFunc --dry-run        # cross-file rename with preview
 
 Agents gather context in one call, then make changes in another:
 
-```
+```bash
 # Call 1: gather all context
-edr(
-  reads: [
-    {file: "lib/scheduler.py", symbol: "Scheduler", signatures: true},
-    {file: "lib/scheduler.py", symbol: "_execute_task"}
+edr do '{
+  "reads": [
+    {"file": "lib/scheduler.py", "symbol": "Scheduler", "signatures": true},
+    {"file": "lib/scheduler.py", "symbol": "_execute_task"}
   ],
-  queries: [
-    {cmd: "search", pattern: "retry", body: true},
-    {cmd: "map", dir: "internal/", type: "function"}
+  "queries": [
+    {"cmd": "search", "pattern": "retry", "body": true},
+    {"cmd": "map", "dir": "internal/", "type": "function"}
   ]
-)
+}'
 
 # Call 2: make changes + verify
-edr(
-  edits: [{file: "lib/scheduler.py", old_text: "self._running = True", new_text: "self._running = False"}],
-  writes: [{file: "lib/scheduler_test.py", content: "...", mkdir: true}],
-  verify: true
-)
+edr do '{
+  "edits": [{"file": "lib/scheduler.py", "old_text": "self._running = True", "new_text": "self._running = False"}],
+  "writes": [{"file": "lib/scheduler_test.py", "content": "...", "mkdir": true}],
+  "verify": true
+}'
 ```
 
 Each call can mix **reads** (files, symbols, signatures, depth), **queries** (search, map, explore, refs, find, diff), **edits** (old_text/new_text, symbol replacement, regex, move), **writes** (create files, append, insert inside a class), **renames** (cross-file, import-aware), and **verify** (build/test after mutations).
+
+Individual commands also work standalone — `edr read`, `edr search`, `edr edit`, etc. See the [CLI reference](#cli-reference) below.
 
 For the full agent-facing reference, see [CLAUDE.md](CLAUDE.md).
 
@@ -115,7 +132,8 @@ edr stores all data in `.edr/` at the repo root (gitignored). This includes the 
 | `edr rename old new --dry-run` | Cross-file, import-aware rename with preview |
 | `edr find "**/*.go"` | Find files by glob pattern |
 | `edr verify` | Run build/test checks (auto-detects Go/npm/Cargo) |
-| `edr '{"reads":[...], "edits":[...], "verify":true}'` | Batched JSON — reads, edits, writes, verify in one call |
+| `edr do '{"reads":[...], "edits":[...], "verify":true}'` | Batched JSON — reads, edits, writes, verify in one call |
+| `edr bench-session` | Score a session's efficiency (delta hits, edit success rate) |
 
 ## Supported languages
 
@@ -180,15 +198,22 @@ internal/
 bench/         benchmarks and multi-language test suite
 ```
 
+## How edr differs from...
+
+- **ripgrep / grep** — text search only, no symbol awareness, no structured output. edr's `search` returns symbols with scores, types, and optional bodies; `refs` filters false positives via import analysis.
+- **ctags / etags** — symbol index but no reads, edits, batching, or session dedup. edr is the index *and* the access layer.
+- **LSP** — designed for interactive editors, not batch agents. Requires a running server per language. edr is a single binary that handles 13 languages and works in stateless CLI calls.
+- **Built-in agent tools (Read/Edit/Grep/Glob)** — work file-at-a-time with no symbol awareness. edr reads one function instead of one file, batches operations, and deduplicates across a session.
+
 ## Contributing
 
-Bug reports and pull requests welcome on [GitHub](https://github.com/jordw/edr/issues).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details. Bug reports and pull requests welcome on [GitHub](https://github.com/jordw/edr/issues).
 
 ### Development setup
 
 ```bash
 git clone https://github.com/jordw/edr.git && cd edr
-go build -o edr .       # build
+go build -o edr .       # build (requires Go 1.25+ and a C compiler)
 go test ./...            # run all tests
 ```
 

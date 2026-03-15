@@ -23,7 +23,7 @@ After changing Go source files, rebuild with `go build -o edr . && go install`.
 ## Reporting bugs
 
 Open an issue with:
-- What you ran (command or MCP call)
+- What you ran (command or `edr do` call)
 - What you expected
 - What actually happened
 - Go version (`go version`) and OS
