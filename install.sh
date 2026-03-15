@@ -142,15 +142,16 @@ echo "==> $(edr --version)"
 # --- Run edr setup on target repo ---
 if [ "$SKIP_SETUP" = false ] && [ -n "$TARGET" ]; then
     TARGET="$(cd "$TARGET" && pwd)"
-    echo "==> Running edr setup on ${TARGET}..."
-    edr setup --root "$TARGET" $AGENT_FLAG
+    echo "==> Setting up ${TARGET}..."
+    edr setup "$TARGET" $AGENT_FLAG
     echo ""
-    echo "==> Done! edr is ready in ${TARGET}"
-    echo "    Usage: edr --root $TARGET <command>"
+    echo "==> Done! edr is ready."
+    echo "    cd $TARGET && edr map       # explore the codebase"
+    echo "    cd $TARGET && edr read ...  # read files and symbols"
 elif [ "$SKIP_SETUP" = false ]; then
     echo ""
-    echo "==> Done! edr is installed."
-    echo "    Set up a project: edr setup /path/to/your/project"
+    echo "==> No git repo detected in current directory."
+    echo "    To set up a project: cd /your/project && edr setup ."
 else
     echo ""
     echo "==> Done! edr is installed."

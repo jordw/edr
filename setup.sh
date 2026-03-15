@@ -57,7 +57,7 @@ if ! command -v go &>/dev/null; then
     fi
 fi
 
-# --- Check gcc/g++ (needed for tree-sitter CGO and HCL grammar) ---
+# --- Check gcc/g++ (needed for tree-sitter CGO) ---
 if ! command -v gcc &>/dev/null || ! command -v g++ &>/dev/null; then
     echo "==> C/C++ compiler not found. Attempting install..."
     if command -v apt-get &>/dev/null; then
@@ -73,21 +73,23 @@ if ! command -v gcc &>/dev/null || ! command -v g++ &>/dev/null; then
 fi
 
 # --- Build ---
-echo "==> Building edr..."
+echo "==> Building edr (first build compiles tree-sitter grammars, may take 60s)..."
 cd "$REPO_DIR"
 # Distro Go may be older than go.mod requires; let Go download the right version
 export GOTOOLCHAIN=auto
 BUILD_HASH=$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_VERSION=$(git -C "$REPO_DIR" describe --tags --always 2>/dev/null || echo "dev")
-go build -ldflags "-X github.com/jordw/edr/cmd.Version=${BUILD_VERSION} -X github.com/jordw/edr/cmd.BuildHash=${BUILD_HASH}" -o edr .
+if ! go build -ldflags "-X github.com/jordw/edr/cmd.Version=${BUILD_VERSION} -X github.com/jordw/edr/cmd.BuildHash=${BUILD_HASH}" -o edr . ; then
+    echo "ERROR: build failed. Check the output above for details."
+    exit 1
+fi
 echo "    built: $REPO_DIR/edr (${BUILD_VERSION}+${BUILD_HASH})"
 
-# --- Install to PATH ---
+# --- Install to PATH (only after successful build) ---
 mkdir -p "$INSTALL_DIR"
 cp "$REPO_DIR/edr" "$INSTALL_DIR/edr"
 echo "    installed: $INSTALL_DIR/edr"
 
-# Ensure ~/.local/bin is in PATH
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     SHELL_RC=""
     if [ -f "$HOME/.zshrc" ]; then
@@ -105,9 +107,19 @@ if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
 fi
 
 # --- Setup target repo (index + inject instructions) ---
-echo "==> Setting up $TARGET..."
-"$INSTALL_DIR/edr" setup --root "$TARGET" $AGENT_FLAG
+echo "==> Indexing and configuring $TARGET..."
+"$INSTALL_DIR/edr" setup "$TARGET" $AGENT_FLAG
+
+# --- Smoke test ---
+SMOKE_OUTPUT=$("$INSTALL_DIR/edr" map --root "$TARGET" --budget 100 2>&1) || true
+if echo "$SMOKE_OUTPUT" | grep -q '"symbols"'; then
+    echo "==> Smoke test passed"
+else
+    echo "==> WARNING: smoke test failed"
+    echo "    $SMOKE_OUTPUT"
+fi
+
 echo ""
 echo "==> Done. edr is ready."
-echo "    CLI:    edr --root $TARGET <command>"
-echo "    Usage:  edr --root $TARGET <command>"
+echo "    cd $TARGET && edr map       # explore the codebase"
+echo "    cd $TARGET && edr read ...  # read files and symbols"
