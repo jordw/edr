@@ -1467,3 +1467,8 @@ func (d *DB) GetContainerAt(ctx context.Context, file string, line int) (*Symbol
 func (d *DB) Root() string {
 	return d.root
 }
+
+// EdrDir returns the .edr directory path (root/.edr).
+func (d *DB) EdrDir() string {
+	return filepath.Join(d.root, ".edr")
+}

@@ -9,7 +9,7 @@ import (
 
 func TestNew(t *testing.T) {
 	s := New()
-	if s.Responses == nil || s.Diffs == nil || s.FileContent == nil || s.SymbolContent == nil || s.SeenBodies == nil {
+	if s.Diffs == nil || s.FileContent == nil || s.SymbolContent == nil || s.SeenBodies == nil {
 		t.Fatal("New() should initialize all maps")
 	}
 	if s.ContentOrder != 0 {
@@ -132,55 +132,17 @@ func TestProcessReadResult_DepthAffectsKey(t *testing.T) {
 	}
 }
 
-// --- Check ---
-
-func TestCheck_FirstCall(t *testing.T) {
-	s := New()
-	if s.Check("k", "response") {
-		t.Error("first call should return false")
-	}
-}
-
-func TestCheck_SameResponse(t *testing.T) {
-	s := New()
-	s.Check("k", "response")
-	if !s.Check("k", "response") {
-		t.Error("same response should return true")
-	}
-}
-
-func TestCheck_DifferentResponse(t *testing.T) {
-	s := New()
-	s.Check("k", "response1")
-	if s.Check("k", "response2") {
-		t.Error("different response should return false")
-	}
-}
-
-func TestCheck_UpdatesHash(t *testing.T) {
-	s := New()
-	s.Check("k", "v1")
-	s.Check("k", "v2")
-	// Now v2 is the stored hash, so v2 should match
-	if !s.Check("k", "v2") {
-		t.Error("should match after update")
-	}
-	if s.Check("k", "v1") {
-		t.Error("old value should no longer match")
-	}
-}
-
 // --- InvalidateFile ---
 
 func TestInvalidateFile(t *testing.T) {
 	s := New()
-	s.Responses["read\x00f.go"] = "hash1"
-	s.Responses["read\x00other.go"] = "hash2"
+	s.FileContent["f.go:[1 5]"] = ContentEntry{Hash: "hash1"}
+	s.FileContent["other.go:[1 5]"] = ContentEntry{Hash: "hash2"}
 	s.InvalidateFile("f.go")
-	if _, ok := s.Responses["read\x00f.go"]; ok {
+	if _, ok := s.FileContent["f.go:[1 5]"]; ok {
 		t.Error("f.go entry should be deleted")
 	}
-	if _, ok := s.Responses["read\x00other.go"]; !ok {
+	if _, ok := s.FileContent["other.go:[1 5]"]; !ok {
 		t.Error("other.go entry should remain")
 	}
 }
@@ -189,20 +151,19 @@ func TestInvalidateFile(t *testing.T) {
 
 func TestInvalidateForEdit_RegularEdit(t *testing.T) {
 	s := New()
-	s.Responses["read\x00f.go"] = "h1"
-	s.Responses["read\x00other.go"] = "h2"
+	s.FileContent["f.go:[1 5]"] = ContentEntry{Hash: "h1"}
+	s.FileContent["other.go:[1 5]"] = ContentEntry{Hash: "h2"}
 	s.InvalidateForEdit("edit", []string{"f.go"})
-	if _, ok := s.Responses["read\x00f.go"]; ok {
+	if _, ok := s.FileContent["f.go:[1 5]"]; ok {
 		t.Error("edited file should be invalidated")
 	}
-	if _, ok := s.Responses["read\x00other.go"]; !ok {
+	if _, ok := s.FileContent["other.go:[1 5]"]; !ok {
 		t.Error("other file should remain")
 	}
 }
 
 func TestInvalidateForEdit_RenameClears(t *testing.T) {
 	s := New()
-	s.Responses["k"] = "v"
 	s.Diffs["f.go"] = "diff"
 	s.FileContent["f.go"] = ContentEntry{Hash: "h"}
 	s.SymbolContent["f.go:foo"] = ContentEntry{Hash: "h"}
@@ -210,26 +171,26 @@ func TestInvalidateForEdit_RenameClears(t *testing.T) {
 
 	s.InvalidateForEdit("rename", []string{"old", "new"})
 
-	if len(s.Responses) != 0 || len(s.Diffs) != 0 || len(s.FileContent) != 0 || len(s.SymbolContent) != 0 || len(s.SeenBodies) != 0 {
+	if len(s.Diffs) != 0 || len(s.FileContent) != 0 || len(s.SymbolContent) != 0 || len(s.SeenBodies) != 0 {
 		t.Error("rename should clear all state")
 	}
 }
 
 func TestInvalidateForEdit_InitClears(t *testing.T) {
 	s := New()
-	s.Responses["k"] = "v"
 	s.SeenBodies["k"] = "h"
+	s.FileContent["k"] = ContentEntry{Hash: "h"}
 	s.InvalidateForEdit("init", nil)
-	if len(s.Responses) != 0 || len(s.SeenBodies) != 0 {
+	if len(s.SeenBodies) != 0 || len(s.FileContent) != 0 {
 		t.Error("init should clear all state")
 	}
 }
 
 func TestInvalidateForEdit_NoArgs(t *testing.T) {
 	s := New()
-	s.Responses["k"] = "v"
+	s.FileContent["k"] = ContentEntry{Hash: "v"}
 	s.InvalidateForEdit("edit", nil)
-	if len(s.Responses) != 1 {
+	if len(s.FileContent) != 1 {
 		t.Error("no args should not invalidate anything")
 	}
 }
@@ -266,13 +227,13 @@ func TestStoreDiff_SmallInline(t *testing.T) {
 	}
 	slim := s.StoreDiff(result, map[string]any{})
 	if slim != nil {
-		t.Fatal("small diff should return nil (inline)")
+		t.Fatal("StoreDiff should always return nil")
 	}
 	if result["lines_changed"] != 2 {
 		t.Errorf("lines_changed = %v, want 2", result["lines_changed"])
 	}
-	if result["diff"] != "-old\n+new\n" {
-		t.Error("small diff should remain in result")
+	if result["diff_available"] != true {
+		t.Error("diff_available should be set")
 	}
 	// Should be stored for GetDiff
 	if s.Diffs["f.go:foo"] != "-old\n+new\n" {
@@ -280,7 +241,7 @@ func TestStoreDiff_SmallInline(t *testing.T) {
 	}
 }
 
-func TestStoreDiff_LargeSlim(t *testing.T) {
+func TestStoreDiff_LargeDiff(t *testing.T) {
 	s := New()
 	var lines []string
 	for i := 0; i < 25; i++ {
@@ -293,23 +254,14 @@ func TestStoreDiff_LargeSlim(t *testing.T) {
 		"old_size": 10, "new_size": 100,
 	}
 	slim := s.StoreDiff(result, map[string]any{})
-	if slim == nil {
-		t.Fatal("large diff should return slim")
+	if slim != nil {
+		t.Error("StoreDiff should always return nil (no slim optimization)")
 	}
-	if _, ok := slim["diff"]; ok {
-		t.Error("slim should not contain diff")
+	if result["lines_changed"] != 25 {
+		t.Errorf("lines_changed = %v, want 25", result["lines_changed"])
 	}
-	if _, ok := slim["old_size"]; ok {
-		t.Error("slim should not contain old_size")
-	}
-	if _, ok := slim["new_size"]; ok {
-		t.Error("slim should not contain new_size")
-	}
-	if slim["lines_changed"] != 25 {
-		t.Errorf("lines_changed = %v, want 25", slim["lines_changed"])
-	}
-	if slim["ok"] != true {
-		t.Error("non-diff fields should be preserved")
+	if result["diff_available"] != true {
+		t.Error("diff_available should be set")
 	}
 }
 
@@ -393,16 +345,16 @@ func TestGetDiff_NoArgs(t *testing.T) {
 
 func TestCheckContent_New(t *testing.T) {
 	s := New()
-	status, old, prev := s.CheckContent("k", "content", false)
-	if status != "new" || old != "" || prev != "" {
-		t.Errorf("got (%s, %q, %q)", status, old, prev)
+	status, prev := s.CheckContent("k", "content", false)
+	if status != "new" || prev != "" {
+		t.Errorf("got (%s, %q)", status, prev)
 	}
 }
 
 func TestCheckContent_Unchanged(t *testing.T) {
 	s := New()
 	s.StoreContent("k", "content", false)
-	status, _, prevHash := s.CheckContent("k", "content", false)
+	status, prevHash := s.CheckContent("k", "content", false)
 	if status != "unchanged" {
 		t.Errorf("got %s, want unchanged", status)
 	}
@@ -414,12 +366,9 @@ func TestCheckContent_Unchanged(t *testing.T) {
 func TestCheckContent_Changed(t *testing.T) {
 	s := New()
 	s.StoreContent("k", "old content", false)
-	status, old, prevHash := s.CheckContent("k", "new content", false)
-	if status != "changed" {
-		t.Errorf("got %s, want changed", status)
-	}
-	if old != "old content" {
-		t.Errorf("old = %q", old)
+	status, prevHash := s.CheckContent("k", "new content", false)
+	if status != "new" {
+		t.Errorf("got %s, want new (hash-only storage, changed maps to new)", status)
 	}
 	if prevHash == "" {
 		t.Error("prevHash should be set")
@@ -496,55 +445,6 @@ func TestEvictLRU_EvictsOldest(t *testing.T) {
 	}
 }
 
-// --- ComputeTextDiff ---
-
-func TestComputeTextDiff_Basic(t *testing.T) {
-	old := "line1\nline2\nline3"
-	new_ := "line1\nmodified\nline3"
-	d := ComputeTextDiff(old, new_, "test.go")
-	if d == "" {
-		t.Fatal("expected non-empty diff")
-	}
-	if !strings.Contains(d, "-line2") || !strings.Contains(d, "+modified") {
-		t.Error("diff should show change")
-	}
-	if !strings.Contains(d, "--- a/test.go") {
-		t.Error("should have file header")
-	}
-}
-
-func TestComputeTextDiff_Identical(t *testing.T) {
-	if ComputeTextDiff("same", "same", "t.go") != "" {
-		t.Error("identical should be empty")
-	}
-}
-
-func TestComputeTextDiff_LargeBails(t *testing.T) {
-	lines := make([]string, 2500)
-	for i := range lines {
-		lines[i] = "line"
-	}
-	old := strings.Join(lines, "\n")
-	lines[100] = "changed"
-	new_ := strings.Join(lines, "\n")
-	if ComputeTextDiff(old, new_, "big.go") != "" {
-		t.Error("large input should bail")
-	}
-}
-
-func TestComputeTextDiff_JustUnder2000(t *testing.T) {
-	lines := make([]string, 1999)
-	for i := range lines {
-		lines[i] = "line"
-	}
-	old := strings.Join(lines, "\n")
-	lines[500] = "changed"
-	new_ := strings.Join(lines, "\n")
-	if ComputeTextDiff(old, new_, "ok.go") == "" {
-		t.Error("under 2000 lines should produce diff")
-	}
-}
-
 // --- ProcessReadResult ---
 
 func TestProcessReadResult_NewFile(t *testing.T) {
@@ -589,18 +489,10 @@ func TestProcessReadResult_ChangedFile(t *testing.T) {
 		"content": "line1\nchanged\n", "file": "f.go", "hash": "h2",
 		"lines": []int{1, 2},
 	}
+	// With hash-only storage, changed content is treated as "new" (no old content to diff)
 	delta := s.ProcessReadResult("read", result2, map[string]any{})
-	if delta == nil {
-		t.Fatal("changed should return delta")
-	}
-	if delta["delta"] != true {
-		t.Error("should be delta")
-	}
-	if delta["diff"] == nil || delta["diff"] == "" {
-		t.Error("should include diff")
-	}
-	if delta["previous_hash"] == nil {
-		t.Error("should include previous_hash")
+	if delta != nil {
+		t.Error("changed content should return nil (treated as new, no diff possible)")
 	}
 }
 
@@ -946,8 +838,11 @@ func TestPostProcess_EditLargeDiff(t *testing.T) {
 	bigDiff := strings.Join(lines, "\\n")
 	text := `{"ok":true,"file":"f.go","diff":"` + bigDiff + `","hash":"abc","old_size":10,"new_size":100}`
 	result := s.PostProcess("edit", []string{"f.go"}, map[string]any{}, nil, text)
-	if strings.Contains(result, "old_size") {
-		t.Error("large edit should strip old_size")
+	if !strings.Contains(result, "lines_changed") {
+		t.Error("large edit should have lines_changed")
+	}
+	if !strings.Contains(result, "diff_available") {
+		t.Error("large edit should have diff_available")
 	}
 }
 

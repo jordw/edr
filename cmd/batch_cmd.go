@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
+	"github.com/jordw/edr/internal/trace"
 	"github.com/spf13/cobra"
 )
 
@@ -35,13 +34,12 @@ as ordered flags: -r (read), -s (search), -e (edit), -w (write), -v (verify).
 Modifier flags apply to the preceding operation. Verify runs automatically
 when edits are present (use --no-verify to skip).
 
-If a running edr server is available, the batch proxies through it for
-session benefits (delta reads, body dedup, slim edits). Otherwise falls
-back to ephemeral dispatch.
+When EDR_SESSION is set, session optimizations (delta reads, body dedup)
+persist across calls via .edr/sessions/<id>.json.
 
 Examples:
-  edr -r cmd/serve.go --sig -s "handleRequest"
-  edr -e cmd/serve.go --old "oldFunc" --new "newFunc"
+  edr -r cmd/root.go --sig -s "handleRequest"
+  edr -e cmd/root.go --old "oldFunc" --new "newFunc"
   edr -r file.go:Symbol --sig -e file.go --old "x" --new "y" -v`,
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -88,7 +86,6 @@ type batchState struct {
 	verifyCommand string
 
 	root      string
-	noProxy   bool
 	stdinUsed bool
 }
 
@@ -325,7 +322,7 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			if err != nil {
 				return nil, err
 			}
-			s.currentQuery.Include = val
+			s.currentQuery.Include = appendStringSlice(s.currentQuery.Include, val)
 
 		case "--exclude":
 			if s.currentOp != opSearch {
@@ -335,7 +332,7 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			if err != nil {
 				return nil, err
 			}
-			s.currentQuery.Exclude = val
+			s.currentQuery.Exclude = appendStringSlice(s.currentQuery.Exclude, val)
 
 		case "--text":
 			if s.currentOp != opSearch {
@@ -503,9 +500,6 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			s.root = val
 
-		case "--no-proxy":
-			s.noProxy = true
-
 		default:
 			return nil, fmt.Errorf("unknown flag: %s", arg)
 		}
@@ -575,34 +569,20 @@ func runBatch(args []string) error {
 		root, _ = os.Getwd()
 	}
 
-	// Try socket proxy first
-	if !state.noProxy {
-		sockPath := filepath.Join(root, ".edr", "serve.sock")
-		if info, err := os.Stat(sockPath); err == nil && info.Mode()&os.ModeSocket != 0 {
-			// Verify it's a live socket
-			conn, err := net.Dial("unix", sockPath)
-			if err == nil {
-				conn.Close()
-				result, err := proxyViaSocket(sockPath, paramsJSON)
-				if err == nil {
-					output.Print(result)
-					return batchResultError(result)
-				}
-			}
-			// Fall through to ephemeral
-			fmt.Fprintf(os.Stderr, "edr: server unavailable, using ephemeral dispatch\n")
-		}
-	}
-
-	// Ephemeral dispatch
 	db, err := openDBWithRoot(root, false)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 
-	sess := session.New()
-	result, err := handleDo(context.Background(), db, sess, nil, json.RawMessage(paramsJSON))
+	edrDir := db.EdrDir()
+	sess, saveSess := session.LoadSession(edrDir)
+	defer saveSess()
+
+	tc := trace.NewCollector(edrDir, Version)
+	defer tc.Close()
+
+	result, err := handleDo(context.Background(), db, sess, tc, json.RawMessage(paramsJSON))
 	if err != nil {
 		return err
 	}
@@ -675,6 +655,21 @@ func batchResultError(result json.RawMessage) error {
 	}
 
 	return nil
+}
+
+// appendStringSlice appends val to an existing include/exclude field.
+// The field may be nil, a string, or []string; the result is always []string.
+func appendStringSlice(existing any, val string) []string {
+	switch v := existing.(type) {
+	case nil:
+		return []string{val}
+	case string:
+		return []string{v, val}
+	case []string:
+		return append(v, val)
+	default:
+		return []string{val}
+	}
 }
 
 // silentError signals non-zero exit without printing an additional error message

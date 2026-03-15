@@ -15,7 +15,7 @@ import (
 	"github.com/jordw/edr/internal/trace"
 )
 
-// doParams holds the parsed params for batch operations (edr serve).
+// doParams holds the parsed params for batch operations.
 type doParams struct {
 	Reads         []doRead   `json:"reads"`
 	Queries       []doQuery  `json:"queries"`
@@ -394,7 +394,7 @@ func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, p 
 }
 
 // executeWrites dispatches write operations and returns typed results.
-func executeWrites(ctx context.Context, db *index.DB, p *doParams) []writeResult {
+func executeWrites(ctx context.Context, db *index.DB, sess *session.Session, p *doParams) []writeResult {
 	results := make([]writeResult, len(p.Writes))
 	for i, w := range p.Writes {
 		flags := map[string]any{"content": w.Content}
@@ -415,26 +415,18 @@ func executeWrites(ctx context.Context, db *index.DB, p *doParams) []writeResult
 			results[i] = writeResult{File: w.File, OK: false, Error: err.Error()}
 		} else {
 			results[i] = writeResult{File: w.File, OK: true, Result: result}
+			sess.InvalidateFile(w.File) // #17: invalidate session for written files
 		}
 	}
 	return results
 }
 
 // executeEdits dispatches edit operations via edit-plan and returns the result JSON + failure status.
-func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, p *doParams, warnings *[]string, cb *trace.CallBuilder) (json.RawMessage, bool) {
+// executeEdits returns (result JSON, editsFailed, allNoop).
+func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, p *doParams, warnings *[]string, cb *trace.CallBuilder) (json.RawMessage, bool, bool) {
 	editFlags := map[string]any{}
 
-	// Promote per-edit dry_run to batch level
-	if p.DryRun == nil || !*p.DryRun {
-		for _, e := range p.Edits {
-			if e.DryRun != nil && *e.DryRun {
-				t := true
-				p.DryRun = &t
-				*warnings = append(*warnings, "per-edit dry_run promoted to batch level (edits are atomic)")
-				break
-			}
-		}
-	}
+	// Dry-run promotion is now handled in handleDo before writes execute.
 
 	editsRaw := make([]map[string]any, len(p.Edits))
 	for i, e := range p.Edits {
@@ -489,20 +481,28 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, p *d
 		}
 		if ambErr := asAmbiguousError(err); ambErr != nil {
 			data, _ := json.Marshal(ambErr)
-			return json.RawMessage(data), true
+			return json.RawMessage(data), true, false
 		}
 		if nfErr := asNotFoundError(err); nfErr != nil {
 			data, _ := json.Marshal(nfErr)
-			return json.RawMessage(data), true
+			return json.RawMessage(data), true, false
 		}
 		data, _ := json.Marshal(map[string]string{"error": err.Error()})
-		return json.RawMessage(data), true
+		return json.RawMessage(data), true, false
+	}
+
+	// Check if result is a no-op (#19)
+	allNoop := false
+	if m, ok := result.(map[string]any); ok {
+		if noop, _ := m["noop"].(bool); noop {
+			allNoop = true
+		}
 	}
 
 	data, _ := json.Marshal(result)
 	text := sess.PostProcess("edit-plan", []string{}, editFlags, result, string(data))
 	traceEditEvents(cb, result)
-	return json.RawMessage(text), false
+	return json.RawMessage(text), false, allNoop
 }
 
 // executeVerify dispatches the verify command and returns result JSON.
@@ -537,7 +537,25 @@ func executeVerify(ctx context.Context, db *index.DB, p *doParams, cb *trace.Cal
 }
 
 // buildSummary constructs the mutation summary with status and hints.
-func buildSummary(p *doParams, editsFailed bool, writeResults []writeResult) *summaryResult {
+// isVerifyFailed checks if a verify result JSON indicates failure.
+func isVerifyFailed(verifyJSON json.RawMessage) bool {
+	if verifyJSON == nil {
+		return false
+	}
+	var vm map[string]any
+	if json.Unmarshal(verifyJSON, &vm) != nil {
+		return false
+	}
+	if ok, _ := vm["ok"].(bool); !ok {
+		// Only count as failed if there's an actual verify result (not a skip message)
+		_, hasError := vm["error"]
+		_, hasOK := vm["ok"]
+		return hasError || hasOK
+	}
+	return false
+}
+
+func buildSummary(p *doParams, editsFailed bool, writeResults []writeResult, verifyFailed bool) *summaryResult {
 	hasEdits := len(p.Edits) > 0
 	hasWrites := len(p.Writes) > 0
 	hasRenames := len(p.Renames) > 0
@@ -569,6 +587,8 @@ func buildSummary(p *doParams, editsFailed bool, writeResults []writeResult) *su
 		s.Status = "failed"
 	} else if p.DryRun != nil && *p.DryRun {
 		s.Status = "dry_run"
+	} else if verifyFailed {
+		s.Status = "verify_failed"
 	} else {
 		s.Status = "applied"
 	}
@@ -655,9 +675,27 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 		resp.Queries = executeQueries(ctx, db, sess, &p, cb)
 	}
 
-	// 3. Writes
-	if hasWrites {
-		resp.Writes = executeWrites(ctx, db, &p)
+	// Pre-promote per-edit dry_run to batch level before writes execute.
+	// This ensures writes are skipped when any edit is dry-run (#12).
+	if p.DryRun == nil || !*p.DryRun {
+		for _, e := range p.Edits {
+			if e.DryRun != nil && *e.DryRun {
+				t := true
+				p.DryRun = &t
+				break
+			}
+		}
+	}
+	isDryRun := p.DryRun != nil && *p.DryRun
+
+	// 3. Writes (skip if dry-run)
+	if hasWrites && !isDryRun {
+		resp.Writes = executeWrites(ctx, db, sess, &p)
+	} else if hasWrites && isDryRun {
+		resp.Writes = make([]writeResult, len(p.Writes))
+		for i, w := range p.Writes {
+			resp.Writes[i] = writeResult{File: w.File, OK: true, Result: map[string]any{"skipped": "dry_run"}}
+		}
 	}
 
 	// 4. Renames
@@ -689,14 +727,15 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 
 	// 5. Edits
 	editsFailed := false
+	allNoop := false
 	if hasEdits {
-		resp.Edits, editsFailed = executeEdits(ctx, db, sess, &p, &warnings, cb)
+		resp.Edits, editsFailed, allNoop = executeEdits(ctx, db, sess, &p, &warnings, cb)
 	}
 
 	// 5b. Post-edit reads
 	if editsFailed && p.ReadAfterEdit != nil && *p.ReadAfterEdit {
 		resp.PostEditReads = json.RawMessage(`"skipped: edits failed"`)
-	} else if (hasEdits || hasWrites) && p.ReadAfterEdit != nil && *p.ReadAfterEdit && (p.DryRun == nil || !*p.DryRun) {
+	} else if (hasEdits || hasWrites) && p.ReadAfterEdit != nil && *p.ReadAfterEdit && !isDryRun {
 		editedFiles := make(map[string]bool)
 		for _, e := range p.Edits {
 			editedFiles[e.File] = true
@@ -722,18 +761,20 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 		}
 	}
 
-	// 6. Verify
-	isDryRun := p.DryRun != nil && *p.DryRun
+	// 6. Verify — skip for failed edits, dry-run, or all-noop (#19)
 	if editsFailed && hasVerify {
 		resp.Verify = json.RawMessage(`"skipped: edits failed"`)
 	} else if isDryRun && hasVerify {
 		resp.Verify = json.RawMessage(`"skipped: dry run"`)
+	} else if allNoop && hasVerify {
+		resp.Verify = json.RawMessage(`"skipped: no-op edit"`)
 	} else if hasVerify {
 		resp.Verify = executeVerify(ctx, db, &p, cb)
 	}
 
 	// 7. Summary
-	resp.Summary = buildSummary(&p, editsFailed, resp.Writes)
+	verifyFailed := isVerifyFailed(resp.Verify)
+	resp.Summary = buildSummary(&p, editsFailed, resp.Writes, verifyFailed)
 
 	if len(warnings) > 0 {
 		resp.Warnings = warnings

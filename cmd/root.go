@@ -48,18 +48,11 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().String("root", ".", "repository root directory")
-	rootCmd.PersistentFlags().Bool("no-proxy", false, "bypass running server, use ephemeral dispatch")
 }
 
 // openAndEnsureIndex opens the DB and bootstraps the index if it does not exist yet.
-// It silently indexes without stderr output in quiet mode.
 func openAndEnsureIndex(cmd *cobra.Command) (*index.DB, error) {
 	return openDB(cmd, false)
-}
-
-// openAndEnsureIndexQuiet opens the DB and indexes silently (for serve mode).
-func openAndEnsureIndexQuiet(cmd *cobra.Command) (*index.DB, error) {
-	return openDB(cmd, true)
 }
 
 func openDB(cmd *cobra.Command, quiet bool) (*index.DB, error) {
@@ -97,15 +90,13 @@ func openDBWithRoot(root string, quiet bool) (*index.DB, error) {
 			}
 		}
 		err = db.WithWriteLock(func() error {
-			// Re-check after acquiring the lock — another process may have
-			// already completed the index/re-index while we waited.
 			currentFiles, _, _ := db.Stats(ctx)
 			if firstIndex && currentFiles > 0 {
-				return nil // another process completed the first index
+				return nil
 			}
 			if !firstIndex {
 				if stale, _ := index.HasStaleFiles(ctx, db); !stale {
-					return nil // already up to date
+					return nil
 				}
 			}
 			var progress index.ProgressFunc
@@ -122,8 +113,6 @@ func openDBWithRoot(root string, quiet bool) (*index.DB, error) {
 			return nil, err
 		}
 		if !quiet {
-			// Report total index size, not just changed files — avoids
-			// confusing "indexed 0 files" when everything was already current.
 			totalFiles, totalSyms, _ := db.Stats(ctx)
 			fmt.Fprintf(os.Stderr, "\redr: index ready (%d files, %d symbols)\n", totalFiles, totalSyms)
 		}

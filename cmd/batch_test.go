@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,17 +63,15 @@ func TestStoreDiff_LargeSlim(t *testing.T) {
 		"old_size": 10, "new_size": 100,
 	}
 	slim := sess.StoreDiff(result, map[string]any{})
-	if slim == nil {
-		t.Fatal("large diffs should return slim map")
+	// No slim optimization anymore — diffs always stay inline
+	if slim != nil {
+		t.Fatal("StoreDiff should return nil (diffs always inline)")
 	}
-	if _, ok := slim["diff"]; ok {
-		t.Error("slim should not contain diff")
+	if result["lines_changed"] != 25 {
+		t.Errorf("lines_changed = %v, want 25", result["lines_changed"])
 	}
-	if _, ok := slim["old_size"]; ok {
-		t.Error("slim should not contain old_size")
-	}
-	if slim["lines_changed"] != 25 {
-		t.Errorf("lines_changed = %v, want 25", slim["lines_changed"])
+	if result["diff_available"] != true {
+		t.Error("diff_available should be set")
 	}
 }
 
@@ -122,7 +121,7 @@ func TestGetDiff_FallbackToFileKey(t *testing.T) {
 
 func TestCheckContent_New(t *testing.T) {
 	sess := session.New()
-	s, _, _ := sess.CheckContent("f.go:[1 10]", "content", false)
+	s, _ := sess.CheckContent("f.go:[1 10]", "content", false)
 	if s != "new" {
 		t.Errorf("got %s, want new", s)
 	}
@@ -131,7 +130,7 @@ func TestCheckContent_New(t *testing.T) {
 func TestCheckContent_Unchanged(t *testing.T) {
 	sess := session.New()
 	sess.StoreContent("f.go:[1 10]", "content", false)
-	s, _, _ := sess.CheckContent("f.go:[1 10]", "content", false)
+	s, _ := sess.CheckContent("f.go:[1 10]", "content", false)
 	if s != "unchanged" {
 		t.Errorf("got %s, want unchanged", s)
 	}
@@ -140,12 +139,10 @@ func TestCheckContent_Unchanged(t *testing.T) {
 func TestCheckContent_Changed(t *testing.T) {
 	sess := session.New()
 	sess.StoreContent("f.go:[1 10]", "old", false)
-	s, old, _ := sess.CheckContent("f.go:[1 10]", "new", false)
-	if s != "changed" {
-		t.Errorf("got %s, want changed", s)
-	}
-	if old != "old" {
-		t.Errorf("old = %s", old)
+	// With hash-only storage, changed content appears as "new" (no old content to diff)
+	s, _ := sess.CheckContent("f.go:[1 10]", "new", false)
+	if s != "new" {
+		t.Errorf("got %s, want new", s)
 	}
 }
 
@@ -165,42 +162,6 @@ func TestEvictLRU(t *testing.T) {
 	}
 }
 
-func TestComputeTextDiff(t *testing.T) {
-	old := "line1\nline2\nline3\nline4"
-	new_ := "line1\nmodified\nline3\nline4"
-	d := session.ComputeTextDiff(old, new_, "test.go")
-	if d == "" {
-		t.Fatal("expected non-empty diff")
-	}
-	if !strings.Contains(d, "-line2") {
-		t.Error("should contain removed line")
-	}
-	if !strings.Contains(d, "+modified") {
-		t.Error("should contain added line")
-	}
-	if !strings.Contains(d, "--- a/test.go") {
-		t.Error("should have file header")
-	}
-}
-
-func TestComputeTextDiff_Identical(t *testing.T) {
-	if session.ComputeTextDiff("same", "same", "t.go") != "" {
-		t.Error("identical should be empty")
-	}
-}
-
-func TestComputeTextDiff_Large(t *testing.T) {
-	lines := make([]string, 2500)
-	for i := range lines {
-		lines[i] = "line"
-	}
-	old := strings.Join(lines, "\n")
-	lines[100] = "changed"
-	new_ := strings.Join(lines, "\n")
-	if session.ComputeTextDiff(old, new_, "big.go") != "" {
-		t.Error("large input should bail")
-	}
-}
 
 func TestTrackBodies(t *testing.T) {
 	sess := session.New()
@@ -276,24 +237,22 @@ func TestStripSeenBodies_NewBodyTracked(t *testing.T) {
 
 func TestInvalidateForEdit_RenameClears(t *testing.T) {
 	sess := session.New()
-	sess.Responses["k"] = "v"
 	sess.Diffs["f.go"] = "d"
 	sess.StoreContent("f.go:[1 10]", "c", false)
 	sess.SeenBodies["f.go:foo"] = "h"
 
 	sess.InvalidateForEdit("rename", []string{"old", "new"})
-	if len(sess.Responses)+len(sess.Diffs)+len(sess.FileContent)+len(sess.SeenBodies) != 0 {
+	if len(sess.Diffs)+len(sess.FileContent)+len(sess.SeenBodies) != 0 {
 		t.Error("rename should clear all")
 	}
 }
 
 func TestInvalidateForEdit_InitClears(t *testing.T) {
 	sess := session.New()
-	sess.Responses["k"] = "v"
 	sess.Diffs["f.go"] = "d"
 
 	sess.InvalidateForEdit("init", []string{})
-	if len(sess.Responses)+len(sess.Diffs) != 0 {
+	if len(sess.Diffs) != 0 {
 		t.Error("init should clear all")
 	}
 }
@@ -336,8 +295,9 @@ func TestPostProcess_DeltaRead_Changed(t *testing.T) {
 
 	sess.PostProcess("read", []string{"f.go"}, map[string]any{}, nil, t1)
 	result := sess.PostProcess("read", []string{"f.go"}, map[string]any{}, nil, t2)
-	if !strings.Contains(result, "delta") {
-		t.Errorf("should be delta, got: %s", result)
+	// With hash-only storage, changed content is returned in full (no delta diff)
+	if strings.Contains(result, "unchanged") {
+		t.Error("changed content should not be unchanged")
 	}
 }
 
@@ -1141,6 +1101,357 @@ func TestHandleDo_SkipsPostEditReadsAndVerifyOnEditFailure(t *testing.T) {
 	// verify should be skipped.
 	if !strings.Contains(result, `"verify":"skipped: edits failed"`) {
 		t.Errorf("expected verify to be skipped, got: %s", result)
+	}
+}
+
+// --- Correctness bug fix tests ---
+
+func TestHandleDo_DryRunSkipsWrites(t *testing.T) {
+	// Issue #12: writes should not execute when edits have dry-run set
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "existing.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc != nil {
+		defer tc.Close()
+	}
+
+	writeTarget := filepath.Join(tmp, "should_not_exist.txt")
+	raw := json.RawMessage(fmt.Sprintf(`{
+		"writes": [{"file": %q, "content": "test data"}],
+		"edits": [{"file": "existing.go", "old_text": "func hello", "new_text": "func world", "dry_run": true}]
+	}`, writeTarget))
+
+	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	// The write target should NOT exist on disk
+	if _, statErr := os.Stat(writeTarget); statErr == nil {
+		t.Error("write target should not exist when edits are dry-run")
+	}
+
+	// Parse result to verify structure
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Writes should show skipped
+	writes, ok := parsed["writes"].([]any)
+	if !ok || len(writes) != 1 {
+		t.Fatalf("expected 1 write result, got: %v", parsed["writes"])
+	}
+	wr := writes[0].(map[string]any)
+	if res, ok := wr["result"].(map[string]any); !ok || res["skipped"] != "dry_run" {
+		t.Errorf("expected write skipped for dry_run, got: %v", wr)
+	}
+
+	// Summary should show dry_run status
+	summary := parsed["summary"].(map[string]any)
+	if summary["status"] != "dry_run" {
+		t.Errorf("summary status = %v, want dry_run", summary["status"])
+	}
+
+	// existing.go should not be modified (dry-run)
+	data, _ := os.ReadFile(filepath.Join(tmp, "existing.go"))
+	if !strings.Contains(string(data), "func hello") {
+		t.Error("existing.go should not be modified during dry-run")
+	}
+}
+
+func TestHandleDo_NoopEditSkipsVerify(t *testing.T) {
+	// Issue #19: no-op edits (old_text == new_text) should not trigger verify
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc != nil {
+		defer tc.Close()
+	}
+
+	// Edit where old_text == new_text, with verify using a command that would fail
+	raw := json.RawMessage(`{
+		"edits": [{"file": "main.go", "old_text": "func hello", "new_text": "func hello"}],
+		"verify": "false"
+	}`)
+
+	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Verify should be skipped for no-op
+	verifyStr, ok := parsed["verify"].(string)
+	if !ok || verifyStr != "skipped: no-op edit" {
+		t.Errorf("verify = %v, want \"skipped: no-op edit\"", parsed["verify"])
+	}
+
+	// File should be unchanged
+	data, _ := os.ReadFile(filepath.Join(tmp, "main.go"))
+	if !strings.Contains(string(data), "func hello") {
+		t.Error("file should not be modified by no-op edit")
+	}
+}
+
+func TestHandleDo_VerifyFailedSummaryStatus(t *testing.T) {
+	// Issue #23: summary status should be "verify_failed" when verify fails
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "data.txt"), []byte("old content\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc != nil {
+		defer tc.Close()
+	}
+
+	// Real edit that succeeds, but verify command fails
+	raw := json.RawMessage(`{
+		"edits": [{"file": "data.txt", "old_text": "old content", "new_text": "new content"}],
+		"verify": "false"
+	}`)
+
+	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Verify should show failure
+	verify, ok := parsed["verify"].(map[string]any)
+	if !ok {
+		t.Fatalf("verify should be object, got: %v", parsed["verify"])
+	}
+	if ok, _ := verify["ok"].(bool); ok {
+		t.Error("verify should have ok=false")
+	}
+
+	// Summary status should be "verify_failed", not "applied"
+	summary := parsed["summary"].(map[string]any)
+	if summary["status"] != "verify_failed" {
+		t.Errorf("summary status = %v, want verify_failed", summary["status"])
+	}
+}
+
+func TestHandleDo_WriteInvalidatesSession(t *testing.T) {
+	// Issue #17: session should be invalidated after writes
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc != nil {
+		defer tc.Close()
+	}
+
+	targetFile := "written.txt"
+
+	// Pre-populate session with a stale content entry for the file
+	sess.StoreContent(targetFile+":[1 10]", "stale content", false)
+
+	// Verify the session has the entry
+	status, _ := sess.CheckContent(targetFile+":[1 10]", "stale content", false)
+	if status != "unchanged" {
+		t.Fatalf("pre-condition: expected unchanged, got %s", status)
+	}
+
+	// Write the file via batch
+	raw := json.RawMessage(fmt.Sprintf(`{
+		"writes": [{"file": %q, "content": "fresh content"}]
+	}`, targetFile))
+
+	_, err = handleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	// After write, the session entry should be invalidated.
+	// Checking with the old content should now return "new" (not "unchanged")
+	status, _ = sess.CheckContent(targetFile+":[1 10]", "stale content", false)
+	if status == "unchanged" {
+		t.Error("session should have been invalidated after write; got unchanged")
+	}
+}
+
+func TestHandleDo_TraceCollectorRecordsEvents(t *testing.T) {
+	// Issue #16: trace events should be recorded when collector is provided
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "f.txt"), []byte("hello\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc == nil {
+		t.Fatal("NewCollector returned nil")
+	}
+
+	sess := session.New()
+
+	raw := json.RawMessage(`{
+		"reads": [{"file": "f.txt"}],
+		"edits": [{"file": "f.txt", "old_text": "hello", "new_text": "world"}]
+	}`)
+
+	_, err = handleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	// Close the collector to flush events
+	tc.Close()
+
+	// Verify traces.db has at least one call record
+	traceDB, err := trace.OpenTraceDB(edrDir)
+	if err != nil {
+		t.Fatalf("OpenTraceDB: %v", err)
+	}
+	defer traceDB.Close()
+
+	var callCount int
+	err = traceDB.QueryRow("SELECT count(*) FROM calls").Scan(&callCount)
+	if err != nil {
+		t.Fatalf("query calls: %v", err)
+	}
+	if callCount == 0 {
+		t.Error("expected at least 1 call record in traces.db, got 0")
+	}
+
+	// Verify the call record has the right shape (reads + edits)
+	var numReads, numEdits int
+	err = traceDB.QueryRow("SELECT num_reads, num_edits FROM calls ORDER BY id DESC LIMIT 1").Scan(&numReads, &numEdits)
+	if err != nil {
+		t.Fatalf("query call shape: %v", err)
+	}
+	if numReads != 1 {
+		t.Errorf("num_reads = %d, want 1", numReads)
+	}
+	if numEdits != 1 {
+		t.Errorf("num_edits = %d, want 1", numEdits)
+	}
+}
+
+func TestIsVerifyFailed(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  json.RawMessage
+		expect bool
+	}{
+		{"nil", nil, false},
+		{"skip string", json.RawMessage(`"skipped: dry run"`), false},
+		{"ok true", json.RawMessage(`{"ok":true}`), false},
+		{"ok false with error", json.RawMessage(`{"ok":false,"error":"exit status 1"}`), true},
+		{"ok false no error", json.RawMessage(`{"ok":false}`), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isVerifyFailed(tt.input)
+			if got != tt.expect {
+				t.Errorf("isVerifyFailed(%s) = %v, want %v", string(tt.input), got, tt.expect)
+			}
+		})
+	}
+}
+
+func TestBuildSummary_VerifyFailed(t *testing.T) {
+	p := &doParams{
+		Edits: []doEdit{{File: "f.go", OldText: "a", NewText: "b"}},
+	}
+	s := buildSummary(p, false, nil, true)
+	if s.Status != "verify_failed" {
+		t.Errorf("status = %q, want verify_failed", s.Status)
+	}
+}
+
+func TestBuildSummary_Applied(t *testing.T) {
+	p := &doParams{
+		Edits: []doEdit{{File: "f.go", OldText: "a", NewText: "b"}},
+	}
+	s := buildSummary(p, false, nil, false)
+	if s.Status != "applied" {
+		t.Errorf("status = %q, want applied", s.Status)
+	}
+}
+
+func TestBuildSummary_DryRun(t *testing.T) {
+	dr := true
+	p := &doParams{
+		Edits:  []doEdit{{File: "f.go", OldText: "a", NewText: "b"}},
+		DryRun: &dr,
+	}
+	s := buildSummary(p, false, nil, false)
+	if s.Status != "dry_run" {
+		t.Errorf("status = %q, want dry_run", s.Status)
+	}
+}
+
+func TestBuildSummary_EditsFailed(t *testing.T) {
+	p := &doParams{
+		Edits: []doEdit{{File: "f.go", OldText: "a", NewText: "b"}},
+	}
+	s := buildSummary(p, true, nil, false)
+	if s.Status != "failed" {
+		t.Errorf("status = %q, want failed", s.Status)
 	}
 }
 

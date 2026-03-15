@@ -4,14 +4,13 @@ import "github.com/jordw/edr/internal/cmdspec"
 
 // toolinfo.go — tool descriptions and parameter help text.
 // ToolDesc is derived from the canonical registry in cmdspec.
-// ParamDesc merges registry-derived descriptions with serve-mode entries.
+// ParamDesc merges registry-derived descriptions with batch-mode entries.
 
 // ToolDesc holds the description for each tool.
 var ToolDesc = func() map[string]string {
 	m := cmdspec.ToolDescs()
-	// Extra entries not in the registry (aliases / serve-only).
-	m["plan"] = "Batch edits with dry-run preview. Use edr serve for full read/query/edit/write workflows."
-	m["serve"] = "Persistent stdio server for NDJSON batch operations."
+	// Extra entries not in the registry.
+	m["plan"] = "Batch edits with dry-run preview. Use batch flags for full read/query/edit/write workflows."
 	return m
 }()
 
@@ -29,7 +28,7 @@ var ParamDesc = func() map[string]string {
 	m["new_name"] = "New name"
 	m["start_line"] = "Start line"
 	m["end_line"] = "End line"
-	// Serve-mode (edr serve) batch fields.
+	// Batch fields.
 	m["reads"] = "Read queries: [{file, symbol?, budget?, signatures?, depth?}]"
 	m["queries"] = "Any query: [{cmd: search|explore|refs|map|find|diff, ...params}]"
 	m["edits"] = "Atomic edits: [{file, old_text, new_text}] or [{file, symbol, new_text}] or [{file, start_line, end_line, new_text}] or [{file, move, after/before}]. Supports regex, all flags."

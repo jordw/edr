@@ -22,6 +22,13 @@ var setRootOnce sync.Once
 // With 1 arg: global name resolution (errors if ambiguous).
 // With 2 args: file + name lookup.
 func resolveSymbolArgs(ctx context.Context, db *index.DB, root string, args []string) (*index.SymbolInfo, error) {
+	// Support "file.go:Symbol" colon syntax — expand to two args
+	if len(args) == 1 {
+		if parts := splitFileSymbol(args[0]); parts != nil {
+			args = parts
+		}
+	}
+
 	switch len(args) {
 	case 1:
 		return db.ResolveSymbol(ctx, args[0])
@@ -74,7 +81,7 @@ func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flag
 	case "verify":
 		result, err = runVerify(ctx, db, root, args, flags)
 	case "multi", "get-diff":
-		return nil, fmt.Errorf("%s is only available in batch mode (edr serve)", cmd)
+		return nil, fmt.Errorf("%s is only available in batch mode (edr -r/-s/-e/-w)", cmd)
 	default:
 		if suggestion := suggestCommand(cmd); suggestion != "" {
 			return nil, fmt.Errorf("unknown command: %s (did you mean: %s?)", cmd, suggestion)

@@ -12,11 +12,11 @@ import (
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
 	"github.com/jordw/edr/internal/output"
+	"github.com/jordw/edr/internal/session"
 	"github.com/spf13/cobra"
 )
 
 func init() {
-	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(readCmd)
 	rootCmd.AddCommand(writeCmd)
 	rootCmd.AddCommand(editCmd)
@@ -33,21 +33,19 @@ func init() {
 }
 
 // dispatchCmd is the common pattern: open DB, dispatch, print result.
-// If a running serve socket is available, proxies through it for session
-// benefits. Otherwise falls back to ephemeral dispatch.
+// Loads a file-backed session when EDR_SESSION is set.
 func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	flags := extractFlags(cmd)
-
-	// Proxy through running server if available
-	if sockPath := findSocket(cmd); sockPath != "" {
-		return proxyCmd(cmd, sockPath, cmdName, args, flags)
-	}
 
 	db, err := openAndEnsureIndex(cmd)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
+
+	edrDir := db.EdrDir()
+	sess, saveSess := session.LoadSession(edrDir)
+	defer saveSess()
 
 	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
 	if err != nil {
@@ -64,6 +62,17 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 		}
 		return err
 	}
+
+	// Apply session post-processing (delta reads, body dedup)
+	data, marshalErr := json.Marshal(result)
+	if marshalErr == nil {
+		processed := sess.PostProcess(cmdName, args, flags, result, string(data))
+		if processed != string(data) {
+			output.Print(json.RawMessage(processed))
+			return nil
+		}
+	}
+
 	output.Print(result)
 	return nil
 }
@@ -72,30 +81,7 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, stdinKey string) error {
 	flags := extractFlags(cmd)
 
-	// Proxy through running server if available (check before stdin read —
-	// proxy doesn't need stdin fallback and it breaks without a pipe).
-	if sockPath := findSocket(cmd); sockPath != "" {
-		// Still need stdin if no content flag was provided
-		hasContent := false
-		for _, key := range []string{stdinKey, "content", "new_text", "body"} {
-			if _, ok := flags[key]; ok {
-				hasContent = true
-				break
-			}
-		}
-		if !hasContent {
-			// Best-effort stdin read; skip if not piped
-			stat, _ := os.Stdin.Stat()
-			if (stat.Mode() & os.ModeCharDevice) == 0 {
-				_ = readStdinToFlags(flags, stdinKey)
-			}
-		}
-		return proxyCmd(cmd, sockPath, cmdName, args, flags)
-	}
-
 	// If any content-equivalent flag was provided on CLI, skip stdin.
-	// An explicitly-set empty string (e.g. --new_text '') is a valid value
-	// (deletion), so we check existence in the map, not emptiness.
 	hasContent := false
 	for _, key := range []string{stdinKey, "content", "new_text", "body"} {
 		if _, ok := flags[key]; ok {
@@ -115,6 +101,10 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	}
 	defer db.Close()
 
+	edrDir := db.EdrDir()
+	sess, saveSess := session.LoadSession(edrDir)
+	defer saveSess()
+
 	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
 	if err != nil {
 		var nfErr *dispatch.NotFoundError
@@ -130,6 +120,17 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 		}
 		return err
 	}
+
+	// Apply session post-processing
+	data, marshalErr := json.Marshal(result)
+	if marshalErr == nil {
+		processed := sess.PostProcess(cmdName, args, flags, result, string(data))
+		if processed != string(data) {
+			output.Print(json.RawMessage(processed))
+			return nil
+		}
+	}
+
 	output.Print(result)
 	return nil
 }
@@ -253,7 +254,7 @@ var initCmd = &cobra.Command{
 var editPlanCmd = &cobra.Command{
 	Use:   "edit-plan",
 	Short: ToolDesc["plan"],
-	Long:  ToolDesc["plan"] + "\n\nBatch equivalent: edr serve with edits array and optional verify.",
+	Long:  ToolDesc["plan"] + "\n\nBatch equivalent: use edits array with optional verify.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		db, err := openAndEnsureIndex(cmd)
 		if err != nil {
