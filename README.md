@@ -10,31 +10,49 @@ edr indexes your codebase by symbol (functions, classes, structs) and lets agent
 
 ## The difference
 
-```bash
-# Without edr: read a 500-line file to find one function
-cat src/config.go                           # 21KB
-
-# With edr: read just the function
-edr read src/config.go:parseConfig          # 1.9KB
-```
+An agent adding a retry parameter to a scheduler. Without edr — 8 tool calls, ~180KB of context:
 
 ```bash
-# Without edr: grep, then read each matched file to understand results
-grep -rn "handleRequest" src/               # file:line list, no structure
-cat src/server.go                           # read whole file for context
-cat src/middleware.go                        # read another whole file
-
-# With edr: structured search with symbol bodies, in one call
-edr search "handleRequest" --body           # symbol-scoped results with code
+Read src/scheduler.py              # 14KB — whole file, need one class
+Grep "retry" src/                  # file:line list, no structure
+Read src/config.py                 # 11KB — whole file, need one function
+Read src/worker.py                 # 9KB  — whole file, need the API shape
+Read src/retry.py                  # 6KB  — whole file for one call site
+Edit src/scheduler.py              # old_text/new_text, no verification
+Read src/scheduler.py              # re-read to confirm the edit took
+Run "python -m pytest"             # separate verify step
 ```
+
+With edr — 2 calls, ~8KB of context:
 
 ```bash
-# Without edr: read a class to understand its API (hundreds of lines of implementation)
-cat src/models.py                           # entire file
+# Call 1: gather exactly what's needed
+edr do '{
+  "reads": [
+    {"file": "src/scheduler.py", "symbol": "Scheduler", "signatures": true},
+    {"file": "src/config.py", "symbol": "parse_config"},
+    {"file": "src/worker.py", "symbol": "Worker", "signatures": true}
+  ],
+  "queries": [
+    {"cmd": "refs", "symbol": "Scheduler.run"},
+    {"cmd": "search", "pattern": "retry", "body": true}
+  ]
+}'
 
-# With edr: just the method signatures (75-86% smaller)
-edr read src/models.py:UserService --signatures
+# Call 2: edit + write + verify, atomically
+edr do '{
+  "edits": [
+    {"file": "src/scheduler.py", "old_text": "def run(self):", "new_text": "def run(self, retries=3):"},
+    {"file": "src/config.py", "old_text": "\"timeout\": 30", "new_text": "\"timeout\": 30, \"retries\": 3"}
+  ],
+  "writes": [
+    {"file": "tests/test_retry.py", "content": "import pytest\n...", "mkdir": true}
+  ],
+  "verify": true
+}'
 ```
+
+Symbol reads return just the function or class asked for. `--signatures` returns a class's API without implementation bodies (75-86% smaller). Refs are import-aware. Edits across multiple files are atomic and auto-reindex. Sessions track what's already in context so repeated reads return diffs, not full content.
 
 ## Benchmarks
 
