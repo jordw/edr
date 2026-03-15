@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/jordw/edr/internal/index"
@@ -40,7 +41,11 @@ func Execute() {
 		}
 		// Detect command name from os.Args for structured error output.
 		cmdName := detectCommandName()
-		output.ErrorEnvelope(cmdName, "command_error", err.Error())
+		if ie, ok := err.(*IndexError); ok {
+			output.ErrorEnvelope(cmdName, ie.Code, ie.Message)
+		} else {
+			output.ErrorEnvelope(cmdName, "command_error", err.Error())
+		}
 		os.Exit(1)
 	}
 }
@@ -103,8 +108,23 @@ func openDBStrict(cmd *cobra.Command) (*index.DB, error) {
 	return openDBStrictRoot(getRoot(cmd))
 }
 
+// IndexError is a structured error for missing or empty index.
+// It carries an error code ("no_index" or "empty_index") so that
+// callers can produce structured JSON output with the correct code.
+type IndexError struct {
+	Code    string // "no_index" or "empty_index"
+	Message string
+}
+
+func (e *IndexError) Error() string { return e.Message }
+
 // openDBStrictRoot opens the DB, validates the index exists, and returns an error if not.
 func openDBStrictRoot(root string) (*index.DB, error) {
+	// Check whether .edr directory existed before OpenDB creates it.
+	edrDir := filepath.Join(root, ".edr")
+	_, statErr := os.Stat(edrDir)
+	edrExisted := statErr == nil
+
 	db, err := index.OpenDB(root)
 	if err != nil {
 		return nil, err
@@ -117,7 +137,16 @@ func openDBStrictRoot(root string) (*index.DB, error) {
 	}
 	if files == 0 {
 		db.Close()
-		return nil, fmt.Errorf("no index found — run \"edr reindex\" first")
+		if !edrExisted {
+			return nil, &IndexError{
+				Code:    "no_index",
+				Message: "no index found — run \"edr reindex\" first",
+			}
+		}
+		return nil, &IndexError{
+			Code:    "empty_index",
+			Message: "index contains 0 files — run \"edr reindex\"",
+		}
 	}
 	output.SetRoot(db.Root())
 	return db, nil

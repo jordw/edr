@@ -526,12 +526,15 @@ func emitPerEditOps(env *output.Envelope, edits []doEdit, result map[string]any)
 
 		// For dry-run, attach the per-file preview if available
 		if len(dryEdits) > 0 {
-			// Match by file name
+			// Match by file name and copy all enrichment fields
 			for _, de := range dryEdits {
 				if dm, ok := de.(map[string]any); ok {
 					if f, _ := dm["file"].(string); f == e.File {
-						if d, ok := dm["diff"].(string); ok {
-							op["diff"] = d
+						for _, key := range []string{"diff", "destructive", "old_size", "new_size",
+							"lines_added", "lines_removed", "lines_changed", "diff_available"} {
+							if v, ok := dm[key]; ok {
+								op[key] = v
+							}
 						}
 						break
 					}

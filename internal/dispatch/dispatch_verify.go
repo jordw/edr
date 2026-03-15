@@ -12,6 +12,12 @@ import (
 	"github.com/jordw/edr/internal/index"
 )
 
+// DispatchVerify runs verification without requiring a DB or index.
+// This avoids creating .edr as a side effect on unindexed repos.
+func DispatchVerify(ctx context.Context, root string, args []string, flags map[string]any) (any, error) {
+	return runVerify(ctx, nil, root, args, flags)
+}
+
 func runVerify(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
 	command := flagString(flags, "command", "")
 	level := flagString(flags, "level", "build")

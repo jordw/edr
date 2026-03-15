@@ -1,6 +1,7 @@
 package dispatch
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -289,9 +290,47 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 				result = append(result[:r.StartByte], append([]byte(r.Replacement), result[r.EndByte:]...)...)
 			}
 			diff := edit.UnifiedDiff(rel, fe.original, result)
+
+			// Compute edit metrics from the replaced spans, matching standalone.
+			// Sum old/new span sizes across all edits for this file.
+			var totalOldBytes, totalNewBytes int
+			var totalOldNewlines, totalNewNewlines int
+			for _, r := range fe.edits {
+				oldSpan := fe.original[r.StartByte:r.EndByte]
+				totalOldBytes += len(oldSpan)
+				totalNewBytes += len(r.Replacement)
+				totalOldNewlines += bytes.Count(oldSpan, []byte("\n"))
+				totalNewNewlines += strings.Count(r.Replacement, "\n")
+			}
+			linesAdded := 0
+			linesRemoved := 0
+			if totalNewNewlines > totalOldNewlines {
+				linesAdded = totalNewNewlines - totalOldNewlines
+			} else {
+				linesRemoved = totalOldNewlines - totalNewNewlines
+			}
+
+			// Count changed lines from the diff (matching session.CountDiffLines)
+			changedLines := 0
+			for _, line := range strings.Split(diff, "\n") {
+				if len(line) > 0 && (line[0] == '+' || line[0] == '-') {
+					if !strings.HasPrefix(line, "+++") && !strings.HasPrefix(line, "---") {
+						changedLines++
+					}
+				}
+			}
+
 			entry := map[string]any{
-				"file":        rel,
-				"description": fe.descs,
+				"file":           rel,
+				"description":    fe.descs,
+				"status":         "dry_run",
+				"destructive":    len(result) == 0,
+				"old_size":       totalOldBytes / 4,
+				"new_size":       totalNewBytes / 4,
+				"lines_added":    linesAdded,
+				"lines_removed":  linesRemoved,
+				"lines_changed":  changedLines,
+				"diff_available": diff != "",
 			}
 			if diff != "" {
 				entry["diff"] = diff

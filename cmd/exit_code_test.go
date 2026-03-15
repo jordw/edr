@@ -84,10 +84,6 @@ func TestStandaloneExitCodes(t *testing.T) {
 func TestNoIndexError(t *testing.T) {
 	binary := buildBinary(t)
 
-	// Create a temp repo WITHOUT indexing.
-	repoDir := t.TempDir()
-	os.WriteFile(filepath.Join(repoDir, "hello.go"), []byte("package main\nfunc main() {}\n"), 0644)
-
 	tests := []struct {
 		name string
 		args []string
@@ -99,6 +95,10 @@ func TestNoIndexError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Fresh temp repo per subtest so .edr does not exist yet.
+			repoDir := t.TempDir()
+			os.WriteFile(filepath.Join(repoDir, "hello.go"), []byte("package main\nfunc main() {}\n"), 0644)
+
 			cmd := exec.Command(binary, tt.args...)
 			cmd.Dir = repoDir
 			out, err := cmd.CombinedOutput()
@@ -110,6 +110,7 @@ func TestNoIndexError(t *testing.T) {
 			var env struct {
 				OK     bool `json:"ok"`
 				Errors []struct {
+					Code    string `json:"code"`
 					Message string `json:"message"`
 				} `json:"errors"`
 			}
@@ -121,14 +122,21 @@ func TestNoIndexError(t *testing.T) {
 				t.Errorf("expected ok:false, got ok:true\noutput: %s", out)
 			}
 
-			found := false
+			foundCode := false
+			foundMsg := false
 			for _, e := range env.Errors {
+				if e.Code == "no_index" {
+					foundCode = true
+				}
 				if strings.Contains(e.Message, "no index found") {
-					found = true
+					foundMsg = true
 				}
 			}
-			if !found {
-				t.Errorf("expected \"no index found\" error, got: %s", out)
+			if !foundCode {
+				t.Errorf("expected error code \"no_index\", got: %s", out)
+			}
+			if !foundMsg {
+				t.Errorf("expected \"no index found\" error message, got: %s", out)
 			}
 		})
 	}
@@ -138,8 +146,6 @@ func TestNoIndexError(t *testing.T) {
 // a clear error on an unindexed repo, matching standalone behavior.
 func TestBatchNoIndex(t *testing.T) {
 	binary := buildBinary(t)
-	repoDir := t.TempDir()
-	os.WriteFile(filepath.Join(repoDir, "hello.go"), []byte("package main\n"), 0644)
 
 	tests := []struct {
 		name string
@@ -150,14 +156,18 @@ func TestBatchNoIndex(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Fresh temp repo per subtest so .edr does not exist yet.
+			repoDir := t.TempDir()
+			os.WriteFile(filepath.Join(repoDir, "hello.go"), []byte("package main\n"), 0644)
+
 			cmd := exec.Command(binary, tt.args...)
 			cmd.Dir = repoDir
 			out, err := cmd.CombinedOutput()
 			if err == nil {
 				t.Fatal("expected non-zero exit, got 0")
 			}
-			if !strings.Contains(string(out), "no index found") {
-				t.Errorf("expected no index found error, got: %s", out)
+			if !strings.Contains(string(out), "no_index") {
+				t.Errorf("expected no_index error code, got: %s", out)
 			}
 		})
 	}
@@ -189,6 +199,34 @@ func TestVerifyWithoutIndex(t *testing.T) {
 	}
 	if env.Verify == nil {
 		t.Error("verify field should be set")
+	}
+}
+
+// TestVerifyNoSideEffects verifies that verify does not create .edr directory.
+func TestVerifyNoSideEffects(t *testing.T) {
+	binary := buildBinary(t)
+	repoDir := t.TempDir()
+	os.WriteFile(filepath.Join(repoDir, "main.go"), []byte("package main\nfunc main() {}\n"), 0644)
+	os.WriteFile(filepath.Join(repoDir, "go.mod"), []byte("module test\n"), 0644)
+
+	// Run verify
+	cmd := exec.Command(binary, "verify")
+	cmd.Dir = repoDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("verify failed: %v\n%s", err, out)
+	}
+
+	// .edr must not exist
+	if _, err := os.Stat(filepath.Join(repoDir, ".edr")); err == nil {
+		t.Error(".edr directory was created by verify — verify should have no side effects")
+	}
+
+	// Subsequent read should get no_index, not empty_index
+	cmd = exec.Command(binary, "read", "main.go")
+	cmd.Dir = repoDir
+	out, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(out), "no_index") {
+		t.Errorf("expected no_index error after verify, got: %s", out)
 	}
 }
 

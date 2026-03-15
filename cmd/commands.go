@@ -8,9 +8,10 @@ import (
 	"os"
 	"runtime/pprof"
 
+	"path/filepath"
+
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
-	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
 	"github.com/spf13/cobra"
@@ -266,19 +267,18 @@ var verifyCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		flags := extractFlags(cmd)
 
-		// Verify does not need the symbol index — just the root path.
-		// Open DB without index validation so verify works on unindexed repos.
+		// Verify does not need the symbol index or .edr directory.
+		// Resolve root without opening a DB to avoid creating .edr as a side effect.
 		root := getRoot(cmd)
-		db, err := index.OpenDB(root)
+		absRoot, err := filepath.Abs(root)
 		if err != nil {
 			return err
 		}
-		defer db.Close()
-		output.SetRoot(db.Root())
+		output.SetRoot(absRoot)
 
 		env := output.NewEnvelope("verify")
 
-		result, dispErr := dispatch.Dispatch(context.Background(), db, "verify", args, flags)
+		result, dispErr := dispatch.DispatchVerify(context.Background(), absRoot, args, flags)
 		if dispErr != nil {
 			env.SetVerify(map[string]any{"ok": false, "error": dispErr.Error()})
 		} else {
@@ -298,6 +298,11 @@ func init() { cmdspec.RegisterFlags(verifyCmd.Flags(), "verify") }
 // addDispatchError converts a dispatch error into a structured envelope error
 // with optional metadata (candidates, suggestion).
 func addDispatchError(env *output.Envelope, err error) {
+	var idxErr *IndexError
+	if errors.As(err, &idxErr) {
+		env.AddError(idxErr.Code, idxErr.Message)
+		return
+	}
 	var nfErr *dispatch.NotFoundError
 	if errors.As(err, &nfErr) {
 		opErr := output.OpError{Code: "not_found", Message: nfErr.Error()}
