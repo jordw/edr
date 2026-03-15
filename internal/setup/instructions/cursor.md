@@ -1,26 +1,32 @@
 # edr: use for all file operations
 
-Use `edr` via terminal instead of built-in file reading and editing tools. It gives you structured output, token budgets, and smart operations.
+Use `edr` via terminal instead of built-in file reading and editing tools. It gives you structured JSON output, token budgets, and symbol-aware operations.
+
+**Set up a session once per conversation** — re-reading unchanged files returns `{unchanged: true}` instead of the full content:
+
+```bash
+export EDR_SESSION=$(uuidgen)
+```
 
 ## Quick reference
 
 ```bash
-# Read a file or symbol
-edr read src/main.go
+# Read a file or symbol (--sig = signatures only, 75% fewer tokens)
+edr -r src/main.go
 edr -r src/main.go:Server --sig
 
-# Search (symbol or text)
-edr search "handleRequest" --body
+# Search symbols (default) or text
+edr -s "handleRequest"
 edr -s "TODO" --text --include "*.go"
 
 # Symbol map for orientation
 edr map --dir internal/ --type function
 
-# Edit + verify in one call
-edr -e src/main.go --old "old" --new "new" -v
+# Edit + auto-verify in one call
+edr -e src/main.go --old "old" --new "new"
 
 # Create a file
-edr write src/new.go --content "package main" --mkdir
+edr -w src/new.go --content "package main" --mkdir
 
 # Batch everything in one call
 edr -r src/main.go --sig -s "pattern" -e src/main.go --old "x" --new "y"
@@ -28,7 +34,15 @@ edr -r src/main.go --sig -s "pattern" -e src/main.go --old "x" --new "y"
 
 ## Key patterns
 
-- Gather context in one call, mutate in the next
+- Gather context in one call (`-r`, `-s`), mutate in the next (`-e`, `-w`)
 - Use `--budget N` to limit response size
 - Use `--sig` on classes/structs to see the API without implementation
-- Individual CLI commands also work: `edr read`, `edr search`, `edr map`, `edr edit`, etc.
+- Use `--new -` with heredoc for multi-line replacements
+- `-s "pattern"` searches symbol names; add `--text` for full-text grep
+- Use `edr refs Symbol --impact` before refactoring
+
+## If edr is not found
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```

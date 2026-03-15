@@ -27,7 +27,7 @@ are currently permissive (>= 0.5) and documented per-test. This track gates all
 optimization work.
 
 **Session lifecycle** exercises a full agent workflow (orient, read, search, explore,
-edit, verify) with session optimizations (delta reads, body dedup, slim edits).
+edit, verify) with session optimizations (body dedup).
 It validates session-level behavior, not individual command correctness.
 
 **Scenario validation** checks that JSON scenario files parse correctly and their

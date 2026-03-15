@@ -173,11 +173,14 @@ type writeResult struct {
 }
 
 type summaryResult struct {
-	Edits   int      `json:"edits,omitempty"`
-	Writes  int      `json:"writes,omitempty"`
-	Renames int      `json:"renames,omitempty"`
-	Status  string   `json:"status"`
-	Hints   []string `json:"hints,omitempty"`
+	Edits       int      `json:"edits,omitempty"`
+	Writes      int      `json:"writes,omitempty"`
+	Renames     int      `json:"renames,omitempty"`
+	Status      string   `json:"status"`
+	Applied     *bool    `json:"applied,omitempty"`
+	Verified    *bool    `json:"verified,omitempty"`
+	VerifyError string   `json:"verify_error,omitempty"`
+	Hints       []string `json:"hints,omitempty"`
 }
 
 // parseDo parses and validates batch params, returning warnings for unknown/missing fields.
@@ -564,7 +567,7 @@ func isVerifyFailed(verifyJSON json.RawMessage) bool {
 	return false
 }
 
-func buildSummary(p *doParams, editsFailed bool, writeResults []writeResult, verifyFailed bool) *summaryResult {
+func buildSummary(p *doParams, editsFailed bool, writeResults []writeResult, verifyJSON json.RawMessage, allNoop bool) *summaryResult {
 	hasEdits := len(p.Edits) > 0
 	hasWrites := len(p.Writes) > 0
 	hasRenames := len(p.Renames) > 0
@@ -592,14 +595,38 @@ func buildSummary(p *doParams, editsFailed bool, writeResults []writeResult, ver
 		}
 	}
 
+	verifyFailed := isVerifyFailed(verifyJSON)
+
 	if editsFailed || writesFailed {
 		s.Status = "failed"
+		f := false
+		s.Applied = &f
 	} else if p.DryRun != nil && *p.DryRun {
 		s.Status = "dry_run"
 	} else if verifyFailed {
 		s.Status = "verify_failed"
+		t := true
+		s.Applied = &t
+		f := false
+		s.Verified = &f
+		// Extract verify error message
+		if verifyJSON != nil {
+			var vm map[string]any
+			if json.Unmarshal(verifyJSON, &vm) == nil {
+				if errMsg, ok := vm["error"].(string); ok {
+					s.VerifyError = errMsg
+				}
+			}
+		}
+	} else if allNoop {
+		s.Status = "noop"
 	} else {
 		s.Status = "applied"
+		t := true
+		s.Applied = &t
+		if verifyJSON != nil {
+			s.Verified = &t
+		}
 	}
 
 	return s
@@ -779,8 +806,7 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 	}
 
 	// 7. Summary
-	verifyFailed := isVerifyFailed(resp.Verify)
-	resp.Summary = buildSummary(&p, editsFailed, resp.Writes, verifyFailed)
+	resp.Summary = buildSummary(&p, editsFailed, resp.Writes, resp.Verify, allNoop)
 
 	if len(warnings) > 0 {
 		resp.Warnings = warnings

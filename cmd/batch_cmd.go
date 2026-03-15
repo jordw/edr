@@ -19,7 +19,7 @@ import (
 func IsBatchFlag(arg string) bool {
 	switch arg {
 	case "-r", "--read", "-s", "--search", "-e", "--edit", "-w", "--write",
-		"-v", "--verify", "--no-verify":
+		"-V", "--verify", "--no-verify":
 		return true
 	}
 	return false
@@ -29,7 +29,7 @@ var batchCmd = &cobra.Command{
 	Use:   "batch",
 	Short: "Execute batched operations",
 	Long: `Execute multiple operations in a single batch. Operations are specified
-as ordered flags: -r (read), -s (search), -e (edit), -w (write), -v (verify).
+as ordered flags: -r (read), -s (search), -e (edit), -w (write), -V (verify).
 
 Modifier flags apply to the preceding operation. Verify runs automatically
 when edits are present (use --no-verify to skip).
@@ -40,7 +40,7 @@ persist across calls via .edr/sessions/<id>.json.
 Examples:
   edr -r cmd/root.go --sig -s "handleRequest"
   edr -e cmd/root.go --old "oldFunc" --new "newFunc"
-  edr -r file.go:Symbol --sig -e file.go --old "x" --new "y" -v`,
+  edr -r file.go:Symbol --sig -e file.go --old "x" --new "y" -V`,
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Handle --help/-h since DisableFlagParsing swallows it
@@ -245,7 +245,7 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			s.currentWrite = doWrite{File: val}
 
-		case "-v", "--verify":
+		case "-V", "--verify":
 			s.verifySet = true
 			s.verifyEnabled = true
 
@@ -587,7 +587,7 @@ func runBatch(args []string) error {
 		root, _ = os.Getwd()
 	}
 
-	db, err := openDBWithRoot(root, false)
+	db, err := openDBWithRoot(root, true)
 	if err != nil {
 		return err
 	}

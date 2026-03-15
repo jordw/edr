@@ -70,7 +70,7 @@ func runVerify(ctx context.Context, db *index.DB, root string, args []string, fl
 }
 
 // goVerifyScope returns Go package arguments scoped to the edited files.
-// If "files" is set in flags, it computes the unique ./dir/... packages.
+// If "files" is set in flags, it computes the unique ./dir packages.
 // Falls back to "./..." when no files are specified.
 func goVerifyScope(root string, flags map[string]any) string {
 	files, _ := flags["files"].([]string)
@@ -89,10 +89,9 @@ func goVerifyScope(root string, flags map[string]any) string {
 		}
 		seen[dir] = true
 	}
-	// If root package is included, just use ./...
-	if seen["."] {
-		return "./..."
-	}
+	// Scope to exact package directories only — never expand to ./...
+	// This avoids pulling in junk directories (scratch/, tmp_agent_flow/) that
+	// happen to contain broken .go files.
 	parts := make([]string, 0, len(seen))
 	for dir := range seen {
 		parts = append(parts, dir)

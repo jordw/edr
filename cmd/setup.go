@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/jordw/edr/internal/setup"
 	"github.com/spf13/cobra"
@@ -74,10 +73,11 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	} else {
 		target = setup.DetectTarget(root)
 		if target == "" {
-			target = setup.TargetGeneric
+			// No existing config file found — default to CLAUDE.md (most common).
+			target = setup.TargetClaude
 			if !jsonOut {
-				fmt.Fprintf(os.Stderr, "edr: no agent config detected, printing instructions to stdout\n")
-				fmt.Fprintf(os.Stderr, "edr: use --claude, --cursor, or --codex to write to a specific file\n")
+				fmt.Fprintf(os.Stderr, "  no agent config detected, creating %s\n", setup.ConfigFile(target))
+				fmt.Fprintf(os.Stderr, "  use --cursor or --codex for other agents\n")
 			}
 		}
 	}
@@ -85,18 +85,16 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	result := setupResult{Target: string(target), CurrentHash: BuildHash}
 
 	// Step 1: Index (unless --skip-index).
+	// openDBWithRoot prints progress ("edr: index ready (N files, M symbols)") to stderr.
 	skipIndex, _ := cmd.Flags().GetBool("skip-index")
 	if !skipIndex {
-		db, err := openDBWithRoot(root, false)
+		db, err := openDBWithRoot(root, jsonOut)
 		if err != nil {
 			result.Error = fmt.Sprintf("index failed: %v", err)
 			return printSetupOutput(result, jsonOut)
 		}
 		db.Close()
 		result.Indexed = true
-		if !jsonOut {
-			fmt.Fprintf(os.Stderr, "  indexed %s\n", filepath.Base(root))
-		}
 	}
 
 	// Step 2: Ensure .edr/ in .gitignore.
@@ -104,9 +102,6 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "warning: gitignore: %v\n", err)
 	} else {
 		result.Gitignore = true
-		if !jsonOut {
-			fmt.Fprintf(os.Stderr, "  added .edr/ to .gitignore\n")
-		}
 	}
 
 	// Step 3: Inject instructions.

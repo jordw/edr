@@ -25,7 +25,7 @@ edr -e src/main.go --old "oldFunc()" --new "newFunc()" -w src/new_test.go --cont
 | `Edit` (old/new strings) | `edr -e f.go --old "x" --new "y"` | Atomic multi-file, auto re-index, auto-verify |
 | `Write` (create file) | `edr -w f.go --content "..." --mkdir` | Auto-indexes, batchable with edits |
 | `Grep` (text search) | `edr -s "pat"` | Structured results |
-| `Glob` (find files) | `edr find "**/*.go"` | Glob with `**`, structured output |
+| `Glob` (find files) | `edr -s "pattern" --include "*.go"` | Text search with glob filter |
 | Multiple tool calls | `edr -r f.go -s "pat" -e f.go --old "x" --new "y"` | Everything in one call |
 
 ## Development workflow (edr on itself)
@@ -97,14 +97,16 @@ Flags: `--dir`, `--glob`, `--type`, `--grep`, `--budget`
 All edits return `status` and `hash` for chaining.
 
 ```bash
-edr edit src/config.go --old "oldName" --new "newName"
-edr edit src/config.go --old "oldName" --new "newName" --all
-edr edit src/config.go parseConfig --new "func parseConfig() { ... }"
-edr edit src/config.go --start-line 45 --end-line 60 --new "replacement"
-edr edit src/config.go --old "oldName" --new "newName" --dry-run
+edr edit src/config.go --old-text "oldName" --new-text "newName"
+edr edit src/config.go --old-text "oldName" --new-text "newName" --all
+edr edit src/config.go parseConfig --new-text "func parseConfig() { ... }"
+edr edit src/config.go --start-line 45 --end-line 60 --new-text "replacement"
+edr edit src/config.go --old-text "oldName" --new-text "newName" --dry-run
 ```
 
-Flags: `--old`, `--new`, `--all`, `--dry-run`, `--expect-hash`, `--start-line`, `--end-line`
+Flags: `--old-text`, `--new-text`, `--all`, `--dry-run`, `--expect-hash`, `--start-line`, `--end-line`
+
+**Note:** Batch mode (`-e`) uses `--old`/`--new`; standalone `edr edit` uses `--old-text`/`--new-text`.
 
 ### `write` — Create or overwrite file
 
@@ -163,7 +165,7 @@ Batch flags combine multiple operations in one CLI call. This is the primary int
 | `-s "pattern"` | Search | `--text`, `--include`, `--exclude`, `--context N`, `--limit N` |
 | `-e file[:symbol]` | Edit | `--old`/`--new`, `--lines N-M`, `--all`, `--dry-run` |
 | `-w file` | Write | `--content`, `--after`, `--inside`, `--mkdir` |
-| `-v` | Verify | Implicit when edits present; `--no-verify` to skip |
+| `-V` | Verify | Implicit when edits present; `--no-verify` to skip |
 
 ### Defaults
 
@@ -194,9 +196,6 @@ edr -w src/models.go --inside UserStore --content "CreatedAt time.Time" \
 
 # Read with line range, edit with line range
 edr -r src/config.go --lines 10-50 -e src/config.go --lines 10-15 --new "replacement"
-
-# Edit + read back result in one call
-edr -e src/config.go --old "old" --new "new" --read-after-edit
 ```
 
 ### Typical 2-call workflow
@@ -218,20 +217,7 @@ edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "packa
 5. **Use `--inside`** to add fields/methods to a class without reading the file first.
 6. **Preview renames:** `edr rename oldName newName --dry-run`.
 7. **Check impact before refactoring:** `edr refs Symbol --impact` (Go/Python/JS/TS only).
-8. **Set `EDR_SESSION`** to enable delta reads across calls. `{unchanged: true}` saves tokens. Use `--full` to force.
-9. **Use `--new -`** with heredoc for large replacement text.
-
-## Sessions
-
-Sessions track what the agent has already seen, enabling two optimizations:
-
-- **Delta reads**: Re-reading a file/symbol returns `{unchanged: true}` if identical. Use `--full` to force full content.
-- **Body dedup**: Search results replace previously-seen bodies with `"[in context]"`.
-
-```bash
-export EDR_SESSION=$(uuidgen)   # set once per conversation
-# All subsequent edr calls share the session automatically.
-```
+8. **Use `--new -`** with heredoc for large replacement text.
 
 ## Benchmarks
 
@@ -259,42 +245,3 @@ Key files:
 **Admin**: `edr reindex`, `edr setup`
 
 All output is structured JSON. File paths are relative to repo root. Edit commands return `hash`.
-
-# edr: use for all file operations
-
-**Use `edr` via Bash instead of Read, Edit, Write, Grep, and Glob.** It gives you structured output, token budgets, and smart operations that raw file tools can't match.
-
-**Use batch flags for all operations:**
-
-```bash
-# Gather context (batch read + search in one call):
-edr -r src/main.go:Server --sig -r src/config.go -s "handleRequest"
-
-# Mutate + verify (auto-verifies when edits present):
-edr -e src/main.go --old "oldFunc()" --new "newFunc()" -w src/new_test.go --content "..."
-```
-
-## Quick reference
-
-| Instead of... | Use edr... |
-|---|---|
-| `Read` (whole file) | `edr -r f.go` |
-| `Read` (symbol only) | `edr -r f.go:FuncName` or `edr -r f.go:ClassName --sig` |
-| `Edit` (old/new) | `edr -e f.go --old "x" --new "y"` |
-| `Write` (create file) | `edr -w f.go --content "..."` |
-| `Grep` (search) | `edr -s "pattern"` |
-| `Glob` (find files) | `edr find "**/*.go"` |
-| Multiple tool calls | `edr -r f.go -s "pat" -e f.go --old "x" --new "y"` |
-
-## Key patterns
-
-- **Batch reads + searches** in one call, then batch edits in the next
-- **Use `--sig`** on classes/structs to see the API without implementation (75%+ fewer tokens)
-- **Use `--budget N`** to limit response size
-- **Use `--inside`** to add methods/fields without reading the file first: `edr -w f.go --inside MyStruct --content "Name string"`
-
-## Standalone commands
-
-`edr read`, `edr search`, `edr map`, `edr edit`, `edr write`, `edr refs`, `edr rename`, `edr verify`.
-
-Run `edr <command> --help` for flags. All output is structured JSON.

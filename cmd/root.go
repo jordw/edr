@@ -115,9 +115,15 @@ func openDBWithRoot(root string, quiet bool) (*index.DB, error) {
 			db.Close()
 			return nil, err
 		}
-		if !quiet && indexed {
+		if indexed {
 			totalFiles, totalSyms, _ := db.Stats(ctx)
-			fmt.Fprintf(os.Stderr, "\redr: index ready (%d files, %d symbols)\n", totalFiles, totalSyms)
+			if !quiet {
+				fmt.Fprintf(os.Stderr, "\redr: index ready (%d files, %d symbols)\n", totalFiles, totalSyms)
+			}
+			if totalFiles == 0 {
+				db.Close()
+				return nil, fmt.Errorf("index ready but 0 files indexed — is --root correct? (%s)", root)
+			}
 		}
 	}
 

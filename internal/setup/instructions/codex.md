@@ -1,43 +1,50 @@
 # edr: use for all file operations
 
-Use `edr` for reading, editing, searching, and navigating code. It gives you structured JSON output, token budgets, and symbol-aware operations.
+Use `edr` for reading, editing, searching, and navigating code. It gives you structured JSON output, token budgets, and symbol-aware operations. Fully local — no network required.
 
-## Quick start
+**Set up a session once per conversation** — re-reading unchanged files returns `{unchanged: true}` instead of the full content:
 
 ```bash
-# Read a file or symbol
-edr read src/main.go
-edr read src/main.go:Server
+export EDR_SESSION=$(uuidgen)
+```
 
-# Search
-edr search "handleRequest" --body
-edr search "TODO" --text --include "*.go"
+## Quick reference
 
-# Symbol map
+```bash
+# Read a file or symbol (--sig = signatures only, 75% fewer tokens)
+edr -r src/main.go
+edr -r src/main.go:Server --sig
+
+# Search symbols (default) or text
+edr -s "handleRequest"
+edr -s "TODO" --text --include "*.go"
+
+# Symbol map for orientation
 edr map --dir internal/ --type function
 
-# Edit + verify
-edr edit src/main.go --old_text "old" --new_text "new"
-edr verify
+# Edit + auto-verify
+edr -e src/main.go --old "old" --new "new"
 
 # Create a file
-edr write src/new.go --content "package main"
+edr -w src/new.go --content "package main"
 
-# Find references
+# Find references and impact
 edr refs Server --impact
+
+# Batch everything in one call
+edr -r src/main.go --sig -s "pattern" -e src/main.go --old "x" --new "y"
 ```
 
-## Batch mode (more efficient)
+## Key patterns
 
-Use batch flags to combine operations in one call:
+- Gather context in one call (`-r`, `-s`), mutate in the next (`-e`, `-w`)
+- Use `--budget N` to limit response size
+- Use `--sig` on classes/structs to see the API without implementation
+- Use `--new -` with heredoc for multi-line replacements
+- `-s "pattern"` searches symbol names; add `--text` for full-text grep
+
+## If edr is not found
 
 ```bash
-# Gather context
-edr -r src/main.go:Server --sig -s "handleRequest"
-
-# Edit + verify
-edr -e src/main.go --old "old" --new "new" -v
+export PATH="$HOME/.local/bin:$PATH"
 ```
-
-Use `--budget N` to limit response size. Use `--sig` on classes to see the API without bodies.
-All output is structured JSON. Run `edr <command> --help` for details.
