@@ -1272,6 +1272,18 @@ func (d *DB) symbolNotFoundError(ctx context.Context, name, file string) error {
 	var msg string
 	if file != "" {
 		msg = fmt.Sprintf("symbol %q not found in %s", name, file)
+		// Check if the file exists on disk but isn't indexed (e.g. gitignored)
+		absFile := file
+		if !filepath.IsAbs(file) {
+			absFile = filepath.Join(d.root, file)
+		}
+		hash, _ := d.GetFileHash(ctx, absFile)
+		if hash == "" {
+			if _, statErr := os.Stat(absFile); statErr == nil {
+				// File exists but not in index — likely gitignored
+				msg += " (file exists but is not indexed — it may be gitignored)"
+			}
+		}
 	} else {
 		msg = fmt.Sprintf("symbol %q not found", name)
 	}

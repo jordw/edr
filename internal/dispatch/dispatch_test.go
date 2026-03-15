@@ -1624,3 +1624,88 @@ func hello() {}
 	}
 }
 
+
+func TestSymbolsHintForUnindexedFile(t *testing.T) {
+	tmp := t.TempDir()
+
+	// Create and index a Go file.
+	goFile := filepath.Join(tmp, "main.go")
+	if err := os.WriteFile(goFile, []byte("package main\n\nfunc hello() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a file AFTER indexing (simulates a gitignored file that exists but isn't indexed).
+	unindexed := filepath.Join(tmp, "ignored.go")
+	if err := os.WriteFile(unindexed, []byte("package main\n\nfunc secret() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Dispatch "map" with a file arg routes to symbols.
+	result, err := dispatch.Dispatch(ctx, db, "map", []string{"ignored.go"}, map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := string(data)
+	if !strings.Contains(s, "not indexed") {
+		t.Errorf("expected hint about unindexed file, got: %s", s)
+	}
+	if !strings.Contains(s, "gitignored") {
+		t.Errorf("expected gitignored mention, got: %s", s)
+	}
+}
+
+func TestSymbolNotFoundHintForUnindexedFile(t *testing.T) {
+	tmp := t.TempDir()
+
+	// Create and index a Go file.
+	goFile := filepath.Join(tmp, "main.go")
+	if err := os.WriteFile(goFile, []byte("package main\n\nfunc hello() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a file AFTER indexing.
+	unindexed := filepath.Join(tmp, "ignored.go")
+	if err := os.WriteFile(unindexed, []byte("package main\n\nfunc secret() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Try to read a symbol from the unindexed file — error should mention gitignored.
+	_, err = dispatch.Dispatch(ctx, db, "read", []string{"ignored.go:secret"}, map[string]any{})
+	if err == nil {
+		t.Fatal("expected error for symbol in unindexed file")
+	}
+	if !strings.Contains(err.Error(), "not indexed") {
+		t.Errorf("expected 'not indexed' in error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "gitignored") {
+		t.Errorf("expected 'gitignored' in error, got: %v", err)
+	}
+}

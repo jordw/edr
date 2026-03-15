@@ -644,12 +644,12 @@ func batchResultError(result json.RawMessage) error {
 		}
 	}
 
-	// Check verify for ok:false
+	// Check verify for ok:false (exit code 2 to distinguish from operation failures)
 	if verify, ok := m["verify"]; ok {
 		var vm map[string]any
 		if json.Unmarshal(verify, &vm) == nil {
 			if ok, _ := vm["ok"].(bool); !ok {
-				return silentError{}
+				return silentError{code: 2}
 			}
 		}
 	}
@@ -674,6 +674,13 @@ func appendStringSlice(existing any, val string) []string {
 
 // silentError signals non-zero exit without printing an additional error message
 // (the structured JSON response was already printed).
-type silentError struct{}
+// Code 1 = operation failure (edit/read/write), Code 2 = verify failure.
+type silentError struct{ code int }
 
-func (silentError) Error() string { return "" }
+func (e silentError) Error() string { return "" }
+func (e silentError) ExitCode() int {
+	if e.code == 0 {
+		return 1
+	}
+	return e.code
+}

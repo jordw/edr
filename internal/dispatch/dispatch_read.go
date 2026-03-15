@@ -379,6 +379,19 @@ func runSymbols(ctx context.Context, db *index.DB, root string, args []string, f
 		return nil, err
 	}
 
+	// If no symbols found, check if the file is unindexed (e.g. gitignored)
+	if len(syms) == 0 {
+		if hash, _ := db.GetFileHash(ctx, file); hash == "" {
+			if _, statErr := os.Stat(file); statErr == nil {
+				return map[string]any{
+					"file":    output.Rel(file),
+					"symbols": nil,
+					"hint":    "file exists but is not indexed (it may be gitignored)",
+				}, nil
+			}
+		}
+	}
+
 	// Apply filters consistent with repo-map
 	typeFilter := flagString(flags, "type", "")
 	grepFilter := flagString(flags, "grep", "")

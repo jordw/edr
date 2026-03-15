@@ -2,9 +2,11 @@ package search
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -115,5 +117,25 @@ func TestFindFilesBudgetTruncation(t *testing.T) {
 
 	if !result.Truncated {
 		t.Error("expected Truncated=true")
+	}
+}
+
+func TestFileResultJSONFieldName(t *testing.T) {
+	// Verify the JSON field is "size_bytes", not "size".
+	r := FileResult{
+		File:    "main.go",
+		Size:    1234,
+		ModTime: "2026-01-01T00:00:00Z",
+	}
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if !strings.Contains(s, `"size_bytes"`) {
+		t.Errorf("expected JSON field 'size_bytes', got: %s", s)
+	}
+	if strings.Contains(s, `"size":`+fmt.Sprintf("%d", r.Size)) && !strings.Contains(s, `"size_bytes"`) {
+		t.Errorf("found old field name 'size' instead of 'size_bytes': %s", s)
 	}
 }

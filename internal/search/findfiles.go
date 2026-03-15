@@ -14,7 +14,7 @@ import (
 // FileResult represents a matched file from find-files.
 type FileResult struct {
 	File    string `json:"file"`
-	Size    int    `json:"size"`     // bytes
+	Size    int    `json:"size_bytes"` // bytes
 	ModTime string `json:"mod_time"` // RFC3339
 }
 

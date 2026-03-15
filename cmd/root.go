@@ -35,8 +35,8 @@ func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		// Silent errors (e.g. batch with failed operations) already printed
 		// their structured output — just exit non-zero.
-		if _, ok := err.(silentError); ok {
-			os.Exit(1)
+		if se, ok := err.(silentError); ok {
+			os.Exit(se.ExitCode())
 		}
 		// Emit structured JSON error to stdout for machine-friendly parsing.
 		// Keep non-zero exit code for shell chaining.
