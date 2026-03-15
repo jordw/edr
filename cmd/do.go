@@ -585,7 +585,8 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 		}
 	}
 
-	// 5b. Post-edit reads — return edited file contents to save a round trip
+	// 5b. Post-edit reads — return signatures of edited files to save a round trip.
+	// Signatures show the updated API shape (75-86% fewer tokens than full content).
 	if editsFailed && p.ReadAfterEdit != nil && *p.ReadAfterEdit {
 		parts = append(parts, `"post_edit_reads":"skipped: edits failed"`)
 	} else if (hasEdits || hasWrites) && p.ReadAfterEdit != nil && *p.ReadAfterEdit && (p.DryRun == nil || !*p.DryRun) {
@@ -598,7 +599,11 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 		}
 		var readCmds []dispatch.MultiCmd
 		for f := range editedFiles {
-			readCmds = append(readCmds, dispatch.MultiCmd{Cmd: "read", Args: []string{f}, Flags: map[string]any{"full": true}})
+			readCmds = append(readCmds, dispatch.MultiCmd{
+				Cmd:   "read",
+				Args:  []string{f},
+				Flags: map[string]any{"signatures": true, "full": true},
+			})
 		}
 		if len(readCmds) > 0 {
 			var budgetOpt []int
@@ -635,6 +640,39 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 			// Trace: extract verify event
 			traceVerifyEvent(cb, result)
 		}
+	}
+
+	// 7. Build structured summary for mutation calls.
+	if hasEdits || hasWrites || hasRenames {
+		summary := map[string]any{}
+		if hasEdits {
+			summary["edits"] = len(p.Edits)
+		}
+		if hasWrites {
+			summary["writes"] = len(p.Writes)
+		}
+		if hasRenames {
+			summary["renames"] = len(p.Renames)
+		}
+		if editsFailed {
+			summary["status"] = "failed"
+		} else if p.DryRun != nil && *p.DryRun {
+			summary["status"] = "dry_run"
+		} else {
+			summary["status"] = "applied"
+		}
+		var hints []string
+		if hasEdits && !editsFailed && (p.ReadAfterEdit == nil || !*p.ReadAfterEdit) && (p.DryRun == nil || !*p.DryRun) {
+			hints = append(hints, "use read_after_edit:true to see updated signatures")
+		}
+		if (hasEdits || hasWrites) && !hasVerify && !editsFailed && (p.DryRun == nil || !*p.DryRun) {
+			hints = append(hints, "use verify:true to check build")
+		}
+		if len(hints) > 0 {
+			summary["hints"] = hints
+		}
+		sumJSON, _ := json.Marshal(summary)
+		parts = append(parts, fmt.Sprintf(`"summary":%s`, sumJSON))
 	}
 
 	if len(warnings) > 0 {

@@ -269,6 +269,7 @@ Renames and `init: true` clear all tracking state. Manage sessions with `edr ses
 ## Key Principles
 
 1. **Start with `edr`** — batch reads, queries, edits, writes, renames, and verify in one call. Minimize round trips.
+   Mutation responses include a `summary` with status, counts, and `hints` for next steps.
 2. **Use `budget`** to control context size. Don't dump entire files.
 3. **Gather context in one call** — `edr(reads: [...], queries: [{cmd: "search", ...}, {cmd: "explore", ...}])`.
 4. **Mutate + verify in one call** — `edr(edits: [...], writes: [...], verify: true)`.
