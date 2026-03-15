@@ -110,39 +110,20 @@ Reproduce: `bash bench/run_real_repo_benchmarks.sh` (clones repos to `/tmp`, ~10
 
 ## CLI reference
 
-**Reading and navigation:**
-
 | Command | What it does |
 |---|---|
 | `edr read file:Symbol` | Read a specific function, class, or struct |
 | `edr read file:Class --signatures` | Container API without implementation bodies |
-| `edr read file --depth N` | Progressive disclosure: collapse nesting below level N |
+| `edr read file --skeleton` | Skeleton view: blocks collapsed |
 | `edr map` | Symbol overview of the repo or a directory |
-| `edr explore Symbol --body --callers --deps` | Symbol body + callers + dependencies in one call |
-| `edr refs Symbol` | Find all references (import-aware for Go/Python/JS/TS) |
-| `edr find "**/*.go"` | Find files by glob pattern |
-
-**Searching:**
-
-| Command | What it does |
-|---|---|
 | `edr search "pattern"` | Symbol search (matches function/class names) |
 | `edr search "pattern" --text` | Text search (like grep, structured output) |
-
-**Editing:**
-
-| Command | What it does |
-|---|---|
 | `edr edit file --old "x" --new "y"` | Edit with auto re-index and verification |
 | `edr write file --inside Class` | Add a method or field without reading the file |
+| `edr refs Symbol` | Find all references (import-aware for Go/Python/JS/TS) |
 | `edr rename old new --dry-run` | Cross-file, import-aware rename with preview |
-
-**Maintenance:**
-
-| Command | What it does |
-|---|---|
 | `edr verify` | Run build/test checks (auto-detects Go/npm/Cargo) |
-| `edr init` | Build or rebuild the symbol index |
+| `edr reindex` | Rebuild the symbol index |
 
 Batch flags (`-r`, `-s`, `-e`, `-w`) combine multiple operations in one call. All output is structured JSON.
 
@@ -150,10 +131,10 @@ Batch flags (`-r`, `-s`, `-e`, `-w`) combine multiple operations in one call. Al
 
 edr can read and edit any text file. Symbol-aware features require a supported language.
 
-**Full symbol indexing** (map, read, edit, signatures, inside, move):
+**Full symbol indexing** (map, read, edit, signatures, inside):
 Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby, PHP, Zig, Lua, Bash/Shell, C#, Kotlin
 
-**Import-aware semantic refs** (refs, rename, explore callers/deps):
+**Import-aware semantic refs** (refs, rename, --impact, --chain):
 Go, Python, JavaScript, TypeScript. Other languages fall back to text-based references.
 
 ## Limitations
@@ -162,7 +143,7 @@ Go, Python, JavaScript, TypeScript. Other languages fall back to text-based refe
 - **C/C++ compiler required for building from source.** Tree-sitter grammars need CGO. The install script downloads pre-built binaries; `setup.sh` handles compiler installation for source builds.
 - **Semantic refs are partial.** Import-aware reference tracking covers Go, Python, JS, and TS. Other languages use text matching, which produces false positives.
 - **Tree-sitter, not LSP.** The index captures structure (functions, classes, types) but not full type information. It will not catch everything a language server would.
-- **Indexing cost.** First `edr init` takes 1-3s on small repos, ~30s on large ones (e.g., vitess at 1.5M LOC). The index is typically 1-5MB. Incremental re-indexing after edits is fast (~50ms per file).
+- **Indexing cost.** First `edr reindex` takes 1-3s on small repos, ~30s on large ones (e.g., vitess at 1.5M LOC). The index is typically 1-5MB. Incremental re-indexing after edits is fast (~50ms per file).
 
 ## Contributing
 
