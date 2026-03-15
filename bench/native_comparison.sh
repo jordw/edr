@@ -85,7 +85,7 @@ rel_path() {
 }
 
 edr_cmd() {
-    "$EDR" -r "$BENCH_ROOT" "$@"
+    "$EDR" --root "$BENCH_ROOT" "$@"
 }
 
 median() {
@@ -153,19 +153,18 @@ native_grep_files() {
     )
 }
 
-# Cap follow-up reads to MAX_FOLLOWUP_READS files (default 3).
-# A real agent reads grep output first and opens a few relevant files, not all.
-MAX_FOLLOWUP_READS="${MAX_FOLLOWUP_READS:-3}"
+# Read ALL files that grep matches — no artificial cap.
+# When an agent greps for a symbol and needs to understand every reference,
+# it reads every matched file. Capping at an arbitrary number (e.g., 3)
+# would undercount the native baseline.
 
 native_grep_followup_read_bytes() {
     local pattern="$1"; shift
-    local total=0 count=0
+    local total=0
     local file
     while IFS= read -r file; do
         [ -n "$file" ] || continue
-        [ "$count" -ge "$MAX_FOLLOWUP_READS" ] && break
         total=$((total + $(native_read_bytes "$(rel_path "$file")")))
-        count=$((count + 1))
     done < <(native_grep_files "$pattern" "$@")
     echo "$total"
 }
@@ -176,7 +175,6 @@ native_grep_followup_read_calls() {
     local file
     while IFS= read -r file; do
         [ -n "$file" ] || continue
-        [ "$count" -ge "$MAX_FOLLOWUP_READS" ] && break
         count=$((count + 1))
     done < <(native_grep_files "$pattern" "$@")
     echo "$count"
@@ -335,15 +333,25 @@ run_edit_function() {
     local -a edr_bytes_arr
     file="$(rel_path "$EDIT_FILE")"
     native_read=$(native_read_bytes "$file")
-    native_bytes=$((native_read * 2 + ${NATIVE_EDIT_CONFIRM_BYTES:-200}))
+    # Native workflow: read file + edit tool response (~negligible) + re-read to verify.
+    # We count file bytes twice (read + verify). The edit tool's own response is small
+    # enough to be noise on any real file.
+    native_bytes=$((native_read * 2))
     native_calls=3
+    # Real edit (not dry-run) so we measure actual verify output.
+    # Backup and restore between iterations since edit modifies the file.
+    cp "$file" "$file.bak"
     edr_bytes_arr=()
-    printf '%s' "$EDIT_NEW_TEXT" | edr_cmd edit "$EDIT_FILE" --old_text "$EDIT_OLD_TEXT" --dry-run >/dev/null 2>/dev/null || true
     for ((i = 0; i < ITERS; i++)); do
-        out=$(printf '%s' "$EDIT_NEW_TEXT" | edr_cmd edit "$EDIT_FILE" --old_text "$EDIT_OLD_TEXT" --dry-run 2>/dev/null) || true
+        cp "$file.bak" "$file"
+        touch "$file"
+        edr_cmd init >/dev/null 2>/dev/null || true
+        out=$(printf '%s' "$EDIT_NEW_TEXT" | edr_cmd edit "$EDIT_FILE" --old_text "$EDIT_OLD_TEXT" 2>/dev/null) || true
         edr_bytes_arr+=("${#out}")
     done
     edr_bytes=$(median "${edr_bytes_arr[@]}")
+    mv "$file.bak" "$file"
+    edr_cmd init >/dev/null 2>/dev/null || true
     report "Edit function" "$native_bytes" "$native_calls" "$edr_bytes" 1
     json_add "edit_function" "$native_bytes" "$native_calls" "$edr_bytes" 1
 }
@@ -355,7 +363,7 @@ run_add_method() {
     fi
     local file native_bytes native_calls edr_bytes_arr out i
     file="$(rel_path "$WRITE_FILE")"
-    native_bytes=$(($(native_read_bytes "$file") + ${NATIVE_EDIT_CONFIRM_BYTES:-200}))
+    native_bytes=$(native_read_bytes "$file")
     native_calls=2
     cp "$file" "$file.bak"
     edr_bytes_arr=()

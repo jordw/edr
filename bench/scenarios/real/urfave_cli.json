@@ -11,13 +11,13 @@
     "read_symbol": {
       "type": "read_symbol",
       "file": "help.go",
-      "spec": "help.go:helpCommandAction"
+      "spec": "help.go:ShowCommandHelp"
     },
     "find_refs": {
       "type": "refs",
-      "pattern": "helpCommandAction",
+      "pattern": "ShowCommandHelp",
       "grep_root": ".",
-      "args": ["help.go", "helpCommandAction"]
+      "args": ["help.go", "ShowCommandHelp"]
     },
     "search_context": {
       "type": "search",
@@ -32,41 +32,41 @@
       "globs": ["*.go"],
       "read_files": [
         "command.go",
-        "command_run.go",
+        "app.go",
         "help.go",
         "flag.go"
       ]
     },
     "edit_function": {
       "type": "edit",
-      "file": "command_run.go",
-      "old_text": "tracef(\"using post-parse arguments %[1]q (cmd=%[2]q)\", args, cmd.Name)",
-      "new_text": "tracef(\"using parsed arguments %[1]q (cmd=%[2]q)\", args, cmd.Name)"
+      "file": "command.go",
+      "old_text": "// HasName returns true if Command.Name matches given name",
+      "new_text": "// HasName reports whether Command.Name matches the given name"
     },
     "add_method": {
       "type": "write_inside",
       "file": "command.go",
       "inside": "Command",
-      "content": "func (cmd *Command) HasSubcommands() bool {\n\treturn len(cmd.Commands) > 0\n}\n"
+      "content": "func (cmd *Command) HasSubcommands() bool {\n\treturn len(cmd.Subcommands) > 0\n}\n"
     },
     "multi_file_read": {
       "type": "multi_read",
       "budget": 500,
       "files": [
         "command.go",
-        "command_run.go",
-        "command_parse.go"
+        "app.go",
+        "context.go"
       ]
     },
     "explore_symbol": {
       "type": "explore",
-      "pattern": "helpCommandAction",
+      "pattern": "ShowCommandHelp",
       "grep_root": ".",
-      "args": ["help.go", "helpCommandAction"],
+      "args": ["help.go", "ShowCommandHelp"],
       "native_read_files": [
         "help.go",
-        "command_run.go",
-        "command_setup.go"
+        "app.go",
+        "command.go"
       ]
     }
   }

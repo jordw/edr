@@ -222,12 +222,14 @@ func TestCorrectnessRepeatedMethodNames(t *testing.T) {
 		t.Logf("pkg_b Validate: def=%s refs=%d leaks=%d precision=%.2f",
 			refsB.Symbol.File, len(refsB.References), bLeaks, bPrecision)
 
-		// Gate: precision must be >= 0.5 (permissive initially, tighten over time)
-		if aPrecision < 0.5 {
-			t.Errorf("pkg_a Validate precision %.2f < 0.5 threshold", aPrecision)
+		// Gate: precision must be >= 0.6.
+		// Current actual precision is 0.67 (1 cross-package leak per 3 refs).
+		// Target is 0.8+ once import-aware ref filtering improves.
+		if aPrecision < 0.6 {
+			t.Errorf("pkg_a Validate precision %.2f < 0.6 threshold", aPrecision)
 		}
-		if bPrecision < 0.5 {
-			t.Errorf("pkg_b Validate precision %.2f < 0.5 threshold", bPrecision)
+		if bPrecision < 0.6 {
+			t.Errorf("pkg_b Validate precision %.2f < 0.6 threshold", bPrecision)
 		}
 	})
 
@@ -271,17 +273,18 @@ func TestCorrectnessRepeatedMethodNames(t *testing.T) {
 				bLeaks++
 			}
 		}
+		// Same threshold as Validate: 0.6 floor, 0.8 target.
 		if len(refsA.References) > 0 {
 			aPrecision := 1.0 - float64(aLeaks)/float64(len(refsA.References))
-			if aPrecision < 0.5 {
-				t.Errorf("pkg_a Init precision %.2f < 0.5", aPrecision)
+			if aPrecision < 0.6 {
+				t.Errorf("pkg_a Init precision %.2f < 0.6", aPrecision)
 			}
 			t.Logf("pkg_a Init: refs=%d leaks=%d precision=%.2f", len(refsA.References), aLeaks, aPrecision)
 		}
 		if len(refsB.References) > 0 {
 			bPrecision := 1.0 - float64(bLeaks)/float64(len(refsB.References))
-			if bPrecision < 0.5 {
-				t.Errorf("pkg_b Init precision %.2f < 0.5", bPrecision)
+			if bPrecision < 0.6 {
+				t.Errorf("pkg_b Init precision %.2f < 0.6", bPrecision)
 			}
 			t.Logf("pkg_b Init: refs=%d leaks=%d precision=%.2f", len(refsB.References), bLeaks, bPrecision)
 		}

@@ -30,6 +30,12 @@ without letting monorepo noise dominate every number.
    - Use `packages/toolkit/src` as the benchmark root.
    - Goal: TypeScript benchmark with a real package-sized source tree.
 
+7. `django/django`
+   - Use `django` (the source package) as the benchmark root.
+   - Goal: large Python codebase (1500+ files). Stress-tests indexing, ref
+     graphs, and search at scale. The other repos are all tightly-scoped
+     libraries (30-100 files); Django proves edr works on real-world codebases.
+
 ## Workflow set
 
 Run the same scenarios everywhere:

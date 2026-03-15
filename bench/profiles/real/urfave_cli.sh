@@ -7,11 +7,11 @@ API_FILE="command.go"
 API_READ_SPEC="command.go:Command"
 
 READ_SYMBOL_FILE="help.go"
-READ_SYMBOL_SPEC="help.go:helpCommandAction"
+READ_SYMBOL_SPEC="help.go:ShowCommandHelp"
 
-REFS_PATTERN="helpCommandAction"
+REFS_PATTERN="ShowCommandHelp"
 REFS_GREP_ROOT="."
-REFS_ARGS=("help.go" "helpCommandAction")
+REFS_ARGS=("help.go" "ShowCommandHelp")
 
 SEARCH_PATTERN="shellCompletion"
 SEARCH_ROOT="."
@@ -22,31 +22,31 @@ ORIENT_BUDGET=500
 ORIENT_GLOBS=("*.go")
 ORIENT_READ_FILES=(
     "command.go"
-    "command_run.go"
+    "app.go"
     "help.go"
     "flag.go"
 )
 
-EDIT_FILE="command_run.go"
-EDIT_OLD_TEXT=$'tracef("using post-parse arguments %[1]q (cmd=%[2]q)", args, cmd.Name)'
-EDIT_NEW_TEXT=$'tracef("using parsed arguments %[1]q (cmd=%[2]q)", args, cmd.Name)'
+EDIT_FILE="command.go"
+EDIT_OLD_TEXT='// HasName returns true if Command.Name matches given name'
+EDIT_NEW_TEXT='// HasName reports whether Command.Name matches the given name'
 
 WRITE_FILE="command.go"
 WRITE_INSIDE="Command"
-WRITE_CONTENT=$'func (cmd *Command) HasSubcommands() bool {\n\treturn len(cmd.Commands) > 0\n}\n'
+WRITE_CONTENT=$'func (cmd *Command) HasSubcommands() bool {\n\treturn len(cmd.Subcommands) > 0\n}\n'
 
 MULTI_READ_BUDGET=500
 MULTI_READ_FILES=(
     "command.go"
-    "command_run.go"
-    "command_parse.go"
+    "app.go"
+    "context.go"
 )
 
-EXPLORE_PATTERN="helpCommandAction"
+EXPLORE_PATTERN="ShowCommandHelp"
 EXPLORE_GREP_ROOT="."
-EXPLORE_ARGS=("help.go" "helpCommandAction")
+EXPLORE_ARGS=("help.go" "ShowCommandHelp")
 EXPLORE_NATIVE_READ_FILES=(
     "help.go"
-    "command_run.go"
-    "command_setup.go"
+    "app.go"
+    "command.go"
 )

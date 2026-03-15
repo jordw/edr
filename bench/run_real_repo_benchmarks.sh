@@ -44,11 +44,12 @@ if [ ! -x "$EDR_BIN" ]; then
 fi
 
 # Pinned commits for reproducible benchmarks (update these when re-running).
-clone_if_missing "https://github.com/urfave/cli.git" "$BASE_DIR/edr-bench-urfave-cli" "f109a216385fc57b71f7513b6377206b6e68514a"
-clone_if_missing "https://github.com/vitessio/vitess.git" "$BASE_DIR/edr-bench-vitess" "db9c49fc8f6682c582e89ab4952c2b70488cba24"
+clone_if_missing "https://github.com/urfave/cli.git" "$BASE_DIR/edr-bench-urfave-cli" "f035ffaa3749afda2cd26fb824aa940747297ef1"
+clone_if_missing "https://github.com/vitessio/vitess.git" "$BASE_DIR/edr-bench-vitess" "33d20817882abb3b8761289052bcfdd6903f743c"
 clone_if_missing "https://github.com/pallets/click.git" "$BASE_DIR/edr-bench-click" "cdab890e57a30a9f437b88ce9652f7bfce980c1f"
 clone_if_missing "https://github.com/rails/thor.git" "$BASE_DIR/edr-bench-thor" "6a680f2f929cc24d61b81197e113066aa18c8fbb"
 clone_if_missing "https://github.com/reduxjs/redux-toolkit.git" "$BASE_DIR/edr-bench-redux-toolkit" "2ebb40a7363c5cec826493eabac53fe7b1b6d5d6"
+clone_if_missing "https://github.com/django/django.git" "$BASE_DIR/edr-bench-django" "373cb3037fe4e67adbac9ac43340391e859aa957"
 
 run_profile "urfave-cli" "$SCRIPT_DIR/profiles/real/urfave_cli.sh"
 run_profile "vitess-sqlparser" "$SCRIPT_DIR/profiles/real/vitess_sqlparser.sh"
@@ -56,6 +57,7 @@ run_profile "vitess-vtgate" "$SCRIPT_DIR/profiles/real/vitess_vtgate.sh"
 run_profile "click" "$SCRIPT_DIR/profiles/real/click.sh"
 run_profile "thor" "$SCRIPT_DIR/profiles/real/thor.sh"
 run_profile "redux-toolkit" "$SCRIPT_DIR/profiles/real/redux_toolkit.sh"
+run_profile "django" "$SCRIPT_DIR/profiles/real/django.sh"
 
 echo ""
 echo "Results written to $RESULTS_DIR"
