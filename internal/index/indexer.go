@@ -577,13 +577,18 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, bool, 
 
 	// Filter out locals: symbols nested inside functions, methods,
 	// or multi-line variable/const blocks (e.g., Cobra command lambdas).
+	// Classes, structs, interfaces, modules, and enums are NOT containers
+	// for this purpose — their members (methods, fields) are public API.
 	if cfg.hideLocals {
 		for file, syms := range byFile {
 			type span struct{ start, end uint32 }
 			var containerSpans []span
 			for _, s := range syms {
-				// Any multi-line symbol can contain locals.
-				if s.StartLine < s.EndLine {
+				if s.StartLine >= s.EndLine {
+					continue
+				}
+				switch s.Type {
+				case "function", "method", "variable":
 					containerSpans = append(containerSpans, span{s.StartLine, s.EndLine})
 				}
 			}

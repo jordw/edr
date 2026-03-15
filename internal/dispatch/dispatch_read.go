@@ -385,11 +385,17 @@ func runSymbols(ctx context.Context, db *index.DB, root string, args []string, f
 	hideLocals := !flagBool(flags, "locals", false)
 
 	// Build container spans for locals filtering (same logic as RepoMap).
+	// Only function/method/variable spans hide their contents.
+	// Class/struct/interface members are public API, not locals.
 	type span struct{ start, end uint32 }
 	var containerSpans []span
 	if hideLocals {
 		for _, s := range syms {
-			if s.StartLine < s.EndLine {
+			if s.StartLine >= s.EndLine {
+				continue
+			}
+			switch s.Type {
+			case "function", "method", "variable":
 				containerSpans = append(containerSpans, span{s.StartLine, s.EndLine})
 			}
 		}

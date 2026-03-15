@@ -654,7 +654,18 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 		if hasRenames {
 			summary["renames"] = len(p.Renames)
 		}
-		if editsFailed {
+		// Check for write failures alongside edit failures.
+		writesFailed := false
+		if hasWrites {
+			for _, part := range parts {
+				if strings.HasPrefix(part, `"writes":`) {
+					if strings.Contains(part, `"ok":false`) {
+						writesFailed = true
+					}
+				}
+			}
+		}
+		if editsFailed || writesFailed {
 			summary["status"] = "failed"
 		} else if p.DryRun != nil && *p.DryRun {
 			summary["status"] = "dry_run"

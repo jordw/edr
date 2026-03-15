@@ -278,7 +278,8 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 	// Phase 2: Search files in parallel with bounded workers.
 	type fileMatches struct {
 		matches []output.Match
-		count   int
+		count   int  // total matches in file (may exceed len(matches) due to cap)
+		capped  bool // true if matches were dropped by per-file cap
 	}
 
 	const maxMatchesPerFile = 10
@@ -328,6 +329,7 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 				}
 				fm.count++
 				if len(fm.matches) >= maxMatchesPerFile {
+					fm.capped = true
 					continue
 				}
 
@@ -400,15 +402,19 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 
 	// Phase 3: Merge, sort, and apply smart budget trimming.
 	var allMatches []output.Match
+	anyCapped := false
 	for fm := range resultCh {
 		allMatches = append(allMatches, fm.matches...)
+		if fm.capped {
+			anyCapped = true
+		}
 	}
 
 	sort.Slice(allMatches, func(i, j int) bool {
 		return allMatches[i].Score > allMatches[j].Score
 	})
 
-	truncated := false
+	truncated := anyCapped
 	result := budgetTrimText(allMatches, budget, &truncated)
 
 	if result == nil {
