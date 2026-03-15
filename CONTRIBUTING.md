@@ -28,6 +28,23 @@ Open an issue with:
 - What actually happened
 - Go version (`go version`) and OS
 
+## Project structure
+
+```
+cmd/           CLI commands, batch orchestrator
+internal/
+  cmdspec/     canonical command registry (names, categories, flags)
+  index/       tree-sitter parsing, SQLite symbol index
+  search/      symbol and text search (parallel, cached)
+  edit/        file edits, transactions, diffing
+  dispatch/    command routing and execution
+  gather/      context collection with token budgets
+  session/     auto-session state (deltas, dedup, slim edits)
+  trace/       session tracing and benchmarks
+  output/      structured JSON formatting
+bench/         benchmarks and multi-language test suite
+```
+
 ## Code style
 
 - Follow standard Go conventions (`gofmt`, `go vet`)

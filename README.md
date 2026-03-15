@@ -4,9 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev)
 
-Coding agents waste most of their context window on file content they don't need. They read entire files to find one function, grep then re-read every match, and make edits one file at a time with no way to verify the result.
+Coding agents read entire files to find one function, grep then re-read every match, and make edits one file at a time with no way to verify the result.
 
-edr fixes this. It indexes your codebase by symbol (functions, classes, structs) and lets agents read exactly what they need, batch operations into single calls, and track sessions so repeated reads shrink to diffs.
+edr indexes your codebase by symbol (functions, classes, structs) and lets agents read exactly what they need, batch operations into single calls, and track what's already in context so repeated reads shrink to diffs.
 
 ## The difference
 
@@ -32,84 +32,13 @@ edr search "handleRequest" --body           # symbol-scoped results with code
 # Without edr: read a class to understand its API (hundreds of lines of implementation)
 cat src/models.py                           # entire file
 
-# With edr: just the method signatures
-edr read src/models.py:UserService --signatures   # API surface only, 75-86% smaller
+# With edr: just the method signatures (75-86% smaller)
+edr read src/models.py:UserService --signatures
 ```
-
-These compose. An agent gathers all context in one call, makes all changes in another:
-
-```bash
-# Call 1: gather context
-edr do '{
-  "reads": [
-    {"file": "lib/scheduler.py", "symbol": "Scheduler", "signatures": true},
-    {"file": "lib/scheduler.py", "symbol": "_execute_task"}
-  ],
-  "queries": [
-    {"cmd": "search", "pattern": "retry", "body": true},
-    {"cmd": "map", "dir": "internal/", "type": "function"}
-  ]
-}'
-
-# Call 2: make changes + verify
-edr do '{
-  "edits": [{"file": "lib/scheduler.py", "old_text": "self._running = True", "new_text": "self._running = False"}],
-  "writes": [{"file": "lib/scheduler_test.py", "content": "...", "mkdir": true}],
-  "verify": true
-}'
-```
-
-Each `edr do` call can mix **reads**, **queries** (search, map, explore, refs, find, diff), **edits** (old_text/new_text, symbol replacement, regex, move), **writes** (create, append, insert inside a class), **renames** (cross-file, import-aware), and **verify** (build/test).
-
-## What edr provides
-
-edr uses [tree-sitter](https://tree-sitter.github.io/tree-sitter/) to parse source files, extracts symbols with their byte ranges, and stores them in a SQLite index. On top of that:
-
-| Capability | What it does |
-|---|---|
-| Symbol reads | Read a function or class by name, not the whole file |
-| `--signatures` | A class's API without implementation bodies (75-86% smaller) |
-| `--depth` | Progressive disclosure — one nesting level at a time |
-| `--inside` | Add a method to a class without reading the file first |
-| Token budgets | Cap any response to N tokens so large repos degrade gracefully |
-| Semantic refs | Import-aware references with false positives filtered out (Go, Python, JS, TS) |
-| Delta reads | Re-reading a file/symbol returns `{unchanged: true}` or a diff |
-| Body dedup | Repeated symbol bodies in search/explore replaced with `"[in context]"` |
-| Slim edits | Small diffs inline; large diffs summarized with on-demand retrieval |
-| Hash-chained edits | File hashes detect stale writes; `expect_hash` rejects them |
-| Atomic batching | Grouped edits validate in memory, write atomically, reindex in one pass |
-
-Sessions are PPID-based and automatic — no setup required. `--no-session` to disable.
-
-## How edr compares
-
-| Tool | Strength | Tradeoff vs. edr |
-|---|---|---|
-| **ripgrep** | Fast text search, zero setup, universal | No symbol awareness or structured output. edr adds scoping but requires indexing |
-| **ctags** | Mature symbol indexing, wide editor support | Index only — no reads, edits, or sessions. edr is the index *and* the access layer, but with fewer languages than ctags |
-| **LSP** | Deep per-language semantics, refactoring | Richer type info than edr, but requires a running server per language. edr is a single binary across 13 languages |
-| **Built-in agent tools** | No setup, always available | File-at-a-time with no symbol awareness. edr reduces context but adds a build dependency |
-
-## Install
-
-For cloud agents and CI, the setup script handles everything — installs Go and gcc if needed, builds, adds to PATH:
-
-```bash
-git clone https://github.com/jordw/edr.git
-./edr/setup.sh /path/to/your/project
-```
-
-If you already have Go 1.25+ and a C compiler:
-
-```bash
-go install github.com/jordw/edr@latest
-```
-
-edr stores its index in `.edr/` at the repo root. Add `.edr/` to your `.gitignore`. Delete it at any time — it rebuilds automatically on the next query.
 
 ## Benchmarks
 
-Measured against baseline workflows that model how agents typically use built-in tools (reading whole files for one function, grepping then reading each match, separate read-edit-verify calls). Both the baselines and edr equivalents are defined in [`bench/scenarios/`](bench/scenarios/) — inspect them to judge fairness.
+Baselines model how agents use built-in tools: `Read` returns whole files, `Grep` returns line matches without symbol context, edits require a separate read-then-write. Both baselines and edr equivalents are defined in [`bench/scenarios/`](bench/scenarios/).
 
 6 real-world repos, 9 scenarios each, 3 iterations, median response bytes:
 
@@ -142,16 +71,78 @@ Measured against baseline workflows that model how agents typically use built-in
 
 Reproduce: `bash bench/run_real_repo_benchmarks.sh` (clones repos to `/tmp`, ~5 min).
 
+## Install
+
+For cloud agents and CI, the setup script handles everything — installs Go and gcc if needed, builds, adds to PATH:
+
+```bash
+git clone https://github.com/jordw/edr.git
+./edr/setup.sh /path/to/your/project
+```
+
+If you already have Go 1.25+ and a C compiler:
+
+```bash
+go install github.com/jordw/edr@latest
+```
+
+edr stores its index in `.edr/` at the repo root. Add `.edr/` to your `.gitignore`. Delete it at any time — it rebuilds automatically on the next query.
+
+## How it works
+
+edr uses [tree-sitter](https://tree-sitter.github.io/tree-sitter/) to parse source files, extracts symbols (functions, classes, structs, methods) with their byte ranges, and stores them in a SQLite index. This makes every operation symbol-aware: reads return just the symbol you asked for, searches scope results to symbol boundaries, and edits can target a symbol by name.
+
+Sessions track what content the agent has already seen. Re-reading a file returns `{unchanged: true}` or a diff of what changed. Symbol bodies that appeared in a previous response are replaced with `[in context]`. Small edit diffs are inlined automatically; large ones are summarized with on-demand retrieval. Sessions are automatic (derived from the parent process ID) — no setup required.
+
+## Capabilities
+
+| Capability | What it does |
+|---|---|
+| Symbol reads | Read a function or class by name — not the whole file |
+| `--signatures` | A container's API without implementation bodies |
+| `--depth N` | Progressive disclosure — collapse nesting below level N |
+| `--inside` | Add a method to a class without reading the file first |
+| Token budgets | Cap any response to N tokens; large repos degrade gracefully |
+| Semantic refs | Import-aware references, false positives filtered (Go, Python, JS, TS) |
+| Batch operations | Reads, searches, edits, writes, renames, and verify in one call |
+| Cross-file rename | Import-aware, with `--dry-run` preview |
+
+## Batch interface
+
+Individual commands work standalone (`edr read`, `edr search`, `edr edit`), but the batch interface is how agents typically use edr — gathering context and making changes in minimal round trips:
+
+```bash
+# Call 1: gather context
+edr do '{
+  "reads": [
+    {"file": "lib/scheduler.py", "symbol": "Scheduler", "signatures": true},
+    {"file": "lib/scheduler.py", "symbol": "_execute_task"}
+  ],
+  "queries": [
+    {"cmd": "search", "pattern": "retry", "body": true},
+    {"cmd": "map", "dir": "internal/", "type": "function"}
+  ]
+}'
+
+# Call 2: make changes + verify
+edr do '{
+  "edits": [{"file": "lib/scheduler.py", "old_text": "self._running = True", "new_text": "self._running = False"}],
+  "writes": [{"file": "lib/scheduler_test.py", "content": "...", "mkdir": true}],
+  "verify": true
+}'
+```
+
+An `edr do` call can mix **reads**, **queries** (search, map, explore, refs, find, diff), **edits** (old_text/new_text, symbol replacement, regex, move), **writes** (create, append, insert inside a class), **renames** (cross-file, import-aware), and **verify** (build/test).
+
 ## CLI reference
 
 | Command | What it does |
 |---|---|
-| `edr init` | Build or rebuild the symbol index |
-| `edr map` | Symbol overview of the repo or a directory |
 | `edr read file:Symbol` | Read a specific symbol (function, class, struct) |
-| `edr read file:Class --signatures` | Class API without implementation bodies |
+| `edr read file:Class --signatures` | Container API without implementation bodies |
 | `edr search "pattern" --body` | Symbol search with optional body snippets |
-| `edr search "pattern" --text` | Text search (like grep, but structured output) |
+| `edr search "pattern" --text` | Text search (like grep, structured output) |
+| `edr map` | Symbol overview of the repo or a directory |
 | `edr explore Symbol --gather --body` | Symbol body + callers + deps in one call |
 | `edr refs Symbol --impact` | Transitive impact analysis before refactoring |
 | `edr edit file --old_text x --new_text y` | Edit with inline diff, auto re-index |
@@ -159,8 +150,17 @@ Reproduce: `bash bench/run_real_repo_benchmarks.sh` (clones repos to `/tmp`, ~5 
 | `edr rename old new --dry-run` | Cross-file, import-aware rename with preview |
 | `edr find "**/*.go"` | Find files by glob pattern |
 | `edr verify` | Run build/test checks (auto-detects Go/npm/Cargo) |
-| `edr do '{"reads":[...], "edits":[...], "verify":true}'` | Batch operations in one call |
-| `edr bench-session` | Score a session's efficiency (delta hits, edit success rate) |
+| `edr do '{...}'` | Batch any combination of the above |
+| `edr init` | Build or rebuild the symbol index |
+
+## How edr compares
+
+| Tool | Strength | Tradeoff |
+|---|---|---|
+| **ripgrep** | Fast text search, zero setup, universal | No symbol awareness or structured output. edr adds scoping but requires indexing |
+| **ctags** | Mature symbol indexing, wide editor support | Index only — no reads, edits, or sessions. edr is the index *and* the access layer, but with fewer languages than ctags |
+| **LSP** | Deep per-language semantics, refactoring | Richer type info than edr, but requires a running server per language. edr is a single binary across 13 languages |
+| **Built-in agent tools** | No setup, always available | File-at-a-time with no symbol awareness. edr reduces context but adds a build dependency |
 
 ## Supported languages
 
@@ -179,44 +179,9 @@ edr can read and edit any text file regardless of language support.
 - **Tree-sitter, not LSP** — the index captures structure (functions, classes, types) but not full type information. It won't catch everything a language server would.
 - **Indexing cost** — first `edr init` takes a few seconds on small repos, longer on large ones. Incremental re-indexing after edits is fast.
 
-## Project structure
-
-```
-cmd/           CLI commands, batch orchestrator
-internal/
-  cmdspec/     canonical command registry (names, categories, flags)
-  index/       tree-sitter parsing, SQLite symbol index
-  search/      symbol and text search (parallel, cached)
-  edit/        file edits, transactions, diffing
-  dispatch/    command routing and execution
-  gather/      context collection with token budgets
-  session/     auto-session state (deltas, dedup, slim edits)
-  trace/       session tracing and benchmarks
-  output/      structured JSON formatting
-bench/         benchmarks and multi-language test suite
-```
-
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for details. Bug reports and pull requests welcome on [GitHub](https://github.com/jordw/edr/issues).
-
-### Development setup
-
-```bash
-git clone https://github.com/jordw/edr.git && cd edr
-go build -o edr .       # build (requires Go 1.25+ and a C compiler)
-go test ./...            # run all tests
-```
-
-After changing Go source files, rebuild with `go build -o edr . && go install`.
-
-### Running benchmarks
-
-```bash
-go test ./bench/ -bench . -benchmem                    # Go benchmarks
-go test ./bench/ -run TestSessionMultiLang -v           # multi-language session test
-bash bench/run_real_repo_benchmarks.sh                  # real-repo comparison (~5 min)
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, project structure, and guidelines. Bug reports and pull requests welcome on [GitHub](https://github.com/jordw/edr/issues).
 
 ## License
 
