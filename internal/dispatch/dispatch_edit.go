@@ -299,6 +299,7 @@ type NotFoundError struct {
 	EditIndex  *int           `json:"edit_index,omitempty"`
 	EditMode   string         `json:"edit_mode,omitempty"`
 	TotalEdits *int           `json:"total_edits,omitempty"`
+	NextAction string         `json:"next_action,omitempty"`
 }
 
 type nearMatchInfo struct {
@@ -336,6 +337,7 @@ func notFoundError(content, relFile, matchText string) *NotFoundError {
 		line := 1 + strings.Count(content[:findOriginalOffset(content, normContent, idx)], "\n")
 		nfe.Hint = "old_text matches after normalizing whitespace — check tabs vs spaces, trailing spaces, or line endings"
 		nfe.NearMatch = &nearMatchInfo{Line: line, Kind: "whitespace"}
+		nfe.NextAction = fmt.Sprintf("re-read %s and copy exact whitespace from the output", relFile)
 		return nfe
 	}
 
@@ -347,6 +349,7 @@ func notFoundError(content, relFile, matchText string) *NotFoundError {
 		line := 1 + strings.Count(content[:origOff], "\n")
 		nfe.Hint = "old_text matches after trimming indentation — check leading whitespace on each line"
 		nfe.NearMatch = &nearMatchInfo{Line: line, Kind: "indentation"}
+		nfe.NextAction = fmt.Sprintf("re-read %s and copy exact indentation from the output", relFile)
 		return nfe
 	}
 
@@ -370,10 +373,12 @@ func notFoundError(content, relFile, matchText string) *NotFoundError {
 			}
 			nfe.Hint = "first line of old_text found but full match failed — content may have diverged"
 			nfe.NearMatch = &nearMatchInfo{Line: line, Kind: "partial", ActualText: actualLine}
+			nfe.NextAction = fmt.Sprintf("re-read %s to get current content, then retry with updated old_text", relFile)
 			return nfe
 		}
 	}
 
+	nfe.NextAction = fmt.Sprintf("re-read %s to get current content", relFile)
 	return nfe
 }
 

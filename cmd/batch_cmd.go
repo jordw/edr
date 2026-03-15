@@ -86,7 +86,8 @@ type batchState struct {
 	verifyEnabled bool
 	verifyCommand string
 
-	dryRun bool
+	dryRun        bool
+	readAfterEdit bool
 
 	root      string
 	stdinUsed bool
@@ -128,6 +129,9 @@ func (s *batchState) toParams() doParams {
 
 	if s.dryRun {
 		p.DryRun = bp(true)
+	}
+	if s.readAfterEdit {
+		p.ReadAfterEdit = bp(true)
 	}
 
 	// Auto-verify when edits are present, unless explicitly disabled
@@ -391,7 +395,11 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			if err != nil {
 				return nil, err
 			}
-			s.currentEdit.OldText = val
+			resolved, err := resolveContent(arg, val)
+			if err != nil {
+				return nil, err
+			}
+			s.currentEdit.OldText = resolved
 
 		case "--new", "--new_text", "--new-text":
 			val, err := nextArg(arg)
@@ -489,6 +497,9 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			s.verifyCommand = val
 
 		// ── global flags ──
+
+		case "--read-after-edit":
+			s.readAfterEdit = true
 
 		case "--root":
 			val, err := nextArg(arg)
