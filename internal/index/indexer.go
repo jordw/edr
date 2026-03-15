@@ -621,7 +621,16 @@ func matchDoublestarPath(path, pattern string) bool {
 // When dir and/or symbolType filters are set, the query is pushed to SQL
 // so only matching rows leave the database. Glob and regex grep are applied
 // in Go after the SQL result set.
-func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, bool, error) {
+// RepoMapStats holds truncation metadata for map output.
+type RepoMapStats struct {
+	Truncated    bool
+	ShownFiles   int
+	TotalFiles   int
+	ShownSymbols int
+	TotalSymbols int
+}
+
+func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, RepoMapStats, error) {
 	cfg := repoMapConfig{}
 	for _, o := range opts {
 		o(&cfg)
@@ -650,7 +659,7 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, bool, 
 
 	symbols, err := db.FilteredSymbols(ctx, sqlDir, cfg.symbolType, sqlName)
 	if err != nil {
-		return "", false, err
+		return "", RepoMapStats{}, err
 	}
 
 	// Group by file, applying Go-side filters (glob, regex grep)
@@ -774,20 +783,33 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, bool, 
 		}
 	}
 
-	// Also mark truncated if we rendered fewer files than available
-	if !truncated && budgetChars > 0 {
-		totalFiles := 0
-		for _, syms := range byFile {
-			if len(syms) > 0 {
-				totalFiles++
-			}
-		}
-		if filesRendered < totalFiles {
-			truncated = true
+	// Count totals (filtered, not rendered)
+	totalFiles := 0
+	totalSymbols := 0
+	for _, syms := range byFile {
+		if len(syms) > 0 {
+			totalFiles++
+			totalSymbols += len(syms)
 		}
 	}
 
-	return b.String(), truncated, nil
+	// Count shown symbols
+	shownSymbols := 0
+	for _, file := range fileOrder[:filesRendered] {
+		shownSymbols += len(byFile[file])
+	}
+
+	if !truncated && budgetChars > 0 && filesRendered < totalFiles {
+		truncated = true
+	}
+
+	return b.String(), RepoMapStats{
+		Truncated:    truncated,
+		ShownFiles:   filesRendered,
+		TotalFiles:   totalFiles,
+		ShownSymbols: shownSymbols,
+		TotalSymbols: totalSymbols,
+	}, nil
 }
 
 // isTestOrBenchFile returns true for common test/benchmark file patterns.

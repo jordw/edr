@@ -13,8 +13,20 @@ mkdir -p "$RESULTS_DIR"
 clone_if_missing() {
     local url="$1" dir="$2" commit="${3:-}"
     if [ -d "$dir/.git" ]; then
-        echo "Reusing existing checkout: $dir"
-        return
+        if [ -n "$commit" ]; then
+            local current_head
+            current_head=$(git -C "$dir" rev-parse HEAD 2>/dev/null || echo "")
+            if [ "$current_head" != "$commit" ]; then
+                echo "Existing checkout at $dir is at $current_head, expected $commit. Re-cloning."
+                rm -rf "$dir"
+            else
+                echo "Reusing existing checkout: $dir (at pinned commit $commit)"
+                return
+            fi
+        else
+            echo "Reusing existing checkout: $dir"
+            return
+        fi
     fi
     rm -rf "$dir"
     if [ -n "$commit" ]; then

@@ -123,7 +123,7 @@ func runXrefs(ctx context.Context, db *index.DB, root string, args []string) (an
 		// If symbol not found, try a quick search to suggest alternatives
 		if strings.Contains(err.Error(), "not found") && len(args) >= 1 {
 			name := args[len(args)-1]
-			if sr, sErr := search.SearchSymbol(ctx, db, name, 50, false); sErr == nil && sr.TotalMatches > 0 {
+			if sr, sErr := search.SearchSymbol(ctx, db, name, 50, false, 0); sErr == nil && sr.TotalMatches > 0 {
 				match := sr.Matches[0].Symbol
 				return nil, fmt.Errorf("%w; found %q in %s — try: search or explore",
 					err, match.Name, match.File)

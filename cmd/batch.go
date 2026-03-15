@@ -59,6 +59,7 @@ type doQuery struct {
 	Include any     `json:"include,omitempty"`
 	Exclude any     `json:"exclude,omitempty"`
 	Context *int    `json:"context,omitempty"`
+	Limit   *int    `json:"limit,omitempty"`
 	Group   *bool   `json:"group,omitempty"`
 
 	// explore
@@ -508,6 +509,18 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, p *d
 // executeVerify dispatches the verify command and returns result JSON.
 func executeVerify(ctx context.Context, db *index.DB, p *doParams, cb *trace.CallBuilder) json.RawMessage {
 	verifyFlags := map[string]any{}
+
+	// Collect edited/written file paths so verify can scope to relevant packages
+	var editedFiles []string
+	for _, e := range p.Edits {
+		editedFiles = append(editedFiles, e.File)
+	}
+	for _, w := range p.Writes {
+		editedFiles = append(editedFiles, w.File)
+	}
+	if len(editedFiles) > 0 {
+		verifyFlags["files"] = editedFiles
+	}
 	if cmd, ok := p.Verify.(string); ok && cmd != "" {
 		if cmd == "test" || cmd == "build" {
 			verifyFlags["level"] = cmd
@@ -968,6 +981,9 @@ func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
 		}
 		if q.Context != nil {
 			flags["context"] = *q.Context
+		}
+		if q.Limit != nil {
+			flags["limit"] = *q.Limit
 		}
 		// Grouping is now default in dispatch for text search.
 		// Only pass no_group if explicitly disabled.

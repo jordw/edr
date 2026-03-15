@@ -119,7 +119,7 @@ pct_round() {
 }
 
 native_read_bytes() {
-    cat -n "$1" | wc -c | tr -d ' '
+    wc -c < "$1" | tr -d ' '
 }
 
 grep_include_args() {
@@ -338,15 +338,17 @@ run_edit_function() {
     # enough to be noise on any real file.
     native_bytes=$((native_read * 2))
     native_calls=3
-    # Real edit (not dry-run) so we measure actual verify output.
-    # Backup and restore between iterations since edit modifies the file.
+    # Use --no-verify: the native baseline doesn't run a build, so neither
+    # should edr.  This keeps the comparison fair across all languages (Go,
+    # Python, Ruby, TS) — some roots lack go.mod/package.json and verify
+    # would fail with "could not auto-detect project type".
     cp "$file" "$file.bak"
     edr_bytes_arr=()
     for ((i = 0; i < ITERS; i++)); do
         cp "$file.bak" "$file"
         touch "$file"
         edr_cmd init >/dev/null 2>/dev/null || true
-        out=$(printf '%s' "$EDIT_NEW_TEXT" | edr_cmd edit "$EDIT_FILE" --old_text "$EDIT_OLD_TEXT" 2>/dev/null) || true
+        out=$(edr_cmd -e "$EDIT_FILE" --old "$EDIT_OLD_TEXT" --new "$EDIT_NEW_TEXT" --no-verify 2>/dev/null) || true
         edr_bytes_arr+=("${#out}")
     done
     edr_bytes=$(median "${edr_bytes_arr[@]}")

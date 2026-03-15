@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jordw/edr/internal/index"
@@ -16,10 +18,11 @@ func runVerify(ctx context.Context, db *index.DB, root string, args []string, fl
 	if command == "" {
 		// Auto-detect based on project files
 		if _, err := os.Stat(root + "/go.mod"); err == nil {
+			scope := goVerifyScope(root, flags)
 			if level == "test" {
-				command = "go test ./..."
+				command = "go test " + scope
 			} else {
-				command = "go build ./..."
+				command = "go build " + scope
 			}
 		} else if _, err := os.Stat(root + "/package.json"); err == nil {
 			if level == "test" {
@@ -64,4 +67,35 @@ func runVerify(ctx context.Context, db *index.DB, root string, args []string, fl
 	}
 
 	return result, nil
+}
+
+// goVerifyScope returns Go package arguments scoped to the edited files.
+// If "files" is set in flags, it computes the unique ./dir/... packages.
+// Falls back to "./..." when no files are specified.
+func goVerifyScope(root string, flags map[string]any) string {
+	files, _ := flags["files"].([]string)
+	if len(files) == 0 {
+		return "./..."
+	}
+	seen := map[string]bool{}
+	for _, f := range files {
+		dir := filepath.Dir(f)
+		if dir == "" || dir == "." {
+			dir = "."
+		}
+		// Normalize to ./dir form
+		if dir != "." && !strings.HasPrefix(dir, "./") {
+			dir = "./" + dir
+		}
+		seen[dir] = true
+	}
+	// If root package is included, just use ./...
+	if seen["."] {
+		return "./..."
+	}
+	parts := make([]string, 0, len(seen))
+	for dir := range seen {
+		parts = append(parts, dir)
+	}
+	return strings.Join(parts, " ")
 }

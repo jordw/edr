@@ -60,7 +60,7 @@ func scoreSymbolMatch(symbolName, pattern string) float64 {
 
 // SearchSymbol searches the index for symbols matching a pattern.
 // When showBody is true, each match includes a snippet of the symbol's source.
-func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int, showBody bool) (*SearchResult, error) {
+func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int, showBody bool, limit int) (*SearchResult, error) {
 	if pattern == "" {
 		return &SearchResult{Kind: "symbol"}, nil
 	}
@@ -85,6 +85,11 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int,
 	sort.Slice(scored, func(i, j int) bool {
 		return scored[i].score > scored[j].score
 	})
+
+	// Apply limit after scoring
+	if limit > 0 && len(scored) > limit {
+		scored = scored[:limit]
+	}
 
 	matches := make([]output.Match, 0)
 	totalTokens := 0
@@ -161,6 +166,7 @@ type searchTextConfig struct {
 	include []string // glob patterns to include (e.g. "*.go")
 	exclude []string // glob patterns to exclude (e.g. "vendor/*")
 	context int      // lines of context around each match
+	limit   int      // max number of results (0 = unlimited)
 }
 
 // SearchTextOption configures SearchText behavior.
@@ -179,6 +185,11 @@ func WithExclude(patterns ...string) SearchTextOption {
 // WithContext adds N lines of context around each match.
 func WithContext(n int) SearchTextOption {
 	return func(c *searchTextConfig) { c.context = n }
+}
+
+// WithLimit caps the number of results returned.
+func WithLimit(n int) SearchTextOption {
+	return func(c *searchTextConfig) { c.limit = n }
 }
 
 func matchesAnyPath(base, rel string, patterns []string) bool {
@@ -413,6 +424,11 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 	sort.Slice(allMatches, func(i, j int) bool {
 		return allMatches[i].Score > allMatches[j].Score
 	})
+
+	// Apply limit after scoring
+	if cfg.limit > 0 && len(allMatches) > cfg.limit {
+		allMatches = allMatches[:cfg.limit]
+	}
 
 	truncated := anyCapped
 	result := budgetTrimText(allMatches, budget, &truncated)

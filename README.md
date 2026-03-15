@@ -74,17 +74,17 @@ edr builds a symbol index using [tree-sitter](https://tree-sitter.github.io/tree
 
 ## Benchmarks
 
-9 workflows across 7 repos, from small libraries to Django (880 files). Baselines use agents' built-in tools: `Read` (whole file), `Grep` (file:line output), `Edit` (no verification). These are the default tools agents are given — they lack symbol reads, signatures, `--inside`, and session dedup. For reference lookups, the baseline reads *every* matched file with no cap. The metric is **response bytes** (proxy for token consumption). Edit benchmarks run real edits with verification. All scenarios are defined in [`bench/scenarios/`](bench/scenarios/).
+9 workflows across 7 repos, from small libraries to Django (880 files). The baseline models the **worst-case native workflow**: whole-file reads (no line ranges), reading every grep-matched file, no caching of prior context. Real agents sometimes do better — an experienced agent might grep then read only relevant files — but built-in tools lack symbol reads, signatures, `--inside`, and session dedup, so the baseline reflects what those tools force agents into for these operations. The metric is **response bytes** (file content for native, structured JSON for edr — JSON overhead means edr can lose on small results, as shown in the search scenario). All scenarios are defined in [`bench/scenarios/`](bench/scenarios/) and are reproducible.
 
 | Repo | Language | Files | Baseline | edr | Reduction |
 |---|---|---|---|---|---|
 | [urfave/cli](https://github.com/urfave/cli) | Go | ~70 | 315KB / 24 calls | 16KB / 9 calls | **95%** |
-| [vitess/sqlparser](https://github.com/vitessio/vitess) | Go | ~70 | 675KB / 21 calls | 17KB / 9 calls | **97%** |
-| [vitess/vtgate](https://github.com/vitessio/vitess) | Go | ~490 | 976KB / 24 calls | 34KB / 9 calls | **97%** |
-| [pallets/click](https://github.com/pallets/click) | Python | ~17 | 490KB / 25 calls | 20KB / 9 calls | **96%** |
-| [rails/thor](https://github.com/rails/thor) | Ruby | ~35 | 239KB / 24 calls | 19KB / 9 calls | **92%** |
-| [reduxjs/redux-toolkit](https://github.com/reduxjs/redux-toolkit) | TypeScript | ~190 | 266KB / 25 calls | 28KB / 9 calls | **89%** |
-| [django/django](https://github.com/django/django) | Python | ~880 | 2,468KB / 33 calls | 35KB / 9 calls | **99%** |
+| [vitess/sqlparser](https://github.com/vitessio/vitess) | Go | ~70 | 675KB / 21 calls | 16KB / 9 calls | **98%** |
+| [vitess/vtgate](https://github.com/vitessio/vitess) | Go | ~490 | 976KB / 24 calls | 33KB / 9 calls | **97%** |
+| [pallets/click](https://github.com/pallets/click) | Python | ~17 | 490KB / 25 calls | 19KB / 9 calls | **96%** |
+| [rails/thor](https://github.com/rails/thor) | Ruby | ~35 | 239KB / 24 calls | 16KB / 9 calls | **93%** |
+| [reduxjs/redux-toolkit](https://github.com/reduxjs/redux-toolkit) | TypeScript | ~190 | 266KB / 25 calls | 23KB / 9 calls | **91%** |
+| [django/django](https://github.com/django/django) | Python | ~880 | 2,468KB / 33 calls | 30KB / 9 calls | **99%** |
 
 <details>
 <summary>Per-scenario breakdown (urfave/cli)</summary>
@@ -97,12 +97,12 @@ The biggest wins come from operations that have no built-in equivalent (signatur
 | Read a specific function | 19,290B (whole file) | 1,463B (symbol read) | **92%** |
 | Find references | 86,463B / 4 calls (grep + read all matches) | 865B / 1 call (`refs`) | **99%** |
 | Search with context | 614B (grep -C3) | 1,812B (search --text --context 3) | **-195%** |
-| Orient in codebase | 65,581B / 5 calls (glob + reads) | 2,134B / 1 call (`map`) | **97%** |
-| Edit a function | 26,038B / 3 calls (read + edit + verify) | 47B / 1 call (edit + auto-verify) | **100%** |
+| Orient in codebase | 65,581B / 5 calls (glob + reads) | 2,235B / 1 call (`map`) | **97%** |
+| Edit a function | 26,038B / 3 calls (read + edit + re-read) | 680B / 1 call (batch edit) | **97%** |
 | Add method to a class | 13,019B / 2 calls (read + edit) | 184B / 1 call (`--inside`) | **99%** |
 | Multi-file read | 39,397B / 3 calls | 2,606B / 1 call (batched + budget) | **93%** |
 | Explore a symbol | 51,967B / 4 calls (grep + reads) | 4,562B / 1 call (body + callers + deps) | **91%** |
-| **Total** | **315,388B / 24 calls** | **15,265B / 9 calls** | **95%** |
+| **Total** | **315,388B / 24 calls** | **15,999B / 9 calls** | **95%** |
 
 </details>
 

@@ -140,12 +140,21 @@ func TestRepoMapBudgetReportsTruncated(t *testing.T) {
 	}
 
 	// Budget of 30 tokens (~120 chars) should truncate 20 files x 5 funcs.
-	out, truncated, err := RepoMap(ctx, db, WithBudget(30))
+	out, stats, err := RepoMap(ctx, db, WithBudget(30))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !truncated {
+	if !stats.Truncated {
 		t.Error("expected RepoMap to report truncated=true with small budget")
+	}
+	if stats.ShownFiles >= stats.TotalFiles {
+		t.Errorf("expected shown_files (%d) < total_files (%d)", stats.ShownFiles, stats.TotalFiles)
+	}
+	if stats.TotalFiles != 20 {
+		t.Errorf("expected 20 total files, got %d", stats.TotalFiles)
+	}
+	if stats.TotalSymbols != 100 {
+		t.Errorf("expected 100 total symbols, got %d", stats.TotalSymbols)
 	}
 	// Output should be non-empty but not contain the last file's functions.
 	if strings.Contains(out, "File19") {
@@ -153,11 +162,11 @@ func TestRepoMapBudgetReportsTruncated(t *testing.T) {
 	}
 
 	// Large budget should not truncate.
-	_, truncated2, err := RepoMap(ctx, db, WithBudget(100000))
+	_, stats2, err := RepoMap(ctx, db, WithBudget(100000))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if truncated2 {
+	if stats2.Truncated {
 		t.Error("expected large budget to not truncate")
 	}
 }

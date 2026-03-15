@@ -35,12 +35,12 @@ func runRepoMap(ctx context.Context, db *index.DB, flags map[string]any) (any, e
 		opts = append(opts, index.WithBudget(budget))
 	}
 
-	repoMap, earlyStop, err := index.RepoMap(ctx, db, opts...)
+	repoMap, stats, err := index.RepoMap(ctx, db, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	truncated := earlyStop
+	truncated := stats.Truncated
 	if budget > 0 {
 		size := len(repoMap) / 4
 		if size > budget {
@@ -49,13 +49,18 @@ func runRepoMap(ctx context.Context, db *index.DB, flags map[string]any) (any, e
 		}
 	}
 
-	files, symbols, _ := db.Stats(ctx)
-	return map[string]any{
-		"files":     files,
-		"symbols":   symbols,
+	result := map[string]any{
+		"files":     stats.TotalFiles,
+		"symbols":   stats.TotalSymbols,
 		"map":       repoMap,
 		"truncated": truncated,
-	}, nil
+	}
+	if truncated {
+		result["shown_files"] = stats.ShownFiles
+		result["shown_symbols"] = stats.ShownSymbols
+		result["hint"] = "use --dir, --type, or --grep to narrow scope"
+	}
+	return result, nil
 }
 
 func runSearch(ctx context.Context, db *index.DB, args []string, flags map[string]any) (any, error) {
@@ -64,7 +69,8 @@ func runSearch(ctx context.Context, db *index.DB, args []string, flags map[strin
 	}
 	budget := flagInt(flags, "budget", 0)
 	showBody := flagBool(flags, "body", false)
-	return search.SearchSymbol(ctx, db, args[0], budget, showBody)
+	limit := flagInt(flags, "limit", 0)
+	return search.SearchSymbol(ctx, db, args[0], budget, showBody, limit)
 }
 
 func runSearchText(ctx context.Context, db *index.DB, args []string, flags map[string]any) (any, error) {
@@ -82,6 +88,9 @@ func runSearchText(ctx context.Context, db *index.DB, args []string, flags map[s
 	}
 	if ctxLines := flagInt(flags, "context", 0); ctxLines > 0 {
 		opts = append(opts, search.WithContext(ctxLines))
+	}
+	if limit := flagInt(flags, "limit", 0); limit > 0 {
+		opts = append(opts, search.WithLimit(limit))
 	}
 	result, err := search.SearchText(ctx, db, args[0], budget, useRegex, opts...)
 	if err != nil {

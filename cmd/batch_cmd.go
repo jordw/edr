@@ -350,6 +350,16 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			s.currentQuery.Context = ip(n)
 
+		case "--limit":
+			if s.currentOp != opSearch {
+				return nil, fmt.Errorf("--limit is only valid after -s")
+			}
+			n, err := nextInt(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentQuery.Limit = ip(n)
+
 		// ── shared: search + edit ──
 
 		case "--regex":
