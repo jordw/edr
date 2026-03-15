@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -27,7 +26,6 @@ type editPlanEntry struct {
 	Replacement string `json:"replacement,omitempty"` // legacy alias for new_text
 	ExpectHash  string `json:"expect_hash,omitempty"`
 	All         bool   `json:"all,omitempty"`   // replace all occurrences (text-based)
-	Regex       bool   `json:"regex,omitempty"` // treat old_text as regex
 }
 
 // resolvedNewText returns the effective replacement text, preferring new_text over replacement.
@@ -97,7 +95,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 
 		case e.OldText != "":
 			// Detect no-op: old_text == new_text means nothing would change
-			if !e.Regex && e.OldText == e.resolvedNewText() {
+			if e.OldText == e.resolvedNewText() {
 				// Even for no-ops, validate expect_hash if provided
 				if e.ExpectHash != "" {
 					currentHash, err := edit.FileHash(file)
@@ -127,46 +125,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 				expectHash = edit.HashBytes(data)
 			}
 
-			if e.Regex {
-				// Regex-based edit
-				re, err := regexp.Compile(e.OldText)
-				if err != nil {
-					return nil, fmt.Errorf("edit-plan: edit %d: invalid regex: %w", i, err)
-				}
-				matches := re.FindAllStringIndex(content, -1)
-				if len(matches) == 0 {
-					nfErr := &NotFoundError{
-						ErrorType: "not_found",
-						File:      output.Rel(file),
-						OldText:   e.OldText,
-						Hint:      "regex pattern did not match any text in the file",
-						EditIndex: intPtr(i),
-						EditMode:  "regex",
-						TotalEdits: intPtr(len(edits)),
-					}
-					return nil, fmt.Errorf("edit-plan: edit %d: %w", i, nfErr)
-				}
-				if len(matches) > 1 && !e.All {
-					locs := make([][]int, len(matches))
-					copy(locs, matches)
-					return nil, fmt.Errorf("edit-plan: edit %d: %w", i, ambiguousMatchError(content, output.Rel(file), e.OldText, locs))
-				}
-				// Build replacements in reverse order for offset stability
-				for j := len(matches) - 1; j >= 0; j-- {
-					m := matches[j]
-					// Support capture group references ($1, $2) in replacement
-					repl := re.ReplaceAllString(content[m[0]:m[1]], e.resolvedNewText())
-					desc := fmt.Sprintf("regex replace in %s", output.Rel(file))
-					if e.All && len(matches) > 1 {
-						desc = fmt.Sprintf("regex replace in %s (occurrence %d)", output.Rel(file), j+1)
-					}
-					resolved = append(resolved, resolvedEdit{
-						File: file, StartByte: uint32(m[0]), EndByte: uint32(m[1]),
-						Replacement: repl, ExpectHash: expectHash,
-						Description: desc,
-					})
-				}
-			} else {
+			{
 				// Literal text-based edit
 				idx := strings.Index(content, e.OldText)
 				if idx < 0 {

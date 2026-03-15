@@ -366,17 +366,13 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			s.currentQuery.Limit = ip(n)
 
-		// ── shared: search + edit ──
+		// ── search modifiers (regex) ──
 
 		case "--regex":
-			switch s.currentOp {
-			case opSearch:
-				s.currentQuery.Regex = bp(true)
-			case opEdit:
-				s.currentEdit.Regex = bp(true)
-			default:
-				return nil, fmt.Errorf("--regex is only valid after -s or -e")
+			if s.currentOp != opSearch {
+				return nil, fmt.Errorf("--regex is only valid after -s")
 			}
+			s.currentQuery.Regex = bp(true)
 
 		// ── edit modifiers ──
 

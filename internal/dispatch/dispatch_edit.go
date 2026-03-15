@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/jordw/edr/internal/edit"
@@ -206,30 +205,11 @@ func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacem
 		}, nil
 	}
 
-	useRegex := flagBool(flags, "regex", false)
 	replaceAll := flagBool(flags, "all", false)
 
 	// Find first match and validate
 	var startByte, endByte int
-	if useRegex {
-		re, err := regexp.Compile(matchText)
-		if err != nil {
-			return nil, fmt.Errorf("invalid regex: %w", err)
-		}
-		locs := re.FindAllStringIndex(content, -1)
-		if len(locs) == 0 {
-			return nil, fmt.Errorf("smart-edit: pattern %q not found in %s", matchText, output.Rel(file))
-		}
-		if replaceAll {
-			resultText := re.ReplaceAllString(content, replacement)
-			return applyReplaceAll(ctx, db, file, content, resultText, matchText, len(locs), dryRun)
-		}
-		if len(locs) > 1 {
-			return nil, ambiguousMatchError(content, output.Rel(file), matchText, locs)
-		}
-		startByte = locs[0][0]
-		endByte = locs[0][1]
-	} else {
+	{
 		idx := strings.Index(content, matchText)
 		if idx < 0 {
 			return nil, notFoundError(content, output.Rel(file), matchText)

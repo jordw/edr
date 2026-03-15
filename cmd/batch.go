@@ -88,7 +88,6 @@ type doEdit struct {
 	Symbol     string `json:"symbol,omitempty"`
 	StartLine  *int   `json:"start_line,omitempty"`
 	EndLine    *int   `json:"end_line,omitempty"`
-	Regex      *bool  `json:"regex,omitempty"`
 	All        *bool  `json:"all,omitempty"`
 	DryRun     *bool  `json:"dry_run,omitempty"`
 	ExpectHash string `json:"expect_hash,omitempty"`
@@ -448,9 +447,6 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, p *d
 		}
 		if e.EndLine != nil {
 			m["end_line"] = *e.EndLine
-		}
-		if e.Regex != nil && *e.Regex {
-			m["regex"] = true
 		}
 		if e.All != nil && *e.All {
 			m["all"] = true

@@ -656,24 +656,6 @@ func TestDoParams_Init(t *testing.T) {
 	}
 }
 
-func TestDoParams_Edits_RegexAll(t *testing.T) {
-	raw := `{"edits": [{"file": "f.go", "old_text": "v[0-9]+", "new_text": "v2", "regex": true, "all": true}]}`
-	var p doParams
-	if err := json.Unmarshal([]byte(raw), &p); err != nil {
-		t.Fatal(err)
-	}
-	if len(p.Edits) != 1 {
-		t.Fatalf("edits len = %d, want 1", len(p.Edits))
-	}
-	e := p.Edits[0]
-	if e.Regex == nil || !*e.Regex {
-		t.Error("regex should be true")
-	}
-	if e.All == nil || !*e.All {
-		t.Error("all should be true")
-	}
-}
-
 func TestDoParams_Edits_DryRunPromotion(t *testing.T) {
 	// Per-edit dry_run should be parsed into the DryRun field.
 	raw := `{"edits": [{"file": "f.go", "old_text": "old", "new_text": "new", "dry_run": true}]}`
@@ -1016,7 +998,7 @@ func TestDoStructsMatchCmdspec(t *testing.T) {
 	// doEdit fields
 	editFields := map[string]bool{
 		"file": true, "old_text": true, "new_text": true, "symbol": true,
-		"start_line": true, "end_line": true, "regex": true, "all": true,
+		"start_line": true, "end_line": true, "all": true,
 		"dry_run": true, "expect_hash": true,
 	}
 	checkStructFields(t, "doEdit", doEditKnownKeys, editFields)

@@ -100,7 +100,6 @@ var Registry = []*Spec{
 			{Name: "end_line", Type: FlagInt, Default: 0, Desc: "End line"},
 			{Name: "old_text", Type: FlagString, Default: "", Desc: "Text to find"},
 			{Name: "new_text", Type: FlagString, Default: "", Desc: "Replacement text"},
-			{Name: "regex", Type: FlagBool, Default: false, Desc: "Treat pattern as regex"},
 			{Name: "all", Type: FlagBool, Default: false, Desc: "Replace all matches"},
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
 			{Name: "expect_hash", Type: FlagString, Default: "", Desc: "Reject edit if file hash doesn't match"},
