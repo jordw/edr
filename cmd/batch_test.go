@@ -1783,15 +1783,15 @@ func TestBatchMode_QuietStderr(t *testing.T) {
 
 // --- Task 4: Zero-file index validation ---
 
-func TestOpenDBWithRoot_EmptyDir_Error(t *testing.T) {
-	// An empty directory should fail indexing with a zero-files error
+func TestOpenDBWithRoot_EmptyDir_OK(t *testing.T) {
+	// An empty directory should succeed (0 files is valid, e.g. fresh git init)
 	tmp := t.TempDir()
-	_, err := openDBWithRoot(tmp, true)
-	if err == nil {
-		t.Fatal("expected error for empty directory with 0 indexed files")
+	db, err := openDBWithRoot(tmp, true)
+	if err != nil {
+		t.Fatalf("expected no error for empty directory, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "0 files") {
-		t.Errorf("expected '0 files' in error, got: %v", err)
+	if db != nil {
+		db.Close()
 	}
 }
 
