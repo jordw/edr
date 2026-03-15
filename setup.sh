@@ -13,6 +13,12 @@
 
 set -euo pipefail
 
+# Use sudo only when not already root (containers, CI often run as root)
+SUDO=""
+if [ "$(id -u)" -ne 0 ] && command -v sudo &>/dev/null; then
+    SUDO="sudo"
+fi
+
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 TARGET="${1:-$(pwd)}"
 TARGET="$(cd "$TARGET" && pwd)"
@@ -26,7 +32,7 @@ echo "    target repo: $TARGET"
 if ! command -v go &>/dev/null; then
     echo "==> Go not found. Attempting install..."
     if command -v apt-get &>/dev/null; then
-        sudo apt-get update -qq && sudo apt-get install -y -qq golang gcc >/dev/null
+        $SUDO apt-get update -qq && $SUDO apt-get install -y -qq golang gcc >/dev/null
     elif command -v brew &>/dev/null; then
         brew install go
     elif command -v apk &>/dev/null; then
@@ -41,7 +47,7 @@ fi
 if ! command -v gcc &>/dev/null; then
     echo "==> gcc not found. Attempting install..."
     if command -v apt-get &>/dev/null; then
-        sudo apt-get update -qq && sudo apt-get install -y -qq gcc >/dev/null
+        $SUDO apt-get update -qq && $SUDO apt-get install -y -qq gcc >/dev/null
     elif command -v brew &>/dev/null; then
         brew install gcc
     elif command -v apk &>/dev/null; then

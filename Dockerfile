@@ -1,10 +1,15 @@
-FROM golang:1.25-bookworm AS builder
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN go build -o /edr .
+# Tests that setup.sh works from a clean environment (no Go, no gcc).
+# Usage: docker build -t edr-test-setup .
+FROM ubuntu:24.04
 
-FROM debian:bookworm-slim
-COPY --from=builder /edr /usr/local/bin/edr
-ENTRYPOINT ["edr"]
+RUN apt-get update -qq && apt-get install -y -qq git ca-certificates >/dev/null
+
+COPY . /edr
+WORKDIR /tmp/target
+RUN git init -q
+
+RUN /edr/setup.sh /tmp/target
+
+ENV PATH="/root/.local/bin:$PATH"
+RUN edr --version
+RUN edr init -r /tmp/target
