@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-REPO="jordw/edr"
+REPO="${EDR_REPO:-jordw/edr}"
 INSTALL_DIR="${EDR_INSTALL_DIR:-$HOME/.local/bin}"
 VERSION=""
 SKIP_SETUP=false
@@ -79,7 +79,12 @@ echo "==> Installing edr v${VERSION_NUM} (${OS}/${ARCH})"
 
 # --- Download and extract ---
 ARCHIVE="edr_${VERSION_NUM}_${OS}_${ARCH}.tar.gz"
-URL="https://github.com/${REPO}/releases/download/v${VERSION_NUM}/${ARCHIVE}"
+# EDR_RELEASE_URL overrides the download base URL (used by CI tests).
+if [ -n "${EDR_RELEASE_URL:-}" ]; then
+    URL="${EDR_RELEASE_URL}/${ARCHIVE}"
+else
+    URL="https://github.com/${REPO}/releases/download/v${VERSION_NUM}/${ARCHIVE}"
+fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

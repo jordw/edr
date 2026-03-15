@@ -38,6 +38,93 @@ jobs:
           name: bench-results-${{ matrix.os }}
           path: bench_output.txt
 
+  release-build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Build release binary
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          COMMIT="$(git rev-parse --short HEAD)"
+          go build -ldflags "-s -w -X github.com/jordw/edr/cmd.Version=0.0.0-test -X github.com/jordw/edr/cmd.BuildHash=${COMMIT}" -o edr .
+
+      - name: Verify version in binary
+        run: |
+          ./edr --version 2>&1 | grep -q "0.0.0-test" || (echo "ldflags not applied" && exit 1)
+
+      - name: Package archive
+        run: |
+          ARCHIVE="edr_0.0.0-test_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz"
+          tar -czf "$ARCHIVE" edr LICENSE README.md
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Verify archive contents
+        run: |
+          tar -tzf "$ARCHIVE" | sort > contents.txt
+          echo "Archive contents:"
+          cat contents.txt
+          grep -q "^edr$" contents.txt || (echo "missing edr binary" && exit 1)
+          grep -q "^LICENSE$" contents.txt || (echo "missing LICENSE" && exit 1)
+          grep -q "^README.md$" contents.txt || (echo "missing README.md" && exit 1)
+
+      - name: Test install.sh against local archive
+        run: |
+          # Serve the archive over HTTP
+          mkdir -p /tmp/serve
+          cp "$ARCHIVE" /tmp/serve/
+          python3 -m http.server 8123 --directory /tmp/serve &
+          SERVER_PID=$!
+          sleep 1
+
+          # Run install.sh with local URL override
+          EDR_RELEASE_URL="http://localhost:8123" \
+          EDR_INSTALL_DIR="/tmp/edr-install-test" \
+            bash install.sh --version 0.0.0-test --skip-setup
+
+          # Verify installed binary works
+          /tmp/edr-install-test/edr --version 2>&1 | grep -q "0.0.0-test"
+          echo "install.sh test passed"
+
+          kill $SERVER_PID 2>/dev/null || true
+
+      - name: Test install.sh with project setup
+        run: |
+          # Serve the archive
+          python3 -m http.server 8124 --directory /tmp/serve &
+          SERVER_PID=$!
+          sleep 1
+
+          # Create a target repo and run install.sh with setup
+          mkdir -p /tmp/install-target && cd /tmp/install-target && git init -q
+          EDR_RELEASE_URL="http://localhost:8124" \
+          EDR_INSTALL_DIR="/tmp/edr-install-test2" \
+            bash ${{ github.workspace }}/install.sh --version 0.0.0-test --claude /tmp/install-target
+
+          # Verify setup ran
+          test -f /tmp/install-target/CLAUDE.md || (echo "CLAUDE.md not created" && exit 1)
+          grep -q "edr" /tmp/install-target/CLAUDE.md || (echo "CLAUDE.md missing edr instructions" && exit 1)
+          grep -q ".edr/" /tmp/install-target/.gitignore || (echo ".gitignore missing .edr/" && exit 1)
+          echo "install.sh + setup test passed"
+
+          kill $SERVER_PID 2>/dev/null || true
+
   install-linux:
     runs-on: ubuntu-latest
     steps:
