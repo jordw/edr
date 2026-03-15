@@ -466,11 +466,14 @@ func applyReplaceAll(ctx context.Context, db *index.DB, file, oldContent, newCon
 // It implements error for Go error chains and is detected by asNotFoundError
 // in the batch handler to produce structured JSON output.
 type NotFoundError struct {
-	ErrorType   string         `json:"error"`
-	File        string         `json:"file"`
-	OldText     string         `json:"old_text"`
-	Hint        string         `json:"hint"`
-	NearMatch   *nearMatchInfo `json:"near_match,omitempty"`
+	ErrorType  string         `json:"error"`
+	File       string         `json:"file"`
+	OldText    string         `json:"old_text"`
+	Hint       string         `json:"hint"`
+	NearMatch  *nearMatchInfo `json:"near_match,omitempty"`
+	EditIndex  *int           `json:"edit_index,omitempty"`
+	EditMode   string         `json:"edit_mode,omitempty"`
+	TotalEdits *int           `json:"total_edits,omitempty"`
 }
 
 type nearMatchInfo struct {

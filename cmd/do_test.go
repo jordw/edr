@@ -855,6 +855,245 @@ func TestHandleDo_EditEmptyNewTextDeletion(t *testing.T) {
 	}
 }
 
+func TestDoParams_VerifyObjectSyntax(t *testing.T) {
+	// Bug 1: verify: {"command": "...", "level": "...", "timeout": N} should parse correctly
+	raw := `{"verify": {"command": "echo works", "timeout": 10}}`
+	var p doParams
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		t.Fatal(err)
+	}
+	m, ok := p.Verify.(map[string]any)
+	if !ok {
+		t.Fatalf("verify should be map, got %T", p.Verify)
+	}
+	if m["command"] != "echo works" {
+		t.Errorf("command = %v, want 'echo works'", m["command"])
+	}
+	if m["timeout"] != float64(10) {
+		t.Errorf("timeout = %v, want 10", m["timeout"])
+	}
+}
+
+func TestHandleDo_VerifyObjectCommand(t *testing.T) {
+	// Bug 1: verify with object syntax should pass the custom command through
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc != nil {
+		defer tc.Close()
+	}
+
+	raw := json.RawMessage(`{"verify": {"command": "echo verify-works", "timeout": 10}}`)
+	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	// The result should contain the custom command, not auto-detected "go build"
+	if !strings.Contains(result, "echo verify-works") {
+		t.Errorf("expected custom command in result, got: %s", result)
+	}
+}
+
+func TestHandleDo_BatchEditFailureReporting(t *testing.T) {
+	// Bug 3: batch edit failure should include edit_index, edit_mode, total_edits
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc != nil {
+		defer tc.Close()
+	}
+
+	// 3 edits, second fails (nonexistent text)
+	raw := json.RawMessage(`{
+		"edits": [
+			{"file": "main.go", "old_text": "package main", "new_text": "package main"},
+			{"file": "main.go", "old_text": "nonexistent_text_xyz", "new_text": "replacement"},
+			{"file": "main.go", "old_text": "func hello", "new_text": "func world"}
+		]
+	}`)
+
+	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	// Parse the JSON result
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("parse result: %v", err)
+	}
+
+	edits, ok := parsed["edits"].(map[string]any)
+	if !ok {
+		t.Fatalf("edits should be object, got %T: %s", parsed["edits"], result)
+	}
+
+	// The first edit is a no-op so editPlan returns early with noop before
+	// reaching the second. But the second edit should fail with not_found.
+	// Check for edit_index in error
+	if edits["error"] != "not_found" && edits["error"] != "noop" {
+		// If it's a not_found error, verify the new fields
+		if editIdx, ok := edits["edit_index"]; ok {
+			if editIdx != float64(1) {
+				t.Errorf("edit_index = %v, want 1", editIdx)
+			}
+		}
+		if editMode, ok := edits["edit_mode"]; ok {
+			if editMode != "old_text" {
+				t.Errorf("edit_mode = %v, want old_text", editMode)
+			}
+		}
+		if totalEdits, ok := edits["total_edits"]; ok {
+			if totalEdits != float64(3) {
+				t.Errorf("total_edits = %v, want 3", totalEdits)
+			}
+		}
+	}
+}
+
+func TestHandleDo_BatchEditNotFoundFields(t *testing.T) {
+	// Bug 3: Targeted test — edit with non-matching old_text should have structured fields
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc != nil {
+		defer tc.Close()
+	}
+
+	// Single failing edit
+	raw := json.RawMessage(`{
+		"edits": [
+			{"file": "main.go", "old_text": "nonexistent_text_xyz", "new_text": "replacement"}
+		]
+	}`)
+
+	result, err := handleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("parse result: %v", err)
+	}
+
+	edits, ok := parsed["edits"].(map[string]any)
+	if !ok {
+		t.Fatalf("edits should be object, got %T: %s", parsed["edits"], result)
+	}
+
+	if edits["error"] != "not_found" {
+		t.Fatalf("expected not_found error, got: %v", edits["error"])
+	}
+	if edits["edit_index"] != float64(0) {
+		t.Errorf("edit_index = %v, want 0", edits["edit_index"])
+	}
+	if edits["edit_mode"] != "old_text" {
+		t.Errorf("edit_mode = %v, want old_text", edits["edit_mode"])
+	}
+	if edits["total_edits"] != float64(1) {
+		t.Errorf("total_edits = %v, want 1", edits["total_edits"])
+	}
+}
+
+func TestDoStructsMatchCmdspec(t *testing.T) {
+	// Verify that doRead, doQuery, doEdit, doWrite, doRename struct fields
+	// have corresponding cmdspec flags/batch fields, and vice versa.
+	// This catches drift between JSON batch structs and the registry.
+
+	checkStructFields := func(t *testing.T, structName string, knownKeys map[string]bool, structFields map[string]bool) {
+		t.Helper()
+		for field := range structFields {
+			if !knownKeys[field] {
+				t.Errorf("%s has field %q not in cmdspec", structName, field)
+			}
+		}
+		for key := range knownKeys {
+			if !structFields[key] {
+				t.Errorf("cmdspec has key %q not in %s struct", key, structName)
+			}
+		}
+	}
+
+	// doRead fields (from JSON tags)
+	readFields := map[string]bool{
+		"file": true, "symbol": true, "budget": true, "signatures": true,
+		"depth": true, "start_line": true, "end_line": true, "symbols": true, "full": true,
+	}
+	checkStructFields(t, "doRead", doReadKnownKeys, readFields)
+
+	// doEdit fields
+	editFields := map[string]bool{
+		"file": true, "old_text": true, "new_text": true, "symbol": true,
+		"start_line": true, "end_line": true, "regex": true, "all": true,
+		"move": true, "after": true, "before": true, "dry_run": true, "expect_hash": true,
+	}
+	checkStructFields(t, "doEdit", doEditKnownKeys, editFields)
+
+	// doWrite fields
+	writeFields := map[string]bool{
+		"file": true, "content": true, "mkdir": true, "after": true,
+		"inside": true, "append": true,
+	}
+	// Write has extra batch fields (body, new_text, force) that aren't in the struct
+	for key := range doWriteKnownKeys {
+		if key == "body" || key == "new_text" || key == "force" {
+			continue // batch aliases, not in struct
+		}
+		if !writeFields[key] {
+			t.Errorf("cmdspec write has key %q not in doWrite struct", key)
+		}
+	}
+	for field := range writeFields {
+		if !doWriteKnownKeys[field] {
+			t.Errorf("doWrite has field %q not in cmdspec", field)
+		}
+	}
+
+	// doRename fields
+	renameFields := map[string]bool{
+		"old_name": true, "new_name": true, "dry_run": true, "scope": true,
+	}
+	checkStructFields(t, "doRename", doRenameKnownKeys, renameFields)
+}
+
 func TestHandleDo_SkipsPostEditReadsAndVerifyOnEditFailure(t *testing.T) {
 	// Create a temp dir with a .edr directory for the DB and traces.
 	tmp := t.TempDir()

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
@@ -148,19 +147,52 @@ func checkSubObjectFields(raw json.RawMessage, section string, known map[string]
 	return warnings
 }
 
-// handleDo dispatches edr_do (batch reads/queries/edits/writes/renames/verify).
-func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trace.Collector, raw json.RawMessage) (string, error) {
-	// Inject per-request source cache to avoid repeated os.ReadFile across operations.
-	ctx = index.WithSourceCache(ctx)
+// doResponse is the typed response struct for handleDo.
+// Using a struct instead of string concatenation enables structural checks
+// (e.g., write failure detection) and proper json.Marshal output.
+type doResponse struct {
+	Init          any                `json:"init,omitempty"`
+	Reads         json.RawMessage    `json:"reads,omitempty"`
+	Queries       json.RawMessage    `json:"queries,omitempty"`
+	Writes        []writeResult      `json:"writes,omitempty"`
+	Renames       json.RawMessage    `json:"renames,omitempty"`
+	Edits         json.RawMessage    `json:"edits,omitempty"`
+	PostEditReads json.RawMessage    `json:"post_edit_reads,omitempty"`
+	Verify        json.RawMessage    `json:"verify,omitempty"`
+	Summary       *summaryResult     `json:"summary,omitempty"`
+	Warnings      []string           `json:"warnings,omitempty"`
+	Error         string             `json:"error,omitempty"`
+	Truncated     bool               `json:"truncated,omitempty"`
+	TruncReason   string             `json:"truncated_reason,omitempty"`
+	Dropped       []string           `json:"sections_dropped,omitempty"`
+}
 
+type writeResult struct {
+	File   string `json:"file"`
+	OK     bool   `json:"ok"`
+	Error  string `json:"error,omitempty"`
+	Result any    `json:"result,omitempty"`
+}
+
+type summaryResult struct {
+	Edits   int      `json:"edits,omitempty"`
+	Writes  int      `json:"writes,omitempty"`
+	Renames int      `json:"renames,omitempty"`
+	Status  string   `json:"status"`
+	Hints   []string `json:"hints,omitempty"`
+}
+
+// parseDo parses and validates batch params, returning warnings for unknown/missing fields.
+func parseDo(raw json.RawMessage) (doParams, []string, error) {
 	var p doParams
 	if err := json.Unmarshal(raw, &p); err != nil {
-		return "", err
+		return p, nil, err
 	}
 
-	// Detect unknown top-level keys and sub-object fields, warn on typos
-	var rawMap map[string]json.RawMessage
 	var warnings []string
+
+	// Detect unknown top-level keys and sub-object fields
+	var rawMap map[string]json.RawMessage
 	if json.Unmarshal(raw, &rawMap) == nil {
 		for key := range rawMap {
 			if !doKnownKeys[key] {
@@ -171,24 +203,18 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 				}
 			}
 		}
-		if rd, ok := rawMap["reads"]; ok {
-			warnings = append(warnings, checkSubObjectFields(rd, "reads", doReadKnownKeys)...)
-		}
-		if q, ok := rawMap["queries"]; ok {
-			warnings = append(warnings, checkSubObjectFields(q, "queries", doQueryKnownKeys)...)
-		}
-		if e, ok := rawMap["edits"]; ok {
-			warnings = append(warnings, checkSubObjectFields(e, "edits", doEditKnownKeys)...)
-		}
-		if w, ok := rawMap["writes"]; ok {
-			warnings = append(warnings, checkSubObjectFields(w, "writes", doWriteKnownKeys)...)
-		}
-		if r, ok := rawMap["renames"]; ok {
-			warnings = append(warnings, checkSubObjectFields(r, "renames", doRenameKnownKeys)...)
+		for section, known := range map[string]map[string]bool{
+			"reads": doReadKnownKeys, "queries": doQueryKnownKeys,
+			"edits": doEditKnownKeys, "writes": doWriteKnownKeys,
+			"renames": doRenameKnownKeys,
+		} {
+			if rd, ok := rawMap[section]; ok {
+				warnings = append(warnings, checkSubObjectFields(rd, section, known)...)
+			}
 		}
 	}
 
-	// Validate required fields in sub-objects
+	// Validate required fields
 	for i, r := range p.Reads {
 		if r.File == "" {
 			warnings = append(warnings, fmt.Sprintf("reads[%d]: missing required field \"file\"", i))
@@ -210,6 +236,366 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 		}
 	}
 
+	return p, warnings, nil
+}
+
+// executeReads dispatches read operations and returns post-processed JSON.
+func executeReads(ctx context.Context, db *index.DB, sess *session.Session, p *doParams) json.RawMessage {
+	cmds := make([]dispatch.MultiCmd, len(p.Reads))
+	for i, r := range p.Reads {
+		readArgs := []string{r.File}
+		if r.Symbol != "" {
+			readArgs = []string{r.File + ":" + r.Symbol}
+		}
+		if r.StartLine != nil && r.EndLine != nil && r.Symbol == "" {
+			readArgs = []string{r.File, strconv.Itoa(*r.StartLine), strconv.Itoa(*r.EndLine)}
+		}
+		readFlags := map[string]any{}
+		if r.Budget != nil {
+			readFlags["budget"] = *r.Budget
+		}
+		if r.Signatures != nil && *r.Signatures {
+			readFlags["signatures"] = true
+		}
+		if r.Depth != nil {
+			readFlags["depth"] = *r.Depth
+		}
+		if r.StartLine != nil && r.EndLine == nil {
+			readFlags["start_line"] = *r.StartLine
+		}
+		if r.EndLine != nil && r.StartLine == nil {
+			readFlags["end_line"] = *r.EndLine
+		}
+		if r.Symbols != nil && *r.Symbols {
+			readFlags["symbols"] = true
+		}
+		if r.Full != nil && *r.Full {
+			readFlags["full"] = true
+		}
+		cmds[i] = dispatch.MultiCmd{Cmd: "read", Args: readArgs, Flags: readFlags}
+	}
+	var budgetOpt []int
+	if p.Budget != nil {
+		budgetOpt = []int{*p.Budget}
+	}
+	results := dispatch.DispatchMulti(ctx, db, cmds, budgetOpt...)
+	return json.RawMessage(postProcessMultiResults(sess, cmds, results))
+}
+
+// executeQueries dispatches query operations and returns post-processed JSON + trace data.
+func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, p *doParams, cb *trace.CallBuilder) json.RawMessage {
+	// Distribute top-level budget to queries that lack individual budgets.
+	if p.Budget != nil && len(p.Queries) > 0 {
+		n := len(p.Queries)
+		perQuery := *p.Budget * 2 / (n + 1)
+		if perQuery > *p.Budget {
+			perQuery = *p.Budget
+		}
+		if perQuery < 50 {
+			perQuery = 50
+		}
+		for i := range p.Queries {
+			if p.Queries[i].Budget == nil {
+				b := perQuery
+				p.Queries[i].Budget = &b
+			}
+		}
+	}
+
+	// Partition into dispatch, diff, and error queries
+	var dispatchIdxs, diffIdxs, errorIdxs []int
+	inferredCmds := make(map[int]string)
+	for i, q := range p.Queries {
+		if q.Cmd == "diff" {
+			diffIdxs = append(diffIdxs, i)
+		} else {
+			mc, wasInferred := doQueryToMultiCmd(q)
+			if mc.Cmd == "" {
+				errorIdxs = append(errorIdxs, i)
+			} else {
+				if wasInferred {
+					inferredCmds[i] = mc.Cmd
+				}
+				dispatchIdxs = append(dispatchIdxs, i)
+			}
+		}
+	}
+
+	allResults := make([]dispatch.MultiResult, len(p.Queries))
+
+	for _, qi := range errorIdxs {
+		allResults[qi] = dispatch.MultiResult{
+			OK:    false,
+			Error: `query requires a "cmd" field (search, map, explore, refs, find, diff)`,
+		}
+	}
+
+	if len(dispatchIdxs) > 0 {
+		cmds := make([]dispatch.MultiCmd, len(dispatchIdxs))
+		for ci, qi := range dispatchIdxs {
+			cmds[ci], _ = doQueryToMultiCmd(p.Queries[qi])
+		}
+		var budgetOpt []int
+		if p.Budget != nil {
+			budgetOpt = []int{*p.Budget}
+		}
+		results := dispatch.DispatchMulti(ctx, db, cmds, budgetOpt...)
+		for ci, qi := range dispatchIdxs {
+			allResults[qi] = results[ci]
+		}
+	}
+
+	for _, qi := range diffIdxs {
+		q := p.Queries[qi]
+		var diffArgs []string
+		if q.File != nil {
+			diffArgs = append(diffArgs, *q.File)
+		}
+		if q.Symbol != nil && *q.Symbol != "" {
+			diffArgs = append(diffArgs, *q.Symbol)
+		}
+		diffResult := sess.GetDiff(diffArgs)
+		allResults[qi] = dispatch.MultiResult{
+			Cmd:    "diff",
+			OK:     diffResult["error"] == nil,
+			Result: diffResult,
+		}
+		if errMsg, ok := diffResult["error"].(string); ok {
+			allResults[qi].Error = errMsg
+		}
+	}
+
+	allCmds := make([]dispatch.MultiCmd, len(p.Queries))
+	for i, q := range p.Queries {
+		if q.Cmd == "diff" {
+			allCmds[i] = dispatch.MultiCmd{Cmd: "diff"}
+		} else {
+			allCmds[i], _ = doQueryToMultiCmd(q)
+		}
+	}
+	for qi, inferredCmd := range inferredCmds {
+		allResults[qi].InferredCmd = inferredCmd
+	}
+
+	text := postProcessMultiResults(sess, allCmds, allResults)
+
+	// Trace query events
+	for _, r := range allResults {
+		resultBytes := 0
+		if r.Result != nil {
+			if d, err := json.Marshal(r.Result); err == nil {
+				resultBytes = len(d)
+			}
+		}
+		cb.AddQueryEvent(r.Cmd, r.OK, resultBytes)
+	}
+
+	return json.RawMessage(text)
+}
+
+// executeWrites dispatches write operations and returns typed results.
+func executeWrites(ctx context.Context, db *index.DB, p *doParams) []writeResult {
+	results := make([]writeResult, len(p.Writes))
+	for i, w := range p.Writes {
+		flags := map[string]any{"content": w.Content}
+		if w.Mkdir != nil && *w.Mkdir {
+			flags["mkdir"] = true
+		}
+		if w.After != nil && *w.After != "" {
+			flags["after"] = *w.After
+		}
+		if w.Inside != nil && *w.Inside != "" {
+			flags["inside"] = *w.Inside
+		}
+		if w.Append != nil && *w.Append {
+			flags["append"] = true
+		}
+		result, err := dispatch.Dispatch(ctx, db, "write", []string{w.File}, flags)
+		if err != nil {
+			results[i] = writeResult{File: w.File, OK: false, Error: err.Error()}
+		} else {
+			results[i] = writeResult{File: w.File, OK: true, Result: result}
+		}
+	}
+	return results
+}
+
+// executeEdits dispatches edit operations via edit-plan and returns the result JSON + failure status.
+func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, p *doParams, warnings *[]string, cb *trace.CallBuilder) (json.RawMessage, bool) {
+	editFlags := map[string]any{}
+
+	// Promote per-edit dry_run to batch level
+	if p.DryRun == nil || !*p.DryRun {
+		for _, e := range p.Edits {
+			if e.DryRun != nil && *e.DryRun {
+				t := true
+				p.DryRun = &t
+				*warnings = append(*warnings, "per-edit dry_run promoted to batch level (edits are atomic)")
+				break
+			}
+		}
+	}
+
+	editsRaw := make([]map[string]any, len(p.Edits))
+	for i, e := range p.Edits {
+		m := map[string]any{"file": e.File}
+		if e.OldText != "" {
+			m["old_text"] = e.OldText
+		}
+		if e.NewText != "" || e.OldText != "" || e.Symbol != "" || (e.StartLine != nil && e.EndLine != nil) {
+			m["new_text"] = e.NewText
+		}
+		if e.Symbol != "" {
+			m["symbol"] = e.Symbol
+		}
+		if e.StartLine != nil {
+			m["start_line"] = *e.StartLine
+		}
+		if e.EndLine != nil {
+			m["end_line"] = *e.EndLine
+		}
+		if e.Regex != nil && *e.Regex {
+			m["regex"] = true
+		}
+		if e.All != nil && *e.All {
+			m["all"] = true
+		}
+		if e.Move != "" {
+			m["move"] = e.Move
+		}
+		if e.After != "" {
+			m["after"] = e.After
+		}
+		if e.Before != "" {
+			m["before"] = e.Before
+		}
+		if e.ExpectHash != "" {
+			m["expect_hash"] = e.ExpectHash
+		}
+		editsRaw[i] = m
+	}
+	editFlags["edits"] = editsRaw
+	if p.DryRun != nil && *p.DryRun {
+		editFlags["dry_run"] = true
+	}
+
+	sess.InvalidateForEdit("edit-plan", []string{})
+
+	result, err := dispatch.Dispatch(ctx, db, "edit-plan", []string{}, editFlags)
+	if err != nil {
+		// Record failed edit trace events
+		for _, e := range p.Edits {
+			cb.AddEditEvent(e.File, 0, "", "", false)
+		}
+		if ambErr := asAmbiguousError(err); ambErr != nil {
+			data, _ := json.Marshal(ambErr)
+			return json.RawMessage(data), true
+		}
+		if nfErr := asNotFoundError(err); nfErr != nil {
+			data, _ := json.Marshal(nfErr)
+			return json.RawMessage(data), true
+		}
+		data, _ := json.Marshal(map[string]string{"error": err.Error()})
+		return json.RawMessage(data), true
+	}
+
+	data, _ := json.Marshal(result)
+	text := sess.PostProcess("edit-plan", []string{}, editFlags, result, string(data))
+	traceEditEvents(cb, result)
+	return json.RawMessage(text), false
+}
+
+// executeVerify dispatches the verify command and returns result JSON.
+func executeVerify(ctx context.Context, db *index.DB, p *doParams, cb *trace.CallBuilder) json.RawMessage {
+	verifyFlags := map[string]any{}
+	if cmd, ok := p.Verify.(string); ok && cmd != "" {
+		if cmd == "test" || cmd == "build" {
+			verifyFlags["level"] = cmd
+		} else {
+			verifyFlags["command"] = cmd
+		}
+	} else if m, ok := p.Verify.(map[string]any); ok {
+		if cmd, ok := m["command"].(string); ok && cmd != "" {
+			verifyFlags["command"] = cmd
+		}
+		if level, ok := m["level"].(string); ok && level != "" {
+			verifyFlags["level"] = level
+		}
+		if timeout, ok := m["timeout"]; ok {
+			verifyFlags["timeout"] = timeout
+		}
+	}
+	result, err := dispatch.Dispatch(ctx, db, "verify", []string{}, verifyFlags)
+	if err != nil {
+		cb.AddVerifyEvent("", false, 0, 0)
+		data, _ := json.Marshal(map[string]string{"error": err.Error()})
+		return json.RawMessage(data)
+	}
+	data, _ := json.Marshal(result)
+	traceVerifyEvent(cb, result)
+	return json.RawMessage(data)
+}
+
+// buildSummary constructs the mutation summary with status and hints.
+func buildSummary(p *doParams, editsFailed bool, writeResults []writeResult) *summaryResult {
+	hasEdits := len(p.Edits) > 0
+	hasWrites := len(p.Writes) > 0
+	hasRenames := len(p.Renames) > 0
+	hasVerify := p.Verify != nil && p.Verify != false
+
+	if !hasEdits && !hasWrites && !hasRenames {
+		return nil
+	}
+
+	s := &summaryResult{}
+	if hasEdits {
+		s.Edits = len(p.Edits)
+	}
+	if hasWrites {
+		s.Writes = len(p.Writes)
+	}
+	if hasRenames {
+		s.Renames = len(p.Renames)
+	}
+
+	// Structural write failure check — no more string scanning
+	writesFailed := false
+	for _, wr := range writeResults {
+		if !wr.OK {
+			writesFailed = true
+			break
+		}
+	}
+
+	if editsFailed || writesFailed {
+		s.Status = "failed"
+	} else if p.DryRun != nil && *p.DryRun {
+		s.Status = "dry_run"
+	} else {
+		s.Status = "applied"
+	}
+
+	if hasEdits && !editsFailed && (p.ReadAfterEdit == nil || !*p.ReadAfterEdit) && (p.DryRun == nil || !*p.DryRun) {
+		s.Hints = append(s.Hints, "use read_after_edit:true to see updated signatures")
+	}
+	if (hasEdits || hasWrites) && !hasVerify && !editsFailed && (p.DryRun == nil || !*p.DryRun) {
+		s.Hints = append(s.Hints, "use verify:true to check build")
+	}
+	if len(s.Hints) == 0 {
+		s.Hints = nil
+	}
+	return s
+}
+
+// handleDo dispatches edr_do (batch reads/queries/edits/writes/renames/verify).
+func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trace.Collector, raw json.RawMessage) (string, error) {
+	ctx = index.WithSourceCache(ctx)
+
+	p, warnings, err := parseDo(raw)
+	if err != nil {
+		return "", err
+	}
+
 	hasInit := p.Init != nil && *p.Init
 	hasReads := len(p.Reads) > 0
 	hasQueries := len(p.Queries) > 0
@@ -218,7 +604,7 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 	hasRenames := len(p.Renames) > 0
 	hasVerify := p.Verify != nil && p.Verify != false
 
-	// Trace: begin call and defer finish
+	// Trace: begin call
 	sess.ResetStats()
 	cb := tc.BeginCall()
 	cb.SetRequest(len(p.Reads), len(p.Queries), len(p.Edits), len(p.Writes), len(p.Renames), hasVerify, hasInit, p.Budget)
@@ -244,229 +630,48 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 	}
 
 	if !hasInit && !hasReads && !hasQueries && !hasEdits && !hasWrites && !hasRenames && !hasVerify {
-		errMsg := `"error":"edr_do requires at least one of: reads, queries, edits, writes, renames, verify, init"`
-		if len(warnings) > 0 {
-			warnJSON, _ := json.Marshal(warnings)
-			return fmt.Sprintf(`{%s,"warnings":%s}`, errMsg, warnJSON), nil
+		resp := &doResponse{
+			Error:    "edr_do requires at least one of: reads, queries, edits, writes, renames, verify, init",
+			Warnings: warnings,
 		}
-		return fmt.Sprintf(`{%s}`, errMsg), nil
+		if len(resp.Warnings) == 0 {
+			resp.Warnings = nil
+		}
+		data, _ := json.Marshal(resp)
+		return string(data), nil
 	}
 
-	var parts []string
+	resp := &doResponse{}
 
-	// 0. Force re-index if requested
+	// 0. Init
 	if hasInit {
 		sess.InvalidateForEdit("init", []string{})
 		if err := db.WithWriteLock(func() error {
 			_, _, err := index.IndexRepo(ctx, db)
 			return err
 		}); err != nil {
-			parts = append(parts, fmt.Sprintf(`"init":{"ok":false,"error":%q}`, err.Error()))
+			resp.Init = map[string]any{"ok": false, "error": err.Error()}
 		} else {
-			parts = append(parts, fmt.Sprintf(`"init":{"ok":true,"version":%q}`, Version+"+"+BuildHash))
+			resp.Init = map[string]any{"ok": true, "version": Version + "+" + BuildHash}
 		}
 	}
 
-	// 1. Dispatch reads via DispatchMulti
+	// 1. Reads
 	if hasReads {
-		cmds := make([]dispatch.MultiCmd, len(p.Reads))
-		for i, r := range p.Reads {
-			readArgs := []string{r.File}
-			if r.Symbol != "" {
-				readArgs = []string{r.File + ":" + r.Symbol}
-			}
-			// If start_line + end_line provided for a single file read, fold into args
-			if r.StartLine != nil && r.EndLine != nil && r.Symbol == "" {
-				readArgs = []string{r.File, strconv.Itoa(*r.StartLine), strconv.Itoa(*r.EndLine)}
-			}
-			readFlags := map[string]any{}
-			if r.Budget != nil {
-				readFlags["budget"] = *r.Budget
-			}
-			if r.Signatures != nil && *r.Signatures {
-				readFlags["signatures"] = true
-			}
-			if r.Depth != nil {
-				readFlags["depth"] = *r.Depth
-			}
-			if r.StartLine != nil && r.EndLine == nil {
-				readFlags["start_line"] = *r.StartLine
-			}
-			if r.EndLine != nil && r.StartLine == nil {
-				readFlags["end_line"] = *r.EndLine
-			}
-			if r.Symbols != nil && *r.Symbols {
-				readFlags["symbols"] = true
-			}
-			if r.Full != nil && *r.Full {
-				readFlags["full"] = true
-			}
-			cmds[i] = dispatch.MultiCmd{Cmd: "read", Args: readArgs, Flags: readFlags}
-		}
-		var budgetOpt []int
-		if p.Budget != nil {
-			budgetOpt = []int{*p.Budget}
-		}
-		results := dispatch.DispatchMulti(ctx, db, cmds, budgetOpt...)
-		text := postProcessMultiResults(sess, cmds, results)
-		parts = append(parts, fmt.Sprintf(`"reads":%s`, text))
+		resp.Reads = executeReads(ctx, db, sess, &p)
 	}
 
-	// 2. Dispatch generalized queries via DispatchMulti (+ diff queries inline)
+	// 2. Queries
 	if hasQueries {
-		// Distribute top-level budget to queries that lack individual budgets.
-		// Use 2*budget/(n+1) so each query gets a larger share — matches
-		// the DispatchMulti distribution strategy.
-		if p.Budget != nil && len(p.Queries) > 0 {
-			n := len(p.Queries)
-			perQuery := *p.Budget * 2 / (n + 1)
-			if perQuery > *p.Budget {
-				perQuery = *p.Budget
-			}
-			if perQuery < 50 {
-				perQuery = 50
-			}
-			for i := range p.Queries {
-				if p.Queries[i].Budget == nil {
-					b := perQuery
-					p.Queries[i].Budget = &b
-				}
-			}
-		}
-
-		// Partition into dispatch queries and diff queries
-		type indexedResult struct {
-			idx    int
-			result dispatch.MultiResult
-		}
-		var dispatchIdxs []int
-		var diffIdxs []int
-		var errorIdxs []int
-		inferredCmds := make(map[int]string) // index → inferred cmd name
-		for i, q := range p.Queries {
-			if q.Cmd == "diff" {
-				diffIdxs = append(diffIdxs, i)
-			} else {
-				mc, wasInferred := doQueryToMultiCmd(q)
-				if mc.Cmd == "" {
-					errorIdxs = append(errorIdxs, i)
-				} else {
-					if wasInferred {
-						inferredCmds[i] = mc.Cmd
-					}
-					dispatchIdxs = append(dispatchIdxs, i)
-				}
-			}
-		}
-
-		// Build ordered results array
-		allResults := make([]dispatch.MultiResult, len(p.Queries))
-
-		// Fill in errors for queries missing cmd
-		for _, qi := range errorIdxs {
-			allResults[qi] = dispatch.MultiResult{
-				Cmd:   "",
-				OK:    false,
-				Error: `query requires a "cmd" field (search, map, explore, refs, find, diff)`,
-			}
-		}
-
-		// Dispatch regular queries
-		if len(dispatchIdxs) > 0 {
-			cmds := make([]dispatch.MultiCmd, len(dispatchIdxs))
-			for ci, qi := range dispatchIdxs {
-				cmds[ci], _ = doQueryToMultiCmd(p.Queries[qi])
-			}
-			var budgetOpt []int
-			if p.Budget != nil {
-				budgetOpt = []int{*p.Budget}
-			}
-			results := dispatch.DispatchMulti(ctx, db, cmds, budgetOpt...)
-			for ci, qi := range dispatchIdxs {
-				allResults[qi] = results[ci]
-			}
-		}
-
-		// Handle diff queries via session
-		for _, qi := range diffIdxs {
-			q := p.Queries[qi]
-			var diffArgs []string
-			if q.File != nil {
-				diffArgs = append(diffArgs, *q.File)
-			}
-			if q.Symbol != nil && *q.Symbol != "" {
-				diffArgs = append(diffArgs, *q.Symbol)
-			}
-			diffResult := sess.GetDiff(diffArgs)
-			allResults[qi] = dispatch.MultiResult{
-				Cmd:    "diff",
-				OK:     diffResult["error"] == nil,
-				Result: diffResult,
-			}
-			if errMsg, ok := diffResult["error"].(string); ok {
-				allResults[qi].Error = errMsg
-			}
-		}
-
-		// Build cmds array for post-processing (need full list for session)
-		allCmds := make([]dispatch.MultiCmd, len(p.Queries))
-		for i, q := range p.Queries {
-			if q.Cmd == "diff" {
-				allCmds[i] = dispatch.MultiCmd{Cmd: "diff"}
-			} else {
-				allCmds[i], _ = doQueryToMultiCmd(q)
-			}
-		}
-
-		// Annotate inferred_cmd on results where cmd was auto-inferred
-		for qi, inferredCmd := range inferredCmds {
-			allResults[qi].InferredCmd = inferredCmd
-		}
-
-		text := postProcessMultiResults(sess, allCmds, allResults)
-		parts = append(parts, fmt.Sprintf(`"queries":%s`, text))
-
-		// Trace: record query events
-		for _, r := range allResults {
-			resultBytes := 0
-			if r.Result != nil {
-				if d, err := json.Marshal(r.Result); err == nil {
-					resultBytes = len(d)
-				}
-			}
-			cb.AddQueryEvent(r.Cmd, r.OK, resultBytes)
-		}
+		resp.Queries = executeQueries(ctx, db, sess, &p, cb)
 	}
 
-	// 3. Dispatch writes sequentially (before renames/edits, so new files can be edited)
+	// 3. Writes
 	if hasWrites {
-		var writeResults []map[string]any
-		for _, w := range p.Writes {
-			flags := map[string]any{"content": w.Content}
-			if w.Mkdir != nil && *w.Mkdir {
-				flags["mkdir"] = true
-			}
-			if w.After != nil && *w.After != "" {
-				flags["after"] = *w.After
-			}
-			if w.Inside != nil && *w.Inside != "" {
-				flags["inside"] = *w.Inside
-			}
-			if w.Append != nil && *w.Append {
-				flags["append"] = true
-			}
-			result, err := dispatch.Dispatch(ctx, db, "write", []string{w.File}, flags)
-			if err != nil {
-				writeResults = append(writeResults, map[string]any{"file": w.File, "ok": false, "error": err.Error()})
-			} else {
-				writeResults = append(writeResults, map[string]any{"file": w.File, "ok": true, "result": result})
-			}
-		}
-		data, _ := json.Marshal(writeResults)
-		parts = append(parts, fmt.Sprintf(`"writes":%s`, string(data)))
+		resp.Writes = executeWrites(ctx, db, &p)
 	}
 
-	// 4. Dispatch renames (clears session state)
+	// 4. Renames
 	if hasRenames {
 		var renameResults []map[string]any
 		for _, r := range p.Renames {
@@ -490,105 +695,18 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 			}
 		}
 		data, _ := json.Marshal(renameResults)
-		parts = append(parts, fmt.Sprintf(`"renames":%s`, string(data)))
+		resp.Renames = json.RawMessage(data)
 	}
 
-	// 5. Dispatch edits via edit-plan (atomic)
+	// 5. Edits
 	editsFailed := false
 	if hasEdits {
-		editFlags := map[string]any{}
-
-		// Promote per-edit dry_run to batch level (edits are atomic, so
-		// dry_run only makes sense for the whole batch). This prevents
-		// agents from accidentally mutating when they intended to preview.
-		if p.DryRun == nil || !*p.DryRun {
-			for _, e := range p.Edits {
-				if e.DryRun != nil && *e.DryRun {
-					t := true
-					p.DryRun = &t
-					warnings = append(warnings, "per-edit dry_run promoted to batch level (edits are atomic)")
-					break
-				}
-			}
-		}
-
-		editsRaw := make([]map[string]any, len(p.Edits))
-		for i, e := range p.Edits {
-			m := map[string]any{"file": e.File}
-			if e.OldText != "" {
-				m["old_text"] = e.OldText
-			}
-			// Always include new_text when an edit mode is active.
-			// Empty new_text with old_text/symbol/line-range = deletion.
-			if e.NewText != "" || e.OldText != "" || e.Symbol != "" || (e.StartLine != nil && e.EndLine != nil) {
-				m["new_text"] = e.NewText
-			}
-			if e.Symbol != "" {
-				m["symbol"] = e.Symbol
-			}
-			if e.StartLine != nil {
-				m["start_line"] = *e.StartLine
-			}
-			if e.EndLine != nil {
-				m["end_line"] = *e.EndLine
-			}
-			if e.Regex != nil && *e.Regex {
-				m["regex"] = true
-			}
-			if e.All != nil && *e.All {
-				m["all"] = true
-			}
-			if e.Move != "" {
-				m["move"] = e.Move
-			}
-			if e.After != "" {
-				m["after"] = e.After
-			}
-			if e.Before != "" {
-				m["before"] = e.Before
-			}
-			if e.ExpectHash != "" {
-				m["expect_hash"] = e.ExpectHash
-			}
-			editsRaw[i] = m
-		}
-		editFlags["edits"] = editsRaw
-		if p.DryRun != nil && *p.DryRun {
-			editFlags["dry_run"] = true
-		}
-
-		sess.InvalidateForEdit("edit-plan", []string{})
-
-		result, err := dispatch.Dispatch(ctx, db, "edit-plan", []string{}, editFlags)
-		if err != nil {
-			editsFailed = true
-			if ambErr := asAmbiguousError(err); ambErr != nil {
-				data, _ := json.Marshal(ambErr)
-				parts = append(parts, fmt.Sprintf(`"edits":%s`, string(data)))
-			} else if nfErr := asNotFoundError(err); nfErr != nil {
-				data, _ := json.Marshal(nfErr)
-				parts = append(parts, fmt.Sprintf(`"edits":%s`, string(data)))
-			} else {
-				parts = append(parts, fmt.Sprintf(`"edits":{"error":%q}`, err.Error()))
-			}
-			// Trace: record failed edits
-			for _, e := range p.Edits {
-				cb.AddEditEvent(e.File, 0, "", "", false)
-			}
-		} else {
-			data, _ := json.Marshal(result)
-			text := sess.PostProcess("edit-plan", []string{}, editFlags, result, string(data))
-			parts = append(parts, fmt.Sprintf(`"edits":%s`, text))
-
-			// Trace: extract per-file edit events from result
-			traceEditEvents(cb, result)
-		}
+		resp.Edits, editsFailed = executeEdits(ctx, db, sess, &p, &warnings, cb)
 	}
 
-	// 5b. Post-edit reads — return signatures of edited files to save a round trip.
-	// Signatures show the updated API shape (75-86% fewer tokens than full content).
+	// 5b. Post-edit reads
 	if editsFailed && p.ReadAfterEdit != nil && *p.ReadAfterEdit {
-		parts = append(parts, `"post_edit_reads":"skipped: edits failed"`)
+		resp.PostEditReads = json.RawMessage(`"skipped: edits failed"`)
 	} else if (hasEdits || hasWrites) && p.ReadAfterEdit != nil && *p.ReadAfterEdit && (p.DryRun == nil || !*p.DryRun) {
 		editedFiles := make(map[string]bool)
 		for _, e := range p.Edits {
@@ -611,125 +729,65 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 				budgetOpt = []int{*p.Budget}
 			}
 			results := dispatch.DispatchMulti(ctx, db, readCmds, budgetOpt...)
-			text := postProcessMultiResults(sess, readCmds, results)
-			parts = append(parts, fmt.Sprintf(`"post_edit_reads":%s`, text))
+			resp.PostEditReads = json.RawMessage(postProcessMultiResults(sess, readCmds, results))
 		}
 	}
 
-	// 6. Run verification if requested
+	// 6. Verify
 	if editsFailed && hasVerify {
-		parts = append(parts, `"verify":"skipped: edits failed"`)
+		resp.Verify = json.RawMessage(`"skipped: edits failed"`)
 	} else if hasVerify {
-		verifyFlags := map[string]any{}
-		// verify: true uses auto-detect; verify: "test"/"build" sets level; verify: "command" uses custom command
-		if cmd, ok := p.Verify.(string); ok && cmd != "" {
-			if cmd == "test" || cmd == "build" {
-				verifyFlags["level"] = cmd
-			} else {
-				verifyFlags["command"] = cmd
-			}
-		}
-		result, err := dispatch.Dispatch(ctx, db, "verify", []string{}, verifyFlags)
-		if err != nil {
-			parts = append(parts, fmt.Sprintf(`"verify":{"error":%q}`, err.Error()))
-			cb.AddVerifyEvent("", false, 0, 0)
-		} else {
-			data, _ := json.Marshal(result)
-			parts = append(parts, fmt.Sprintf(`"verify":%s`, string(data)))
-
-			// Trace: extract verify event
-			traceVerifyEvent(cb, result)
-		}
+		resp.Verify = executeVerify(ctx, db, &p, cb)
 	}
 
-	// 7. Build structured summary for mutation calls.
-	if hasEdits || hasWrites || hasRenames {
-		summary := map[string]any{}
-		if hasEdits {
-			summary["edits"] = len(p.Edits)
-		}
-		if hasWrites {
-			summary["writes"] = len(p.Writes)
-		}
-		if hasRenames {
-			summary["renames"] = len(p.Renames)
-		}
-		// Check for write failures alongside edit failures.
-		writesFailed := false
-		if hasWrites {
-			for _, part := range parts {
-				if strings.HasPrefix(part, `"writes":`) {
-					if strings.Contains(part, `"ok":false`) {
-						writesFailed = true
-					}
-				}
-			}
-		}
-		if editsFailed || writesFailed {
-			summary["status"] = "failed"
-		} else if p.DryRun != nil && *p.DryRun {
-			summary["status"] = "dry_run"
-		} else {
-			summary["status"] = "applied"
-		}
-		var hints []string
-		if hasEdits && !editsFailed && (p.ReadAfterEdit == nil || !*p.ReadAfterEdit) && (p.DryRun == nil || !*p.DryRun) {
-			hints = append(hints, "use read_after_edit:true to see updated signatures")
-		}
-		if (hasEdits || hasWrites) && !hasVerify && !editsFailed && (p.DryRun == nil || !*p.DryRun) {
-			hints = append(hints, "use verify:true to check build")
-		}
-		if len(hints) > 0 {
-			summary["hints"] = hints
-		}
-		sumJSON, _ := json.Marshal(summary)
-		parts = append(parts, fmt.Sprintf(`"summary":%s`, sumJSON))
-	}
+	// 7. Summary
+	resp.Summary = buildSummary(&p, editsFailed, resp.Writes)
 
 	if len(warnings) > 0 {
-		warnJSON, _ := json.Marshal(warnings)
-		parts = append(parts, fmt.Sprintf(`"warnings":%s`, warnJSON))
+		resp.Warnings = warnings
 	}
 
-	result := "{" + strings.Join(parts, ",") + "}"
+	// Marshal and truncate
+	result, _ := json.Marshal(resp)
+	resultStr := string(result)
 
-	// Hard cap: if response exceeds 100KB, drop sections from the end until
-	// it fits. This guarantees valid JSON unlike raw byte slicing.
 	const maxResponseBytes = 100_000
 	wasTruncated := false
-	if len(result) > maxResponseBytes {
+	if len(resultStr) > maxResponseBytes {
 		wasTruncated = true
-		fullSize := len(result)
+		fullSize := len(resultStr)
+
+		// Drop fields by priority (last = least critical) until it fits.
+		// Try dropping in order: post_edit_reads, verify, queries, reads
+		dropOrder := []func(){
+			func() { resp.PostEditReads = nil },
+			func() { resp.Verify = nil },
+			func() { resp.Queries = nil },
+			func() { resp.Reads = nil },
+		}
+		dropNames := []string{"post_edit_reads", "verify", "queries", "reads"}
 		var dropped []string
-		// Drop sections from the end (last added = least critical) until it fits.
-		// Keep at least one section to return something useful.
-		for len(parts) > 1 {
-			// Extract the key name from the last part (format: "key":value)
-			last := parts[len(parts)-1]
-			keyEnd := strings.Index(last, "\":")
-			key := "unknown"
-			if keyEnd > 0 && last[0] == '"' {
-				key = last[1:keyEnd]
-			}
-			dropped = append(dropped, key)
-			parts = parts[:len(parts)-1]
-			candidate := "{" + strings.Join(parts, ",") + "}"
-			if len(candidate) <= maxResponseBytes-200 { // leave room for metadata
+		for i, drop := range dropOrder {
+			drop()
+			dropped = append(dropped, dropNames[i])
+			result, _ = json.Marshal(resp)
+			if len(result) <= maxResponseBytes-200 {
 				break
 			}
 		}
-		droppedJSON, _ := json.Marshal(dropped)
-		meta := fmt.Sprintf(`"truncated":true,"truncated_reason":"response exceeded %d bytes (%d actual)","sections_dropped":%s`,
-			maxResponseBytes, fullSize, droppedJSON)
-		result = "{" + meta + "," + strings.Join(parts, ",") + "}"
+		resp.Truncated = true
+		resp.TruncReason = fmt.Sprintf("response exceeded %d bytes (%d actual)", maxResponseBytes, fullSize)
+		resp.Dropped = dropped
+		result, _ = json.Marshal(resp)
+		resultStr = string(result)
 	}
 
 	// Trace: record session stats and finish
 	dr, bd, se := sess.GetStats()
 	cb.SetSessionStats(dr, bd, se)
-	cb.Finish(len(result), wasTruncated, len(warnings))
+	cb.Finish(len(resultStr), wasTruncated, len(warnings))
 
-	return result, nil
+	return resultStr, nil
 }
 
 // traceEditEvents extracts per-file edit results and records them on the CallBuilder.

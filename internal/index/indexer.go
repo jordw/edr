@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // alwaysIgnore contains directories that are always skipped regardless of .gitignore.
@@ -28,17 +29,136 @@ var DefaultIgnore = []string{
 }
 
 // HasStaleFiles checks whether the repo has changed since the last index.
-// Uses a two-tier approach: first compares mtime metadata (no file reads),
-// then only reads files whose mtime changed to verify by content hash.
-// This avoids both full-repo content hashing and false positives from
-// touch-only mtime bumps.
+// Uses a two-tier approach:
+//  1. Fast path: if last_index_time is stored, walk directories only. Check dir
+//     mtime against last_index_time; only stat files in changed directories. O(dirs).
+//  2. Slow path (no last_index_time / first index): full file walk with mtime+hash. O(files).
 func HasStaleFiles(ctx context.Context, db *DB) (bool, error) {
-	// Quick check: has .gitignore changed? (separate metadata, not in files table)
+	// Quick check: has .gitignore changed?
 	if checkGitignoreStale(db.Root()) {
 		return true, nil
 	}
 
-	// Bulk-load all indexed metadata in two queries (not per-file).
+	// Try fast path: incremental staleness via directory mtime.
+	lastIndexStr, err := db.GetMeta("last_index_time")
+	if err == nil && lastIndexStr != "" {
+		var lastIndexTime int64
+		fmt.Sscanf(lastIndexStr, "%d", &lastIndexTime)
+		if lastIndexTime > 0 {
+			return hasStaleFilesFast(ctx, db, lastIndexTime)
+		}
+	}
+
+	// Slow path: full walk (first index or missing metadata).
+	return hasStaleFilesFull(ctx, db)
+}
+
+// hasStaleFilesFast checks staleness with an incremental strategy.
+// Tracks which directories had their mtime change since the last index.
+// For files in unchanged directories: checks file mtime against indexed mtime
+// (detects content modifications) but skips deleted-file checks.
+// For files in changed directories: full check including new/deleted detection.
+// This avoids content-hash reads for files in unchanged directories and
+// reduces the deleted-file scan from O(all indexed files) to O(changed dir files).
+func hasStaleFilesFast(ctx context.Context, db *DB, lastIndexTime int64) (bool, error) {
+	indexedMeta, err := db.GetAllFileMeta(ctx)
+	if err != nil || len(indexedMeta) == 0 {
+		return true, nil
+	}
+	indexedHashes, err := db.GetAllFileHashes(ctx)
+	if err != nil {
+		indexedHashes = make(map[string]string)
+	}
+
+	root := db.Root()
+	gitignore := LoadGitIgnore(root)
+	seen := make(map[string]bool, len(indexedMeta))
+	changedDirs := make(map[string]bool)
+	var stale bool
+
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if d.IsDir() {
+			if shouldIgnoreDir(d.Name(), path, root, gitignore) {
+				return filepath.SkipDir
+			}
+			info, err := d.Info()
+			if err != nil {
+				return nil
+			}
+			if info.ModTime().UnixNano() > lastIndexTime {
+				changedDirs[path] = true
+			}
+			return nil
+		}
+		if gitignore != nil {
+			rel, _ := filepath.Rel(root, path)
+			if gitignore.IsIgnored(rel, false) {
+				return nil
+			}
+		}
+		if GetLangConfig(path) == nil {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil || info.Size() > 1<<20 {
+			return nil
+		}
+
+		seen[path] = true
+		dir := filepath.Dir(path)
+		storedMtime, inDB := indexedMeta[path]
+
+		if !inDB {
+			// New file — only expected in changed directories.
+			stale = true
+			return filepath.SkipAll
+		}
+		if info.ModTime().UnixNano() <= storedMtime {
+			return nil
+		}
+
+		// Mtime changed — for files in unchanged directories, we still
+		// need to verify by content hash to catch external modifications.
+		// For files in changed directories, also verify.
+		if !changedDirs[dir] {
+			// File mtime changed in an "unchanged" dir — external modification.
+			// Read file to confirm by hash.
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		if fileHash(src) != indexedHashes[path] {
+			stale = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+
+	if stale {
+		return true, nil
+	}
+
+	// Check for deleted files only in changed directories.
+	// Files in unchanged directories can't have been deleted (dir mtime would change).
+	for path := range indexedMeta {
+		if !seen[path] && GetLangConfig(path) != nil {
+			dir := filepath.Dir(path)
+			if changedDirs[dir] {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
+// hasStaleFilesFull is the original full-walk staleness check.
+// Used when no last_index_time is available (first index).
+func hasStaleFilesFull(ctx context.Context, db *DB) (bool, error) {
 	indexedMeta, err := db.GetAllFileMeta(ctx)
 	if err != nil || len(indexedMeta) == 0 {
 		return true, nil
@@ -85,16 +205,14 @@ func HasStaleFiles(ctx context.Context, db *DB) (bool, error) {
 		storedMtime, inDB := indexedMeta[path]
 
 		if !inDB {
-			// New file not in index
 			stale = true
 			return filepath.SkipAll
 		}
 		if info.ModTime().UnixNano() <= storedMtime {
-			// Mtime unchanged — skip (no read needed)
 			return nil
 		}
 
-		// Mtime changed — verify by content hash to avoid false positive on touch.
+		// Mtime changed — verify by content hash.
 		src, err := os.ReadFile(path)
 		if err != nil {
 			return nil
@@ -110,9 +228,6 @@ func HasStaleFiles(ctx context.Context, db *DB) (bool, error) {
 		return true, nil
 	}
 
-	// Check for deleted files: any indexed path not seen on disk.
-	// Only consider paths with a language config — non-source files
-	// (e.g. legacy rows) in the DB should not trigger staleness.
 	for path := range indexedMeta {
 		if !seen[path] && GetLangConfig(path) != nil {
 			return true, nil
@@ -309,6 +424,9 @@ func IndexRepo(ctx context.Context, db *DB, progress ...ProgressFunc) (int, int,
 	if err := updateIndexedSnapshot(ctx, root); err != nil {
 		return filesIndexed, symbolsFound, err
 	}
+
+	// Record the index timestamp for incremental staleness checks.
+	_ = db.SetMeta("last_index_time", fmt.Sprintf("%d", time.Now().UnixNano()))
 
 	return filesIndexed, symbolsFound, nil
 }

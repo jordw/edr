@@ -89,6 +89,7 @@ func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flag
 }
 
 // relError rewrites absolute repo paths in error messages to relative paths.
+// It preserves the error chain so that errors.As still works on the result.
 func relError(root string, err error) error {
 	if err == nil || root == "" {
 		return err
@@ -97,10 +98,19 @@ func relError(root string, err error) error {
 	cleaned := strings.ReplaceAll(msg, root+"/", "")
 	cleaned = strings.ReplaceAll(cleaned, root, "")
 	if cleaned != msg {
-		return fmt.Errorf("%s", cleaned)
+		return &relPathError{msg: cleaned, wrapped: err}
 	}
 	return err
 }
+
+// relPathError wraps an error with a cleaned message while preserving the chain.
+type relPathError struct {
+	msg     string
+	wrapped error
+}
+
+func (e *relPathError) Error() string { return e.msg }
+func (e *relPathError) Unwrap() error { return e.wrapped }
 
 // --- Unified command routers ---
 

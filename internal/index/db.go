@@ -305,7 +305,7 @@ func retryBusy(fn func() error) error {
 }
 
 
-const currentSchemaVersion = 5
+const currentSchemaVersion = 6
 
 func (d *DB) migrate() error {
 	// Create schema_version table if it doesn't exist
@@ -351,6 +351,11 @@ func (d *DB) migrate() error {
 	}
 	if version < 5 {
 		if err := d.migrateV5(); err != nil {
+			return err
+		}
+	}
+	if version < 6 {
+		if err := d.migrateV6(); err != nil {
 			return err
 		}
 	}
@@ -465,6 +470,30 @@ func (d *DB) migrateV4() error {
 
 func (d *DB) migrateV5() error {
 	_, err := d.db.Exec(`CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file)`)
+	return err
+}
+
+func (d *DB) migrateV6() error {
+	_, err := d.db.Exec(`CREATE TABLE IF NOT EXISTS index_meta (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	)`)
+	return err
+}
+
+// GetMeta reads a value from the index_meta table.
+func (d *DB) GetMeta(key string) (string, error) {
+	var value string
+	err := d.db.QueryRow("SELECT value FROM index_meta WHERE key = ?", key).Scan(&value)
+	return value, err
+}
+
+// SetMeta writes a key-value pair to the index_meta table.
+func (d *DB) SetMeta(key, value string) error {
+	_, err := d.db.Exec(
+		"INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)",
+		key, value,
+	)
 	return err
 }
 

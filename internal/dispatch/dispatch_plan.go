@@ -138,7 +138,16 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 				}
 				matches := re.FindAllStringIndex(content, -1)
 				if len(matches) == 0 {
-					return nil, fmt.Errorf("edit-plan: edit %d: regex %q not found in %s", i, e.OldText, output.Rel(file))
+					nfErr := &NotFoundError{
+						ErrorType: "not_found",
+						File:      output.Rel(file),
+						OldText:   e.OldText,
+						Hint:      "regex pattern did not match any text in the file",
+						EditIndex: intPtr(i),
+						EditMode:  "regex",
+						TotalEdits: intPtr(len(edits)),
+					}
+					return nil, fmt.Errorf("edit-plan: edit %d: %w", i, nfErr)
 				}
 				if len(matches) > 1 && !e.All {
 					locs := make([][]int, len(matches))
@@ -164,7 +173,11 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 				// Literal text-based edit
 				idx := strings.Index(content, e.OldText)
 				if idx < 0 {
-					return nil, fmt.Errorf("edit-plan: edit %d: %w", i, notFoundError(content, output.Rel(file), e.OldText))
+					nfErr := notFoundError(content, output.Rel(file), e.OldText)
+					nfErr.EditIndex = intPtr(i)
+					nfErr.EditMode = "old_text"
+					nfErr.TotalEdits = intPtr(len(edits))
+					return nil, fmt.Errorf("edit-plan: edit %d: %w", i, nfErr)
 				}
 				// Check for ambiguous matches before proceeding
 				totalMatches := strings.Count(content, e.OldText)
@@ -519,3 +532,6 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 	}
 	return result, nil
 }
+
+// intPtr returns a pointer to the given int.
+func intPtr(v int) *int { return &v }

@@ -5,6 +5,12 @@
 // derives that information from this registry.
 package cmdspec
 
+import (
+	"strings"
+
+	"github.com/spf13/pflag"
+)
+
 // Category classifies a command for session and dispatch behavior.
 type Category string
 
@@ -180,6 +186,10 @@ var Registry = []*Spec{
 		Name: "edit-plan", Desc: "Batch edits with dry-run preview.",
 		Category: CatGlobalMutate, MinArgs: 0, MaxArgs: 0,
 		DiffEdit: true,
+		Flags: []FlagSpec{
+			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
+			{Name: "edits", Type: FlagString, Default: "", Desc: "JSON array of edit objects"},
+		},
 	},
 	{
 		Name: "verify", Desc: "Run build/typecheck or tests. Auto-detects go/npm/cargo.",
@@ -325,6 +335,39 @@ func QueryBatchKeys() map[string]bool {
 		}
 	}
 	return m
+}
+
+// --- Cobra flag registration ---
+
+// RegisterFlags registers all flags from the registry for the named command.
+// This ensures CLI flags stay in sync with the canonical cmdspec registry.
+// Flag names are converted from underscore to hyphen convention for CLI
+// (e.g., "dry_run" → "dry-run") since dispatch's flagLookup handles both.
+func RegisterFlags(flags *pflag.FlagSet, name string) {
+	s := byName[name]
+	if s == nil {
+		return
+	}
+	for _, f := range s.Flags {
+		cliName := strings.ReplaceAll(f.Name, "_", "-")
+		switch f.Type {
+		case FlagBool:
+			def, _ := f.Default.(bool)
+			flags.Bool(cliName, def, f.Desc)
+		case FlagInt:
+			def, _ := f.Default.(int)
+			flags.Int(cliName, def, f.Desc)
+		case FlagString:
+			def, _ := f.Default.(string)
+			flags.String(cliName, def, f.Desc)
+		case FlagStringSlice:
+			var def []string
+			if f.Default != nil {
+				def, _ = f.Default.([]string)
+			}
+			flags.StringSlice(cliName, def, f.Desc)
+		}
+	}
 }
 
 // --- Description helpers ---

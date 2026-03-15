@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -97,6 +98,18 @@ func dispatchWithSession(db *index.DB, sess *session.Session, cmdName string, ar
 
 	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
 	if err != nil {
+		// Surface structured errors as JSON instead of bare strings
+		var nfErr *dispatch.NotFoundError
+		if errors.As(err, &nfErr) {
+			data, _ := json.Marshal(map[string]any{"ok": false, "error": nfErr})
+			output.Print(json.RawMessage(data))
+			return nil
+		}
+		if ambErr := asAmbiguousError(err); ambErr != nil {
+			data, _ := json.Marshal(map[string]any{"ok": false, "error": ambErr})
+			output.Print(json.RawMessage(data))
+			return nil
+		}
 		return err
 	}
 
@@ -184,13 +197,7 @@ var readCmd = &cobra.Command{
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "read", args) },
 }
 
-func init() {
-	readCmd.Flags().Int("budget", 0, P("budget"))
-	readCmd.Flags().Bool("symbols", false, P("symbols"))
-	readCmd.Flags().Bool("signatures", false, P("signatures"))
-	readCmd.Flags().Int("depth", 0, P("depth"))
-	readCmd.Flags().Bool("full", false, P("full"))
-}
+func init() { cmdspec.RegisterFlags(readCmd.Flags(), "read") }
 
 var writeCmd = &cobra.Command{
 	Use:   "write <file>",
@@ -201,15 +208,7 @@ var writeCmd = &cobra.Command{
 	},
 }
 
-func init() {
-	writeCmd.Flags().Bool("mkdir", false, P("mkdir"))
-	writeCmd.Flags().Bool("append", false, P("append"))
-	writeCmd.Flags().String("after", "", P("after"))
-	writeCmd.Flags().String("inside", "", P("inside"))
-	writeCmd.Flags().String("content", "", "Content to write (alternative to stdin)")
-	writeCmd.Flags().String("new_text", "", "Content to write (alias for --content, consistent with edit)")
-	writeCmd.Flags().Bool("force", false, "Allow overwriting a non-empty file with empty content")
-}
+func init() { cmdspec.RegisterFlags(writeCmd.Flags(), "write") }
 
 var editCmd = &cobra.Command{
 	Use:   "edit <file> [symbol]",
@@ -224,19 +223,7 @@ var editCmd = &cobra.Command{
 	},
 }
 
-func init() {
-	editCmd.Flags().Int("start_line", 0, P("start_line"))
-	editCmd.Flags().Int("end_line", 0, P("end_line"))
-	editCmd.Flags().String("old_text", "", P("old_text"))
-	editCmd.Flags().String("new_text", "", P("new_text"))
-	editCmd.Flags().Bool("regex", false, P("regex"))
-	editCmd.Flags().Bool("all", false, P("all"))
-	editCmd.Flags().Bool("dry-run", false, P("dry_run"))
-	editCmd.Flags().String("expect_hash", "", "Reject edit if file hash doesn't match (concurrency guard)")
-	editCmd.Flags().String("move", "", "Symbol to move")
-	editCmd.Flags().String("after", "", "Place after this symbol (use with --move)")
-	editCmd.Flags().String("before", "", "Place before this symbol (use with --move)")
-}
+func init() { cmdspec.RegisterFlags(editCmd.Flags(), "edit") }
 
 var mapCmd = &cobra.Command{
 	Use:   "map [file]",
@@ -245,14 +232,7 @@ var mapCmd = &cobra.Command{
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "map", args) },
 }
 
-func init() {
-	mapCmd.Flags().Int("budget", 0, P("budget"))
-	mapCmd.Flags().String("dir", "", P("dir"))
-	mapCmd.Flags().String("glob", "", P("glob"))
-	mapCmd.Flags().String("type", "", P("type"))
-	mapCmd.Flags().String("grep", "", P("grep"))
-	mapCmd.Flags().Bool("locals", false, P("locals"))
-}
+func init() { cmdspec.RegisterFlags(mapCmd.Flags(), "map") }
 
 var searchCmd = &cobra.Command{
 	Use:   "search <pattern>",
@@ -261,15 +241,7 @@ var searchCmd = &cobra.Command{
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "search", args) },
 }
 
-func init() {
-	searchCmd.Flags().Int("budget", 0, P("budget"))
-	searchCmd.Flags().Bool("body", false, P("body"))
-	searchCmd.Flags().Bool("text", false, P("text"))
-	searchCmd.Flags().Bool("regex", false, P("regex"))
-	searchCmd.Flags().StringSlice("include", nil, P("include"))
-	searchCmd.Flags().StringSlice("exclude", nil, P("exclude"))
-	searchCmd.Flags().Int("context", 0, P("context"))
-}
+func init() { cmdspec.RegisterFlags(searchCmd.Flags(), "search") }
 
 var exploreCmd = &cobra.Command{
 	Use:   "explore [file] <symbol>",
@@ -278,14 +250,7 @@ var exploreCmd = &cobra.Command{
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "explore", args) },
 }
 
-func init() {
-	exploreCmd.Flags().Bool("body", false, P("body"))
-	exploreCmd.Flags().Bool("callers", false, P("callers"))
-	exploreCmd.Flags().Bool("deps", false, P("deps"))
-	exploreCmd.Flags().Bool("gather", false, P("gather"))
-	exploreCmd.Flags().Bool("signatures", false, P("signatures"))
-	exploreCmd.Flags().Int("budget", 0, P("budget"))
-}
+func init() { cmdspec.RegisterFlags(exploreCmd.Flags(), "explore") }
 
 var refsCmd = &cobra.Command{
 	Use:   "refs [file] <symbol>",
@@ -294,11 +259,7 @@ var refsCmd = &cobra.Command{
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "refs", args) },
 }
 
-func init() {
-	refsCmd.Flags().Bool("impact", false, P("impact"))
-	refsCmd.Flags().String("chain", "", P("chain"))
-	refsCmd.Flags().Int("depth", 3, P("depth"))
-}
+func init() { cmdspec.RegisterFlags(refsCmd.Flags(), "refs") }
 
 var renameCmd = &cobra.Command{
 	Use:   "rename <old-name> <new-name>",
@@ -307,10 +268,7 @@ var renameCmd = &cobra.Command{
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "rename", args) },
 }
 
-func init() {
-	renameCmd.Flags().Bool("dry-run", false, P("dry_run"))
-	renameCmd.Flags().String("scope", "", P("scope"))
-}
+func init() { cmdspec.RegisterFlags(renameCmd.Flags(), "rename") }
 
 var findCmd = &cobra.Command{
 	Use:   "find <pattern>",
@@ -320,10 +278,8 @@ var findCmd = &cobra.Command{
 }
 
 func init() {
-	findCmd.Flags().String("dir", "", P("dir"))
-	findCmd.Flags().Int("budget", 0, P("budget"))
-
-	initCmd.Flags().String("cpuprofile", "", "write CPU profile to file")
+	cmdspec.RegisterFlags(findCmd.Flags(), "find")
+	cmdspec.RegisterFlags(initCmd.Flags(), "init")
 }
 
 var initCmd = &cobra.Command{
@@ -394,10 +350,7 @@ var editPlanCmd = &cobra.Command{
 	},
 }
 
-func init() {
-	editPlanCmd.Flags().Bool("dry-run", false, P("dry_run"))
-	editPlanCmd.Flags().String("edits", "", P("edits"))
-}
+func init() { cmdspec.RegisterFlags(editPlanCmd.Flags(), "edit-plan") }
 
 var verifyCmd = &cobra.Command{
 	Use:   "verify",
@@ -405,8 +358,4 @@ var verifyCmd = &cobra.Command{
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "verify", args) },
 }
 
-func init() {
-	verifyCmd.Flags().String("command", "", P("command"))
-	verifyCmd.Flags().String("level", "build", P("level"))
-	verifyCmd.Flags().Int("timeout", 30, P("timeout"))
-}
+func init() { cmdspec.RegisterFlags(verifyCmd.Flags(), "verify") }
