@@ -63,36 +63,32 @@ type Spec struct {
 // Registry is the canonical list of all edr commands.
 var Registry = []*Spec{
 	{
-		Name: "read", Desc: "Read file, symbol (file:sym), or batch. Use edr for multiple reads.",
+		Name: "read", Desc: "Read file or symbol. Supports file:symbol syntax, --signatures, --skeleton.",
 		Category: CatRead, MinArgs: 1, MaxArgs: -1, FileScoped: true,
 		DeltaRead: true, BodyTrack: true,
 		Flags: []FlagSpec{
 			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens"},
-			{Name: "symbols", Type: FlagBool, Default: false, Desc: "Append symbol list"},
 			{Name: "signatures", Type: FlagBool, Default: false, Desc: "Signatures only (75-86% fewer tokens)"},
 			{Name: "skeleton", Type: FlagBool, Default: false, Desc: "Skeleton view: blocks collapsed (one level deeper than signatures)"},
 			{Name: "full", Type: FlagBool, Default: false, Desc: "Force full content (skip delta)"},
 		},
-		BatchFields: []string{"file", "symbol", "start_line", "end_line", "depth"},
+		BatchFields: []string{"file", "symbol", "start_line", "end_line", "depth", "symbols"},
 	},
 	{
-		Name: "write", Desc: "Create/overwrite file. Supports append, after (symbol), inside (container), mkdir.",
+		Name: "write", Desc: "Create or overwrite file. Supports --after, --inside, --mkdir.",
 		Category: CatWrite, MinArgs: 1, MaxArgs: 1, StdinKey: "content", FileScoped: true,
 		Flags: []FlagSpec{
 			{Name: "mkdir", Type: FlagBool, Default: false, Desc: "Create parent dirs"},
-			{Name: "append", Type: FlagBool, Default: false, Desc: "Append to file"},
 			{Name: "after", Type: FlagString, Default: "", Desc: "Place after this symbol"},
 			{Name: "inside", Type: FlagString, Default: "", Desc: "Insert inside container"},
 			{Name: "content", Type: FlagString, Default: "", Desc: "Content to write (alternative to stdin)"},
-			{Name: "new_text", Type: FlagString, Default: "", Desc: "Content to write (alias for --content)"},
-			{Name: "force", Type: FlagBool, Default: false, Desc: "Allow overwriting non-empty file with empty content"},
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
 		},
-		// "body" accepted as alias for "content" to suppress agent typo warnings
-		BatchFields: []string{"file", "body"},
+		// backward-compat JSON fields not in CLI
+		BatchFields: []string{"file", "body", "append", "new_text", "force"},
 	},
 	{
-		Name: "edit", Desc: "Edit by old_text/new_text, symbol, line range, or move. Returns hash.",
+		Name: "edit", Desc: "Edit file by exact text match, symbol replacement, or line range.",
 		Category: CatWrite, MinArgs: 1, MaxArgs: 2, StdinKey: "new_text", FileScoped: true,
 		DiffEdit: true,
 		Flags: []FlagSpec{
@@ -115,24 +111,21 @@ var Registry = []*Spec{
 			{Name: "glob", Type: FlagString, Default: "", Desc: "Filter by file glob"},
 			{Name: "type", Type: FlagString, Default: "", Desc: "Filter by symbol type"},
 			{Name: "grep", Type: FlagString, Default: "", Desc: "Filter by name pattern"},
-			{Name: "locals", Type: FlagBool, Default: false, Desc: "Include local variables"},
 		},
 	},
 	{
-		Name: "search", Desc: "Symbol or text search. body=true includes source inline.",
+		Name: "search", Desc: "Search symbols or text. Auto-detects mode from flags.",
 		Category: CatRead, MinArgs: 1, MaxArgs: 1,
 		BodyTrack: true,
 		Flags: []FlagSpec{
 			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens"},
-			{Name: "body", Type: FlagBool, Default: false, Desc: "Include source in results"},
 			{Name: "text", Type: FlagBool, Default: false, Desc: "Text search mode"},
-			{Name: "regex", Type: FlagBool, Default: false, Desc: "Treat pattern as regex"},
 			{Name: "include", Type: FlagStringSlice, Default: []string(nil), Desc: "File glob(s) to include"},
 			{Name: "exclude", Type: FlagStringSlice, Default: []string(nil), Desc: "File glob(s) to exclude"},
 			{Name: "context", Type: FlagInt, Default: 0, Desc: "Lines of context"},
 			{Name: "limit", Type: FlagInt, Default: 0, Desc: "Max number of results to return"},
-			{Name: "no_group", Type: FlagBool, Default: false, Desc: "Disable grouping text results by file (grouped by default)"},
 		},
+		BatchFields: []string{"body", "regex", "no_group"},
 	},
 	{
 		Name: "explore", Desc: "Symbol body, callers, deps. gather=true bundles callers+tests.",
@@ -147,7 +140,7 @@ var Registry = []*Spec{
 		},
 	},
 	{
-		Name: "refs", Desc: "Find references. impact=true for transitive, chain for call path.",
+		Name: "refs", Desc: "Find all references to a symbol. --impact for transitive callers.",
 		Category: CatRead, MinArgs: 1, MaxArgs: 2, FileScoped: true,
 		Flags: []FlagSpec{
 			{Name: "impact", Type: FlagBool, Default: false, Desc: "Transitive callers"},
@@ -164,7 +157,7 @@ var Registry = []*Spec{
 		},
 	},
 	{
-		Name: "rename", Desc: "Cross-file rename, import-aware. dry_run to preview.",
+		Name: "rename", Desc: "Cross-file rename with import-aware resolution. --dry-run to preview.",
 		Category: CatGlobalMutate, MinArgs: 2, MaxArgs: 2,
 		Flags: []FlagSpec{
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
@@ -174,9 +167,7 @@ var Registry = []*Spec{
 	{
 		Name: "reindex", Desc: "Force re-index the repository.",
 		Category: CatGlobalMutate, MinArgs: 0, MaxArgs: 0,
-		Flags: []FlagSpec{
-			{Name: "cpuprofile", Type: FlagString, Default: "", Desc: "Write CPU profile to file"},
-		},
+		Flags: []FlagSpec{},
 	},
 	{
 		Name: "verify", Desc: "Run build/typecheck or tests. Auto-detects go/npm/cargo.",
@@ -314,6 +305,9 @@ func QueryBatchKeys() map[string]bool {
 		if s.Category == CatRead {
 			for _, f := range s.Flags {
 				m[f.Name] = true
+			}
+			for _, k := range s.BatchFields {
+				m[k] = true
 			}
 		}
 	}

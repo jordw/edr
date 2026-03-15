@@ -225,6 +225,8 @@ var findCmd = &cobra.Command{
 func init() {
 	cmdspec.RegisterFlags(findCmd.Flags(), "find")
 	cmdspec.RegisterFlags(initCmd.Flags(), "reindex")
+	initCmd.Flags().String("cpuprofile", "", "Write CPU profile to file")
+	initCmd.Flags().MarkHidden("cpuprofile")
 }
 
 var initCmd = &cobra.Command{
