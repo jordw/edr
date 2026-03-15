@@ -1,51 +1,61 @@
-# edr: the editor for agents
+# edr
 
 [![CI](https://github.com/jordw/edr/actions/workflows/ci.yml/badge.svg)](https://github.com/jordw/edr/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev)
 
-edr gives AI coding agents symbol-aware file operations. Instead of reading whole files, agents read single functions. Instead of grepping for text, they query an index. Instead of making six tool calls to understand and edit a class, they make two.
+**Coding agents waste most of their context window reading entire files to find one function. edr fixes that.**
 
-It works with Claude Code, Cursor, Codex, and any agent that runs CLI tools. Fully local — no network calls, no telemetry.
+edr (editor) gives agents symbol-level reads, batched operations, and structured output — so a task that takes 6 tool calls and 200KB of context takes 2 calls and 16KB. Works with any agent that can run shell commands (Claude Code, Cursor, Codex, etc). Fully local, no telemetry.
 
-## Example
+## Before and after
 
-An agent adding a retry parameter to a scheduler. The left column is what agents do with their default tools; the right is the same task with edr:
+Task: add a `retries` parameter to a scheduler class.
 
-| Without edr (6 tool calls) | With edr (2 calls) |
-|---|---|
-| `Read src/scheduler.py` — 400-line file, need one class | `edr -r src/scheduler.py:Scheduler --sig` — just the API |
-| `Grep "retry" src/` — flat file:line list | `-r src/config.py:parse_config` — just the function |
-| `Read src/config.py` — whole file for one function | `-r src/worker.py:Worker --sig` — just the API |
-| `Read src/worker.py` — whole file for the API shape | `-s "retry"` — structured search |
-| `Edit src/scheduler.py` — no verification | `edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):"` — edit + auto-verify |
-| `Read src/scheduler.py` — re-read to confirm | `-e src/config.py --old '"timeout": 30' --new '"timeout": 30, "retries": 3'` — batched |
+**Without edr** — agents read whole files to reach individual symbols:
+```
+read src/scheduler.py            → 400 lines (needed 1 class)
+grep "retry" src/                → flat file:line list
+read src/config.py               → 200 lines (needed 1 function)
+read src/worker.py               → 300 lines (needed the API shape)
+edit src/scheduler.py            → no verification
+read src/scheduler.py            → re-read to confirm
+```
+6 calls, ~200KB of context.
 
-The first edr call gathers all context; the second applies all mutations and runs verification. Both are single CLI invocations using batch flags (`-r` read, `-s` search, `-e` edit).
+**With edr** — read symbols directly, batch everything:
+```bash
+# Call 1: gather context (--sig = signatures only, no bodies)
+edr -r src/scheduler.py:Scheduler --sig \
+    -r src/config.py:parse_config \
+    -r src/worker.py:Worker --sig \
+    -s "retry"
+
+# Call 2: apply edits (auto-verifies build)
+edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):" \
+    -e src/config.py --old '"timeout": 30' --new '"timeout": 30, "retries": 3'
+```
+2 calls, ~16KB. Same result.
 
 ## Install
-
-**Requirements:** macOS or Linux. The install script downloads a pre-built binary. Building from source requires Go 1.25+ and a C/C++ compiler (for tree-sitter grammars).
-
-Run this in your project directory ([review the script first](install.sh)):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/jordw/edr/main/install.sh | sh
-```
-
-This installs the binary, indexes your project, adds `.edr/` to `.gitignore`, and appends agent instructions to your agent's config file (`CLAUDE.md` for Claude Code, `.cursorrules` for Cursor, `AGENTS.md` for Codex). Existing content is preserved. You can also write them manually; this repo's [CLAUDE.md](CLAUDE.md) is a complete working example.
-
-Or with Homebrew:
 
 ```bash
 brew install jordw/tap/edr
 edr setup .
 ```
 
+`edr setup` indexes your project, adds `.edr/` to `.gitignore`, and appends agent instructions to your config (`CLAUDE.md`, `.cursorrules`, or `AGENTS.md`). Existing content is preserved.
+
 <details>
 <summary>Other install methods</summary>
 
-**From source** (requires Go 1.25+ and a C/C++ compiler):
+**Pre-built binary** ([review the script first](install.sh)):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jordw/edr/main/install.sh | sh
+```
+
+**From source** (requires Go 1.25+ and a C/C++ compiler for tree-sitter):
 
 ```bash
 go install github.com/jordw/edr@latest
@@ -60,21 +70,21 @@ git clone https://github.com/jordw/edr.git && ./edr/setup.sh
 
 </details>
 
-edr stores its index in `.edr/` at the repo root. `edr setup` adds `.edr/` to `.gitignore` automatically. The index rebuilds automatically if deleted.
+The index lives in `.edr/` at the repo root and rebuilds automatically if deleted.
 
 ## How it works
 
-edr builds a symbol index using [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and SQLite. Three things make this useful for agents:
+edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and stores symbols in a SQLite index. This enables three things agents can't do with raw file tools:
 
-**Symbol-level access.** Every operation knows about functions, classes, structs, and methods — not just files and lines. `edr read file.py:ClassName --signatures` returns the class API without implementation bodies (up to 85% fewer tokens). `edr write file.py --inside ClassName` inserts a method without reading the file first. Edits re-index the modified file immediately and run verification automatically.
+**Symbol-level operations.** Read one function instead of a 400-line file. Get a class API with `--signatures` — method names, args, and return types without bodies (85% fewer tokens). Add a method with `--inside ClassName` without reading the file at all. Edits re-index immediately and auto-verify.
 
-**Sessions.** edr tracks what the agent has already seen. Set `EDR_SESSION` to a unique ID at conversation start, and edr persists state across CLI calls: re-reading an unchanged file returns `{unchanged: true}`, and symbol bodies already in context are replaced with `[in context]`. Without `EDR_SESSION`, each call is stateless.
+**Sessions.** Set `EDR_SESSION` once per conversation. Re-reading an unchanged file returns `{unchanged: true}` instead of the full content. Already-seen symbol bodies in search results are replaced with `[in context]`.
 
-**Batching.** Flags `-r`, `-s`, `-e`, `-w` combine reads, searches, edits, and writes into a single CLI call. A typical workflow is two calls: one to gather context, one to apply all mutations.
+**Batching.** `-r`, `-s`, `-e`, `-w` combine reads, searches, edits, and writes into one CLI call. One call to gather context, one to apply mutations.
 
 ## Benchmarks
 
-9 workflows across 7 repos, from small libraries to Django (880 files). The baseline models a **typical native workflow**: whole-file reads (agents can't target symbols), grep then read up to 3 matched files, glob then read one entry point to orient. Built-in tools lack symbol reads, signatures, `--inside`, and session dedup. The metric is **response bytes** (raw file content for native, structured JSON for edr — JSON overhead means edr can lose on small results, as shown in the search scenario). All scenarios are defined in [`bench/scenarios/`](bench/scenarios/) and are reproducible.
+Median **93% context reduction** across 9 scenarios and 7 repos — from small libraries to Django (880 files). Scenarios and methodology in [`bench/scenarios/`](bench/scenarios/).
 
 | Repo | Language | Files | Baseline | edr | Reduction |
 |---|---|---|---|---|---|
@@ -86,72 +96,90 @@ edr builds a symbol index using [tree-sitter](https://tree-sitter.github.io/tree
 | [reduxjs/redux-toolkit](https://github.com/reduxjs/redux-toolkit) | TypeScript | ~190 | 186KB / 20 calls | 23KB / 9 calls | **88%** |
 | [django/django](https://github.com/django/django) | Python | ~880 | 1,328KB / 20 calls | 30KB / 9 calls | **98%** |
 
+The baseline simulates how agents actually work: whole-file reads, grep for search, glob-then-read for exploration. No symbol extraction, no batching.
+
 <details>
 <summary>Per-scenario breakdown (urfave/cli)</summary>
 
-The biggest wins come from operations that have no built-in equivalent (signatures, symbol reads, `--inside`, `refs`). Text search can go negative — edr's structured JSON adds overhead when grep output is already small.
+Biggest wins: operations with no built-in equivalent. Text search goes negative — edr's structured JSON adds overhead when grep output is already compact.
 
-| Workflow | Baseline | edr | Reduction |
+| Scenario | Baseline | edr | Reduction |
 |---|---|---|---|
 | Understand a class API | 10,072B (whole file) | 1,592B (`--signatures`) | **84%** |
 | Read a specific function | 15,307B (whole file) | 1,463B (symbol read) | **90%** |
-| Find references | 67,101B / 4 calls (grep + read 3 matches) | 865B / 1 call (`refs`) | **99%** |
-| Search with context | 614B (grep -C3) | 1,812B (search --text --context 3) | **-195%** |
-| Orient in codebase | 11,481B / 2 calls (glob + read entry point) | 2,235B / 1 call (`map`) | **81%** |
-| Edit a function | 10,172B / 2 calls (read + edit) | 680B / 1 call (batch edit) | **93%** |
-| Add method to a class | 10,072B / 2 calls (read + edit) | 184B / 1 call (`--inside`) | **98%** |
-| Multi-file read | 30,794B / 3 calls | 2,606B / 1 call (batched + budget) | **92%** |
-| Explore a symbol | 41,285B / 4 calls (grep + read 3 callers) | 4,562B / 1 call (body + callers + deps) | **89%** |
+| Find references | 67,101B / 4 calls | 865B / 1 call (`refs`) | **99%** |
+| Search with context | 614B (grep -C3) | 1,812B (structured) | **-195%** |
+| Orient in codebase | 11,481B / 2 calls | 2,235B / 1 call (`map`) | **81%** |
+| Edit a function | 10,172B / 2 calls | 680B / 1 call (batch) | **93%** |
+| Add method to a class | 10,072B / 2 calls | 184B / 1 call (`--inside`) | **98%** |
+| Multi-file read | 30,794B / 3 calls | 2,606B / 1 call (batched) | **92%** |
+| Explore a symbol | 41,285B / 4 calls | 4,562B / 1 call | **89%** |
 | **Total** | **196,898B / 20 calls** | **15,999B / 9 calls** | **92%** |
 
 </details>
 
 Reproduce: `bash bench/run_real_repo_benchmarks.sh` (clones repos to `/tmp`, ~10 min).
 
-## CLI reference
+## Commands
 
-| Command | What it does |
-|---|---|
-| `edr read file:Symbol` | Read a specific function, class, or struct |
-| `edr read file:Class --signatures` | Container API without implementation bodies |
-| `edr read file --skeleton` | Skeleton view: blocks collapsed |
-| `edr map` | Symbol overview of the repo or a directory |
-| `edr search "pattern"` | Symbol search (matches function/class names) |
-| `edr search "pattern" --text` | Text search (like grep, structured output) |
-| `edr edit file --old "x" --new "y"` | Edit with auto re-index and verification |
-| `edr write file --inside Class` | Add a method or field without reading the file |
-| `edr refs Symbol` | Find all references (import-aware for Go/Python/JS/TS) |
-| `edr rename old new --dry-run` | Cross-file, import-aware rename with preview |
-| `edr verify` | Run build/test checks (auto-detects Go/npm/Cargo) |
-| `edr reindex` | Rebuild the symbol index |
+**Batch flags** (primary interface — what agents use):
+```bash
+edr -r file[:Symbol]              # Read file or symbol
+edr -r file:Class --sig           # Signatures only, no bodies
+edr -s "pattern"                  # Search symbols or text (--text)
+edr -e file --old "x" --new "y"   # Edit with auto re-index + verify
+edr -w file --inside Class        # Add method/field without reading
+```
 
-Batch flags (`-r`, `-s`, `-e`, `-w`) combine multiple operations in one call. All output is structured JSON.
+Combine freely — one call to read, one to mutate:
+```bash
+# Gather context
+edr -r src/config.go:parseConfig --sig -r src/main.go:Server -s "handleRequest"
+
+# Apply mutations (verify runs automatically)
+edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "..."
+```
+
+**Standalone commands:**
+```
+edr read file:Symbol              Read a function, class, or struct
+edr read file:Class --signatures  API shape without bodies
+edr read file --skeleton          Collapsed block view
+edr search "pattern"              Symbol or text search (--text)
+edr map                           Symbol overview of repo or directory
+edr edit file --old "x" --new "y" Edit with auto re-index + verify
+edr write file --inside Class     Add method/field without reading the file
+edr refs Symbol                   Find references (import-aware: Go/Py/JS/TS)
+edr rename old new --dry-run      Cross-file rename with preview
+edr verify                        Auto-detect and run build/test
+```
+
+**Admin:**
+```
+edr setup .                       Index repo + configure agent instructions
+edr reindex                       Rebuild symbol index
+```
+
+All output is structured JSON.
 
 ## Supported languages
 
-edr can read and edit any text file. Symbol-aware features require a supported language.
+edr reads and edits any text file. Symbol-aware features require a supported language.
 
-**Full symbol indexing** (map, read, edit, signatures, inside):
-Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby, PHP, Zig, Lua, Bash/Shell, C#, Kotlin
+**Symbol indexing:** Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby, PHP, Zig, Lua, Bash/Shell, C#, Kotlin
 
-**Import-aware semantic refs** (refs, rename, --impact, --chain):
-Go, Python, JavaScript, TypeScript. Other languages fall back to text-based references.
+**Import-aware refs:** Go, Python, JavaScript, TypeScript (others fall back to text matching)
 
 ## Limitations
 
-- **macOS and Linux only.** Windows is not supported.
-- **C/C++ compiler required for building from source.** Tree-sitter grammars need CGO. The install script downloads pre-built binaries; `setup.sh` handles compiler installation for source builds.
-- **Semantic refs are partial.** Import-aware reference tracking covers Go, Python, JS, and TS. Other languages use text matching, which produces false positives.
-- **Tree-sitter, not LSP.** The index captures structure (functions, classes, types) but not full type information. It will not catch everything a language server would.
-- **Indexing cost.** First `edr reindex` takes 1-3s on small repos, ~30s on large ones (e.g., vitess at 1.5M LOC). The index is typically 1-5MB. Incremental re-indexing after edits is fast (~50ms per file).
+- **Tree-sitter, not LSP.** Fast, no build step, works on broken code, zero config. The tradeoff: no type information. Refs use import-path matching, not type resolution, so cross-package references may produce false positives. For agent read/edit/search workloads, structural parsing is enough.
+- **macOS and Linux only.** Windows is not planned.
+- **C/C++ compiler required** when building from source (tree-sitter grammars). Homebrew and the install script use pre-built binaries.
+- **First index: 1-3s** on small repos, ~30s on large ones (vitess, 1.5M LOC). Incremental re-index after edits: ~50ms/file.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, project structure, and guidelines. Bug reports and pull requests welcome on [GitHub](https://github.com/jordw/edr/issues).
-
-## Changelog
-
-See [CHANGELOG.md](CHANGELOG.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports and PRs welcome on [GitHub](https://github.com/jordw/edr/issues).
 
 ## License
 
