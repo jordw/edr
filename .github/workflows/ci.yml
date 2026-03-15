@@ -120,6 +120,7 @@ jobs:
           # Verify setup ran
           test -f /tmp/install-target/CLAUDE.md || (echo "CLAUDE.md not created" && exit 1)
           grep -q "edr" /tmp/install-target/CLAUDE.md || (echo "CLAUDE.md missing edr instructions" && exit 1)
+          grep -q "edr-instructions hash:" /tmp/install-target/CLAUDE.md || (echo "CLAUDE.md missing hash marker" && exit 1)
           grep -q ".edr/" /tmp/install-target/.gitignore || (echo ".gitignore missing .edr/" && exit 1)
           echo "install.sh + setup test passed"
 
@@ -156,6 +157,7 @@ jobs:
         run: |
           test -f /tmp/target/CLAUDE.md || (echo "CLAUDE.md not created by setup.sh" && exit 1)
           grep -q "edr" /tmp/target/CLAUDE.md || (echo "CLAUDE.md missing edr instructions" && exit 1)
+          grep -q "edr-instructions hash:" /tmp/target/CLAUDE.md || (echo "CLAUDE.md missing hash marker" && exit 1)
           grep -q ".edr/" /tmp/target/.gitignore || (echo ".gitignore missing .edr/" && exit 1)
 
       - name: Verify edr setup targets
@@ -164,5 +166,21 @@ jobs:
           mkdir /tmp/target2 && cd /tmp/target2 && git init -q
           edr setup --cursor --root /tmp/target2
           test -f /tmp/target2/.cursorrules || (echo ".cursorrules not created" && exit 1)
+          grep -q "edr-instructions hash:" /tmp/target2/.cursorrules || (echo ".cursorrules missing hash marker" && exit 1)
           edr setup --codex --root /tmp/target2 --skip-index
           test -f /tmp/target2/AGENTS.md || (echo "AGENTS.md not created" && exit 1)
+          grep -q "edr-instructions hash:" /tmp/target2/AGENTS.md || (echo "AGENTS.md missing hash marker" && exit 1)
+
+      - name: Verify outdated detection
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          mkdir /tmp/target3 && cd /tmp/target3 && git init -q
+          # Inject with a fake old hash
+          echo '<!-- edr-instructions hash:fakehash123 -->' > /tmp/target3/CLAUDE.md
+          echo '# edr: use for all file operations' >> /tmp/target3/CLAUDE.md
+          echo 'old instructions' >> /tmp/target3/CLAUDE.md
+          # Setup without --force should detect outdated
+          OUTPUT=$(edr setup --claude --json --skip-index --root /tmp/target3)
+          echo "$OUTPUT" | grep -q '"outdated": true' || (echo "failed to detect outdated instructions: $OUTPUT" && exit 1)
+          echo "$OUTPUT" | grep -q '"installed_hash": "fakehash123"' || (echo "failed to report installed hash: $OUTPUT" && exit 1)
+          echo "outdated detection test passed"

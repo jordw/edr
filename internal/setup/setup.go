@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -47,50 +48,131 @@ func Instructions(t Target) (string, error) {
 	return string(data), nil
 }
 
+// InjectResult describes what happened during instruction injection.
+type InjectResult struct {
+	Path           string
+	AlreadyCurrent bool   // instructions already present and hash matches
+	Outdated       bool   // instructions present but hash differs
+	InstalledHash  string // hash found in existing file (empty if none)
+	Updated        bool   // old instructions replaced with new
+}
+
+// edrMarker is the string we look for to detect existing edr instructions.
+const edrMarker = "edr: use for all file operations"
+
+// hashMarkerPrefix is the HTML comment that stamps the build hash.
+const hashMarkerPrefix = "<!-- edr-instructions hash:"
+
+// hashMarkerRe extracts the hash from an existing marker comment.
+var hashMarkerRe = regexp.MustCompile(`<!-- edr-instructions hash:(\S+) -->`)
+
+// formatHashMarker returns the full marker comment for a given hash.
+func formatHashMarker(hash string) string {
+	return fmt.Sprintf("<!-- edr-instructions hash:%s -->", hash)
+}
+
+// extractInstalledHash returns the hash from an existing edr block, or "".
+func extractInstalledHash(content string) string {
+	m := hashMarkerRe.FindStringSubmatch(content)
+	if len(m) >= 2 {
+		return m[1]
+	}
+	return ""
+}
+
 // InjectInstructions appends the edr instruction block to the target config
-// file. If the file already contains the edr marker, it returns without
-// modifying the file.
-func InjectInstructions(repoRoot string, target Target) (string, error) {
+// file. buildHash is stamped into the block so future runs can detect staleness.
+// If the file already contains current instructions (same hash), it reports
+// AlreadyCurrent. If the hash differs, it reports Outdated (use force to replace).
+func InjectInstructions(repoRoot string, target Target, buildHash string, force bool) (InjectResult, error) {
 	text, err := Instructions(target)
 	if err != nil {
-		return "", err
+		return InjectResult{}, err
 	}
 
 	if target == TargetGeneric {
 		// Generic: just return the text (caller prints to stdout).
-		return text, nil
+		return InjectResult{Path: text}, nil
 	}
 
 	filename := ConfigFile(target)
 	path := filepath.Join(repoRoot, filename)
 
-	// Check if already injected.
-	existing, err := os.ReadFile(path)
-	if err == nil && strings.Contains(string(existing), "edr: use for all file operations") {
-		return path, fmt.Errorf("already configured: %s contains edr instructions", filename)
+	existing, _ := os.ReadFile(path)
+	content := string(existing)
+	hasMarker := strings.Contains(content, edrMarker)
+	installedHash := extractInstalledHash(content)
+
+	// Same hash → already current, nothing to do.
+	if hasMarker && installedHash == buildHash && !force {
+		return InjectResult{Path: path, AlreadyCurrent: true, InstalledHash: installedHash}, nil
 	}
 
-	// Build content to append.
+	// Different hash (or no hash) but marker present → outdated.
+	if hasMarker && !force {
+		return InjectResult{Path: path, Outdated: true, InstalledHash: installedHash}, nil
+	}
+
+	// Strip old block if present (force or first inject with stale content).
+	if hasMarker {
+		content = stripEdrBlock(content)
+	}
+
+	// Build new content: hash marker + instructions.
 	var buf strings.Builder
-	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
+	buf.WriteString(content)
+	if len(content) > 0 && !strings.HasSuffix(content, "\n") {
 		buf.WriteString("\n")
 	}
-	if len(existing) > 0 {
+	if len(content) > 0 {
 		buf.WriteString("\n")
 	}
+	buf.WriteString(formatHashMarker(buildHash))
+	buf.WriteString("\n")
 	buf.WriteString(text)
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return "", fmt.Errorf("open %s: %w", filename, err)
-	}
-	defer f.Close()
-
-	if _, err := f.WriteString(buf.String()); err != nil {
-		return "", fmt.Errorf("write %s: %w", filename, err)
+	if err := os.WriteFile(path, []byte(buf.String()), 0644); err != nil {
+		return InjectResult{}, fmt.Errorf("write %s: %w", filename, err)
 	}
 
-	return path, nil
+	result := InjectResult{Path: path}
+	if hasMarker {
+		result.Updated = true
+	}
+	return result, nil
+}
+
+// stripEdrBlock removes the edr instruction block from content.
+// The block starts at the hash marker comment (<!-- edr-instructions hash:... -->)
+// or the heading containing edrMarker, and extends to the next top-level heading
+// that isn't part of edr, or end of file.
+func stripEdrBlock(content string) string {
+	lines := strings.Split(content, "\n")
+	var out []string
+	inBlock := false
+	for _, line := range lines {
+		if !inBlock && (strings.HasPrefix(line, hashMarkerPrefix) || strings.Contains(line, edrMarker)) {
+			inBlock = true
+			continue
+		}
+		if inBlock {
+			// End block at next top-level heading (# ...) that isn't part of edr.
+			if strings.HasPrefix(line, "# ") && !strings.Contains(line, "edr") {
+				inBlock = false
+				out = append(out, line)
+			}
+			continue
+		}
+		out = append(out, line)
+	}
+	// Trim trailing blank lines left by removal.
+	for len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
+		out = out[:len(out)-1]
+	}
+	if len(out) > 0 {
+		return strings.Join(out, "\n") + "\n"
+	}
+	return ""
 }
 
 // EnsureGitignore adds `.edr/` to .gitignore if not already present.
