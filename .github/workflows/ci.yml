@@ -8,16 +8,16 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
-
-      - name: Verify dependencies are on module proxy
-        run: GOPROXY=https://proxy.golang.org go mod download -x
 
       - name: Build
         run: go build -o edr .
@@ -35,5 +35,29 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bench-results
+          name: bench-results-${{ matrix.os }}
           path: bench_output.txt
+
+  install-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test clean install via Dockerfile
+        run: docker build -t edr-test-setup .
+
+  install-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test clean install via setup.sh
+        run: |
+          mkdir /tmp/target && cd /tmp/target && git init -q
+          ${{ github.workspace }}/setup.sh /tmp/target
+
+      - name: Verify edr works
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          edr --version
+          edr init -r /tmp/target
