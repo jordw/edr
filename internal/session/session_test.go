@@ -988,8 +988,9 @@ func TestCommandMaps_Coverage(t *testing.T) {
 	if !ReadCommands["find"] {
 		t.Error("find should be in ReadCommands")
 	}
-	if !EditCommands["edit-plan"] {
-		t.Error("edit-plan should be in EditCommands")
+	// edit-plan is an internal command (not in cmdspec), but should be in DiffEditCommands
+	if !DiffEditCommands["edit-plan"] {
+		t.Error("edit-plan should be in DiffEditCommands")
 	}
 }
 

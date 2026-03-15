@@ -10,7 +10,6 @@ import "github.com/jordw/edr/internal/cmdspec"
 var ToolDesc = func() map[string]string {
 	m := cmdspec.ToolDescs()
 	// Extra entries not in the registry.
-	m["plan"] = "Batch edits with dry-run preview. Use batch flags for full read/query/edit/write workflows."
 	return m
 }()
 
@@ -33,7 +32,7 @@ var ParamDesc = func() map[string]string {
 	m["queries"] = "Any query: [{cmd: search|explore|refs|map|find|diff, ...params}]"
 	m["edits"] = "Atomic edits: [{file, old_text, new_text}] or [{file, symbol, new_text}] or [{file, start_line, end_line, new_text}] Supports all flag."
 	m["writes"] = "File writes: [{file, content, mkdir?, after?, inside?}]"
-	m["renames"] = "Cross-file renames: [{old_name, new_name, dry_run?, scope?}]"
+	m["renames"] = "Cross-file renames: [{old_name, new_name, dry_run?}]"
 	m["verify"] = `true = auto-detect build check, "build"/"test" = shortcut for level, other string = custom command`
 	m["init_flag"] = "Force re-index before other operations"
 	m["read_after_edit"] = "Read edited file signatures after applying edits (saves a round trip, shows updated API shape)"

@@ -181,15 +181,6 @@ var Registry = []*Spec{
 		},
 	},
 	{
-		Name: "edit-plan", Desc: "Batch edits with dry-run preview.",
-		Category: CatGlobalMutate, MinArgs: 0, MaxArgs: 0,
-		DiffEdit: true,
-		Flags: []FlagSpec{
-			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
-			{Name: "edits", Type: FlagString, Default: "", Desc: "JSON array of edit objects"},
-		},
-	},
-	{
 		Name: "verify", Desc: "Run build/typecheck or tests. Auto-detects go/npm/cargo.",
 		Category: CatMeta, MinArgs: 0, MaxArgs: 0,
 		Flags: []FlagSpec{

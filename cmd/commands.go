@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"runtime/pprof"
 
@@ -27,7 +26,6 @@ func init() {
 	rootCmd.AddCommand(renameCmd)
 	rootCmd.AddCommand(findCmd)
 	rootCmd.AddCommand(verifyCmd)
-	rootCmd.AddCommand(editPlanCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(setupCmd)
 }
@@ -246,67 +244,6 @@ var initCmd = &cobra.Command{
 		return dispatchCmd(cmd, "init", args)
 	},
 }
-
-var editPlanCmd = &cobra.Command{
-	Use:   "edit-plan",
-	Short: ToolDesc["plan"],
-	Long:  ToolDesc["plan"] + "\n\nBatch equivalent: use edits array with optional verify.",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		db, err := openAndEnsureIndex(cmd)
-		if err != nil {
-			return err
-		}
-		defer db.Close()
-
-		flags := extractFlags(cmd)
-		editsStr, _ := cmd.Flags().GetString("edits")
-		if editsStr != "" {
-			var edits []any
-			if err := json.Unmarshal([]byte(editsStr), &edits); err != nil {
-				return fmt.Errorf("edit-plan: invalid --edits JSON: %w", err)
-			}
-			flags["edits"] = edits
-		} else if flags["edits"] == nil {
-			stat, _ := os.Stdin.Stat()
-			if (stat.Mode() & os.ModeCharDevice) == 0 {
-				data, err := io.ReadAll(os.Stdin)
-				if err != nil {
-					return fmt.Errorf("edit-plan: reading stdin: %w", err)
-				}
-				if len(data) > 0 {
-					var edits []any
-					if err := json.Unmarshal(data, &edits); err != nil {
-						return fmt.Errorf("edit-plan: invalid stdin JSON: %w", err)
-					}
-					flags["edits"] = edits
-				}
-			}
-			if flags["edits"] == nil {
-				return fmt.Errorf("edit-plan: provide edits via --edits flag or pipe JSON to stdin")
-			}
-		}
-
-		result, err := dispatch.Dispatch(context.Background(), db, "edit-plan", args, flags)
-		if err != nil {
-			var nfErr *dispatch.NotFoundError
-			if errors.As(err, &nfErr) {
-				data, _ := json.Marshal(map[string]any{"ok": false, "error": nfErr})
-				output.Print(json.RawMessage(data))
-				return nil
-			}
-			if ambErr := asAmbiguousError(err); ambErr != nil {
-				data, _ := json.Marshal(map[string]any{"ok": false, "error": ambErr})
-				output.Print(json.RawMessage(data))
-				return nil
-			}
-			return err
-		}
-		output.Print(result)
-		return nil
-	},
-}
-
-func init() { cmdspec.RegisterFlags(editPlanCmd.Flags(), "edit-plan") }
 
 var verifyCmd = &cobra.Command{
 	Use:   "verify",

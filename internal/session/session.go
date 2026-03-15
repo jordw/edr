@@ -141,7 +141,11 @@ func LoadSession(edrDir string) (*Session, func()) {
 // Command category maps — derived from the canonical registry in cmdspec.
 var ReadCommands = deriveSet(cmdspec.IsRead)
 var EditCommands = deriveSet(cmdspec.ModifiesState)
-var DiffEditCommands = deriveSet(cmdspec.IsDiffEdit)
+var DiffEditCommands = func() map[string]bool {
+	m := deriveSet(cmdspec.IsDiffEdit)
+	m["edit-plan"] = true // internal batch edit implementation
+	return m
+}()
 var DeltaReadCommands = deriveSet(cmdspec.IsDeltaRead)
 var BodyCommands = deriveSet(cmdspec.IsBodyTrack)
 
@@ -617,7 +621,7 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 	}
 
 	// Level 1: Store edit diffs (always inline, no slim optimization)
-	if cmdspec.IsDiffEdit(cmd) {
+	if DiffEditCommands[cmd] {
 		s.storeDiff(m, flags)
 		if m["diff_available"] == true {
 			data, _ := json.Marshal(m)
