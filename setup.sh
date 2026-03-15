@@ -109,5 +109,5 @@ echo "==> Setting up $TARGET..."
 "$INSTALL_DIR/edr" setup --root "$TARGET" $AGENT_FLAG
 echo ""
 echo "==> Done. edr is ready."
-echo "    CLI:    edr -r $TARGET <command>"
-echo "    Server: edr -r $TARGET serve --stdio"
+echo "    CLI:    edr --root $TARGET <command>"
+echo "    Server: edr --root $TARGET serve"
