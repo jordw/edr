@@ -1063,6 +1063,30 @@ func postProcessMultiResults(sess *session.Session, cmds []dispatch.MultiCmd, re
 		} else {
 			processed[i].Result = r.Result
 		}
+
+		// Normalize read results: add "content" alias for "body" so agents
+		// can always use result.content regardless of file vs symbol reads.
+		if cmds[i].Cmd == "read" {
+			if m, ok := processed[i].Result.(map[string]any); ok {
+				if body, has := m["body"]; has {
+					if _, hasC := m["content"]; !hasC {
+						m["content"] = body
+					}
+				}
+			} else {
+				// Struct result (no session delta) — round-trip through JSON
+				d2, _ := json.Marshal(processed[i].Result)
+				var m2 map[string]any
+				if json.Unmarshal(d2, &m2) == nil {
+					if body, has := m2["body"]; has {
+						if _, hasC := m2["content"]; !hasC {
+							m2["content"] = body
+							processed[i].Result = m2
+						}
+					}
+				}
+			}
+		}
 	}
 
 	out, _ := json.Marshal(processed)

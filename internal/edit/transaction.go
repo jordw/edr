@@ -85,7 +85,16 @@ func (t *Transaction) Commit() error {
 			if int(e.StartByte) > len(data) || int(e.EndByte) > len(data) || e.StartByte > e.EndByte {
 				return fmt.Errorf("transaction: span [%d:%d] out of range for %s (len %d)", e.StartByte, e.EndByte, file, len(data))
 			}
-			data = append(data[:e.StartByte], append([]byte(e.Replacement), data[e.EndByte:]...)...)
+			sb, eb := e.StartByte, e.EndByte
+			// When deleting (empty replacement), consume trailing blank lines
+			// so the blank separator before the symbol is preserved but the
+			// gap after it collapses.
+			if e.Replacement == "" {
+				for int(eb) < len(data) && data[eb] == '\n' {
+					eb++
+				}
+			}
+			data = append(data[:sb], append([]byte(e.Replacement), data[eb:]...)...)
 		}
 
 		fi, err := os.Stat(file)

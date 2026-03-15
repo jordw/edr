@@ -2,18 +2,17 @@
 
 **edr is your primary tool for ALL file operations.** Use `edr` via Bash instead of Read, Edit, Write, Grep, and Glob. It gives you structured output, token budgets, and smart operations that raw file tools can't match.
 
-**`edr serve --stdio`** is the primary interface. It starts a persistent NDJSON server over stdin/stdout. Sessions are **connection-scoped** (process lifetime). Delta reads, body dedup, and slim edits work automatically.
+**`edr serve`** starts a background server. Then use **batch flags** (`-r`, `-s`, `-e`, `-w`) for all operations. Session optimizations (delta reads, body dedup, slim edits) work automatically across CLI calls.
 
 ```bash
 # Start the server once per agent session:
-edr serve --stdio
+edr serve
 
-# Then send NDJSON requests on stdin, read NDJSON responses from stdout.
-# Request 1: gather ALL context
-{"request_id":"1","reads":[{"file":"src/main.go","symbol":"Server"}],"queries":[{"cmd":"search","pattern":"handleRequest","body":true},{"cmd":"map","dir":"internal/","type":"function"}]}
+# Gather context (batch read + search in one call):
+edr -r src/main.go:Server --sig -r src/config.go -s "handleRequest"
 
-# Request 2: ALL mutations + verify
-{"request_id":"2","edits":[{"file":"src/main.go","old_text":"old","new_text":"new"}],"writes":[{"file":"src/new_test.go","content":"...","mkdir":true}],"verify":true}
+# Mutate + verify (auto-verifies when edits present):
+edr -e src/main.go --old "oldFunc()" --new "newFunc()" -w src/new_test.go --content "..."
 ```
 
 **Fall back to built-in tools when:**
@@ -25,19 +24,19 @@ edr serve --stdio
 
 | Instead of... | Use edr... | Why |
 |---|---|---|
-| `Read` (whole file) | `{"reads": [{"file": "f.go"}]}` | Budget-controlled, batchable |
-| `Edit` (old/new strings) | `{"edits": [{"file": "f.go", "old_text": "x", "new_text": "y"}]}` | Atomic multi-file, auto re-index |
-| `Write` (create file) | `{"writes": [{"file": "f.go", "content": "...", "mkdir": true}]}` | Auto-indexes, batchable with edits |
-| `Grep` (text search) | `{"queries": [{"cmd": "search", "pattern": "pat", "body": true}]}` | Structured results, batchable |
-| `Glob` (find files) | `{"queries": [{"cmd": "find", "pattern": "**/*.go"}]}` | Glob with `**`, batchable |
-| Multiple tool calls | One `{"reads": [...], "edits": [...], "verify": true}` | Everything in 1-2 requests |
+| `Read` (whole file) | `edr -r f.go` | Budget-controlled, batchable |
+| `Edit` (old/new strings) | `edr -e f.go --old "x" --new "y"` | Atomic multi-file, auto re-index, auto-verify |
+| `Write` (create file) | `edr -w f.go --content "..." --mkdir` | Auto-indexes, batchable with edits |
+| `Grep` (text search) | `edr -s "pat"` | Structured results, body on by default |
+| `Glob` (find files) | `edr find "**/*.go"` | Glob with `**`, structured output |
+| Multiple tool calls | `edr -r f.go -s "pat" -e f.go --old "x" --new "y"` | Everything in one call |
 
 ## Development workflow (edr on itself)
 
 **This is the edr codebase.** When working here, edr is both the tool and the target.
 
 - **Rebuild after every Go source change:** `go build -o edr . && go install`
-- **The running `edr serve` process is the old binary.** Source edits do not take effect until you rebuild. If you need the new behavior (e.g. to test a fix), restart the server after rebuilding.
+- **The running `edr serve` process is the old binary.** Source edits do not take effect until you rebuild. If you need the new behavior (e.g. to test a fix), run `edr serve --stop && go build -o edr . && edr serve`.
 - **If a broken edit prevents `go build`:** fall back to built-in Read/Edit tools to fix the compile error, then rebuild.
 
 ## Setup (any environment)
@@ -134,9 +133,9 @@ edr edit src/config.go --move parseConfig --after main --dry-run
 edr edit src/config.go --old_text "oldName" --dry-run --new_text "newName"
 ```
 
-> **Batch usage**: `{"edits": [{"file": "file.go", "old_text": "old code", "new_text": "new code"}]}`
-> This is the direct equivalent of the built-in Edit tool's `old_string`/`new_string` pattern.
-> **Move**: `{"edits": [{"file": "file.go", "move": "FuncA", "after": "FuncB"}]}`
+> **Batch**: `edr -e file.go --old "old code" --new "new code" -e other.go --old "x" --new "y"`
+> Multiple edits in one call are atomic. Verify runs automatically.
+> **Move**: `edr -e file.go --move FuncA --after FuncB`
 
 ## Writing (`write`)
 
@@ -172,7 +171,7 @@ edr rename oldFuncName newFuncName --dry-run
 edr rename oldFuncName newFuncName --scope "internal/**"
 ```
 
-> **Batch usage**: `{"renames": [{"old_name": "Foo", "new_name": "Bar", "dry_run": true}]}`
+> Rename is a standalone command (not batchable with `-e`/`-r`). Run `edr verify` after if needed.
 
 ## Orientation (`map`, `explore`)
 
@@ -221,98 +220,97 @@ edr find "*.yaml" --dir config/
 edr find "**/test_*" --budget 500
 ```
 
-## Stdio Server (`edr serve --stdio`)
+## Server (`edr serve`)
 
-`edr serve --stdio` is the primary interface for agents. It starts a persistent NDJSON server
-that reads requests from stdin and writes responses to stdout. Stderr is used for logs.
-
-### Protocol
-
-- **Transport**: NDJSON over stdin/stdout. One JSON object per line.
-- **Sequential**: One request in flight at a time.
-- **Request envelope**: `{"request_id": "1", ...batch fields...}`. Required `request_id`, optional `control`.
-- **Response envelope**: `{"request_id": "1", "ok": true, "result": {...}}`. Wraps the batch result.
-- **Control messages**: `ping` → `pong`, `status` → index/root info, `shutdown` → clean exit.
-- **Errors**: `{"request_id": "1", "ok": false, "error": {"code": "...", "message": "..."}}`
-
-### Example session
+`edr serve` starts a background daemon with a Unix socket (`.edr/serve.sock`).
+All CLI commands automatically proxy through the server for session benefits.
 
 ```bash
-# Start the server
-edr serve --stdio
+edr serve          # daemonize, create socket, print PID
+edr serve --stop   # send shutdown, clean up
 
-# Ping
-{"request_id":"1","control":"ping"}
-# Response: {"request_id":"1","ok":true,"control":"pong"}
-
-# Read a symbol
-{"request_id":"2","reads":[{"file":"src/main.go","symbol":"Server"}]}
-# Response: {"request_id":"2","ok":true,"result":{"reads":[...]}}
-
-# Edit + verify
-{"request_id":"3","edits":[{"file":"src/main.go","old_text":"old","new_text":"new"}],"verify":true}
-# Response: {"request_id":"3","ok":true,"result":{"edits":...,"verify":...,"summary":...}}
-
-# Shutdown
-{"request_id":"4","control":"shutdown"}
-# Response: {"request_id":"4","ok":true,"control":"shutdown"}
+# No server running? CLI commands fall back to ephemeral dispatch.
+# Everything works either way — the server is a performance optimization.
 ```
 
-### Batch request fields
+## Batch Operations
 
-```jsonc
-{
-  "request_id": "1",                    // required
-  "reads": [{"file": "src/main.go"}, {"file": "src/config.go", "symbol": "parseConfig"}],
-  "queries": [
-    {"cmd": "search", "pattern": "handleRequest", "body": true},
-    {"cmd": "explore", "symbol": "Server", "gather": true, "body": true},
-    {"cmd": "map", "dir": "internal/", "type": "function"},
-    {"cmd": "refs", "symbol": "Config", "impact": true},
-    {"cmd": "diff", "file": "src/main.go"}
-  ],
-  "edits": [
-    {"file": "src/main.go", "old_text": "oldFunc()", "new_text": "newFunc()"},
-    {"file": "src/config.go", "symbol": "parseConfig", "new_text": "..."},
-    {"file": "src/main.go", "move": "initDB", "after": "main"}
-  ],
-  "writes": [{"file": "src/new.go", "content": "package main\n...", "mkdir": true}],
-  "renames": [{"old_name": "OldFunc", "new_name": "NewFunc", "dry_run": true}],
-  "verify": true,
-  "init": true
+Batch flags let you combine multiple operations in a single CLI call.
+Operations are specified as ordered flags — modifier flags apply to the preceding operation.
+
+| Flag | Operation | Key modifiers |
+|------|-----------|---------------|
+| `-r file[:symbol]` | Read | `--sig`, `--depth N`, `--budget N`, `--lines N-M`, `--full` |
+| `-s "pattern"` | Search | `--no-body`, `--include`, `--exclude`, `--regex`, `--text` |
+| `-e file[:symbol]` | Edit | `--old`/`--new`, `--lines N-M`, `--all`, `--move`, `--dry-run` |
+| `-w file` | Write | `--content`, `--after`, `--inside`, `--mkdir`, `--append` |
+| `-v` | Verify | Implicit when edits present; `--no-verify` to skip |
+
+### Defaults
+
+- **Search body on**: `-s` includes match bodies by default (use `--no-body` to suppress)
+- **Auto-verify**: edits automatically trigger `go build`/`go vet` (use `--no-verify` to skip)
+- **Exit codes**: non-zero if any operation fails (structured JSON still printed)
+- **`--new -`**: reads replacement text from stdin (for heredoc large content)
+
+### Examples
+
+```bash
+# Gather context: signatures + search in one call
+edr -r src/config.go --sig -r src/main.go:Server -s "handleRequest"
+
+# Multi-file edit with auto-verify
+edr -e src/config.go --old "oldFunc()" --new "newFunc()" \
+    -e src/main.go --old "oldFunc()" --new "newFunc()"
+
+# Symbol replacement via heredoc
+edr -e src/config.go:parseConfig --new - <<'EOF'
+func parseConfig() (*Config, error) {
+    // new implementation
 }
+EOF
+
+# Write inside a struct + edit another file
+edr -w src/models.go --inside UserStore --content "CreatedAt time.Time" \
+    -e src/models.go --old "func New(" --new "func NewWithTimestamp("
+
+# Read with line range, edit with line range
+edr -r src/config.go --lines 10-50 -e src/config.go --lines 10-15 --new "replacement"
 ```
 
-### Typical 2-request workflow
+### Typical 2-call workflow
 
-```
-Request 1: {"request_id":"1","reads":[...],"queries":[...]}          // gather ALL context
-Request 2: {"request_id":"2","edits":[...],"writes":[...],"verify":true}  // ALL mutations + verify
+```bash
+# Call 1: gather ALL context
+edr -r src/config.go:parseConfig --sig -r src/main.go:Server -s "handleRequest"
+
+# Call 2: ALL mutations (verify runs automatically)
+edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "package main"
 ```
 
 ## Context-Aware Responses
 
-edr automatically tracks what content you've already seen within the `edr serve` connection:
+When a server is running (`edr serve`), edr tracks what you've already seen across CLI calls:
 
-- **Slim edits**: Small diffs (<=20 changed lines) are returned inline automatically. Large diffs are stripped to `{ok, file, hash, lines_changed, diff_available}`. Use `queries: [{cmd: "diff", file: "..."}]` to retrieve them.
-- **Delta reads**: Re-reading a file/symbol you've already seen returns `{unchanged: true}` if identical, or `{delta: true, diff: "..."}` with just the changes. Pass `full: true` to force full content.
-- **Body dedup**: `explore(gather: true, body: true)` and `search(body: true)` replace bodies you've already seen with `"[in context]"` and report `skipped_bodies`. New/changed bodies are returned in full.
+- **Delta reads**: Re-reading a file/symbol returns `{unchanged: true}` if identical. Use `--full` to force full content.
+- **Slim edits**: Small diffs (<=20 changed lines) are returned inline. Large diffs are stored; use `edr read --diff file` to retrieve.
+- **Body dedup**: Search and explore replace previously-seen bodies with `"[in context]"`.
 
-These optimizations are automatic and connection-scoped. They live for the `edr serve` process lifetime.
-Renames and `init: true` clear all tracking state. Single CLI commands use ephemeral sessions (no persistence).
+These optimizations are automatic and server-scoped. They persist for the server's lifetime.
+Without a server, each CLI call uses an ephemeral session (no cross-call tracking).
 
 ## Key Principles
 
-1. **Start with `edr serve`.** Batch reads, queries, edits, writes, renames, and verify in one request. Minimize round trips. Mutation responses include a `summary` with status, counts, and `hints` for next steps.
-2. **Use `budget`** to control context size. Don't dump entire files.
-3. **Gather context in one request:** `{"reads": [...], "queries": [{...}, {...}]}`.
-4. **Mutate + verify in one request:** `{"edits": [...], "writes": [...], "verify": true}`.
-5. **Use `signatures: true`** to understand a container's API without reading implementation (75-86% fewer tokens).
-6. **Preview renames:** `{"renames": [{"old_name": "X", "new_name": "Y", "dry_run": true}]}`.
-7. **Check impact before refactoring:** `{"queries": [{"cmd": "refs", "symbol": "X", "impact": true}]}`.
-8. **Small edit diffs are inline.** Diffs <=20 lines are included automatically. Large diffs are stored; use `queries: [{cmd: "diff", file: "..."}]` to retrieve.
-9. **Re-reads are delta.** `{unchanged: true}` or `{delta: true, diff: "..."}`. Use `full: true` to force full content.
-10. **Use `--inside`** to add fields/methods to a class without reading the file first.
+1. **Start with `edr serve`.** One-time setup. Then use batch flags for everything.
+2. **Batch reads + searches** in one call: `edr -r file.go --sig -r other.go:Func -s "pattern"`.
+3. **Batch edits + verify** in one call: `edr -e file.go --old "x" --new "y" -e other.go --old "a" --new "b"`. Verify runs automatically.
+4. **Use `--sig`** to understand a container's API without reading implementation (75-86% fewer tokens).
+5. **Use `--budget`** to control context size. Don't dump entire files.
+6. **Use `--inside`** to add fields/methods to a class without reading the file first.
+7. **Preview renames:** `edr rename oldName newName --dry-run`.
+8. **Check impact before refactoring:** `edr refs Symbol --impact`.
+9. **Re-reads are delta** (with server). `{unchanged: true}` saves tokens. Use `--full` to force.
+10. **Use `--new -`** with heredoc for large replacement text.
 
 ## Session Tracing
 
@@ -335,7 +333,8 @@ Key files:
 - `internal/cmdspec/cmdspec.go`: Canonical command registry (names, categories, flags, session behavior, batch keys)
 - `internal/trace/trace.go`: Collector, CallBuilder, schema, BenchSession scoring
 - `internal/session/session.go`: PostProcessStats (DeltaReads, BodyDedup, SlimEdits)
-- `cmd/serve.go`: Stdio server loop, request/response envelope types
+- `cmd/serve.go`: Daemon server, socket listener, request/response envelope types
+- `cmd/batch_cmd.go`: Batch CLI command (`-r`, `-s`, `-e`, `-w`) and ordered-flag parser
 - `cmd/batch.go`: handleDo batch orchestrator, execute helpers
 - `cmd/bench_session.go`: CLI command
 
@@ -408,9 +407,11 @@ batch reads, depth-2 reads, and bench-session scoring of the resulting trace.
 
 ## CLI Reference
 
-`edr serve --stdio` is the primary batch interface. Requests support: reads, queries (search/explore/refs/map/find/diff), edits, writes, renames, verify, init.
-Read params: `file`, `symbol?`, `budget?`, `signatures?`, `depth?`, `start_line?`, `end_line?`, `symbols?`, `full?`.
+**Batch** (primary interface): `edr -r file -s pattern -e file --old x --new y` (or `edr batch ...`).
+**Standalone commands**: `edr read`, `edr search`, `edr edit`, `edr write`, `edr map`, `edr find`, `edr refs`, `edr rename`, `edr explore`, `edr verify`, `edr init`.
+**Server**: `edr serve` (start), `edr serve --stop` (stop).
 
 All output is structured JSON. File paths are relative to repo root. Edit commands return `hash`.
+Symbol reads include both `body` and `content` fields (use either). File reads use `content`.
 
-Sessions are connection-scoped within `edr serve`. Single CLI commands use ephemeral in-memory sessions.
+Sessions are server-scoped (persist across CLI calls while server runs). Without a server, each call uses an ephemeral session.

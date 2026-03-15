@@ -33,6 +33,11 @@ var rootCmd = &cobra.Command{
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		// Silent errors (e.g. batch with failed operations) already printed
+		// their structured output — just exit non-zero.
+		if _, ok := err.(silentError); ok {
+			os.Exit(1)
+		}
 		// Emit structured JSON error to stdout for machine-friendly parsing.
 		// Keep non-zero exit code for shell chaining.
 		errJSON, _ := json.Marshal(err.Error())
@@ -42,7 +47,7 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringP("root", "r", ".", "repository root directory")
+	rootCmd.PersistentFlags().String("root", ".", "repository root directory")
 	rootCmd.PersistentFlags().Bool("no-proxy", false, "bypass running server, use ephemeral dispatch")
 }
 
@@ -58,8 +63,11 @@ func openAndEnsureIndexQuiet(cmd *cobra.Command) (*index.DB, error) {
 }
 
 func openDB(cmd *cobra.Command, quiet bool) (*index.DB, error) {
-	root := getRoot(cmd)
+	return openDBWithRoot(getRoot(cmd), quiet)
+}
 
+// openDBWithRoot is the core DB opener, usable without a cobra command.
+func openDBWithRoot(root string, quiet bool) (*index.DB, error) {
 	db, err := index.OpenDB(root)
 	if err != nil {
 		return nil, err

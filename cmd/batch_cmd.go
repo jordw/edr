@@ -1,0 +1,684 @@
+package cmd
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/jordw/edr/internal/output"
+	"github.com/jordw/edr/internal/session"
+	"github.com/spf13/cobra"
+)
+
+// IsBatchFlag returns true if arg is a batch operation flag.
+func IsBatchFlag(arg string) bool {
+	switch arg {
+	case "-r", "--read", "-s", "--search", "-e", "--edit", "-w", "--write",
+		"-v", "--verify", "--no-verify":
+		return true
+	}
+	return false
+}
+
+var batchCmd = &cobra.Command{
+	Use:   "batch",
+	Short: "Execute batched operations",
+	Long: `Execute multiple operations in a single batch. Operations are specified
+as ordered flags: -r (read), -s (search), -e (edit), -w (write), -v (verify).
+
+Modifier flags apply to the preceding operation. Verify runs automatically
+when edits are present (use --no-verify to skip).
+
+If a running edr server is available, the batch proxies through it for
+session benefits (delta reads, body dedup, slim edits). Otherwise falls
+back to ephemeral dispatch.
+
+Examples:
+  edr -r cmd/serve.go --sig -s "handleRequest"
+  edr -e cmd/serve.go --old "oldFunc" --new "newFunc"
+  edr -r file.go:Symbol --sig -e file.go --old "x" --new "y" -v`,
+	DisableFlagParsing: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runBatch(args)
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(batchCmd)
+}
+
+// --- pointer helpers ---
+
+func bp(b bool) *bool     { return &b }
+func ip(i int) *int       { return &i }
+func sp(s string) *string { return &s }
+
+// --- batch state machine ---
+
+type batchOp int
+
+const (
+	opNone batchOp = iota
+	opRead
+	opSearch
+	opEdit
+	opWrite
+)
+
+type batchState struct {
+	reads   []doRead
+	queries []doQuery
+	edits   []doEdit
+	writes  []doWrite
+
+	currentOp    batchOp
+	currentRead  doRead
+	currentQuery doQuery
+	currentEdit  doEdit
+	currentWrite doWrite
+
+	verifySet     bool
+	verifyEnabled bool
+	verifyCommand string
+
+	root      string
+	noProxy   bool
+	stdinUsed bool
+}
+
+func (s *batchState) flush() {
+	switch s.currentOp {
+	case opRead:
+		if s.currentRead.File != "" {
+			s.reads = append(s.reads, s.currentRead)
+		}
+		s.currentRead = doRead{}
+	case opSearch:
+		s.queries = append(s.queries, s.currentQuery)
+		s.currentQuery = doQuery{}
+	case opEdit:
+		if s.currentEdit.File != "" {
+			s.edits = append(s.edits, s.currentEdit)
+		}
+		s.currentEdit = doEdit{}
+	case opWrite:
+		if s.currentWrite.File != "" {
+			s.writes = append(s.writes, s.currentWrite)
+		}
+		s.currentWrite = doWrite{}
+	}
+	s.currentOp = opNone
+}
+
+func (s *batchState) toParams() doParams {
+	s.flush()
+
+	p := doParams{
+		Reads:   s.reads,
+		Queries: s.queries,
+		Edits:   s.edits,
+		Writes:  s.writes,
+	}
+
+	// Auto-verify when edits are present, unless explicitly disabled
+	if s.verifySet {
+		if s.verifyEnabled {
+			if s.verifyCommand != "" {
+				p.Verify = s.verifyCommand
+			} else {
+				p.Verify = true
+			}
+		}
+	} else if len(s.edits) > 0 {
+		p.Verify = true
+	}
+
+	return p
+}
+
+// --- argument parsing ---
+
+func parseBatchArgs(args []string) (*batchState, error) {
+	s := &batchState{}
+	i := 0
+
+	nextArg := func(flag string) (string, error) {
+		i++
+		if i >= len(args) {
+			return "", fmt.Errorf("%s requires an argument", flag)
+		}
+		return args[i], nil
+	}
+
+	nextInt := func(flag string) (int, error) {
+		val, err := nextArg(flag)
+		if err != nil {
+			return 0, err
+		}
+		n, err := strconv.Atoi(val)
+		if err != nil {
+			return 0, fmt.Errorf("%s: invalid integer %q", flag, val)
+		}
+		return n, nil
+	}
+
+	resolveContent := func(flag, val string) (string, error) {
+		if val == "-" {
+			if s.stdinUsed {
+				return "", fmt.Errorf("%s: stdin already consumed by a previous operation", flag)
+			}
+			s.stdinUsed = true
+			data, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return "", fmt.Errorf("%s: reading stdin: %w", flag, err)
+			}
+			return string(data), nil
+		}
+		return val, nil
+	}
+
+	for i < len(args) {
+		arg := args[i]
+
+		switch arg {
+		// ── operations ──
+
+		case "-r", "--read":
+			s.flush()
+			s.currentOp = opRead
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			file, sym := splitFileArg(val)
+			s.currentRead = doRead{File: file, Symbol: sym}
+
+		case "-s", "--search":
+			s.flush()
+			s.currentOp = opSearch
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentQuery = doQuery{
+				Cmd:     "search",
+				Pattern: sp(val),
+				Body:    bp(true), // body on by default
+			}
+
+		case "-e", "--edit":
+			s.flush()
+			s.currentOp = opEdit
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			file, sym := splitFileArg(val)
+			s.currentEdit = doEdit{File: file, Symbol: sym}
+
+		case "-w", "--write":
+			s.flush()
+			s.currentOp = opWrite
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentWrite = doWrite{File: val}
+
+		case "-v", "--verify":
+			s.verifySet = true
+			s.verifyEnabled = true
+
+		case "--no-verify":
+			s.verifySet = true
+			s.verifyEnabled = false
+
+		// ── read modifiers ──
+
+		case "--sig", "--signatures":
+			if s.currentOp != opRead {
+				return nil, fmt.Errorf("%s is only valid after -r", arg)
+			}
+			s.currentRead.Signatures = bp(true)
+
+		case "--depth":
+			n, err := nextInt(arg)
+			if err != nil {
+				return nil, err
+			}
+			if s.currentOp != opRead {
+				return nil, fmt.Errorf("--depth is only valid after -r")
+			}
+			s.currentRead.Depth = ip(n)
+
+		case "--budget":
+			n, err := nextInt(arg)
+			if err != nil {
+				return nil, err
+			}
+			switch s.currentOp {
+			case opRead:
+				s.currentRead.Budget = ip(n)
+			case opSearch:
+				s.currentQuery.Budget = ip(n)
+			default:
+				return nil, fmt.Errorf("--budget is only valid after -r or -s")
+			}
+
+		case "--lines":
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			start, end, err := parseLineRange(val)
+			if err != nil {
+				return nil, fmt.Errorf("--lines: %w", err)
+			}
+			switch s.currentOp {
+			case opRead:
+				s.currentRead.StartLine = ip(start)
+				s.currentRead.EndLine = ip(end)
+			case opEdit:
+				s.currentEdit.StartLine = ip(start)
+				s.currentEdit.EndLine = ip(end)
+			default:
+				return nil, fmt.Errorf("--lines is only valid after -r or -e")
+			}
+
+		case "--full":
+			if s.currentOp != opRead {
+				return nil, fmt.Errorf("--full is only valid after -r")
+			}
+			s.currentRead.Full = bp(true)
+
+		case "--symbols":
+			if s.currentOp != opRead {
+				return nil, fmt.Errorf("--symbols is only valid after -r")
+			}
+			s.currentRead.Symbols = bp(true)
+
+		// ── search modifiers ──
+
+		case "--body":
+			if s.currentOp != opSearch {
+				return nil, fmt.Errorf("--body is only valid after -s")
+			}
+			s.currentQuery.Body = bp(true)
+
+		case "--no-body":
+			if s.currentOp != opSearch {
+				return nil, fmt.Errorf("--no-body is only valid after -s")
+			}
+			s.currentQuery.Body = bp(false)
+
+		case "--include":
+			if s.currentOp != opSearch {
+				return nil, fmt.Errorf("--include is only valid after -s")
+			}
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentQuery.Include = val
+
+		case "--exclude":
+			if s.currentOp != opSearch {
+				return nil, fmt.Errorf("--exclude is only valid after -s")
+			}
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentQuery.Exclude = val
+
+		case "--text":
+			if s.currentOp != opSearch {
+				return nil, fmt.Errorf("--text is only valid after -s")
+			}
+			s.currentQuery.Text = bp(true)
+
+		case "--context":
+			if s.currentOp != opSearch {
+				return nil, fmt.Errorf("--context is only valid after -s")
+			}
+			n, err := nextInt(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentQuery.Context = ip(n)
+
+		// ── shared: search + edit ──
+
+		case "--regex":
+			switch s.currentOp {
+			case opSearch:
+				s.currentQuery.Regex = bp(true)
+			case opEdit:
+				s.currentEdit.Regex = bp(true)
+			default:
+				return nil, fmt.Errorf("--regex is only valid after -s or -e")
+			}
+
+		// ── edit modifiers ──
+
+		case "--old", "--old_text", "--old-text":
+			if s.currentOp != opEdit {
+				return nil, fmt.Errorf("%s is only valid after -e", arg)
+			}
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentEdit.OldText = val
+
+		case "--new", "--new_text", "--new-text":
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			switch s.currentOp {
+			case opEdit:
+				resolved, err := resolveContent(arg, val)
+				if err != nil {
+					return nil, err
+				}
+				s.currentEdit.NewText = resolved
+			case opWrite:
+				resolved, err := resolveContent(arg, val)
+				if err != nil {
+					return nil, err
+				}
+				s.currentWrite.Content = resolved
+			default:
+				return nil, fmt.Errorf("%s is only valid after -e or -w", arg)
+			}
+
+		case "--all":
+			if s.currentOp != opEdit {
+				return nil, fmt.Errorf("--all is only valid after -e")
+			}
+			s.currentEdit.All = bp(true)
+
+		case "--move":
+			if s.currentOp != opEdit {
+				return nil, fmt.Errorf("--move is only valid after -e")
+			}
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentEdit.Move = val
+
+		case "--after":
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			switch s.currentOp {
+			case opEdit:
+				s.currentEdit.After = val
+			case opWrite:
+				s.currentWrite.After = sp(val)
+			default:
+				return nil, fmt.Errorf("--after is only valid after -e or -w")
+			}
+
+		case "--before":
+			if s.currentOp != opEdit {
+				return nil, fmt.Errorf("--before is only valid after -e")
+			}
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentEdit.Before = val
+
+		case "--dry-run", "--dry_run":
+			if s.currentOp != opEdit {
+				return nil, fmt.Errorf("--dry-run is only valid after -e")
+			}
+			s.currentEdit.DryRun = bp(true)
+
+		// ── write modifiers ──
+
+		case "--content":
+			if s.currentOp != opWrite {
+				return nil, fmt.Errorf("--content is only valid after -w")
+			}
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			resolved, err := resolveContent(arg, val)
+			if err != nil {
+				return nil, err
+			}
+			s.currentWrite.Content = resolved
+
+		case "--inside":
+			if s.currentOp != opWrite {
+				return nil, fmt.Errorf("--inside is only valid after -w")
+			}
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentWrite.Inside = sp(val)
+
+		case "--mkdir":
+			if s.currentOp != opWrite {
+				return nil, fmt.Errorf("--mkdir is only valid after -w")
+			}
+			s.currentWrite.Mkdir = bp(true)
+
+		case "--append":
+			if s.currentOp != opWrite {
+				return nil, fmt.Errorf("--append is only valid after -w")
+			}
+			s.currentWrite.Append = bp(true)
+
+		// ── verify modifiers ──
+
+		case "--command":
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.verifySet = true
+			s.verifyEnabled = true
+			s.verifyCommand = val
+
+		// ── global flags ──
+
+		case "--root":
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.root = val
+
+		case "--no-proxy":
+			s.noProxy = true
+
+		default:
+			return nil, fmt.Errorf("unknown flag: %s", arg)
+		}
+
+		i++
+	}
+
+	return s, nil
+}
+
+// parseLineRange parses "N-M" into start and end line numbers.
+func parseLineRange(s string) (int, int, error) {
+	parts := strings.SplitN(s, "-", 2)
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("expected N-M format, got %q", s)
+	}
+	start, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid start line %q", parts[0])
+	}
+	end, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid end line %q", parts[1])
+	}
+	return start, end, nil
+}
+
+// splitFileArg splits "file:symbol" into file and symbol parts.
+// Returns (file, "") if no symbol is present.
+func splitFileArg(arg string) (string, string) {
+	for i := len(arg) - 1; i > 0; i-- {
+		if arg[i] == ':' {
+			return arg[:i], arg[i+1:]
+		}
+		if arg[i] == '/' || arg[i] == '\\' {
+			break // path separator before colon means no symbol
+		}
+	}
+	return arg, ""
+}
+
+// --- execution ---
+
+func runBatch(args []string) error {
+	state, err := parseBatchArgs(args)
+	if err != nil {
+		return err
+	}
+
+	params := state.toParams()
+
+	// Nothing to do
+	if len(params.Reads) == 0 && len(params.Queries) == 0 &&
+		len(params.Edits) == 0 && len(params.Writes) == 0 &&
+		params.Verify == nil {
+		return fmt.Errorf("no operations specified")
+	}
+
+	paramsJSON, err := json.Marshal(params)
+	if err != nil {
+		return fmt.Errorf("marshal batch: %w", err)
+	}
+
+	// Resolve root
+	root := state.root
+	if root == "" {
+		root, _ = os.Getwd()
+	}
+
+	// Try socket proxy first
+	if !state.noProxy {
+		sockPath := filepath.Join(root, ".edr", "serve.sock")
+		if info, err := os.Stat(sockPath); err == nil && info.Mode()&os.ModeSocket != 0 {
+			// Verify it's a live socket
+			conn, err := net.Dial("unix", sockPath)
+			if err == nil {
+				conn.Close()
+				result, err := proxyViaSocket(sockPath, paramsJSON)
+				if err == nil {
+					output.Print(result)
+					return batchResultError(result)
+				}
+			}
+			// Fall through to ephemeral
+			fmt.Fprintf(os.Stderr, "edr: server unavailable, using ephemeral dispatch\n")
+		}
+	}
+
+	// Ephemeral dispatch
+	db, err := openDBWithRoot(root, false)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	sess := session.New()
+	result, err := handleDo(context.Background(), db, sess, nil, json.RawMessage(paramsJSON))
+	if err != nil {
+		return err
+	}
+	output.Print(json.RawMessage(result))
+	return batchResultError(json.RawMessage(result))
+}
+
+// batchResultError checks if any operation in the batch result failed,
+// returning a silent error (already printed) to trigger non-zero exit.
+func batchResultError(result json.RawMessage) error {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(result, &m); err != nil {
+		return nil
+	}
+
+	// Check reads array for ok:false
+	if reads, ok := m["reads"]; ok {
+		var arr []map[string]any
+		if json.Unmarshal(reads, &arr) == nil {
+			for _, r := range arr {
+				if ok, _ := r["ok"].(bool); !ok {
+					return silentError{}
+				}
+			}
+		}
+	}
+
+	// Check queries array for ok:false
+	if queries, ok := m["queries"]; ok {
+		var arr []map[string]any
+		if json.Unmarshal(queries, &arr) == nil {
+			for _, q := range arr {
+				if ok, _ := q["ok"].(bool); !ok {
+					return silentError{}
+				}
+			}
+		}
+	}
+
+	// Check edits for error
+	if edits, ok := m["edits"]; ok {
+		var em map[string]any
+		if json.Unmarshal(edits, &em) == nil {
+			if _, hasErr := em["error"]; hasErr {
+				return silentError{}
+			}
+		}
+	}
+
+	// Check writes array for ok:false
+	if writes, ok := m["writes"]; ok {
+		var arr []map[string]any
+		if json.Unmarshal(writes, &arr) == nil {
+			for _, w := range arr {
+				if ok, _ := w["ok"].(bool); !ok {
+					return silentError{}
+				}
+			}
+		}
+	}
+
+	// Check verify for ok:false
+	if verify, ok := m["verify"]; ok {
+		var vm map[string]any
+		if json.Unmarshal(verify, &vm) == nil {
+			if ok, _ := vm["ok"].(bool); !ok {
+				return silentError{}
+			}
+		}
+	}
+
+	return nil
+}
+
+// silentError signals non-zero exit without printing an additional error message
+// (the structured JSON response was already printed).
+type silentError struct{}
+
+func (silentError) Error() string { return "" }

@@ -60,6 +60,15 @@ func ReplaceSpan(path string, startByte, endByte uint32, replacement string, exp
 		return fmt.Errorf("replacespan: invalid byte range [%d, %d) for file of length %d", startByte, endByte, len(data))
 	}
 
+	// When deleting (empty replacement), consume trailing blank lines
+	// so the blank separator before the deleted span is preserved but the
+	// gap after it collapses.
+	if replacement == "" {
+		for int(endByte) < len(data) && data[endByte] == '\n' {
+			endByte++
+		}
+	}
+
 	result := make([]byte, 0, int(startByte)+len(replacement)+len(data)-int(endByte))
 	result = append(result, data[:startByte]...)
 	result = append(result, []byte(replacement)...)
