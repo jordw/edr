@@ -114,7 +114,7 @@ edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-s
 
 **Batching.** `-r`, `-s`, `-e`, `-w` combine reads, searches, edits, and writes in one CLI call. One call to gather context, one to apply mutations.
 
-**Sessions.** Set `EDR_SESSION` once per conversation. Search results replace already-seen bodies with `[in context]`.
+**Sessions.** Automatic — all edr calls from the same shell share a session. Re-reading an unchanged file returns `{unchanged: true}`. Search results replace already-seen bodies with `[in context]`.
 
 ## Commands
 

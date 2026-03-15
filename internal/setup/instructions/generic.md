@@ -1,12 +1,6 @@
 # edr: use for all file operations
 
-Use `edr` for reading, editing, searching, and navigating code. It gives you structured JSON output, token budgets, and symbol-aware operations. Fully local — no network required.
-
-**Set up a session once per conversation** — re-reading unchanged files returns `{unchanged: true}` instead of the full content:
-
-```bash
-export EDR_SESSION=$(uuidgen)
-```
+Use `edr` for reading, editing, searching, and navigating code. It gives you structured JSON output, token budgets, and symbol-aware operations. Fully local — no network required. Sessions are automatic — re-reading unchanged files returns `{unchanged: true}`.
 
 ## Quick reference
 

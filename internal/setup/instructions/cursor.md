@@ -1,12 +1,6 @@
 # edr: use for all file operations
 
-Use `edr` via terminal instead of built-in file reading and editing tools. It gives you structured JSON output, token budgets, and symbol-aware operations.
-
-**Set up a session once per conversation** — re-reading unchanged files returns `{unchanged: true}` instead of the full content:
-
-```bash
-export EDR_SESSION=$(uuidgen)
-```
+Use `edr` via terminal instead of built-in file reading and editing tools. It gives you structured JSON output, token budgets, and symbol-aware operations. Sessions are automatic — re-reading unchanged files returns `{unchanged: true}`.
 
 ## Quick reference
 
