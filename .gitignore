@@ -4,6 +4,8 @@ edr
 .gocache/
 .gomodcache/
 .mcp.json
+annoyances.md
+scratch/
 issues.md
 iteration.md
 ROADMAP.md
