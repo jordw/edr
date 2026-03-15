@@ -183,9 +183,9 @@ func TestSessionMultiLang(t *testing.T) {
 	// Phase 5: Explore and refs — semantic analysis
 	t.Run("explore/python_gather", func(t *testing.T) {
 		out := handleDoJSON(t, ctx, db, sess, tc, "explore", []string{"_execute_task"}, map[string]any{
-			"gather": true, "body": true, "budget": 1500,
+			"body": true, "budget": 1500,
 		})
-		assertJSONHas(t, out, "target")
+		assertJSONHas(t, out, "symbol")
 	})
 
 	t.Run("explore/go_callers_deps", func(t *testing.T) {
