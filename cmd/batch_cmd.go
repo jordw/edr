@@ -43,6 +43,12 @@ Examples:
   edr -r file.go:Symbol --sig -e file.go --old "x" --new "y" -v`,
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Handle --help/-h since DisableFlagParsing swallows it
+		for _, a := range args {
+			if a == "--help" || a == "-h" {
+				return cmd.Help()
+			}
+		}
 		return runBatch(args)
 	},
 }
