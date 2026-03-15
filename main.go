@@ -18,6 +18,11 @@ func main() {
 	cmd.Execute()
 }
 
+// persistentBoolFlags lists root-level boolean flags that do NOT consume a value argument.
+var persistentBoolFlags = map[string]bool{
+	"--verbose": true,
+}
+
 // findBatchFlag returns the index (in args) of the first batch operation flag,
 // skipping over persistent flags like --root <value>. Returns -1 if not found.
 func findBatchFlag(args []string) int {
@@ -26,8 +31,18 @@ func findBatchFlag(args []string) int {
 		if cmd.IsBatchFlag(a) {
 			return i
 		}
-		// Skip persistent flags that take a value (--flag value or --flag=value).
-		if strings.HasPrefix(a, "--") && !strings.Contains(a, "=") {
+		// -- terminates flag parsing.
+		if a == "--" {
+			break
+		}
+		// Skip persistent flags. Boolean flags consume no value; others consume one.
+		if strings.HasPrefix(a, "--") {
+			if strings.Contains(a, "=") {
+				continue // --flag=value, already consumed
+			}
+			if persistentBoolFlags[a] {
+				continue // boolean, no value to skip
+			}
 			i++ // skip the value argument
 			continue
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
@@ -44,14 +45,42 @@ func Execute() {
 	}
 }
 
+// knownCommands is the set of valid edr subcommand names.
+var knownCommands = map[string]bool{
+	"read": true, "write": true, "edit": true, "map": true,
+	"search": true, "refs": true, "rename": true, "verify": true,
+	"reindex": true, "init": true, "setup": true, "batch": true,
+}
+
 // detectCommandName extracts the subcommand name from os.Args.
+// Only returns recognized command names — never file paths or other arguments.
+// Skips global flags and their values using the same logic as findBatchFlag.
 func detectCommandName() string {
-	for _, arg := range os.Args[1:] {
-		if len(arg) > 0 && arg[0] != '-' {
-			return arg
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			break
 		}
+		if strings.HasPrefix(a, "--") {
+			if strings.Contains(a, "=") {
+				continue // --flag=value
+			}
+			if a == "--verbose" {
+				continue // boolean, no value
+			}
+			i++ // skip value arg
+			continue
+		}
+		if strings.HasPrefix(a, "-") && !IsBatchFlag(a) {
+			continue // short flag we don't recognize
+		}
+		if knownCommands[a] {
+			return a
+		}
+		break // first non-flag arg is not a known command
 	}
-	return ""
+	return "batch" // implicit batch mode if no subcommand found
 }
 
 var verbose bool
@@ -68,17 +97,35 @@ func init() {
 // Verbose returns true if --verbose was set.
 func Verbose() bool { return verbose }
 
-// openAndEnsureIndex opens the DB and bootstraps the index if it does not exist yet.
-func openAndEnsureIndex(cmd *cobra.Command) (*index.DB, error) {
-	return openDB(cmd, !verbose)
+// openDBStrict opens the DB and returns an error if the index does not exist.
+// Read-only commands (read, search, map, refs) use this — they never auto-index.
+func openDBStrict(cmd *cobra.Command) (*index.DB, error) {
+	return openDBStrictRoot(getRoot(cmd))
 }
 
-func openDB(cmd *cobra.Command, quiet bool) (*index.DB, error) {
-	return openDBWithRoot(getRoot(cmd), quiet)
+// openDBStrictRoot opens the DB, validates the index exists, and returns an error if not.
+func openDBStrictRoot(root string) (*index.DB, error) {
+	db, err := index.OpenDB(root)
+	if err != nil {
+		return nil, err
+	}
+	ctx := context.Background()
+	files, _, err := db.Stats(ctx)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	if files == 0 {
+		db.Close()
+		return nil, fmt.Errorf("no index found — run \"edr reindex\" first")
+	}
+	output.SetRoot(db.Root())
+	return db, nil
 }
 
-// openDBWithRoot is the core DB opener, usable without a cobra command.
-func openDBWithRoot(root string, quiet bool) (*index.DB, error) {
+// openDBAndIndex opens the DB and bootstraps the index if needed.
+// Only used by reindex, setup, and batch (which may contain edits that need verification).
+func openDBAndIndex(root string, quiet bool) (*index.DB, error) {
 	db, err := index.OpenDB(root)
 	if err != nil {
 		return nil, err

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
 	"github.com/jordw/edr/internal/trace"
@@ -517,6 +518,9 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			s.root = val
 
+		case "--verbose":
+			verbose = true
+
 		default:
 			return nil, fmt.Errorf("unknown flag: %s", arg)
 		}
@@ -590,8 +594,15 @@ func runBatch(args []string) error {
 		root, _ = os.Getwd()
 	}
 
-	db, err := openDBWithRoot(root, !verbose)
-
+	// Only auto-index when mutations are present. Read-only batch
+	// operations use the strict opener — same contract as standalone.
+	hasMutations := len(params.Edits) > 0 || len(params.Writes) > 0
+	var db *index.DB
+	if hasMutations {
+		db, err = openDBAndIndex(root, !verbose)
+	} else {
+		db, err = openDBStrictRoot(root)
+	}
 	if err != nil {
 		return err
 	}

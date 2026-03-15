@@ -10,6 +10,7 @@ import (
 
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
+	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
 	"github.com/spf13/cobra"
@@ -25,8 +26,37 @@ func init() {
 	rootCmd.AddCommand(renameCmd)
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(initCmd)
-	setupCmd.Hidden = true
 	rootCmd.AddCommand(setupCmd)
+}
+
+// dispatchCmdWithIndex is like dispatchCmd but auto-indexes if needed.
+// Used only by reindex/init.
+func dispatchCmdWithIndex(cmd *cobra.Command, cmdName string, args []string) error {
+	flags := extractFlags(cmd)
+
+	db, err := openDBAndIndex(getRoot(cmd), !verbose)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	env := output.NewEnvelope(cmdName)
+
+	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
+	if err != nil {
+		addDispatchError(env, err)
+		output.PrintEnvelope(env)
+		return silentError{code: 1}
+	}
+
+	opID := cmdName[:1] + "0"
+	env.AddOp(opID, cmdName, result)
+	env.ComputeOK()
+	output.PrintEnvelope(env)
+	if !env.OK {
+		return silentError{code: 1}
+	}
+	return nil
 }
 
 // dispatchCmd is the common pattern: open DB, dispatch, wrap in envelope, print.
@@ -34,7 +64,7 @@ func init() {
 func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	flags := extractFlags(cmd)
 
-	db, err := openAndEnsureIndex(cmd)
+	db, err := openDBStrict(cmd)
 	if err != nil {
 		return err
 	}
@@ -50,7 +80,7 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	if err != nil {
 		addDispatchError(env, err)
 		output.PrintEnvelope(env)
-		return nil
+		return silentError{code: 1}
 	}
 
 	// Apply session post-processing (delta reads, body dedup)
@@ -68,6 +98,9 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	env.AddOp(opID, cmdName, result)
 	env.ComputeOK()
 	output.PrintEnvelope(env)
+	if !env.OK {
+		return silentError{code: 1}
+	}
 	return nil
 }
 
@@ -89,7 +122,7 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 		}
 	}
 
-	db, err := openAndEnsureIndex(cmd)
+	db, err := openDBStrict(cmd)
 	if err != nil {
 		return err
 	}
@@ -105,7 +138,7 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	if err != nil {
 		addDispatchError(env, err)
 		output.PrintEnvelope(env)
-		return nil
+		return silentError{code: 1}
 	}
 
 	// Apply session post-processing
@@ -123,6 +156,9 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	env.AddOp(opID, cmdName, result)
 	env.ComputeOK()
 	output.PrintEnvelope(env)
+	if !env.OK {
+		return silentError{code: 1}
+	}
 	return nil
 }
 
@@ -220,14 +256,41 @@ var initCmd = &cobra.Command{
 				f.Close()
 			}()
 		}
-		return dispatchCmd(cmd, "init", args)
+		return dispatchCmdWithIndex(cmd, "init", args)
 	},
 }
 
 var verifyCmd = &cobra.Command{
 	Use:   "verify",
 	Short: ToolDesc["verify"],
-	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "verify", args) },
+	RunE: func(cmd *cobra.Command, args []string) error {
+		flags := extractFlags(cmd)
+
+		// Verify does not need the symbol index — just the root path.
+		// Open DB without index validation so verify works on unindexed repos.
+		root := getRoot(cmd)
+		db, err := index.OpenDB(root)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		output.SetRoot(db.Root())
+
+		env := output.NewEnvelope("verify")
+
+		result, dispErr := dispatch.Dispatch(context.Background(), db, "verify", args, flags)
+		if dispErr != nil {
+			env.SetVerify(map[string]any{"ok": false, "error": dispErr.Error()})
+		} else {
+			env.SetVerify(result)
+		}
+		env.ComputeOK()
+		output.PrintEnvelope(env)
+		if !env.OK {
+			return silentError{code: 2}
+		}
+		return nil
+	},
 }
 
 func init() { cmdspec.RegisterFlags(verifyCmd.Flags(), "verify") }

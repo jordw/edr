@@ -1695,10 +1695,10 @@ func TestBatchMode_QuietStderr(t *testing.T) {
 
 // --- Task 4: Zero-file index validation ---
 
-func TestOpenDBWithRoot_EmptyDir_OK(t *testing.T) {
+func TestOpenDBAndIndex_EmptyDir_OK(t *testing.T) {
 	// An empty directory should succeed (0 files is valid, e.g. fresh git init)
 	tmp := t.TempDir()
-	db, err := openDBWithRoot(tmp, true)
+	db, err := openDBAndIndex(tmp, true)
 	if err != nil {
 		t.Fatalf("expected no error for empty directory, got: %v", err)
 	}
@@ -1981,7 +1981,22 @@ func TestDetectCommandName(t *testing.T) {
 	}
 
 	os.Args = []string{"edr", "--verbose"}
-	if got := detectCommandName(); got != "" {
-		t.Errorf("detectCommandName (flags only) = %q, want empty", got)
+	if got := detectCommandName(); got != "batch" {
+		t.Errorf("detectCommandName (flags only) = %q, want batch", got)
+	}
+
+	os.Args = []string{"edr", "--root", "/tmp/foo", "read", "hello.go"}
+	if got := detectCommandName(); got != "read" {
+		t.Errorf("detectCommandName (--root value) = %q, want read", got)
+	}
+
+	os.Args = []string{"edr", "--root=/tmp/foo", "edit", "hello.go"}
+	if got := detectCommandName(); got != "edit" {
+		t.Errorf("detectCommandName (--root=value) = %q, want edit", got)
+	}
+
+	os.Args = []string{"edr", "-r", "hello.go"}
+	if got := detectCommandName(); got != "batch" {
+		t.Errorf("detectCommandName (batch flags) = %q, want batch", got)
 	}
 }

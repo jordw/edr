@@ -388,16 +388,17 @@ func runSymbols(ctx context.Context, db *index.DB, root string, args []string, f
 		return nil, err
 	}
 
-	// If no symbols found, check if the file is unindexed (e.g. gitignored)
+	// If no symbols found, check if the file is unindexed or missing
 	if len(syms) == 0 {
 		if hash, _ := db.GetFileHash(ctx, file); hash == "" {
-			if _, statErr := os.Stat(file); statErr == nil {
-				return map[string]any{
-					"file":    output.Rel(file),
-					"symbols": nil,
-					"hint":    "file exists but is not indexed (it may be gitignored)",
-				}, nil
+			if _, statErr := os.Stat(file); statErr != nil {
+				return nil, fmt.Errorf("open %s: no such file or directory", output.Rel(file))
 			}
+			return map[string]any{
+				"file":    output.Rel(file),
+				"symbols": nil,
+				"hint":    "file exists but is not indexed (it may be gitignored)",
+			}, nil
 		}
 	}
 

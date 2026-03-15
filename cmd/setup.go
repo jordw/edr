@@ -1,10 +1,10 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 
+	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/setup"
 	"github.com/spf13/cobra"
 )
@@ -85,10 +85,10 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	result := setupResult{Target: string(target), CurrentHash: BuildHash}
 
 	// Step 1: Index (unless --skip-index).
-	// openDBWithRoot prints progress ("edr: index ready (N files, M symbols)") to stderr.
+	// openDBAndIndex prints progress ("edr: index ready (N files, M symbols)") to stderr.
 	skipIndex, _ := cmd.Flags().GetBool("skip-index")
 	if !skipIndex {
-		db, err := openDBWithRoot(root, jsonOut)
+		db, err := openDBAndIndex(root, jsonOut)
 		if err != nil {
 			result.Error = fmt.Sprintf("index failed: %v", err)
 			return printSetupOutput(result, jsonOut)
@@ -150,9 +150,19 @@ func runSetup(cmd *cobra.Command, args []string) error {
 
 func printSetupOutput(r setupResult, jsonOut bool) error {
 	if jsonOut {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(r)
+		env := output.NewEnvelope("setup")
+		env.AddOp("s0", "setup", r)
+		if r.Error != "" {
+			env.OK = false
+			env.AddError("setup_error", r.Error)
+		} else {
+			env.OK = true
+		}
+		output.PrintEnvelope(env)
+		if !env.OK {
+			return silentError{code: 1}
+		}
+		return nil
 	}
 	// For generic target, print instructions to stdout even in human mode.
 	if r.Instructions != "" {
