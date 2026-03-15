@@ -153,18 +153,21 @@ native_grep_files() {
     )
 }
 
-# Read ALL files that grep matches — no artificial cap.
-# When an agent greps for a symbol and needs to understand every reference,
-# it reads every matched file. Capping at an arbitrary number (e.g., 3)
-# would undercount the native baseline.
+# Cap follow-up file reads at MAX_FOLLOWUP_READS (default 3).
+# An agent that greps for a symbol typically reads a few of the most
+# relevant matches, not every file.  Sorting by match count approximates
+# which files an agent would prioritise.
+MAX_FOLLOWUP_READS="${MAX_FOLLOWUP_READS:-3}"
 
 native_grep_followup_read_bytes() {
     local pattern="$1"; shift
-    local total=0
+    local total=0 count=0
     local file
     while IFS= read -r file; do
         [ -n "$file" ] || continue
         total=$((total + $(native_read_bytes "$(rel_path "$file")")))
+        count=$((count + 1))
+        [ "$count" -ge "$MAX_FOLLOWUP_READS" ] && break
     done < <(native_grep_files "$pattern" "$@")
     echo "$total"
 }
@@ -176,6 +179,7 @@ native_grep_followup_read_calls() {
     while IFS= read -r file; do
         [ -n "$file" ] || continue
         count=$((count + 1))
+        [ "$count" -ge "$MAX_FOLLOWUP_READS" ] && break
     done < <(native_grep_files "$pattern" "$@")
     echo "$count"
 }
@@ -303,18 +307,18 @@ run_orient_map() {
         skip "Orient (map)"
         return
     fi
-    local orient_root glob_bytes read_bytes native_bytes native_calls edr_bytes ext file
+    local orient_root glob_bytes read_bytes native_bytes native_calls edr_bytes ext
     orient_root="$ORIENT_DIR"
+    # Native workflow: glob to list files, then read ONE entry-point file.
+    # An agent orienting in a codebase runs ls/find, skims the listing,
+    # then opens the most promising file — not all of them.
     glob_bytes=0
     for ext in "${ORIENT_GLOBS[@]}"; do
         glob_bytes=$((glob_bytes + $(native_glob_bytes "$orient_root" "$ext")))
     done
-    read_bytes=0
-    for file in "${ORIENT_READ_FILES[@]}"; do
-        read_bytes=$((read_bytes + $(native_read_bytes "$(rel_path "$file")")))
-    done
+    read_bytes=$(native_read_bytes "$(rel_path "${ORIENT_READ_FILES[0]}")")
     native_bytes=$((glob_bytes + read_bytes))
-    native_calls=$((1 + ${#ORIENT_READ_FILES[@]}))
+    native_calls=2
     if [ "$ORIENT_DIR" = "." ]; then
         edr_bytes=$(edr_median_bytes edr_cmd map --budget "${ORIENT_BUDGET:-500}")
     else
@@ -333,11 +337,10 @@ run_edit_function() {
     local -a edr_bytes_arr
     file="$(rel_path "$EDIT_FILE")"
     native_read=$(native_read_bytes "$file")
-    # Native workflow: read file + edit tool response (~negligible) + re-read to verify.
-    # We count file bytes twice (read + verify). The edit tool's own response is small
-    # enough to be noise on any real file.
-    native_bytes=$((native_read * 2))
-    native_calls=3
+    # Native workflow: read file, then edit (small confirmation response).
+    # Agents don't re-read after editing — the Edit tool confirms success.
+    native_bytes=$((native_read + 100))
+    native_calls=2
     # Use --no-verify: the native baseline doesn't run a build, so neither
     # should edr.  This keeps the comparison fair across all languages (Go,
     # Python, Ruby, TS) — some roots lack go.mod/package.json and verify

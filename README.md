@@ -74,17 +74,17 @@ edr builds a symbol index using [tree-sitter](https://tree-sitter.github.io/tree
 
 ## Benchmarks
 
-9 workflows across 7 repos, from small libraries to Django (880 files). The baseline models the **worst-case native workflow**: whole-file reads (no line ranges), reading every grep-matched file, no caching of prior context. Real agents sometimes do better — an experienced agent might grep then read only relevant files — but built-in tools lack symbol reads, signatures, `--inside`, and session dedup, so the baseline reflects what those tools force agents into for these operations. The metric is **response bytes** (file content for native, structured JSON for edr — JSON overhead means edr can lose on small results, as shown in the search scenario). All scenarios are defined in [`bench/scenarios/`](bench/scenarios/) and are reproducible.
+9 workflows across 7 repos, from small libraries to Django (880 files). The baseline models a **typical native workflow**: whole-file reads (agents can't target symbols), grep then read up to 3 matched files, glob then read one entry point to orient. Built-in tools lack symbol reads, signatures, `--inside`, and session dedup. The metric is **response bytes** (raw file content for native, structured JSON for edr — JSON overhead means edr can lose on small results, as shown in the search scenario). All scenarios are defined in [`bench/scenarios/`](bench/scenarios/) and are reproducible.
 
 | Repo | Language | Files | Baseline | edr | Reduction |
 |---|---|---|---|---|---|
-| [urfave/cli](https://github.com/urfave/cli) | Go | ~70 | 315KB / 24 calls | 16KB / 9 calls | **95%** |
-| [vitess/sqlparser](https://github.com/vitessio/vitess) | Go | ~70 | 675KB / 21 calls | 16KB / 9 calls | **98%** |
-| [vitess/vtgate](https://github.com/vitessio/vitess) | Go | ~490 | 976KB / 24 calls | 33KB / 9 calls | **97%** |
-| [pallets/click](https://github.com/pallets/click) | Python | ~17 | 490KB / 25 calls | 19KB / 9 calls | **96%** |
-| [rails/thor](https://github.com/rails/thor) | Ruby | ~35 | 239KB / 24 calls | 16KB / 9 calls | **93%** |
-| [reduxjs/redux-toolkit](https://github.com/reduxjs/redux-toolkit) | TypeScript | ~190 | 266KB / 25 calls | 23KB / 9 calls | **91%** |
-| [django/django](https://github.com/django/django) | Python | ~880 | 2,468KB / 33 calls | 30KB / 9 calls | **99%** |
+| [urfave/cli](https://github.com/urfave/cli) | Go | ~70 | 197KB / 20 calls | 16KB / 9 calls | **92%** |
+| [vitess/sqlparser](https://github.com/vitessio/vitess) | Go | ~70 | 322KB / 17 calls | 16KB / 9 calls | **95%** |
+| [vitess/vtgate](https://github.com/vitessio/vitess) | Go | ~490 | 747KB / 19 calls | 33KB / 9 calls | **96%** |
+| [pallets/click](https://github.com/pallets/click) | Python | ~17 | 297KB / 20 calls | 19KB / 9 calls | **93%** |
+| [rails/thor](https://github.com/rails/thor) | Ruby | ~35 | 170KB / 20 calls | 16KB / 9 calls | **91%** |
+| [reduxjs/redux-toolkit](https://github.com/reduxjs/redux-toolkit) | TypeScript | ~190 | 186KB / 20 calls | 23KB / 9 calls | **88%** |
+| [django/django](https://github.com/django/django) | Python | ~880 | 1,328KB / 20 calls | 30KB / 9 calls | **98%** |
 
 <details>
 <summary>Per-scenario breakdown (urfave/cli)</summary>
@@ -93,16 +93,16 @@ The biggest wins come from operations that have no built-in equivalent (signatur
 
 | Workflow | Baseline | edr | Reduction |
 |---|---|---|---|
-| Understand a class API | 13,019B (whole file) | 1,592B (`--signatures`) | **88%** |
-| Read a specific function | 19,290B (whole file) | 1,463B (symbol read) | **92%** |
-| Find references | 86,463B / 4 calls (grep + read all matches) | 865B / 1 call (`refs`) | **99%** |
+| Understand a class API | 10,072B (whole file) | 1,592B (`--signatures`) | **84%** |
+| Read a specific function | 15,307B (whole file) | 1,463B (symbol read) | **90%** |
+| Find references | 67,101B / 4 calls (grep + read 3 matches) | 865B / 1 call (`refs`) | **99%** |
 | Search with context | 614B (grep -C3) | 1,812B (search --text --context 3) | **-195%** |
-| Orient in codebase | 65,581B / 5 calls (glob + reads) | 2,235B / 1 call (`map`) | **97%** |
-| Edit a function | 26,038B / 3 calls (read + edit + re-read) | 680B / 1 call (batch edit) | **97%** |
-| Add method to a class | 13,019B / 2 calls (read + edit) | 184B / 1 call (`--inside`) | **99%** |
-| Multi-file read | 39,397B / 3 calls | 2,606B / 1 call (batched + budget) | **93%** |
-| Explore a symbol | 51,967B / 4 calls (grep + reads) | 4,562B / 1 call (body + callers + deps) | **91%** |
-| **Total** | **315,388B / 24 calls** | **15,999B / 9 calls** | **95%** |
+| Orient in codebase | 11,481B / 2 calls (glob + read entry point) | 2,235B / 1 call (`map`) | **81%** |
+| Edit a function | 10,172B / 2 calls (read + edit) | 680B / 1 call (batch edit) | **93%** |
+| Add method to a class | 10,072B / 2 calls (read + edit) | 184B / 1 call (`--inside`) | **98%** |
+| Multi-file read | 30,794B / 3 calls | 2,606B / 1 call (batched + budget) | **92%** |
+| Explore a symbol | 41,285B / 4 calls (grep + read 3 callers) | 4,562B / 1 call (body + callers + deps) | **89%** |
+| **Total** | **196,898B / 20 calls** | **15,999B / 9 calls** | **92%** |
 
 </details>
 
