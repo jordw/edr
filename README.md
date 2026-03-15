@@ -4,9 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev)
 
-Coding agents spend most of their context on content they don't need. They read entire files to find one function, grep then re-read every match, and edit files one at a time with no verification.
+Coding agents waste most of their context window on content they never use. A typical agent reads an entire file to find one function, greps a pattern and then re-reads every matching file, and edits files one at a time with no verification step.
 
-edr indexes your codebase by symbol so agents can read exactly what they need. It batches multiple operations into single requests and tracks what the agent has already seen, so repeated reads return diffs instead of full content.
+edr indexes your codebase by symbol so agents can read exactly what they need. It batches multiple operations into single requests and tracks what the agent has already seen, returning diffs instead of full content on repeated reads.
 
 ## Before and after
 
@@ -47,9 +47,9 @@ With edr, 2 requests over `edr serve --stdio`:
 
 ## How it works
 
-edr uses [tree-sitter](https://tree-sitter.github.io/tree-sitter/) to parse source files and extract symbols (functions, classes, structs, methods) with their byte ranges into a SQLite index. Reads, searches, and edits are all symbol-aware: you can read a single function, search within symbol boundaries, or edit a symbol by name.
+edr uses [tree-sitter](https://tree-sitter.github.io/tree-sitter/) to parse source files and extract symbols (functions, classes, structs, methods) into a SQLite index. Reads, searches, and edits are all symbol-aware: you can read a single function, search within symbol boundaries, or replace a symbol by name.
 
-`edr serve --stdio` starts a persistent NDJSON server over stdin/stdout. Each request can batch any combination of reads, queries, edits, writes, renames, and verification. The server tracks what content the agent has already seen within the connection:
+`edr serve --stdio` starts a persistent NDJSON server over stdin/stdout. Each request can batch reads, edits, queries, and verification into a single call. The server tracks what content the agent has already seen within the connection:
 
 - Re-reading a file returns `{unchanged: true}` or a diff of what changed
 - Symbol bodies already in context are replaced with `[in context]`
@@ -59,7 +59,7 @@ Individual CLI commands (`edr read`, `edr search`, etc.) also work standalone wi
 
 ## Benchmarks
 
-Baselines reproduce how agents use standard tool-calling interfaces: `Read` returns whole files, `Grep` returns unstructured line matches, edits need a separate read-then-write. All numbers are median response bytes across 3 iterations. Scenarios defined in [`bench/scenarios/`](bench/scenarios/).
+Baselines model how agents use standard tool-calling interfaces: `Read` returns whole files, `Grep` returns unstructured line matches, edits require a separate read-then-write cycle. All numbers are median response bytes across 3 iterations. Scenarios defined in [`bench/scenarios/`](bench/scenarios/).
 
 6 real-world repos, 9 scenarios each:
 
@@ -94,20 +94,22 @@ Reproduce: `bash bench/run_real_repo_benchmarks.sh` (clones repos to `/tmp`, ~5 
 
 ## Install
 
-For cloud agents and CI, the setup script installs Go and gcc if needed, builds edr, and adds it to PATH:
+If you already have Go 1.25+ and a C/C++ compiler (required for tree-sitter grammars):
+
+```bash
+go install github.com/jordw/edr@latest
+```
+
+For cloud agents and CI where Go may not be installed, the setup script handles dependencies, builds, PATH, and indexing:
 
 ```bash
 git clone https://github.com/jordw/edr.git
 ./edr/setup.sh /path/to/your/project
 ```
 
-If you already have Go 1.25+ and C/C++ compilers (required for tree-sitter grammars):
-
-```bash
-go install github.com/jordw/edr@latest
-```
-
 edr stores its index in `.edr/` at the repo root. Add `.edr/` to your `.gitignore`. The index rebuilds automatically if deleted.
+
+### Agent setup
 
 To make an agent use edr, add instructions to whatever file your agent reads at startup (e.g., `CLAUDE.md`, `.cursorrules`, `AGENTS.md`). At minimum:
 
@@ -146,15 +148,6 @@ This repo's own [CLAUDE.md](CLAUDE.md) is a complete working example with the fu
 
 All output is structured JSON. Token budgets (`--budget N`) cap any response to N tokens.
 
-## Comparison
-
-| Tool | What it does well | What edr adds | What edr lacks |
-|---|---|---|---|
-| **ripgrep** | Fast text search, zero setup | Symbol-scoped results, batching, sessions | Requires indexing; ripgrep needs nothing |
-| **ctags** | Mature symbol indexing, wide editor support | Reads, edits, sessions on top of the index | Fewer languages than ctags |
-| **LSP** | Deep per-language semantics, refactoring | Single binary across 13 languages, no per-language server | No type info, weaker refactoring |
-| **Built-in agent tools** | No setup, always available | Symbol awareness, batching, context tracking | Build dependency (Go + C/C++ compilers) |
-
 ## Supported languages
 
 **Full symbol indexing** (map, read, edit, signatures, inside, move):
@@ -163,11 +156,23 @@ Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby, PHP, Zig, 
 **Import-aware semantic refs** (refs, rename, explore callers/deps):
 Go, Python, JavaScript, TypeScript. Other languages fall back to text-based references.
 
+**Additional grammars** (parsing, structure extraction):
+C#, Scala, Kotlin, Elixir, HCL/Terraform, HTML, CSS, JSON, YAML, TOML, Markdown, Protocol Buffers, SQL, Dockerfile
+
 edr can read and edit any text file regardless of language support.
+
+## Comparison
+
+| Tool | What it does well | What edr adds | What edr lacks |
+|---|---|---|---|
+| **ripgrep** | Fast text search, zero setup | Symbol-scoped results, batching, sessions | Requires indexing; ripgrep needs nothing |
+| **ctags** | Mature symbol indexing, wide editor support | Reads, edits, sessions on top of the index | Narrower language coverage |
+| **LSP** | Deep per-language semantics, refactoring | Single binary, no per-language server setup | No type information, weaker refactoring |
+| **Built-in agent tools** | No setup, always available | Symbol awareness, batching, context tracking | Build dependency (Go + C/C++ compilers) |
 
 ## Limitations
 
-- **C/C++ compilers required.** Tree-sitter grammars need CGO, and the HCL grammar needs C++. The setup script handles this, but it is a real dependency.
+- **C/C++ compilers required.** Tree-sitter grammars need CGO. The setup script handles this, but it is a real dependency.
 - **Semantic refs are partial.** Import-aware reference tracking covers Go, Python, JS, and TS. Other languages use text matching, which can produce false positives.
 - **Tree-sitter, not LSP.** The index captures structure (functions, classes, types) but not full type information. It will not catch everything a language server would.
 - **Indexing cost.** First `edr init` takes a few seconds on small repos, longer on large ones. Incremental re-indexing after edits is fast.
