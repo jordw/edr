@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Coding agents waste most of their context window reading entire files to find one function.** edr gives agents symbol-level file operations and batched calls — so a task that takes 6 tool calls and 200KB of context takes 2 calls and 16KB.
+**Coding agents waste most of their context window reading entire files to find one function.** edr gives agents symbol-level file operations and batched calls so they read less and stay under budget longer.
 
 Works with any agent that can run shell commands. Fully local, no telemetry.
 
@@ -12,14 +12,14 @@ Task: add a `retries` parameter to a scheduler class.
 
 **Without edr** — agents read whole files to reach individual symbols:
 ```
-read src/scheduler.py            → 400 lines
-grep "retry" src/                → flat file:line dump
-read src/config.py               → 200 lines
-read src/worker.py               → 300 lines
-edit src/scheduler.py            → no verification
-read src/scheduler.py            → re-read to confirm
+read src/scheduler.py            → 400 lines, 18KB
+grep "retry" src/                → flat text dump, ~1KB
+read src/config.py               → 200 lines, 9KB
+read src/worker.py               → 300 lines, 13KB
+edit src/scheduler.py            → no build verification
+read src/scheduler.py            → re-read to confirm, 18KB
 ```
-6 calls, ~200KB of context.
+6 calls, ~59KB of context consumed.
 
 **With edr:**
 ```bash
@@ -33,11 +33,13 @@ edr -r src/scheduler.py:Scheduler --sig \
 edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):" \
     -e src/config.py --old '"timeout": 30' --new '"timeout": 30, "retries": 3'
 ```
-2 calls, ~16KB. Same result.
+2 calls, ~8KB of context consumed.
 
 ## Benchmarks
 
-Median **93% context reduction** across 9 scenarios and 7 repos — from small libraries to Django (880 files). edr loses on plain text search (structured JSON adds overhead vs raw grep), but wins everywhere else.
+We run 9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos and measure tool response bytes — the raw amount of text that enters the agent's context window.
+
+The baseline uses the tools agents actually have: whole-file `cat`, `grep -rn`, `find` + read. No symbol extraction, no batching. edr uses symbol reads, `--signatures`, `refs`, `map`, and batch flags.
 
 | Repo | Lang | Files | Baseline | edr | Reduction |
 |---|---|---|---|---|---|
@@ -49,7 +51,7 @@ Median **93% context reduction** across 9 scenarios and 7 repos — from small l
 | [reduxjs/redux-toolkit](https://github.com/reduxjs/redux-toolkit) | TS | ~190 | 186KB / 20 calls | 23KB / 9 calls | **88%** |
 | [django/django](https://github.com/django/django) | Python | ~880 | 1,328KB / 20 calls | 30KB / 9 calls | **98%** |
 
-The baseline simulates how agents actually work: whole-file reads, grep for search, glob-then-read for exploration. No symbol extraction, no batching.
+Median reduction: **93%** across repos. edr loses on plain text search (structured JSON adds overhead vs raw grep — see breakdown below), but wins everywhere else. Call counts are summed across all 9 scenarios; each edr scenario is 1 call.
 
 <details>
 <summary>Per-scenario breakdown (urfave/cli)</summary>
@@ -78,7 +80,7 @@ brew install jordw/tap/edr
 edr setup .
 ```
 
-`edr setup` indexes your project, adds `.edr/` to `.gitignore`, and appends agent instructions to your config (`CLAUDE.md`, `.cursorrules`, or `AGENTS.md`). Existing content is preserved.
+`edr setup` indexes your project, adds `.edr/` to `.gitignore`, and appends agent instructions (~2KB) to your config (`CLAUDE.md`, `.cursorrules`, or `AGENTS.md`). Existing content is preserved. The instructions teach the agent to use edr instead of built-in file tools.
 
 <details>
 <summary>Other install methods</summary>
@@ -116,7 +118,7 @@ edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-s
 
 **Batching.** `-r`, `-s`, `-e`, `-w` combine reads, searches, edits, and writes in one CLI call. One call to gather context, one to apply mutations.
 
-**Sessions.** Automatic — all edr calls from the same shell share a session. Re-reading an unchanged file returns `{unchanged: true}`. Search results replace already-seen bodies with `[in context]`.
+**Sessions.** Set `EDR_SESSION` to a stable ID to enable cross-call dedup. Re-reading an unchanged file returns `{unchanged: true}`. Search results replace already-seen bodies with `[in context]`. Without a session, each call is independent.
 
 ## Commands
 
@@ -145,10 +147,10 @@ edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "..."
 | `edit` | `edr edit file --old "x" --new "y"` |
 | `write` | `edr write file --inside Class --content "..."` |
 | `refs` | `edr refs Symbol`, `edr refs Symbol --impact` |
-| `rename` | `edr rename old new --dry-run` |
 | `verify` | `edr verify` |
+| `reindex` | `edr reindex` |
 
-**Admin:** `edr setup .` (index + configure agent), `edr reindex` (rebuild index).
+`rename` is convenience sugar over `refs` + `edit`: `edr rename old new --dry-run`.
 
 All output is structured JSON.
 
@@ -165,7 +167,7 @@ edr reads and edits any text file. Symbol-aware features (symbol reads, `--signa
 - **Tree-sitter, not LSP.** Fast, no build step, works on broken code, zero config. The tradeoff: no type information. Refs use import-path matching, not type resolution, so cross-package references may produce false positives. For agent workloads — read, edit, search — structural parsing is enough.
 - **macOS and Linux only.** Windows is not planned.
 - **C/C++ compiler required** when building from source (tree-sitter grammars). Homebrew and the install script use pre-built binaries.
-- **First index: 1-3s** on small repos, ~30s on large ones (vitess, 1.5M LOC). Incremental re-index after edits: ~50ms/file.
+- **First index: 1-3s** on small repos, ~30s on large ones (vitess, 1.5M LOC). Incremental re-index after edits: ~50ms/file. Subsequent reads/searches add ~5-20ms of overhead vs raw `cat`/`grep` for tree-sitter parsing and SQLite lookup.
 
 ## Contributing
 

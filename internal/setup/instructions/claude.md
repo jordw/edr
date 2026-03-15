@@ -1,45 +1,12 @@
-# STOP. Use `edr` for all file operations.
+# MUST use `edr` for all file operations.
 
-Do NOT use Read, Edit, Write, Grep, or Glob. Use `edr` via Bash instead.
-
-- `Read` → `edr -r file.go` or `edr -r file.go:Symbol`
-- `Edit` → `edr -e file.go --old "x" --new "y"`
-- `Write` → `edr -w file.go --content "..."`
-- `Grep` → `edr -s "pattern" --text`
-- `Glob` → `edr -s "pattern" --include "*.go"`
-- Multiple tools → one call: `edr -r f.go -s "pat" -e f.go --old "x" --new "y"`
-
-## Patterns
-
-```bash
-# Gather context in one call
-edr -r src/main.go:Server --sig -r src/config.go -s "handleRequest"
-
-# Mutate in one call (auto-verifies build)
-edr -e src/main.go --old "oldFunc()" --new "newFunc()" -w src/new_test.go --content "..."
-
-# Read signatures only (75% fewer tokens)
-edr -r src/models.go:UserService --sig
-
-# Add a method without reading the file
-edr -w src/models.go --inside UserService --content "func (u *UserService) Delete() error { ... }"
-
-# Multi-line replacement via heredoc
-edr -e src/config.go:parseConfig --new - <<'EOF'
-func parseConfig() (*Config, error) {
-    // new implementation
-}
-EOF
-
-# Orient in unfamiliar codebase
-edr map --budget 500
-
-# Check impact before refactoring
-edr refs Symbol --impact
+```
+edr -r file.go                       # read (or file.go:Symbol)
+edr -e file.go --old "x" --new "y"   # edit
+edr -w file.go --content "..."       # write/create
+edr -s "pattern" --text              # search
 ```
 
-## If edr is not found
+Combine: `edr -r f.go:Sym --sig -s "pattern" -e f.go --old "x" --new "y"`
 
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
+Run `edr --help` for full options. If not found: `export PATH="$HOME/.local/bin:$PATH"`

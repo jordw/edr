@@ -58,9 +58,9 @@ type InjectResult struct {
 }
 
 // edrMarkers are strings we look for to detect existing edr instructions.
-// Matches both old ("# edr: use for all file operations") and new ("# STOP. Use `edr`") headings.
 var edrMarkers = []string{
-	"Use `edr` for all file operations",
+	"use `edr` for all file operations",
+	"Use `edr` instead of",
 	"edr: use for all file operations",
 }
 
