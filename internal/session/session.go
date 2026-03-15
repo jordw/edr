@@ -128,11 +128,6 @@ func ResolveSessionID() string {
 	return os.Getenv("EDR_SESSION")
 }
 
-// HasSession reports whether an explicit session is active.
-func HasSession() bool {
-	return os.Getenv("EDR_SESSION") != ""
-}
-
 // LoadSession loads the session identified by EDR_SESSION env var.
 // Returns the session and a save function. Call save() after processing
 // to persist changes. If EDR_SESSION is not set, returns an ephemeral

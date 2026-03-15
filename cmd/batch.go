@@ -163,7 +163,6 @@ type doResponse struct {
 	Truncated     bool               `json:"truncated,omitempty"`
 	TruncReason   string             `json:"truncated_reason,omitempty"`
 	Dropped       []string           `json:"sections_dropped,omitempty"`
-	SessionHint   string             `json:"session_hint,omitempty"`
 }
 
 type writeResult struct {
@@ -688,11 +687,6 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 	}
 
 	resp := &doResponse{}
-
-	// Hint when no session is active — agent sees this and knows to set one up.
-	if !session.HasSession() {
-		resp.SessionHint = "export EDR_SESSION=$(edr session-id)"
-	}
 
 	// 0. Init
 	if hasInit {

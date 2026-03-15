@@ -38,15 +38,18 @@ func TestInstructionsNoBodyFlag(t *testing.T) {
 	}
 }
 
-func TestInstructionsNoManualSession(t *testing.T) {
+func TestInstructionsSessionOneLiner(t *testing.T) {
 	for _, target := range AllTargets() {
 		t.Run(target, func(t *testing.T) {
 			text, err := Instructions(Target(target))
 			if err != nil {
 				t.Fatalf("Instructions(%q): %v", target, err)
 			}
-			if strings.Contains(text, "EDR_SESSION") {
-				t.Errorf("Instructions(%q) still contains manual EDR_SESSION setup (sessions are now automatic)", target)
+			if strings.Contains(text, "uuidgen") {
+				t.Errorf("Instructions(%q) still uses uuidgen (should use edr session-id)", target)
+			}
+			if strings.Contains(text, "```\nexport EDR_SESSION") {
+				t.Errorf("Instructions(%q) has session setup as code block (should be inline)", target)
 			}
 		})
 	}

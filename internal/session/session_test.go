@@ -23,17 +23,6 @@ func TestResolveSessionID_EnvUnset(t *testing.T) {
 	}
 }
 
-func TestHasSession(t *testing.T) {
-	t.Setenv("EDR_SESSION", "abc")
-	if !HasSession() {
-		t.Error("expected HasSession=true when EDR_SESSION is set")
-	}
-	os.Unsetenv("EDR_SESSION")
-	if HasSession() {
-		t.Error("expected HasSession=false when EDR_SESSION is unset")
-	}
-}
-
 // --- New ---
 
 func TestNew(t *testing.T) {

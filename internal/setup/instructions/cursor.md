@@ -1,6 +1,6 @@
 # edr: use for all file operations
 
-Use `edr` via terminal instead of built-in file reading and editing tools. It gives you structured JSON output, token budgets, and symbol-aware operations. If edr output includes `session_hint`, run that command once to enable delta reads across calls.
+Use `edr` via terminal instead of built-in file reading and editing tools. It gives you structured JSON output, token budgets, and symbol-aware operations. Run `export EDR_SESSION=$(edr session-id)` once per conversation to enable delta reads.
 
 ## Quick reference
 
