@@ -4,35 +4,24 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev)
 
-edr is not an agent — it's a tool that agents use. It gives AI coding agents (Claude Code, Cursor, Codex, and others) symbol-aware file operations, batched commands, and session tracking — replacing the default Read, Grep, and Edit tools with structured, budget-controlled alternatives. Fully local — no network calls, no telemetry.
+edr gives AI coding agents symbol-aware file operations. Instead of reading whole files, agents read single functions. Instead of grepping for text, they query an index. Instead of making six tool calls to understand and edit a class, they make two.
+
+It works with Claude Code, Cursor, Codex, and any agent that runs CLI tools. Fully local — no network calls, no telemetry.
 
 ## Example
 
-Adding a retry parameter to a scheduler. Without edr, agents typically make several tool calls — reading whole files to find a single class, grepping for unstructured file:line lists, re-reading after edits to confirm:
+An agent adding a retry parameter to a scheduler. The left column is what agents do with their default tools; the right is the same task with edr:
 
-```
-Read src/scheduler.py              # 400-line file to find one class
-Grep "retry" src/                  # file:line list, no structure
-Read src/config.py                 # whole file to find one function
-Read src/worker.py                 # whole file for the API shape
-Edit src/scheduler.py              # old_text/new_text, no verification
-Read src/scheduler.py              # re-read to confirm the edit
-```
+| Without edr (6 tool calls) | With edr (2 calls) |
+|---|---|
+| `Read src/scheduler.py` — 400-line file, need one class | `edr -r src/scheduler.py:Scheduler --sig` — just the API |
+| `Grep "retry" src/` — flat file:line list | `-r src/config.py:parse_config` — just the function |
+| `Read src/config.py` — whole file for one function | `-r src/worker.py:Worker --sig` — just the API |
+| `Read src/worker.py` — whole file for the API shape | `-s "retry"` — structured search |
+| `Edit src/scheduler.py` — no verification | `edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):"` — edit + auto-verify |
+| `Read src/scheduler.py` — re-read to confirm | `-e src/config.py --old '"timeout": 30' --new '"timeout": 30, "retries": 3'` — batched |
 
-With edr, 2 calls — symbol-targeted reads, batched operations, and built-in verification:
-
-```bash
-# Gather: signatures, symbol reads, and search in one call
-edr -r src/scheduler.py:Scheduler --sig \
-    -r src/config.py:parse_config \
-    -r src/worker.py:Worker --sig \
-    -s "retry"
-
-# Mutate: two edits, a new file, and verification in one call
-edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):" \
-    -e src/config.py --old '"timeout": 30' --new '"timeout": 30, "retries": 3' \
-    -w tests/test_retry.py --content "import pytest\n..."
-```
+The first edr call gathers all context; the second applies all mutations and runs verification. Both are single CLI invocations using batch flags (`-r` read, `-s` search, `-e` edit).
 
 ## Install
 
@@ -75,25 +64,17 @@ edr stores its index in `.edr/` at the repo root. `edr setup` adds `.edr/` to `.
 
 ## How it works
 
-edr parses source files with [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and stores symbols (functions, classes, structs, methods) in a SQLite index. This makes every operation symbol-aware:
+edr builds a symbol index using [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and SQLite. Three things make this useful for agents:
 
-- **Reads** target a single function or class instead of a whole file
-- **Signatures** return a container's API without implementation bodies (up to 85% fewer tokens)
-- **Searches** return structured JSON with symbol context, not `file:line` lists
-- **Edits** re-index the modified file immediately and run verification automatically
-- **Writes** can insert into a class or struct without reading the file first
+**Symbol-level access.** Every operation knows about functions, classes, structs, and methods — not just files and lines. `edr read file.py:ClassName --signatures` returns the class API without implementation bodies (up to 85% fewer tokens). `edr write file.py --inside ClassName` inserts a method without reading the file first. Edits re-index the modified file immediately and run verification automatically.
 
-**Sessions** track what content the agent has already seen. The agent instructions written by `edr setup` tell the agent to set `EDR_SESSION` to a unique ID at the start of each conversation (e.g., `export EDR_SESSION=$(uuidgen)`). edr then persists state across CLI calls: re-reading an unchanged file returns `{unchanged: true}`, and symbol bodies already in context are replaced with `[in context]`. Without `EDR_SESSION`, each call is stateless.
+**Sessions.** edr tracks what the agent has already seen. Set `EDR_SESSION` to a unique ID at conversation start, and edr persists state across CLI calls: re-reading an unchanged file returns `{unchanged: true}`, and symbol bodies already in context are replaced with `[in context]`. Without `EDR_SESSION`, each call is stateless.
 
-**Batch flags** (`-r`, `-s`, `-e`, `-w`) combine multiple operations into a single CLI call. A typical workflow is two calls: one to gather context, one to apply all mutations.
+**Batching.** Flags `-r`, `-s`, `-e`, `-w` combine reads, searches, edits, and writes into a single CLI call. A typical workflow is two calls: one to gather context, one to apply all mutations.
 
 ## Benchmarks
 
-9 workflows across 7 repos, from small libraries to Django (1500+ files). edr scenarios and baselines are defined side-by-side in the same auditable files: [`bench/scenarios/`](bench/scenarios/). All scenarios are deterministic — results are identical across runs.
-
-**What the baseline measures.** Each baseline uses the built-in tools agents are given by default: `Read` (whole file), `Grep` (file:line output), and `Edit` (no verification). This is what agents do *without custom tooling or instructions* — they read whole files because they have no way to target a symbol, grep returns flat text because there's no index, and edits don't auto-verify because the tool doesn't support it. Agents *can* be instructed to use line ranges and batch calls, but the default tools don't offer symbol reads, signatures, `--inside`, or session dedup — those capabilities don't exist without something like edr. For reference lookups (refs, explore), the baseline counts grep output plus reading *every* matched file — no artificial cap.
-
-The metric is **response bytes** (a proxy for context/token consumption), not wall time. Edit benchmarks run real edits with verification, not dry-runs.
+9 workflows across 7 repos, from small libraries to Django (880 files). Baselines use agents' built-in tools: `Read` (whole file), `Grep` (file:line output), `Edit` (no verification). These are the default tools agents are given — they lack symbol reads, signatures, `--inside`, and session dedup. For reference lookups, the baseline reads *every* matched file with no cap. The metric is **response bytes** (proxy for token consumption). Edit benchmarks run real edits with verification. All scenarios are defined in [`bench/scenarios/`](bench/scenarios/).
 
 | Repo | Language | Files | Baseline | edr | Reduction |
 |---|---|---|---|---|---|
@@ -115,13 +96,13 @@ The biggest wins come from operations that have no built-in equivalent (signatur
 | Understand a class API | 13,019B (whole file) | 1,592B (`--signatures`) | **88%** |
 | Read a specific function | 19,290B (whole file) | 1,463B (symbol read) | **92%** |
 | Find references | 86,463B / 4 calls (grep + read all matches) | 865B / 1 call (`refs`) | **99%** |
-| Search with context | 614B (grep -C3) | 2,816B (search --text --context 3) | **-359%** |
+| Search with context | 614B (grep -C3) | 1,812B (search --text --context 3) | **-195%** |
 | Orient in codebase | 65,581B / 5 calls (glob + reads) | 2,134B / 1 call (`map`) | **97%** |
 | Edit a function | 26,038B / 3 calls (read + edit + verify) | 47B / 1 call (edit + auto-verify) | **100%** |
 | Add method to a class | 13,019B / 2 calls (read + edit) | 184B / 1 call (`--inside`) | **99%** |
 | Multi-file read | 39,397B / 3 calls | 2,606B / 1 call (batched + budget) | **93%** |
 | Explore a symbol | 51,967B / 4 calls (grep + reads) | 4,562B / 1 call (body + callers + deps) | **91%** |
-| **Total** | **315,388B / 24 calls** | **16,269B / 9 calls** | **95%** |
+| **Total** | **315,388B / 24 calls** | **15,265B / 9 calls** | **95%** |
 
 </details>
 
@@ -129,20 +110,37 @@ Reproduce: `bash bench/run_real_repo_benchmarks.sh` (clones repos to `/tmp`, ~10
 
 ## CLI reference
 
+**Reading and navigation:**
+
 | Command | What it does |
 |---|---|
-| `edr read file:Symbol` | Read a specific symbol (function, class, struct) |
+| `edr read file:Symbol` | Read a specific function, class, or struct |
 | `edr read file:Class --signatures` | Container API without implementation bodies |
 | `edr read file --depth N` | Progressive disclosure: collapse nesting below level N |
-| `edr search "pattern" --body` | Symbol search with optional body snippets |
-| `edr search "pattern" --text` | Text search (like grep, structured output) |
 | `edr map` | Symbol overview of the repo or a directory |
-| `edr explore Symbol --gather --body` | Symbol body + callers + deps in one call |
-| `edr refs Symbol --impact` | Transitive impact analysis before refactoring |
+| `edr explore Symbol --body --callers --deps` | Symbol body + callers + dependencies in one call |
+| `edr refs Symbol` | Find all references (import-aware for Go/Python/JS/TS) |
+| `edr find "**/*.go"` | Find files by glob pattern |
+
+**Searching:**
+
+| Command | What it does |
+|---|---|
+| `edr search "pattern"` | Symbol search (matches function/class names) |
+| `edr search "pattern" --text` | Text search (like grep, structured output) |
+
+**Editing:**
+
+| Command | What it does |
+|---|---|
 | `edr edit file --old "x" --new "y"` | Edit with auto re-index and verification |
 | `edr write file --inside Class` | Add a method or field without reading the file |
 | `edr rename old new --dry-run` | Cross-file, import-aware rename with preview |
-| `edr find "**/*.go"` | Find files by glob pattern |
+
+**Maintenance:**
+
+| Command | What it does |
+|---|---|
 | `edr verify` | Run build/test checks (auto-detects Go/npm/Cargo) |
 | `edr init` | Build or rebuild the symbol index |
 
