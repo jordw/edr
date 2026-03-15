@@ -80,7 +80,7 @@ func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flag
 		result, err = runEditPlan(ctx, db, root, args, flags)
 	case "verify":
 		result, err = runVerify(ctx, db, root, args, flags)
-	case "multi", "get-diff":
+	case "multi":
 		return nil, fmt.Errorf("%s is only available in batch mode (edr -r/-s/-e/-w)", cmd)
 	default:
 		if suggestion := suggestCommand(cmd); suggestion != "" {
@@ -273,9 +273,6 @@ func runSearchUnified(ctx context.Context, db *index.DB, args []string, flags ma
 //	explore symbol --body --callers    → expand (fine-grained)
 //	explore symbol --gather            → gather (context bundle with tests)
 func runExploreUnified(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
-	if flagBool(flags, "gather", false) {
-		return runGather(ctx, db, root, args, flags)
-	}
 	return runExpand(ctx, db, root, args, flags)
 }
 

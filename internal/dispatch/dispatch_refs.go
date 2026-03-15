@@ -36,6 +36,11 @@ func runImpact(ctx context.Context, db *index.DB, root string, args []string, fl
 	}
 	symbolName := sym.Name
 
+	// Impact analysis requires import-aware refs (Go, Python, JS, TS)
+	if !hasStrongRefs(sym.File) {
+		return nil, fmt.Errorf("--impact requires Go, Python, JavaScript, or TypeScript (file: %s)", output.Rel(sym.File))
+	}
+
 	type impactNode struct {
 		Name  string `json:"name"`
 		File  string `json:"file"`
@@ -133,6 +138,11 @@ func runCallChain(ctx context.Context, db *index.DB, root string, args []string,
 		}
 	}
 
+	// Call chain requires import-aware refs (Go, Python, JS, TS)
+	if !hasStrongRefs(toSym.File) {
+		return nil, fmt.Errorf("--chain requires Go, Python, JavaScript, or TypeScript (file: %s)", output.Rel(toSym.File))
+	}
+
 	// BFS from 'to' backwards through callers to find 'from'
 	type pathNode struct {
 		name   string
@@ -210,4 +220,19 @@ func runCallChain(ctx context.Context, db *index.DB, root string, args []string,
 		"chain": chain,
 		"depth": len(chain) - 1,
 	}, nil
+}
+
+// hasStrongRefs returns true if the file is in a language with import-aware
+// semantic references (Go, Python, JavaScript, TypeScript).
+func hasStrongRefs(file string) bool {
+	cfg := index.GetLangConfig(file)
+	if cfg == nil {
+		return false
+	}
+	switch cfg.LangID {
+	case "go", "python", "javascript", "typescript":
+		return true
+	default:
+		return false
+	}
 }

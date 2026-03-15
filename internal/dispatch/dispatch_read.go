@@ -62,6 +62,9 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 
 	// --depth N: AST-aware progressive disclosure for the whole file
 	depth := flagInt(flags, "depth", 0)
+	if depth > 2 {
+		depth = 2
+	}
 	if depth > 0 {
 		body, outlineErr := index.OutlineFile(file, depth)
 		if outlineErr == nil {
@@ -204,6 +207,9 @@ func runReadSymbol(ctx context.Context, db *index.DB, root string, args []string
 
 	// --depth N: progressive disclosure via AST-aware collapsing
 	depth := flagInt(flags, "depth", 0)
+	if depth > 2 {
+		depth = 2
+	}
 	if depth > 0 {
 		body, err := index.OutlineSymbol(sym.File, *sym, depth)
 		if err != nil {

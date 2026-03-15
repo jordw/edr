@@ -65,7 +65,6 @@ type doQuery struct {
 	// explore
 	Callers    *bool `json:"callers,omitempty"`
 	Deps       *bool `json:"deps,omitempty"`
-	Gather     *bool `json:"gather,omitempty"`
 	Signatures *bool `json:"signatures,omitempty"`
 
 	// refs
@@ -885,7 +884,7 @@ func inferQueryCmd(q doQuery) string {
 	if q.Pattern != nil && *q.Pattern != "" {
 		return "search"
 	}
-	if (q.Callers != nil && *q.Callers) || (q.Deps != nil && *q.Deps) || (q.Gather != nil && *q.Gather) {
+	if (q.Callers != nil && *q.Callers) || (q.Deps != nil && *q.Deps) {
 		return "explore"
 	}
 	if q.Impact != nil && *q.Impact {
@@ -992,9 +991,6 @@ func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
 		}
 		if q.Deps != nil && *q.Deps {
 			flags["deps"] = true
-		}
-		if q.Gather != nil && *q.Gather {
-			flags["gather"] = true
 		}
 		if q.Signatures != nil && *q.Signatures {
 			flags["signatures"] = true

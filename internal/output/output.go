@@ -83,23 +83,6 @@ type RenameOccurrence struct {
 	Text string `json:"text"`
 }
 
-// GatherResult aggregates context around a target symbol.
-type GatherResult struct {
-	Target         Symbol            `json:"target"`
-	TargetBody     string            `json:"target_body,omitempty"`
-	Container      *Symbol           `json:"container,omitempty"`
-	ContainerStub  string            `json:"container_stub,omitempty"`
-	Deps           []Symbol          `json:"deps,omitempty"`
-	Callers        []Symbol          `json:"callers,omitempty"`
-	CallerSnips    map[string]string `json:"caller_snippets,omitempty"`
-	Tests          []Symbol          `json:"tests,omitempty"`
-	TestSnips      map[string]string `json:"test_snippets,omitempty"`
-	TotalTokens    int               `json:"total_tokens"`
-	OmittedCallers int               `json:"omitted_callers,omitempty"`
-	OmittedTests   int               `json:"omitted_tests,omitempty"`
-	Truncated      bool              `json:"truncated,omitempty"`
-}
-
 // Print marshals v to indented JSON and writes it to stdout.
 // Falls back to a plain-text error message if marshaling fails.
 func Print(v any) {

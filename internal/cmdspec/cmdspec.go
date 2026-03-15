@@ -142,7 +142,6 @@ var Registry = []*Spec{
 			{Name: "body", Type: FlagBool, Default: false, Desc: "Include source in results"},
 			{Name: "callers", Type: FlagBool, Default: false, Desc: "Include callers"},
 			{Name: "deps", Type: FlagBool, Default: false, Desc: "Include dependencies"},
-			{Name: "gather", Type: FlagBool, Default: false, Desc: "Full context: callers + tests"},
 			{Name: "signatures", Type: FlagBool, Default: false, Desc: "Signatures only (75-86% fewer tokens)"},
 			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens"},
 		},
@@ -187,10 +186,6 @@ var Registry = []*Spec{
 			{Name: "level", Type: FlagString, Default: "", Desc: "Verification level: build (default) or test"},
 			{Name: "timeout", Type: FlagInt, Default: 0, Desc: "Timeout in seconds"},
 		},
-	},
-	{
-		Name: "diff", Desc: "Retrieve stored diff from last large edit.",
-		Category: CatMeta, MinArgs: 0, MaxArgs: 2,
 	},
 }
 

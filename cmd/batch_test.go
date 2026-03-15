@@ -348,13 +348,13 @@ func TestDoQueryToMultiCmd_SearchEmptyPattern(t *testing.T) {
 
 func TestDoQueryToMultiCmd_Explore(t *testing.T) {
 	sym := "Dispatch"
-	gather := true
 	body := true
+	callers := true
 	q := doQuery{
-		Cmd:    "explore",
-		Symbol: &sym,
-		Gather: &gather,
-		Body:   &body,
+		Cmd:     "explore",
+		Symbol:  &sym,
+		Body:    &body,
+		Callers: &callers,
 	}
 	mc, _ := doQueryToMultiCmd(q)
 	if mc.Cmd != "explore" {
@@ -363,8 +363,8 @@ func TestDoQueryToMultiCmd_Explore(t *testing.T) {
 	if len(mc.Args) != 1 || mc.Args[0] != "Dispatch" {
 		t.Errorf("args = %v, want [Dispatch]", mc.Args)
 	}
-	if mc.Flags["gather"] != true {
-		t.Error("gather should be true")
+	if mc.Flags["callers"] != true {
+		t.Error("callers should be true")
 	}
 }
 

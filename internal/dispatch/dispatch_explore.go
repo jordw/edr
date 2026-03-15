@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/jordw/edr/internal/edit"
-	"github.com/jordw/edr/internal/gather"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/search"
@@ -171,22 +170,3 @@ func runXrefs(ctx context.Context, db *index.DB, root string, args []string) (an
 	return resp, nil
 }
 
-func runGather(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
-	if len(args) < 1 {
-		return nil, fmt.Errorf("gather requires at least 1 argument")
-	}
-	budget := flagInt(flags, "budget", 1500)
-	includeBody := flagBool(flags, "body", false)
-	includeSigs := flagBool(flags, "signatures", false)
-
-	// Try exact symbol resolution first
-	sym, resolveErr := resolveSymbolArgs(ctx, db, root, args)
-	if resolveErr == nil {
-		return gather.Gather(ctx, db, sym.File, sym.Name, budget, includeBody, includeSigs)
-	}
-	// Fall back to search-based gather for single arg
-	if len(args) == 1 {
-		return gather.GatherBySearch(ctx, db, args[0], budget, includeBody, includeSigs)
-	}
-	return nil, resolveErr
-}
