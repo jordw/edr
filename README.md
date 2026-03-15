@@ -47,36 +47,38 @@ With edr, 2 requests over `edr serve --stdio`:
 
 ## Install
 
-**One-liner** (downloads prebuilt binary, no dependencies):
+Run this in your project directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jordw/edr/main/install.sh | sh
 ```
 
-**Homebrew:**
+This installs the binary, indexes your project, and injects agent instructions. One command, done.
+
+Or with Homebrew:
 
 ```bash
 brew install jordw/tap/edr
+edr setup .
 ```
+
+<details>
+<summary>Other install methods</summary>
 
 **From source** (requires Go 1.25+ and a C/C++ compiler for tree-sitter):
 
 ```bash
 go install github.com/jordw/edr@latest
+edr setup /path/to/your/project
 ```
 
-**Cloud agents and CI** (installs Go/gcc if needed, builds, indexes your project):
+**Cloud agents and CI** (installs Go/gcc if needed, builds, indexes):
 
 ```bash
-git clone https://github.com/jordw/edr.git
-./edr/setup.sh /path/to/your/project
+git clone https://github.com/jordw/edr.git && ./edr/setup.sh
 ```
 
-After installing, set up a project:
-
-```bash
-edr setup /path/to/your/project        # indexes + injects agent instructions
-```
+</details>
 
 edr stores its index in `.edr/` at the repo root. Add `.edr/` to your `.gitignore`. The index rebuilds automatically if deleted.
 

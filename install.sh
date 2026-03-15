@@ -3,8 +3,9 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/jordw/edr/main/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/jordw/edr/main/install.sh | sh -s -- /path/to/project
-#   curl -fsSL https://raw.githubusercontent.com/jordw/edr/main/install.sh | sh -s -- --claude /path/to/project
+#
+# Installs the binary and automatically runs `edr setup` on the current
+# directory if it's a git repo. Pass --skip-setup to install only.
 #
 # Options:
 #   --claude, --cursor, --codex   Agent target for edr setup (default: auto-detect)
@@ -41,6 +42,24 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+# --- Auto-detect target if not specified ---
+if [ -z "$TARGET" ] && [ "$SKIP_SETUP" = false ]; then
+    if git rev-parse --show-toplevel >/dev/null 2>&1; then
+        TARGET="$(git rev-parse --show-toplevel)"
+    fi
+fi
+
+# --- Auto-detect agent if not specified ---
+if [ -z "$AGENT_FLAG" ] && [ -n "$TARGET" ]; then
+    if [ -f "$TARGET/CLAUDE.md" ] || [ -f "$TARGET/.claude" ]; then
+        AGENT_FLAG="--claude"
+    elif [ -f "$TARGET/.cursorrules" ]; then
+        AGENT_FLAG="--cursor"
+    elif [ -f "$TARGET/AGENTS.md" ]; then
+        AGENT_FLAG="--codex"
+    fi
+fi
 
 # --- Detect platform ---
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -120,17 +139,19 @@ fi
 
 echo "==> $(edr --version)"
 
-# --- Optional: run edr setup on target repo ---
+# --- Run edr setup on target repo ---
 if [ "$SKIP_SETUP" = false ] && [ -n "$TARGET" ]; then
     TARGET="$(cd "$TARGET" && pwd)"
     echo "==> Running edr setup on ${TARGET}..."
     edr setup --root "$TARGET" $AGENT_FLAG
-fi
-
-echo ""
-echo "==> Done! edr is ready."
-if [ -n "$TARGET" ]; then
+    echo ""
+    echo "==> Done! edr is ready in ${TARGET}"
     echo "    Start: edr serve --root $TARGET"
+elif [ "$SKIP_SETUP" = false ]; then
+    echo ""
+    echo "==> Done! edr is installed."
+    echo "    Set up a project: edr setup /path/to/your/project"
 else
-    echo "    Usage: edr setup /path/to/your/project"
+    echo ""
+    echo "==> Done! edr is installed."
 fi
