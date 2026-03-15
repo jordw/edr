@@ -721,34 +721,6 @@ func world() {
 	}
 }
 
-func TestWriteAcceptsNewTextFlag(t *testing.T) {
-	// write should accept new_text as an alias for content.
-	tmp := t.TempDir()
-
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	ctx := context.Background()
-
-	_, err = dispatch.Dispatch(ctx, db, "write", []string{"test.go"}, map[string]any{
-		"new_text": "package main\n\nfunc foo() {}\n",
-	})
-	if err != nil {
-		t.Fatalf("write with new_text: %v", err)
-	}
-
-	data, err := os.ReadFile(filepath.Join(tmp, "test.go"))
-	if err != nil {
-		t.Fatalf("read written file: %v", err)
-	}
-	if !strings.Contains(string(data), "func foo()") {
-		t.Fatalf("expected file to contain func foo(), got: %q", string(data))
-	}
-}
-
 func TestSearchEmptyPatternReturnsError(t *testing.T) {
 	tmp := t.TempDir()
 	goFile := filepath.Join(tmp, "main.go")

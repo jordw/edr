@@ -436,12 +436,30 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 	if result == nil {
 		result = []output.Match{}
 	}
-	return &SearchResult{
+	sr := &SearchResult{
 		Kind:         "text",
 		Matches:      result,
 		TotalMatches: int(totalMatches.Load()),
 		Truncated:    truncated,
-	}, nil
+	}
+	if !useRegex && sr.TotalMatches == 0 && looksLikeRegex(pattern) {
+		sr.Hint = "pattern contains regex metacharacters; use --regex for regex matching"
+	}
+	return sr, nil
+}
+
+// looksLikeRegex returns true if pattern contains common regex metacharacters
+// that suggest the user intended a regex search (not just a dot in a filename).
+func looksLikeRegex(pattern string) bool {
+	// Match patterns like .*, .+, \w, \d, [abc], (a|b), ^...$
+	// Single dots are common in filenames, so we only flag "strong" indicators.
+	indicators := []string{".*", ".+", "\\w", "\\d", "\\s", "\\b", "[", "(", "^", "$"}
+	for _, ind := range indicators {
+		if strings.Contains(pattern, ind) {
+			return true
+		}
+	}
+	return false
 }
 
 // budgetTrimText progressively reduces match detail to fit within budget:

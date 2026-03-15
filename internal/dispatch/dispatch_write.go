@@ -12,14 +12,9 @@ import (
 	"github.com/jordw/edr/internal/output"
 )
 
-// writeContent extracts the content string from flags, checking common aliases.
+// writeContent extracts the content string from flags.
 func writeContent(flags map[string]any) string {
-	for _, key := range []string{"content", "new_text", "body"} {
-		if c := flagString(flags, key, ""); c != "" {
-			return c
-		}
-	}
-	return ""
+	return flagString(flags, "content", "")
 }
 
 // writeResult builds an EditResult from a commitResult.

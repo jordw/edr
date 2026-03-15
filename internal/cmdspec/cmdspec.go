@@ -51,11 +51,6 @@ type Spec struct {
 	Internal   bool     // not a public command (no cobra registration, dispatch-only)
 	Flags      []FlagSpec
 
-	// CompatFields are JSON keys accepted in batch mode that are not public CLI flags.
-	// Includes: structural fields (file, symbol), deprecated flags (depth, symbols),
-	// and aliases (body for write content). These are not registered as cobra flags.
-	CompatFields []string
-
 	// Session behavior flags — which post-processing stages apply.
 	DiffEdit  bool // slim edit responses (stores large diffs for retrieval)
 	DeltaRead bool // delta reads (return diff from last-seen version)
@@ -73,8 +68,8 @@ var Registry = []*Spec{
 			{Name: "signatures", Type: FlagBool, Default: false, Desc: "Signatures only (75-86% fewer tokens)"},
 			{Name: "skeleton", Type: FlagBool, Default: false, Desc: "Skeleton view: blocks collapsed"},
 			{Name: "lines", Type: FlagString, Default: "", Desc: "Line range (e.g. 10:50)"},
+			{Name: "full", Type: FlagBool, Default: false, Desc: "Force full content (skip session delta)"},
 		},
-		CompatFields: []string{"file", "symbol", "start_line", "end_line", "depth", "symbols", "full"},
 	},
 	{
 		Name: "write", Desc: "Write file. Modes: plain write, --inside container, --after symbol.",
@@ -85,9 +80,9 @@ var Registry = []*Spec{
 			{Name: "inside", Type: FlagString, Default: "", Desc: "Insert inside container"},
 			{Name: "content", Type: FlagString, Default: "", Desc: "Content to write (alternative to stdin)"},
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
+			{Name: "force", Type: FlagBool, Default: false, Desc: "Overwrite existing file without confirmation"},
+			{Name: "append", Type: FlagBool, Default: false, Desc: "Append to file"},
 		},
-		// backward-compat JSON fields not in CLI
-		CompatFields: []string{"file", "body", "append", "new_text", "force"},
 	},
 	{
 		Name: "edit", Desc: "Edit file by exact text match, symbol replacement, or line range.",
@@ -102,7 +97,6 @@ var Registry = []*Spec{
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
 			{Name: "expect_hash", Type: FlagString, Default: "", Desc: "Reject edit if file hash doesn't match"},
 		},
-		CompatFields: []string{"file", "symbol"},
 	},
 	{
 		Name: "map", Desc: "Symbol map of repo or file. Filters: dir, glob, type, grep.",
@@ -126,8 +120,10 @@ var Registry = []*Spec{
 			{Name: "exclude", Type: FlagStringSlice, Default: []string(nil), Desc: "File glob(s) to exclude"},
 			{Name: "context", Type: FlagInt, Default: 0, Desc: "Lines of context"},
 			{Name: "limit", Type: FlagInt, Default: 0, Desc: "Max number of results to return"},
+			{Name: "regex", Type: FlagBool, Default: false, Desc: "Use regex matching"},
+			{Name: "body", Type: FlagBool, Default: false, Desc: "Include symbol body in results"},
+			{Name: "no_group", Type: FlagBool, Default: false, Desc: "Disable file grouping in text results"},
 		},
-		CompatFields: []string{"body", "regex", "no_group"},
 	},
 	{
 		Name: "explore", Desc: "Symbol body, callers, deps.",
@@ -164,7 +160,6 @@ var Registry = []*Spec{
 		Flags: []FlagSpec{
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
 		},
-		CompatFields: []string{"old_name", "new_name"},
 	},
 	{
 		Name: "reindex", Desc: "Force re-index the repository.",
@@ -264,12 +259,9 @@ func flagNames(name string) map[string]bool {
 	if s == nil {
 		return nil
 	}
-	m := make(map[string]bool, len(s.Flags)+len(s.CompatFields))
+	m := make(map[string]bool, len(s.Flags))
 	for _, f := range s.Flags {
 		m[f.Name] = true
-	}
-	for _, k := range s.CompatFields {
-		m[k] = true
 	}
 	return m
 }
@@ -284,16 +276,41 @@ func DoBatchKeys() map[string]bool {
 }
 
 // ReadBatchKeys returns valid keys for doRead batch objects.
-func ReadBatchKeys() map[string]bool { return flagNames("read") }
+func ReadBatchKeys() map[string]bool {
+	m := flagNames("read")
+	// Structural args used in batch JSON (not CLI flags).
+	m["file"] = true
+	m["symbol"] = true
+	// Legacy JSON batch fields (not CLI flags, used by JSON batch path).
+	m["start_line"] = true
+	m["end_line"] = true
+	m["depth"] = true
+	m["symbols"] = true
+	return m
+}
 
 // EditBatchKeys returns valid keys for doEdit batch objects.
-func EditBatchKeys() map[string]bool { return flagNames("edit") }
+func EditBatchKeys() map[string]bool {
+	m := flagNames("edit")
+	m["file"] = true
+	m["symbol"] = true
+	return m
+}
 
 // WriteBatchKeys returns valid keys for doWrite batch objects.
-func WriteBatchKeys() map[string]bool { return flagNames("write") }
+func WriteBatchKeys() map[string]bool {
+	m := flagNames("write")
+	m["file"] = true
+	return m
+}
 
 // RenameBatchKeys returns valid keys for doRename batch objects.
-func RenameBatchKeys() map[string]bool { return flagNames("rename") }
+func RenameBatchKeys() map[string]bool {
+	m := flagNames("rename")
+	m["old_name"] = true
+	m["new_name"] = true
+	return m
+}
 
 // QueryBatchKeys returns valid keys for doQuery batch objects.
 // This is the union of all read-category commands' flag names,
@@ -307,9 +324,6 @@ func QueryBatchKeys() map[string]bool {
 		if s.Category == CatRead {
 			for _, f := range s.Flags {
 				m[f.Name] = true
-			}
-			for _, k := range s.CompatFields {
-				m[k] = true
 			}
 		}
 	}

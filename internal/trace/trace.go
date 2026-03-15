@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jordw/edr/internal/session"
 	_ "modernc.org/sqlite"
 )
 
@@ -160,17 +161,10 @@ func NewCollector(edrDir, version string) *Collector {
 		return nil
 	}
 
-	sessionID := os.Getenv("EDR_SESSION")
-	if sessionID == "" {
-		sessionID = fmt.Sprintf("%d", time.Now().UnixNano())
-	}
+	sessionID := session.ResolveSessionID()
 	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := db.Exec("INSERT INTO sessions (id, started_at, edr_version) VALUES (?, ?, ?)",
-		sessionID, now, version); err != nil {
-		fmt.Fprintf(os.Stderr, "edr: trace session insert: %v\n", err)
-		db.Close()
-		return nil
-	}
+	_, _ = db.Exec("INSERT OR IGNORE INTO sessions (id, started_at, edr_version) VALUES (?, ?, ?)",
+		sessionID, now, version)
 
 	tc := &Collector{
 		db:        db,
@@ -253,7 +247,7 @@ func (tc *Collector) flushEvent(ev traceEvent) {
 		c.numDeltaReads, c.numBodyDedup, c.numSlimEdits,
 	)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "edr: trace flush call: %v\n", err)
+		// Silently drop — stderr noise poisons agent context
 		return
 	}
 
@@ -379,7 +373,7 @@ func (cb *CallBuilder) Finish(responseBytes int, wasTruncated bool, numWarnings 
 	select {
 	case cb.tc.ch <- ev:
 	default:
-		fmt.Fprintf(os.Stderr, "edr: trace channel full, dropping event\n")
+		// Silently drop — stderr noise poisons agent context
 	}
 }
 

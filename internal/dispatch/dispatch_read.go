@@ -109,6 +109,13 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 	if len(args) >= 3 {
 		fmt.Sscanf(args[2], "%d", &endLine)
 	}
+	// --lines flag (parsed into start_line/end_line by runReadUnified)
+	if sl := flagInt(flags, "start_line", 0); sl > 0 {
+		startLine = sl
+	}
+	if el := flagInt(flags, "end_line", 0); el > 0 {
+		endLine = el
+	}
 	if startLine < 1 {
 		startLine = 1
 	}

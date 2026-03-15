@@ -2,9 +2,9 @@
 // It tracks what content the caller has already seen and produces deltas
 // and body dedup — the same logic for CLI and batch.
 //
-// Sessions are identified by the EDR_SESSION env var. When set, session state
-// is persisted to .edr/sessions/<id>.json between calls. When unset, sessions
-// are ephemeral (in-memory only, no persistence).
+// Sessions are identified automatically using the parent process ID, so
+// all edr calls from the same shell/agent share a session. The EDR_SESSION
+// env var overrides this with an explicit ID.
 package session
 
 import (
@@ -122,15 +122,22 @@ func (s *Session) SaveToFile(path string) error {
 	return os.Rename(tmp, path)
 }
 
-// LoadSession loads the session identified by EDR_SESSION env var.
-// Returns the session and a save function. Call save() after processing
-// to persist changes. If EDR_SESSION is not set, returns an ephemeral
-// session and a no-op save.
-func LoadSession(edrDir string) (*Session, func()) {
-	id := os.Getenv("EDR_SESSION")
-	if id == "" {
-		return New(), func() {}
+// ResolveSessionID returns the session ID to use. It checks EDR_SESSION
+// first, then falls back to the parent PID. This means all edr calls from
+// the same shell/agent conversation automatically share a session.
+func ResolveSessionID() string {
+	if id := os.Getenv("EDR_SESSION"); id != "" {
+		return id
 	}
+	return fmt.Sprintf("ppid-%d", os.Getppid())
+}
+
+// LoadSession loads the session for the current context.
+// Uses EDR_SESSION if set, otherwise derives an ID from the parent PID.
+// Returns the session and a save function. Call save() after processing
+// to persist changes.
+func LoadSession(edrDir string) (*Session, func()) {
+	id := ResolveSessionID()
 	path := filepath.Join(edrDir, "sessions", id+".json")
 	sess := LoadFromFile(path)
 	return sess, func() {
