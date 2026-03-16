@@ -615,7 +615,8 @@ func runBatch(args []string) error {
 	tc := trace.NewCollector(edrDir, Version)
 	defer tc.Close()
 
-	env := output.NewEnvelope("batch")
+	cmdName := inferBatchCommand(&params)
+	env := output.NewEnvelope(cmdName)
 	if err := handleDo(context.Background(), db, sess, tc, env, json.RawMessage(paramsJSON)); err != nil {
 		return err
 	}
@@ -630,6 +631,34 @@ func runBatch(args []string) error {
 	}
 	return nil
 }
+// inferBatchCommand returns the command name for the envelope.
+// Single-type batches use the actual command name for parity with standalone.
+// Mixed batches use "batch".
+func inferBatchCommand(p *doParams) string {
+	types := 0
+	name := "batch"
+	if len(p.Reads) > 0 {
+		types++
+		name = "read"
+	}
+	if len(p.Queries) > 0 {
+		types++
+		name = "search"
+	}
+	if len(p.Edits) > 0 {
+		types++
+		name = "edit"
+	}
+	if len(p.Writes) > 0 {
+		types++
+		name = "write"
+	}
+	if types != 1 {
+		return "batch"
+	}
+	return name
+}
+
 // appendStringSlice appends val to an existing include/exclude field.
 // The field may be nil, a string, or []string; the result is always []string.
 func appendStringSlice(existing any, val string) []string {

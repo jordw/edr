@@ -44,7 +44,12 @@ func Execute() {
 		if ie, ok := err.(*IndexError); ok {
 			output.ErrorEnvelope(cmdName, ie.Code, ie.Message)
 		} else {
-			output.ErrorEnvelope(cmdName, "command_error", err.Error())
+			msg := err.Error()
+			if strings.Contains(msg, "no such file or directory") {
+				output.ErrorEnvelope(cmdName, "file_not_found", msg)
+			} else {
+				output.ErrorEnvelope(cmdName, "command_error", msg)
+			}
 		}
 		os.Exit(1)
 	}

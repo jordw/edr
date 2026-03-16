@@ -9,6 +9,7 @@ import (
 )
 
 func init() {
+	sessionIDCmd.Hidden = true
 	rootCmd.AddCommand(sessionIDCmd)
 }
 

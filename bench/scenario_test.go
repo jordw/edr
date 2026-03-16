@@ -150,7 +150,7 @@ func TestScenarioDispatch(t *testing.T) {
 			t.Fatalf("dispatch: %v", err)
 		}
 		var result struct {
-			Body string `json:"body"`
+			Body string `json:"content"`
 		}
 		json.Unmarshal(out, &result)
 		if result.Body == "" {
@@ -174,7 +174,7 @@ func TestScenarioDispatch(t *testing.T) {
 			t.Fatalf("dispatch: %v", err)
 		}
 		var result struct {
-			Body   string `json:"body"`
+			Body   string `json:"content"`
 			Symbol struct {
 				Name string `json:"name"`
 			} `json:"symbol"`
@@ -324,7 +324,7 @@ func TestScenarioDispatch(t *testing.T) {
 		}
 		var result struct {
 			Symbol struct{ Name string } `json:"symbol"`
-			Body   string                `json:"body"`
+			Body   string                `json:"content"`
 		}
 		json.Unmarshal(out, &result)
 		if result.Symbol.Name == "" {

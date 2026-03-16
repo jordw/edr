@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"runtime/pprof"
+	"strings"
 
 	"path/filepath"
 
@@ -93,6 +94,10 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 			json.Unmarshal([]byte(processed), &postResult)
 			result = postResult
 		}
+	}
+
+	if cmdName == "read" {
+		result = liftSymbolFields(result)
 	}
 
 	opID := cmdName[:1] + "0"
@@ -295,6 +300,38 @@ var verifyCmd = &cobra.Command{
 
 func init() { cmdspec.RegisterFlags(verifyCmd.Flags(), "verify") }
 
+// liftSymbolFields promotes file and hash from the nested "symbol" sub-object
+// to the top level of a read result, for envelope consistency.
+func liftSymbolFields(result any) any {
+	m, ok := result.(map[string]any)
+	if !ok {
+		// Try JSON roundtrip for struct types
+		data, err := json.Marshal(result)
+		if err != nil {
+			return result
+		}
+		if json.Unmarshal(data, &m) != nil {
+			return result
+		}
+	}
+	sym, ok := m["symbol"].(map[string]any)
+	if !ok {
+		return m
+	}
+	// Lift file and hash to top level if not already present
+	if _, has := m["file"]; !has {
+		if f, ok := sym["file"]; ok {
+			m["file"] = f
+		}
+	}
+	if _, has := m["hash"]; !has {
+		if h, ok := sym["hash"]; ok {
+			m["hash"] = h
+		}
+	}
+	return m
+}
+
 // addDispatchError converts a dispatch error into a structured envelope error
 // with optional metadata (candidates, suggestion).
 func addDispatchError(env *output.Envelope, err error) {
@@ -322,5 +359,16 @@ func addDispatchError(env *output.Envelope, err error) {
 		env.Errors = append(env.Errors, opErr)
 		return
 	}
-	env.AddError("command_error", err.Error())
+	// Detect file-not-found errors from OS or dispatch layer.
+	msg := err.Error()
+	if strings.Contains(msg, "no such file or directory") {
+		env.AddError("file_not_found", msg)
+		return
+	}
+	// Detect symbol-not-found errors reported as plain strings.
+	if strings.Contains(msg, "symbol") && strings.Contains(msg, "not found") {
+		env.AddError("symbol_not_found", msg)
+		return
+	}
+	env.AddError("command_error", msg)
 }

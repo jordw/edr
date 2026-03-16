@@ -551,6 +551,7 @@ type repoMapConfig struct {
 	glob       string // only include files matching this glob
 	symbolType string // filter to this symbol type
 	grep       string // only include symbols whose name contains this
+	lang       string // filter to files of this language (e.g. "go", "python")
 	hideLocals bool   // hide symbols nested inside functions/methods
 	budget     int    // approximate token budget (0 = unlimited)
 }
@@ -581,6 +582,11 @@ func WithGrep(grep string) RepoMapOption {
 // WithHideLocals filters out symbols that are nested inside functions/methods.
 func WithHideLocals() RepoMapOption {
 	return func(c *repoMapConfig) { c.hideLocals = true }
+}
+
+// WithLang filters repo-map to files of the given language.
+func WithLang(lang string) RepoMapOption {
+	return func(c *repoMapConfig) { c.lang = strings.ToLower(lang) }
 }
 
 // WithBudget sets an approximate token budget for map output.
@@ -628,6 +634,23 @@ type RepoMapStats struct {
 	TotalFiles   int
 	ShownSymbols int
 	TotalSymbols int
+	// Files contains the structured symbol data, keyed by relative path.
+	// Populated when the map is generated; consumers can use this for structured output.
+	Files []MapFileEntry
+}
+
+// MapFileEntry is a file with its symbols for structured map output.
+type MapFileEntry struct {
+	File    string           `json:"file"`
+	Symbols []MapSymbolEntry `json:"symbols"`
+}
+
+// MapSymbolEntry is a symbol in structured map output.
+type MapSymbolEntry struct {
+	Name    string `json:"name"`
+	Kind    string `json:"kind"`
+	Line    int    `json:"line"`
+	EndLine int    `json:"end_line,omitempty"`
 }
 
 func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, RepoMapStats, error) {
@@ -685,6 +708,13 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, RepoMa
 				matched, _ = filepath.Match(cfg.glob, filepath.Base(rel))
 			}
 			if !matched {
+				continue
+			}
+		}
+
+		// Language filter
+		if cfg.lang != "" {
+			if !matchesLang(rel, cfg.lang) {
 				continue
 			}
 		}
@@ -803,13 +833,73 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, RepoMa
 		truncated = true
 	}
 
+	// Build structured file entries for the shown files
+	var mapFiles []MapFileEntry
+	for _, file := range fileOrder[:filesRendered] {
+		syms := byFile[file]
+		if len(syms) == 0 {
+			continue
+		}
+		rel, _ := filepath.Rel(root, file)
+		if rel == "" {
+			rel = file
+		}
+		entry := MapFileEntry{File: rel}
+		for _, s := range syms {
+			entry.Symbols = append(entry.Symbols, MapSymbolEntry{
+				Name:    s.Name,
+				Kind:    s.Type,
+				Line:    int(s.StartLine),
+				EndLine: int(s.EndLine),
+			})
+		}
+		mapFiles = append(mapFiles, entry)
+	}
+
 	return b.String(), RepoMapStats{
 		Truncated:    truncated,
 		ShownFiles:   filesRendered,
 		TotalFiles:   totalFiles,
 		ShownSymbols: shownSymbols,
 		TotalSymbols: totalSymbols,
+		Files:        mapFiles,
 	}, nil
+}
+
+// langExtensions maps language names to file extensions.
+var langExtensions = map[string][]string{
+	"go":         {".go"},
+	"python":     {".py"},
+	"javascript": {".js", ".jsx"},
+	"typescript":  {".ts", ".tsx"},
+	"rust":       {".rs"},
+	"java":       {".java"},
+	"c":          {".c", ".h"},
+	"cpp":        {".cpp", ".cc", ".hpp", ".hh"},
+	"ruby":       {".rb"},
+	"php":        {".php"},
+	"zig":        {".zig"},
+	"lua":        {".lua"},
+	"bash":       {".sh", ".bash"},
+	"csharp":     {".cs"},
+	"kotlin":     {".kt"},
+}
+
+// matchesLang returns true if the file matches the given language.
+func matchesLang(relPath, lang string) bool {
+	exts, ok := langExtensions[lang]
+	if !ok {
+		// Try as a direct extension match
+		ext := strings.ToLower(filepath.Ext(relPath))
+		return ext == "."+lang
+	}
+	ext := strings.ToLower(filepath.Ext(relPath))
+	for _, e := range exts {
+		if ext == e {
+			return true
+		}
+	}
+	return false
 }
 
 // isTestOrBenchFile returns true for common test/benchmark file patterns.

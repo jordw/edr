@@ -57,7 +57,7 @@ func runWriteFile(ctx context.Context, db *index.DB, root string, args []string,
 	if errors.Is(readErr, os.ErrNotExist) {
 		if dryRun {
 			diff := edit.UnifiedDiff(output.Rel(file), nil, []byte(content))
-			return map[string]any{"file": output.Rel(file), "diff": diff, "dry_run": true, "new_file": true}, nil
+			return map[string]any{"file": output.Rel(file), "diff": diff, "status": "dry_run", "new_file": true}, nil
 		}
 		// New file: create empty, then commit content as insertion
 		if err := os.WriteFile(file, nil, 0644); err != nil {
@@ -74,13 +74,13 @@ func runWriteFile(ctx context.Context, db *index.DB, root string, args []string,
 	}
 
 	// Guard: refuse to overwrite a non-empty file with empty content
-	if content == "" && len(existingData) > 0 && !flagBool(flags, "force", false) {
-		return nil, fmt.Errorf("refusing to overwrite non-empty file with empty content (use --force to override)")
+	if content == "" && len(existingData) > 0 {
+		return nil, fmt.Errorf("refusing to overwrite non-empty file with empty content (use edit to clear)")
 	}
 
 	if dryRun {
 		diff := edit.UnifiedDiff(output.Rel(file), existingData, []byte(content))
-		return map[string]any{"file": output.Rel(file), "diff": diff, "dry_run": true}, nil
+		return map[string]any{"file": output.Rel(file), "diff": diff, "status": "dry_run"}, nil
 	}
 
 	// Overwrite existing: replace all content
@@ -124,7 +124,7 @@ func runAppendFile(ctx context.Context, db *index.DB, root string, args []string
 	if flagBool(flags, "dry-run", false) {
 		newData := append(append([]byte{}, data...), []byte(insertion)...)
 		diff := edit.UnifiedDiff(output.Rel(file), data, newData)
-		return map[string]any{"file": output.Rel(file), "diff": diff, "dry_run": true}, nil
+		return map[string]any{"file": output.Rel(file), "diff": diff, "status": "dry_run"}, nil
 	}
 
 	cr, err := commitEdits(ctx, db, []resolvedEdit{{
@@ -166,7 +166,7 @@ func runInsertAfter(ctx context.Context, db *index.DB, root string, args []strin
 		newData = append(newData, []byte(insertion)...)
 		newData = append(newData, data[sym.EndByte:]...)
 		diff := edit.UnifiedDiff(output.Rel(sym.File), data, newData)
-		return map[string]any{"file": output.Rel(sym.File), "diff": diff, "dry_run": true}, nil
+		return map[string]any{"file": output.Rel(sym.File), "diff": diff, "status": "dry_run"}, nil
 	}
 
 	cr, err := commitEdits(ctx, db, []resolvedEdit{{
@@ -244,7 +244,7 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 						newData = append(newData, []byte(insertion)...)
 						newData = append(newData, data[insertAfter:]...)
 						diff := edit.UnifiedDiff(output.Rel(container.File), data, newData)
-						return map[string]any{"file": output.Rel(container.File), "diff": diff, "dry_run": true}, nil
+						return map[string]any{"file": output.Rel(container.File), "diff": diff, "status": "dry_run"}, nil
 					}
 					hash := edit.HashBytes(data)
 					cr, err := commitEdits(ctx, db, []resolvedEdit{{
@@ -295,7 +295,7 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 		newData = append(newData, []byte(insertion)...)
 		newData = append(newData, data[insertByte:]...)
 		diff := edit.UnifiedDiff(output.Rel(container.File), data, newData)
-		return map[string]any{"file": output.Rel(container.File), "diff": diff, "dry_run": true}, nil
+		return map[string]any{"file": output.Rel(container.File), "diff": diff, "status": "dry_run"}, nil
 	}
 
 	cr, err := commitEdits(ctx, db, []resolvedEdit{{

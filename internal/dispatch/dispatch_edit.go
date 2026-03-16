@@ -102,12 +102,24 @@ func smartEditByteRange(ctx context.Context, db *index.DB, file string, startByt
 	}
 
 	if dryRun {
+		oldLines := strings.Count(oldBody, "\n")
+		newLines := strings.Count(replacement, "\n")
+		linesAdded := 0
+		linesRemoved := 0
+		if newLines > oldLines {
+			linesAdded = newLines - oldLines
+		} else {
+			linesRemoved = oldLines - newLines
+		}
 		result := map[string]any{
-			"file":     output.Rel(file),
-			"diff":     diff,
-			"old_size": len(oldBody) / 4,
-			"new_size": len(replacement) / 4,
-			"dry_run":  true,
+			"file":          output.Rel(file),
+			"status":        "dry_run",
+			"diff":          diff,
+			"old_size":      len(oldBody) / 4,
+			"new_size":      len(replacement) / 4,
+			"lines_added":   linesAdded,
+			"lines_removed": linesRemoved,
+			"destructive":   replacement == "",
 		}
 		if label != "" {
 			result["symbol"] = label
@@ -253,12 +265,24 @@ func applyReplaceAll(ctx context.Context, db *index.DB, file, oldContent, newCon
 	}
 	if dryRun {
 		diff, _ := edit.DiffPreviewContent(file, []byte(oldContent), []byte(newContent))
+		oldLines := strings.Count(oldContent, "\n")
+		newLines := strings.Count(newContent, "\n")
+		linesAdded := 0
+		linesRemoved := 0
+		if newLines > oldLines {
+			linesAdded = newLines - oldLines
+		} else {
+			linesRemoved = oldLines - newLines
+		}
 		return map[string]any{
-			"file":    output.Rel(file),
-			"diff":    diff,
-			"count":   count,
-			"match":   matchText,
-			"dry_run": true,
+			"file":          output.Rel(file),
+			"status":        "dry_run",
+			"diff":          diff,
+			"count":         count,
+			"match":         matchText,
+			"lines_added":   linesAdded,
+			"lines_removed": linesRemoved,
+			"destructive":   newContent == "",
 		}, nil
 	}
 

@@ -338,7 +338,7 @@ func TestCorrectnessCrossLanguageSearch(t *testing.T) {
 type searchMatch struct {
 	Symbol symbolFile `json:"symbol"`
 	Score  float64    `json:"score"`
-	Body   string     `json:"body"`
+	Body   string     `json:"content"`
 }
 
 // --- Correctness: Edit + Reindex ---
@@ -645,7 +645,7 @@ func TestCorrectnessExplore(t *testing.T) {
 	t.Run("explore scoped symbol", func(t *testing.T) {
 		var result struct {
 			Symbol  symbolFile   `json:"symbol"`
-			Body    string       `json:"body"`
+			Body    string       `json:"content"`
 			Callers []symbolFile `json:"callers"`
 			Deps    []symbolFile `json:"deps"`
 		}

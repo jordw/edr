@@ -47,7 +47,7 @@ type Match struct {
 // ExpandResult contains the full details of an expanded symbol.
 type ExpandResult struct {
 	Symbol    Symbol   `json:"symbol"`
-	Body      string   `json:"body"`
+	Body      string   `json:"content"`
 	Callers   []Symbol `json:"callers,omitempty"`
 	Deps      []Symbol `json:"deps,omitempty"`
 	Truncated bool     `json:"truncated,omitempty"`
