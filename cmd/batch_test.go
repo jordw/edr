@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jordw/edr/internal/dispatch"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
@@ -2021,6 +2022,98 @@ func TestNormalizeReadBody_NoBodyNoOp(t *testing.T) {
 	rm := result.(map[string]any)
 	if _, has := rm["content"]; has {
 		t.Error("should not add content when no body present")
+	}
+}
+
+// TestNormalizeReadResult_BodyToContent verifies that normalizeReadResult
+// renames "body" to "content" for standalone read commands.
+func TestNormalizeReadResult_BodyToContent(t *testing.T) {
+	input := map[string]any{
+		"body": "func hello() {}",
+		"file": "main.go",
+		"hash": "abc",
+	}
+	result := normalizeReadResult(input)
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map, got %T", result)
+	}
+	if _, has := m["body"]; has {
+		t.Error("body should be removed after normalization")
+	}
+	if c, _ := m["content"].(string); c != "func hello() {}" {
+		t.Errorf("content = %q, want func hello() {}", c)
+	}
+}
+
+// TestHandleDo_ReadShapeParity verifies that batch and standalone symbol reads
+// produce the same set of keys.
+func TestHandleDo_ReadShapeParity(t *testing.T) {
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() { println(\"hi\") }\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	index.IndexRepo(context.Background(), db)
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc != nil {
+		defer tc.Close()
+	}
+
+	// Batch read via handleDo
+	raw := json.RawMessage(`{"reads":[{"file":"main.go","symbol":"hello"}]}`)
+	batchResult, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	var batchEnv map[string]any
+	json.Unmarshal([]byte(batchResult), &batchEnv)
+	batchOps, _ := batchEnv["ops"].([]any)
+	if len(batchOps) == 0 {
+		t.Fatal("batch returned no ops")
+	}
+	batchOp, _ := batchOps[0].(map[string]any)
+
+	// Standalone read via dispatch + normalize
+	result, err := dispatch.Dispatch(context.Background(), db, "read", []string{"main.go:hello"}, nil)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	standaloneOp := normalizeReadResult(result)
+	standaloneMap, _ := standaloneOp.(map[string]any)
+
+	// Compare key sets (excluding op_id/type which are added by envelope)
+	skip := map[string]bool{"op_id": true, "type": true, "session": true}
+	batchKeys := map[string]bool{}
+	for k := range batchOp {
+		if !skip[k] {
+			batchKeys[k] = true
+		}
+	}
+	standaloneKeys := map[string]bool{}
+	for k := range standaloneMap {
+		if !skip[k] {
+			standaloneKeys[k] = true
+		}
+	}
+
+	for k := range batchKeys {
+		if !standaloneKeys[k] {
+			t.Errorf("batch has key %q but standalone does not", k)
+		}
+	}
+	for k := range standaloneKeys {
+		if !batchKeys[k] {
+			t.Errorf("standalone has key %q but batch does not", k)
+		}
 	}
 }
 

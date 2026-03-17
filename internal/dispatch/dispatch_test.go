@@ -1568,3 +1568,142 @@ func TestReindexDispatch(t *testing.T) {
 		t.Fatal("reindex returned nil")
 	}
 }
+
+// TestReadResultShape_UnifiedBaseKeys verifies that all read modes share the
+// same base keys: file, hash, lines, size, truncated, plus content (as "body"
+// internally — normalizeReadBody renames to "content" in the CLI layer).
+func TestReadResultShape_UnifiedBaseKeys(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	os.WriteFile(goFile, []byte(`package main
+
+type Config struct {
+	Name string
+	Port int
+}
+
+func hello() {
+	println("hello")
+}
+`), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	index.IndexRepo(ctx, db)
+
+	baseKeys := []string{"file", "hash", "lines", "size", "truncated"}
+
+	tests := []struct {
+		name  string
+		args  []string
+		flags map[string]any
+	}{
+		{"file read", []string{"main.go"}, nil},
+		{"symbol read", []string{"main.go:hello"}, nil},
+		{"line range", []string{"main.go"}, map[string]any{"start_line": 1, "end_line": 3}},
+		{"signatures", []string{"main.go"}, map[string]any{"signatures": true}},
+		{"symbol signatures", []string{"main.go:Config"}, map[string]any{"signatures": true}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := dispatch.Dispatch(ctx, db, "read", tt.args, tt.flags)
+			if err != nil {
+				t.Fatalf("dispatch: %v", err)
+			}
+			data, _ := json.Marshal(result)
+			var m map[string]any
+			if json.Unmarshal(data, &m) != nil {
+				t.Fatalf("result is not a map: %T", result)
+			}
+			for _, key := range baseKeys {
+				if _, ok := m[key]; !ok {
+					t.Errorf("missing base key %q in %s result. Keys: %v", key, tt.name, mapKeys(m))
+				}
+			}
+			// Content must be present as either "body" (internal) or "content" (post-normalization)
+			_, hasBody := m["body"]
+			_, hasContent := m["content"]
+			if !hasBody && !hasContent {
+				t.Errorf("missing content/body in %s result. Keys: %v", tt.name, mapKeys(m))
+			}
+		})
+	}
+}
+
+// TestReadSymbolResult_HasSizeAndTruncated verifies that symbol reads include
+// size and truncated at the top level (not just in the symbol sub-object).
+func TestReadSymbolResult_HasSizeAndTruncated(t *testing.T) {
+	tmp := t.TempDir()
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() { println(\"hi\") }\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	index.IndexRepo(ctx, db)
+
+	result, err := dispatch.Dispatch(ctx, db, "read", []string{"main.go:hello"}, nil)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	data, _ := json.Marshal(result)
+	var m map[string]any
+	json.Unmarshal(data, &m)
+
+	if _, ok := m["size"]; !ok {
+		t.Error("symbol read missing top-level 'size'")
+	}
+	if _, ok := m["truncated"]; !ok {
+		t.Error("symbol read missing top-level 'truncated'")
+	}
+}
+
+// TestReadSignatures_HasLines verifies that --signatures reads include
+// the lines field (covering the full file range).
+func TestReadSignatures_HasLines(t *testing.T) {
+	tmp := t.TempDir()
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\nfunc world() {}\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	index.IndexRepo(ctx, db)
+
+	result, err := dispatch.Dispatch(ctx, db, "read", []string{"main.go"}, map[string]any{"signatures": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	data, _ := json.Marshal(result)
+	var m map[string]any
+	json.Unmarshal(data, &m)
+
+	lines, ok := m["lines"]
+	if !ok {
+		t.Fatal("signatures read missing 'lines'")
+	}
+	arr, ok := lines.([]any)
+	if !ok || len(arr) != 2 {
+		t.Fatalf("lines should be [start, end], got %v", lines)
+	}
+	if int(arr[0].(float64)) != 1 {
+		t.Errorf("lines[0] = %v, want 1", arr[0])
+	}
+}
+
+func mapKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}

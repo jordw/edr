@@ -47,14 +47,17 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 				size = budget
 			}
 			hash, _ := edit.FileHash(file)
+			totalLines := fileLineCount(file)
 			return map[string]any{
-				"file":       output.Rel(file),
-				"signatures": true,
-				"size":       size,
-				"content":    body,
-				"hash":       hash,
-				"truncated":  truncated,
-				"mtime":      fileMtime(file),
+				"file":        output.Rel(file),
+				"signatures":  true,
+				"lines":       [2]int{1, totalLines},
+				"total_lines": totalLines,
+				"size":        size,
+				"content":     body,
+				"hash":        hash,
+				"truncated":   truncated,
+				"mtime":       fileMtime(file),
 			}, nil
 		}
 		// Fall through to normal read for non-code files
@@ -79,14 +82,17 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 				size = budget
 			}
 			hash, _ := edit.FileHash(file)
+			totalLines := fileLineCount(file)
 			return map[string]any{
-				"file":      output.Rel(file),
-				"depth":     depth,
-				"size":      size,
-				"content":   body,
-				"hash":      hash,
-				"truncated": truncated,
-				"mtime":     fileMtime(file),
+				"file":        output.Rel(file),
+				"depth":       depth,
+				"lines":       [2]int{1, totalLines},
+				"total_lines": totalLines,
+				"size":        size,
+				"content":     body,
+				"hash":        hash,
+				"truncated":   truncated,
+				"mtime":       fileMtime(file),
 			}, nil
 		}
 		// Fall through to normal read if outline fails (unsupported language etc.)
@@ -166,6 +172,34 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 	return result, nil
 }
 
+// symbolReadResult builds a flat result map for symbol reads.
+// Uses "body" as the internal content key (session expects it; normalizeReadBody renames to "content").
+// The "symbol" sub-object contains only name/type/size — file/hash/lines are at top level.
+func symbolReadResult(sym *index.SymbolInfo, body string, hash string, extra map[string]any) map[string]any {
+	size := len(body) / 4
+	result := map[string]any{
+		"file":      output.Rel(sym.File),
+		"hash":      hash,
+		"lines":     [2]int{int(sym.StartLine), int(sym.EndLine)},
+		"body":      body,
+		"size":      size,
+		"truncated": false,
+		"symbol": map[string]any{
+			"name": sym.Name,
+			"type": sym.Type,
+			"size": size,
+			// Keep file/hash/lines in symbol for session backward compat
+			"file":  output.Rel(sym.File),
+			"hash":  hash,
+			"lines": [2]int{int(sym.StartLine), int(sym.EndLine)},
+		},
+	}
+	for k, v := range extra {
+		result[k] = v
+	}
+	return result
+}
+
 func runReadSymbol(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {
 		return nil, fmt.Errorf("read-symbol requires 1-2 arguments: [file] <symbol>")
@@ -182,12 +216,9 @@ func runReadSymbol(ctx context.Context, db *index.DB, root string, args []string
 		allSyms, _ := db.GetSymbolsByFile(ctx, sym.File)
 		stub := index.ExtractContainerStub(*sym, allSyms)
 		hash, _ := edit.FileHash(sym.File)
-		osym := toOutputSymbol(sym, hash)
-		osym.Size = len(stub) / 4
-		return output.ExpandResult{
-			Symbol: osym,
-			Body:   stub,
-		}, nil
+		r := symbolReadResult(sym, stub, hash, map[string]any{"signatures": true})
+		r["size"] = len(stub) / 4
+		return r, nil
 	}
 
 	// --signatures on a non-container: return error
@@ -209,12 +240,7 @@ func runReadSymbol(ctx context.Context, db *index.DB, root string, args []string
 			return nil, err
 		}
 		hash, _ := edit.FileHash(sym.File)
-		osym := toOutputSymbol(sym, hash)
-		osym.Size = len(body) / 4
-		return output.ExpandResult{
-			Symbol: osym,
-			Body:   body,
-		}, nil
+		return symbolReadResult(sym, body, hash, nil), nil
 	}
 
 	src, err := os.ReadFile(sym.File)
@@ -232,13 +258,10 @@ func runReadSymbol(ctx context.Context, db *index.DB, root string, args []string
 	}
 
 	hash, _ := edit.FileHash(sym.File)
-	osym := toOutputSymbol(sym, hash)
-	osym.Size = size
-	return output.ExpandResult{
-		Truncated: truncated,
-		Symbol:    osym,
-		Body:      body,
-	}, nil
+	r := symbolReadResult(sym, body, hash, nil)
+	r["size"] = size
+	r["truncated"] = truncated
+	return r, nil
 }
 
 func runBatchRead(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
@@ -467,6 +490,15 @@ func runSymbols(ctx context.Context, db *index.DB, root string, args []string, f
 	}, nil
 }
 
+
+// fileLineCount returns the number of lines in a file (cheap: reads file, counts newlines).
+func fileLineCount(path string) int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	return strings.Count(string(data), "\n") + 1
+}
 
 // fileMtime returns the file modification time as an ISO 8601 string, or empty on error.
 func fileMtime(path string) string {

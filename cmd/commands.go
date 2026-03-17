@@ -97,7 +97,7 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	}
 
 	if cmdName == "read" {
-		result = liftSymbolFields(result)
+		result = normalizeReadResult(result)
 	}
 
 	env.AddOp(opID, cmdName, result)
@@ -345,6 +345,29 @@ func init() { cmdspec.RegisterFlags(verifyCmd.Flags(), "verify") }
 
 // liftSymbolFields promotes file and hash from the nested "symbol" sub-object
 // to the top level of a read result, for envelope consistency.
+// normalizeReadResult normalizes read results: renames "body" → "content" and lifts symbol fields.
+func normalizeReadResult(result any) any {
+	m, ok := result.(map[string]any)
+	if !ok {
+		data, err := json.Marshal(result)
+		if err != nil {
+			return result
+		}
+		if json.Unmarshal(data, &m) != nil {
+			return result
+		}
+	}
+	// Rename body → content
+	if body, has := m["body"]; has {
+		if _, hasC := m["content"]; !hasC {
+			m["content"] = body
+		}
+		delete(m, "body")
+	}
+	// Lift symbol fields
+	return liftSymbolFields(m)
+}
+
 func liftSymbolFields(result any) any {
 	m, ok := result.(map[string]any)
 	if !ok {
