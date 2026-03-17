@@ -210,8 +210,7 @@ func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacem
 			}
 		}
 		return map[string]any{
-			"ok":      true,
-			"noop":    true,
+			"status":  "noop",
 			"file":    output.Rel(file),
 			"message": "old_text equals new_text, no change applied",
 		}, nil
@@ -257,8 +256,7 @@ func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacem
 func applyReplaceAll(ctx context.Context, db *index.DB, file, oldContent, newContent, matchText string, count int, dryRun bool) (any, error) {
 	if oldContent == newContent {
 		return map[string]any{
-			"ok":      true,
-			"noop":    true,
+			"status":  "noop",
 			"file":    output.Rel(file),
 			"message": "old_text equals new_text, no change applied",
 		}, nil

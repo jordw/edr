@@ -17,7 +17,7 @@ type Category string
 const (
 	CatRead         Category = "read"          // read-only queries
 	CatWrite        Category = "write"         // file mutations
-	CatGlobalMutate Category = "global_mutate" // global-state mutations (init, rename, edit-plan)
+	CatGlobalMutate Category = "global_mutate" // global-state mutations (reindex, rename)
 	CatMeta         Category = "meta"          // non-mutating utilities (verify, diff)
 )
 
@@ -128,31 +128,17 @@ var Registry = []*Spec{
 		},
 	},
 	{
-		Name: "explore", Desc: "Symbol body, callers, deps.",
-		Category: CatRead, MinArgs: 1, MaxArgs: 2, FileScoped: true, Internal: true,
-		DeltaRead: true, BodyTrack: true,
-		Flags: []FlagSpec{
-			{Name: "body", Type: FlagBool, Default: false, Desc: "Include source in results"},
-			{Name: "callers", Type: FlagBool, Default: false, Desc: "Include callers"},
-			{Name: "deps", Type: FlagBool, Default: false, Desc: "Include dependencies"},
-			{Name: "signatures", Type: FlagBool, Default: false, Desc: "Signatures only (75-86% fewer tokens)"},
-			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens"},
-		},
-	},
-	{
 		Name: "refs", Desc: "Find all references to a symbol. --impact for transitive callers.",
 		Category: CatRead, MinArgs: 1, MaxArgs: 2, FileScoped: true,
+		DeltaRead: true, BodyTrack: true,
 		Flags: []FlagSpec{
 			{Name: "impact", Type: FlagBool, Default: false, Desc: "Transitive callers"},
 			{Name: "chain", Type: FlagString, Default: "", Desc: "Find call path to target"},
 			{Name: "depth", Type: FlagInt, Default: 3, Desc: "Max traversal depth"},
-		},
-	},
-	{
-		Name: "find", Desc: "Find files by glob pattern.",
-		Category: CatRead, MinArgs: 1, MaxArgs: 1, Internal: true,
-		Flags: []FlagSpec{
-			{Name: "dir", Type: FlagString, Default: "", Desc: "Filter by directory"},
+			{Name: "callers", Type: FlagBool, Default: false, Desc: "Include callers"},
+			{Name: "deps", Type: FlagBool, Default: false, Desc: "Include dependencies"},
+			{Name: "body", Type: FlagBool, Default: false, Desc: "Include source in results"},
+			{Name: "signatures", Type: FlagBool, Default: false, Desc: "Signatures only"},
 			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens"},
 		},
 	},
@@ -204,7 +190,7 @@ func Names() []string {
 
 // --- Classification helpers ---
 
-// IsRead returns true for read-category commands (read, map, search, explore, refs, find).
+// IsRead returns true for read-category commands (read, map, search, refs).
 func IsRead(name string) bool {
 	s := byName[name]
 	return s != nil && s.Category == CatRead
@@ -216,7 +202,7 @@ func IsWrite(name string) bool {
 	return s != nil && s.Category == CatWrite
 }
 
-// IsGlobalMutating returns true for commands that mutate global state (init, rename, edit-plan).
+// IsGlobalMutating returns true for commands that mutate global state (reindex, rename).
 func IsGlobalMutating(name string) bool {
 	s := byName[name]
 	return s != nil && s.Category == CatGlobalMutate
@@ -235,19 +221,19 @@ func IsFileScoped(name string) bool {
 	return s != nil && s.FileScoped
 }
 
-// IsDiffEdit returns true for commands that produce diffs (edit, edit-plan).
+// IsDiffEdit returns true for commands that produce diffs (edit).
 func IsDiffEdit(name string) bool {
 	s := byName[name]
 	return s != nil && s.DiffEdit
 }
 
-// IsDeltaRead returns true for commands that support delta reads (read, explore).
+// IsDeltaRead returns true for commands that support delta reads (read, refs).
 func IsDeltaRead(name string) bool {
 	s := byName[name]
 	return s != nil && s.DeltaRead
 }
 
-// IsBodyTrack returns true for commands whose bodies are tracked for dedup (read, explore, search).
+// IsBodyTrack returns true for commands whose bodies are tracked for dedup (read, refs, search).
 func IsBodyTrack(name string) bool {
 	s := byName[name]
 	return s != nil && s.BodyTrack
@@ -273,7 +259,7 @@ func DoBatchKeys() map[string]bool {
 	return map[string]bool{
 		"reads": true, "queries": true, "edits": true, "writes": true,
 		"renames": true, "budget": true, "dry_run": true, "verify": true,
-		"init": true, "read_after_edit": true,
+		"reindex": true, "init": true, "read_after_edit": true,
 	}
 }
 

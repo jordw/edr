@@ -126,18 +126,8 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 		return nil, fmt.Errorf("start line %d is beyond end line %d (file has %d lines)", startLine, endLine, totalLines)
 	}
 
-	var numbered strings.Builder
-	for i, line := range lines[startLine-1 : endLine] {
-		fmt.Fprintf(&numbered, "%d\t%s", startLine+i, line)
-	}
-	body := numbered.String()
-
-	// Budget is based on raw content size (line numbers are overhead)
-	rawSize := 0
-	for _, line := range lines[startLine-1 : endLine] {
-		rawSize += len(line)
-	}
-	size := rawSize / 4
+	body := strings.Join(lines[startLine-1:endLine], "")
+	size := len(body) / 4
 	truncated := false
 	if budget > 0 && size > budget {
 		chars := budget * 4

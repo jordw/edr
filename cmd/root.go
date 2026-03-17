@@ -59,7 +59,7 @@ func Execute() {
 var knownCommands = map[string]bool{
 	"read": true, "write": true, "edit": true, "map": true,
 	"search": true, "refs": true, "rename": true, "verify": true,
-	"reindex": true, "init": true, "setup": true, "batch": true,
+	"reindex": true, "setup": true, "batch": true,
 }
 
 // detectCommandName extracts the subcommand name from os.Args.

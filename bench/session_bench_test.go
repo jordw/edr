@@ -24,7 +24,7 @@ func handleDoJSON(t testing.TB, ctx context.Context, db *index.DB, sess *session
 	numReads, numQueries, numEdits := 0, 0, 0
 	if cmd == "read" {
 		numReads = 1
-	} else if cmd == "search" || cmd == "map" || cmd == "explore" || cmd == "refs" || cmd == "find" {
+	} else if cmd == "search" || cmd == "map" || cmd == "refs" {
 		numQueries = 1
 	} else if cmd == "edit" || cmd == "write" {
 		numEdits = 1
@@ -82,9 +82,9 @@ func TestSessionMultiLang(t *testing.T) {
 
 	t.Run("orient/find_all_langs", func(t *testing.T) {
 		for _, pat := range []string{"**/*.go", "**/*.py", "**/*.rs", "**/*.c", "**/*.java", "**/*.rb", "**/*.js", "**/*.tsx"} {
-			out := handleDoJSON(t, ctx, db, sess, tc, "find", []string{pat}, nil)
+			out := handleDoJSON(t, ctx, db, sess, tc, "search", []string{pat}, nil)
 			if len(out) < 10 {
-				t.Errorf("find %s returned too few bytes: %d", pat, len(out))
+				t.Errorf("search %s returned too few bytes: %d", pat, len(out))
 			}
 		}
 	})
@@ -182,17 +182,17 @@ func TestSessionMultiLang(t *testing.T) {
 
 	// Phase 5: Explore and refs — semantic analysis
 	t.Run("explore/python_gather", func(t *testing.T) {
-		out := handleDoJSON(t, ctx, db, sess, tc, "explore", []string{"_execute_task"}, map[string]any{
+		out := handleDoJSON(t, ctx, db, sess, tc, "refs", []string{"_execute_task"}, map[string]any{
 			"body": true, "budget": 1500,
 		})
 		assertJSONHas(t, out, "symbol")
 	})
 
 	t.Run("explore/go_callers_deps", func(t *testing.T) {
-		out := handleDoJSON(t, ctx, db, sess, tc, "explore", []string{"internal/queue.go", "Dequeue"}, map[string]any{
+		out := handleDoJSON(t, ctx, db, sess, tc, "refs", []string{"internal/queue.go", "Dequeue"}, map[string]any{
 			"callers": true, "deps": true, "body": true,
 		})
-		// explore returns {symbol, body, callers, deps}
+		// refs returns {symbol, body, callers, deps}
 		assertJSONHas(t, out, "symbol")
 	})
 
@@ -460,9 +460,9 @@ func BenchmarkSessionWorkflow(b *testing.B) {
 		totalBytes += len(text)
 
 		// Explore
-		result, _ = dispatch.Dispatch(ctx, db, "explore", []string{"_execute_task"}, map[string]any{"gather": true, "body": true, "budget": 1500})
+		result, _ = dispatch.Dispatch(ctx, db, "refs", []string{"_execute_task"}, map[string]any{"gather": true, "body": true, "budget": 1500})
 		data, _ = json.Marshal(result)
-		text = sess.PostProcess("explore", []string{"_execute_task"}, map[string]any{"gather": true, "body": true, "budget": 1500}, result, string(data))
+		text = sess.PostProcess("refs", []string{"_execute_task"}, map[string]any{"gather": true, "body": true, "budget": 1500}, result, string(data))
 		totalBytes += len(text)
 
 		// Edit + revert

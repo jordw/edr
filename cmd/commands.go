@@ -305,7 +305,7 @@ var initCmd = &cobra.Command{
 				f.Close()
 			}()
 		}
-		return dispatchCmdWithIndex(cmd, "init", args)
+		return dispatchCmdWithIndex(cmd, "reindex", args)
 	},
 }
 

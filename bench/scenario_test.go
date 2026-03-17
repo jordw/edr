@@ -314,7 +314,7 @@ func TestScenarioDispatch(t *testing.T) {
 		if err := scenario.GetScenario("explore_symbol", &s); err != nil {
 			t.Fatal(err)
 		}
-		out, err := dispatchJSON(ctx, db, "explore", s.Args, map[string]any{
+		out, err := dispatchJSON(ctx, db, "refs", s.Args, map[string]any{
 			"body":    true,
 			"callers": true,
 			"deps":    true,

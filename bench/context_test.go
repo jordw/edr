@@ -142,7 +142,7 @@ func TestResponseSizeRegression(t *testing.T) {
 		},
 		{
 			name:     "find files",
-			cmd:      "find",
+			cmd:      "search",
 			args:     []string{"**/*.py"},
 			flags:    nil,
 			maxBytes: 1500,
@@ -170,7 +170,7 @@ func TestResponseSizeRegression(t *testing.T) {
 		},
 		{
 			name:     "explore gather",
-			cmd:      "explore",
+			cmd:      "refs",
 			args:     []string{"_execute_task"},
 			flags:    map[string]any{"gather": true, "body": true, "budget": 1500},
 			maxBytes: 8000,

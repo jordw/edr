@@ -262,9 +262,9 @@ func TestInvalidateForEdit_InitClears(t *testing.T) {
 	sess := session.New()
 	sess.Diffs["f.go"] = "d"
 
-	sess.InvalidateForEdit("init", []string{})
+	sess.InvalidateForEdit("reindex", []string{})
 	if len(sess.Diffs) != 0 {
-		t.Error("init should clear all")
+		t.Error("reindex should clear all")
 	}
 }
 
@@ -358,6 +358,7 @@ func TestDoQueryToMultiCmd_SearchEmptyPattern(t *testing.T) {
 }
 
 func TestDoQueryToMultiCmd_Explore(t *testing.T) {
+	// Legacy "explore" cmd should be translated to "refs" when callers/deps are set
 	sym := "Dispatch"
 	body := true
 	callers := true
@@ -368,8 +369,8 @@ func TestDoQueryToMultiCmd_Explore(t *testing.T) {
 		Callers: &callers,
 	}
 	mc, _ := doQueryToMultiCmd(q)
-	if mc.Cmd != "explore" {
-		t.Errorf("cmd = %q, want explore", mc.Cmd)
+	if mc.Cmd != "refs" {
+		t.Errorf("cmd = %q, want refs (explore with callers translates to refs)", mc.Cmd)
 	}
 	if len(mc.Args) != 1 || mc.Args[0] != "Dispatch" {
 		t.Errorf("args = %v, want [Dispatch]", mc.Args)
@@ -523,6 +524,65 @@ func TestDoQueryToMultiCmd_TextSearchGrouping(t *testing.T) {
 	mc2, _ := doQueryToMultiCmd(q2)
 	if mc2.Flags["no_group"] != true {
 		t.Error("explicit group=false should set no_group=true")
+	}
+}
+
+// TestDoQueryToMultiCmd_LegacyExploreWithoutCallers verifies that legacy
+// "explore" cmd with no callers/deps translates to "read".
+func TestDoQueryToMultiCmd_LegacyExploreWithoutCallers(t *testing.T) {
+	sym := "Dispatch"
+	q := doQuery{
+		Cmd:    "explore",
+		Symbol: &sym,
+	}
+	mc, _ := doQueryToMultiCmd(q)
+	if mc.Cmd != "read" {
+		t.Errorf("explore without callers/deps should translate to read, got %q", mc.Cmd)
+	}
+}
+
+// TestDoQueryToMultiCmd_LegacyFind verifies that legacy "find" cmd translates to "search".
+func TestDoQueryToMultiCmd_LegacyFind(t *testing.T) {
+	pattern := "**/*.go"
+	q := doQuery{
+		Cmd:     "find",
+		Pattern: &pattern,
+	}
+	mc, _ := doQueryToMultiCmd(q)
+	if mc.Cmd != "search" {
+		t.Errorf("find should translate to search, got %q", mc.Cmd)
+	}
+}
+
+// TestInferQueryCmd_OnlyPublicCommands verifies that inferQueryCmd never returns
+// internal command names (explore, find, edit-plan, multi, init).
+func TestInferQueryCmd_OnlyPublicCommands(t *testing.T) {
+	internal := map[string]bool{
+		"explore": true, "find": true, "edit-plan": true, "multi": true, "init": true,
+	}
+
+	tests := []doQuery{
+		// Symbol-only (formerly routed to explore)
+		func() doQuery { s := "Foo"; return doQuery{Symbol: &s} }(),
+		// Callers (formerly routed to explore)
+		func() doQuery { s := "Foo"; c := true; return doQuery{Symbol: &s, Callers: &c} }(),
+		// Deps (formerly routed to explore)
+		func() doQuery { s := "Foo"; d := true; return doQuery{Symbol: &s, Deps: &d} }(),
+		// Pattern (search)
+		func() doQuery { p := "TODO"; return doQuery{Pattern: &p} }(),
+		// Impact (refs)
+		func() doQuery { s := "Foo"; i := true; return doQuery{Symbol: &s, Impact: &i} }(),
+		// Dir (map)
+		func() doQuery { d := "internal/"; return doQuery{Dir: &d} }(),
+		// File (read)
+		func() doQuery { f := "main.go"; return doQuery{File: &f} }(),
+	}
+
+	for i, q := range tests {
+		cmd := inferQueryCmd(q)
+		if internal[cmd] {
+			t.Errorf("test %d: inferQueryCmd returned internal command %q", i, cmd)
+		}
 	}
 }
 
@@ -688,14 +748,14 @@ func TestDoParams_Edits_DryRunPromotion(t *testing.T) {
 }
 
 func TestPostProcess_EditPlanDiff(t *testing.T) {
-	// edit-plan results should go through the slim-edit pipeline now that
-	// DiffEditCommands includes "edit-plan".
+	// Edit results should go through the slim-edit pipeline now that
+	// DiffEditCommands includes "edit".
 	sess := session.New()
 	text := `{"ok":true,"edits":1,"files":1,"hashes":{"f.go":"abc"},"description":["replace text"],"diff":"--- a/f.go\n+++ b/f.go\n@@ -1 +1 @@\n-old\n+new\n"}`
 
-	result := sess.PostProcess("edit-plan", []string{}, map[string]any{}, nil, text)
+	result := sess.PostProcess("edit", []string{}, map[string]any{}, nil, text)
 	if !strings.Contains(result, `"diff"`) {
-		t.Error("small edit-plan diff should stay inline")
+		t.Error("small edit diff should stay inline")
 	}
 	if !strings.Contains(result, "lines_changed") {
 		t.Error("should have lines_changed")
@@ -1998,5 +2058,116 @@ func TestDetectCommandName(t *testing.T) {
 	os.Args = []string{"edr", "-r", "hello.go"}
 	if got := detectCommandName(); got != "batch" {
 		t.Errorf("detectCommandName (batch flags) = %q, want batch", got)
+	}
+}
+
+func TestStripEditPlanPrefix(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"edit: edit 0: old_text not found in main.go", "old_text not found in main.go"},
+		{"edit: edit 1: hash mismatch on config.go", "hash mismatch on config.go"},
+		{"edit: edit 12: symbol \"foo\": not found", "symbol \"foo\": not found"},
+		{"edit: edits array is empty", "edits array is empty"},
+		{"edit: invalid edits: bad json", "invalid edits: bad json"},
+		{"old_text not found in main.go", "old_text not found in main.go"},
+		{"some other error", "some other error"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := stripEditPlanPrefix(tt.input)
+			if got != tt.want {
+				t.Errorf("stripEditPlanPrefix(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHandleDo_BatchEditErrorParity(t *testing.T) {
+	// Batch edit errors should not contain "edit:" prefix from multi-edit dispatcher.
+	// This verifies parity between batch and standalone error messages.
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc != nil {
+		defer tc.Close()
+	}
+
+	raw := json.RawMessage(`{
+		"edits": [
+			{"file": "main.go", "old_text": "nonexistent_text", "new_text": "replacement"}
+		]
+	}`)
+
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	if strings.Contains(result, "edit: edit ") {
+		t.Errorf("batch edit error should not contain 'edit: edit N:' prefix, got: %s", result)
+	}
+	if !strings.Contains(result, "old_text not found") {
+		t.Errorf("batch edit error should contain 'old_text not found', got: %s", result)
+	}
+}
+
+// TestHandleDo_CommandFieldNeverLeaksInternalNames verifies that the envelope
+// "command" field and op "type" fields never contain internal command names.
+func TestHandleDo_CommandFieldNeverLeaksInternalNames(t *testing.T) {
+	internal := []string{"explore", "find", "edit-plan", "multi", "init"}
+
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	index.IndexRepo(context.Background(), db)
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test-1.0")
+	if tc != nil {
+		defer tc.Close()
+	}
+
+	// Test various batch operations
+	cases := []string{
+		`{"reads":[{"file":"main.go"}]}`,
+		`{"queries":[{"cmd":"search","pattern":"hello"}]}`,
+		`{"edits":[{"file":"main.go","old_text":"func hello()","new_text":"func hello()"}]}`,
+		`{"reindex":true}`,
+	}
+
+	for _, rawJSON := range cases {
+		result, err := testHandleDo(context.Background(), db, sess, tc, json.RawMessage(rawJSON))
+		if err != nil {
+			continue // some may fail, that's ok — we're checking the JSON output
+		}
+		for _, name := range internal {
+			// Check for "command":"<internal>" or "type":"<internal>" in output
+			if strings.Contains(result, `"`+name+`"`) {
+				t.Errorf("internal command %q leaked into output: %s", name, result[:min(len(result), 200)])
+			}
+		}
 	}
 }

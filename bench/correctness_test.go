@@ -649,14 +649,14 @@ func TestCorrectnessExplore(t *testing.T) {
 			Callers []symbolFile `json:"callers"`
 			Deps    []symbolFile `json:"deps"`
 		}
-		dispatchResult(t, ctx, db, "explore", []string{"go/pkg_b/helpers.go", "Process"}, map[string]any{
+		dispatchResult(t, ctx, db, "refs", []string{"go/pkg_b/helpers.go", "Process"}, map[string]any{
 			"body":    true,
 			"callers": true,
 			"deps":    true,
 		}, &result)
 
 		if result.Body == "" {
-			t.Error("explore body should not be empty")
+			t.Error("refs body should not be empty")
 		}
 		// Process calls Init() — should appear in deps
 		t.Logf("Process: body=%dB callers=%d deps=%d", len(result.Body), len(result.Callers), len(result.Deps))

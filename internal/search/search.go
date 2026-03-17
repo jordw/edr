@@ -2,7 +2,6 @@ package search
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -82,8 +81,14 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int,
 	for i, s := range symbols {
 		scored[i] = scoredSymbol{sym: s, score: scoreSymbolMatch(s.Name, pattern)}
 	}
-	sort.Slice(scored, func(i, j int) bool {
-		return scored[i].score > scored[j].score
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		if scored[i].sym.File != scored[j].sym.File {
+			return scored[i].sym.File < scored[j].sym.File
+		}
+		return scored[i].sym.StartLine < scored[j].sym.StartLine
 	})
 
 	// Apply limit after scoring
@@ -361,7 +366,7 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 					}
 					var ctxLines []string
 					for i := ctxStart; i < ctxEnd; i++ {
-						ctxLines = append(ctxLines, fmt.Sprintf("%d\t%s", i+1, allLines[i]))
+						ctxLines = append(ctxLines, allLines[i])
 					}
 					snippet = strings.Join(ctxLines, "\n")
 					displayStart = ctxStart + 1
@@ -421,8 +426,14 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 		}
 	}
 
-	sort.Slice(allMatches, func(i, j int) bool {
-		return allMatches[i].Score > allMatches[j].Score
+	sort.SliceStable(allMatches, func(i, j int) bool {
+		if allMatches[i].Score != allMatches[j].Score {
+			return allMatches[i].Score > allMatches[j].Score
+		}
+		if allMatches[i].Symbol.File != allMatches[j].Symbol.File {
+			return allMatches[i].Symbol.File < allMatches[j].Symbol.File
+		}
+		return allMatches[i].Symbol.Lines[0] < allMatches[j].Symbol.Lines[0]
 	})
 
 	// Apply limit after scoring

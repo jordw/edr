@@ -146,7 +146,7 @@ func hello() {
 		"edits":   edits,
 	}
 
-	result, err := dispatch.Dispatch(ctx, db, "edit-plan", nil, flags)
+	result, err := dispatch.Dispatch(ctx, db, "edit", nil, flags)
 	if err != nil {
 		t.Fatalf("Dispatch returned error: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestDispatchMulti_GlobalMutatingIsSequential(t *testing.T) {
 	// Mix of init (global-mutating) and read — should run sequentially
 	commands := []dispatch.MultiCmd{
 		{Cmd: "read", Args: []string{"a.go"}},
-		{Cmd: "init"},
+		{Cmd: "reindex"},
 		{Cmd: "read", Args: []string{"a.go"}},
 	}
 
@@ -526,16 +526,16 @@ func TestFlagNormalization_DryRunUnderscore(t *testing.T) {
 		"old_text": "func hello()",
 		"new_text": "func goodbye()",
 	}}
-	_, err = dispatch.Dispatch(ctx, db, "edit-plan", nil, map[string]any{
+	_, err = dispatch.Dispatch(ctx, db, "edit", nil, map[string]any{
 		"dry_run": true,
 		"edits":   edits,
 	})
 	if err != nil {
-		t.Fatalf("edit-plan with dry_run: %v", err)
+		t.Fatalf("edit with dry_run: %v", err)
 	}
 	data, _ := os.ReadFile(goFile)
 	if string(data) != original {
-		t.Fatalf("edit-plan dry_run modified file!\nexpected: %q\ngot:     %q", original, string(data))
+		t.Fatalf("edit dry_run modified file!\nexpected: %q\ngot:     %q", original, string(data))
 	}
 
 	// Test rename with dry_run (underscore)
@@ -888,8 +888,8 @@ func TestEditNoopDetection(t *testing.T) {
 		t.Fatalf("json.Unmarshal: %v", err)
 	}
 
-	if m["noop"] != true {
-		t.Fatalf("expected noop=true, got: %v", m)
+	if m["status"] != "noop" {
+		t.Fatalf("expected status=noop, got: %v", m)
 	}
 
 	// Verify file was not modified
@@ -1491,5 +1491,80 @@ func TestRead_NoBudgetCapByDefault(t *testing.T) {
 	}
 	if trunc, _ := m["truncated"].(bool); trunc {
 		t.Error("read should NOT truncate by default — only search/map have default budget cap")
+	}
+}
+
+// TestInternalCommandsRejected verifies that removed internal command names
+// are no longer accepted by Dispatch.
+func TestInternalCommandsRejected(t *testing.T) {
+	tmp := t.TempDir()
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n"), 0644)
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	index.IndexRepo(ctx, db)
+
+	for _, cmd := range []string{"explore", "find", "edit-plan", "multi", "init"} {
+		_, err := dispatch.Dispatch(ctx, db, cmd, nil, nil)
+		if err == nil {
+			t.Errorf("dispatch(%q) should fail, but succeeded", cmd)
+		}
+		if !strings.Contains(err.Error(), "unknown command") {
+			t.Errorf("dispatch(%q) error = %q, want 'unknown command'", cmd, err.Error())
+		}
+	}
+}
+
+// TestRefsWithCallersAbsorbedExplore verifies that refs --callers works
+// (formerly the explore command).
+func TestRefsWithCallersAbsorbedExplore(t *testing.T) {
+	tmp := t.TempDir()
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte(`package main
+
+func caller() { target() }
+func target() {}
+`), 0644)
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	index.IndexRepo(ctx, db)
+
+	// refs with --callers should work (absorbed from explore)
+	result, err := dispatch.Dispatch(ctx, db, "refs", []string{"target"}, map[string]any{
+		"callers": true,
+		"body":    true,
+	})
+	if err != nil {
+		t.Fatalf("refs --callers: %v", err)
+	}
+	if result == nil {
+		t.Fatal("refs --callers returned nil")
+	}
+}
+
+// TestReindexDispatch verifies the reindex command name works in dispatch.
+func TestReindexDispatch(t *testing.T) {
+	tmp := t.TempDir()
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n"), 0644)
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	index.IndexRepo(ctx, db)
+
+	result, err := dispatch.Dispatch(ctx, db, "reindex", nil, nil)
+	if err != nil {
+		t.Fatalf("reindex: %v", err)
+	}
+	if result == nil {
+		t.Fatal("reindex returned nil")
 	}
 }

@@ -19,12 +19,9 @@ func TestResolveSessionID_EnvUnset(t *testing.T) {
 	t.Setenv("EDR_SESSION", "")
 	os.Unsetenv("EDR_SESSION")
 	id := ResolveSessionID()
-	// With auto-session, unset EDR_SESSION should derive from PPID
-	if id == "" {
-		t.Errorf("expected auto session ID from PPID, got empty")
-	}
-	if !strings.HasPrefix(id, "auto_") {
-		t.Errorf("expected auto_ prefix, got %q", id)
+	// Without EDR_SESSION, no session — agents must opt in explicitly
+	if id != "" {
+		t.Errorf("expected empty session ID without EDR_SESSION, got %q", id)
 	}
 }
 
@@ -203,9 +200,9 @@ func TestInvalidateForEdit_InitClears(t *testing.T) {
 	s := New()
 	s.SeenBodies["k"] = "h"
 	s.FileContent["k"] = ContentEntry{Hash: "h"}
-	s.InvalidateForEdit("init", nil)
+	s.InvalidateForEdit("reindex", nil)
 	if len(s.SeenBodies) != 0 || len(s.FileContent) != 0 {
-		t.Error("init should clear all state")
+		t.Error("reindex should clear all state")
 	}
 }
 
@@ -1008,12 +1005,12 @@ func TestCommandMaps_Coverage(t *testing.T) {
 	if !BodyCommands["read"] {
 		t.Error("read should be in BodyCommands")
 	}
-	if !ReadCommands["find"] {
-		t.Error("find should be in ReadCommands")
+	// refs (absorbed explore) should have DeltaRead and BodyTrack
+	if !DeltaReadCommands["refs"] {
+		t.Error("refs should be in DeltaReadCommands")
 	}
-	// edit-plan is an internal command (not in cmdspec), but should be in DiffEditCommands
-	if !DiffEditCommands["edit-plan"] {
-		t.Error("edit-plan should be in DiffEditCommands")
+	if !BodyCommands["refs"] {
+		t.Error("refs should be in BodyCommands")
 	}
 }
 

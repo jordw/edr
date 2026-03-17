@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
@@ -25,7 +26,8 @@ type doParams struct {
 	Budget        *int       `json:"budget"`
 	DryRun        *bool      `json:"dry_run"`
 	Verify        any        `json:"verify"`
-	Init          *bool      `json:"init"`
+	Reindex       *bool      `json:"reindex,omitempty"`
+	Init          *bool      `json:"init,omitempty"` // legacy alias for reindex
 	ReadAfterEdit *bool      `json:"read_after_edit,omitempty"`
 }
 
@@ -44,14 +46,15 @@ type doRead struct {
 }
 
 // doQuery is a generalized read-only command for use in batch operations.
-// Cmd selects the operation: search, explore, refs, map, find, diff, read (default).
+// Cmd selects the operation: search, refs, map, read, diff.
 type doQuery struct {
-	Cmd string `json:"cmd"` // search, explore, refs, map, find, diff, read
+	Cmd string `json:"cmd"` // search, refs, map, read, diff
 
 	// Shared
 	Budget *int    `json:"budget,omitempty"`
 	File   *string `json:"file,omitempty"`
 	Symbol *string `json:"symbol,omitempty"`
+	Full   *bool   `json:"full,omitempty"`
 
 	// search
 	Pattern *string `json:"pattern,omitempty"`
@@ -64,15 +67,13 @@ type doQuery struct {
 	Limit   *int    `json:"limit,omitempty"`
 	Group   *bool   `json:"group,omitempty"`
 
-	// explore
-	Callers    *bool `json:"callers,omitempty"`
-	Deps       *bool `json:"deps,omitempty"`
-	Signatures *bool `json:"signatures,omitempty"`
-
-	// refs
-	Impact *bool   `json:"impact,omitempty"`
-	Chain  *string `json:"chain,omitempty"`
-	Depth  *int    `json:"depth,omitempty"`
+	// refs (includes former explore flags)
+	Callers    *bool   `json:"callers,omitempty"`
+	Deps       *bool   `json:"deps,omitempty"`
+	Signatures *bool   `json:"signatures,omitempty"`
+	Impact     *bool   `json:"impact,omitempty"`
+	Chain      *string `json:"chain,omitempty"`
+	Depth      *int    `json:"depth,omitempty"`
 
 	// map
 	Dir    *string `json:"dir,omitempty"`
@@ -80,9 +81,6 @@ type doQuery struct {
 	Type   *string `json:"type,omitempty"`
 	Grep   *string `json:"grep,omitempty"`
 	Locals *bool   `json:"locals,omitempty"`
-
-	// shared
-	Full *bool `json:"full,omitempty"`
 }
 
 type doEdit struct {
@@ -298,7 +296,7 @@ func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, en
 	for _, qi := range errorIdxs {
 		allResults[qi] = dispatch.MultiResult{
 			OK:    false,
-			Error: `query requires a "cmd" field (search, map, explore, refs, find, diff)`,
+			Error: `query requires a "cmd" field (search, map, refs, read, diff)`,
 		}
 	}
 
@@ -436,28 +434,29 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env 
 		editFlags["dry_run"] = true
 	}
 
-	sess.InvalidateForEdit("edit-plan", []string{})
+	sess.InvalidateForEdit("edit", []string{})
 
-	result, err := dispatch.Dispatch(ctx, db, "edit-plan", []string{}, editFlags)
+	result, err := dispatch.Dispatch(ctx, db, "edit", []string{}, editFlags)
 	if err != nil {
 		code := classifyError(err)
+		errMsg := stripEditPlanPrefix(err.Error())
 		for i, e := range p.Edits {
 			cb.AddEditEvent(e.File, 0, "", "", false)
-			env.AddFailedOpWithCode(fmt.Sprintf("e%d", i), "edit", code, err.Error())
+			env.AddFailedOpWithCode(fmt.Sprintf("e%d", i), "edit", code, errMsg)
 		}
 		return true, false
 	}
 
 	// Apply session post-processing
 	data, _ := json.Marshal(result)
-	text := sess.PostProcess("edit-plan", []string{}, editFlags, result, string(data))
+	text := sess.PostProcess("edit", []string{}, editFlags, result, string(data))
 	var processed any
 	if json.Unmarshal([]byte(text), &processed) == nil {
 		result = processed
 	}
 	traceEditEvents(cb, result)
 
-	// Decompose the aggregate edit-plan result into per-edit ops.
+	// Decompose the aggregate edit result into per-edit ops.
 	allNoop := false
 	m, _ := result.(map[string]any)
 	if m != nil {
@@ -596,7 +595,7 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 		return err
 	}
 
-	hasInit := p.Init != nil && *p.Init
+	hasInit := (p.Init != nil && *p.Init) || (p.Reindex != nil && *p.Reindex)
 	hasReads := len(p.Reads) > 0
 	hasQueries := len(p.Queries) > 0
 	hasEdits := len(p.Edits) > 0
@@ -634,16 +633,16 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 		return nil
 	}
 
-	// 0. Init
+	// 0. Reindex
 	if hasInit {
-		sess.InvalidateForEdit("init", []string{})
+		sess.InvalidateForEdit("reindex", []string{})
 		if err := db.WithWriteLock(func() error {
 			_, _, err := index.IndexRepo(ctx, db)
 			return err
 		}); err != nil {
-			env.AddFailedOp("i0", "init", err.Error())
+			env.AddFailedOp("i0", "reindex", err.Error())
 		} else {
-			env.AddOp("i0", "init", map[string]any{"version": Version + "+" + BuildHash})
+			env.AddOp("i0", "reindex", map[string]any{"version": Version + "+" + BuildHash})
 		}
 	}
 
@@ -816,13 +815,14 @@ func traceVerifyEvent(cb *trace.CallBuilder, result any) {
 }
 
 // doQueryToMultiCmd converts a generalized doQuery into a dispatch.MultiCmd.
-// inferQueryCmd guesses the intended cmd from populated fields when cmd is omitted.
+// inferQueryCmd determines the public command from populated fields when cmd is omitted.
+// Only returns public command names: search, refs, map, read.
 func inferQueryCmd(q doQuery) string {
 	if q.Pattern != nil && *q.Pattern != "" {
 		return "search"
 	}
 	if (q.Callers != nil && *q.Callers) || (q.Deps != nil && *q.Deps) {
-		return "explore"
+		return "refs"
 	}
 	if q.Impact != nil && *q.Impact {
 		return "refs"
@@ -837,12 +837,12 @@ func inferQueryCmd(q doQuery) string {
 		return "read"
 	}
 	if q.Symbol != nil && *q.Symbol != "" {
-		return "explore"
+		return "refs"
 	}
 	return "" // will be caught as error below
 }
 
-// doQueryToMultiCmd converts a doQuery to a dispatch.MultiCmd.
+// doQueryToMultiCmd converts a doQuery to a dispatch.MultiCmd using only public commands.
 // Returns the MultiCmd and whether the cmd was inferred (not explicitly set).
 func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
 	cmd := q.Cmd
@@ -850,6 +850,18 @@ func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
 	if cmd == "" {
 		cmd = inferQueryCmd(q)
 		inferred = true
+	}
+
+	// Translate legacy internal command names to public commands
+	switch cmd {
+	case "explore":
+		if (q.Callers != nil && *q.Callers) || (q.Deps != nil && *q.Deps) {
+			cmd = "refs"
+		} else {
+			cmd = "read"
+		}
+	case "find":
+		cmd = "search"
 	}
 
 	// When cmd is inferred and no budget is set, apply a default cap
@@ -876,6 +888,9 @@ func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
 				f += ":" + *q.Symbol
 			}
 			args = []string{f}
+		} else if q.Symbol != nil && *q.Symbol != "" {
+			// Symbol-only query (formerly routed to explore) → read symbol
+			args = []string{*q.Symbol}
 		}
 		if q.Signatures != nil && *q.Signatures {
 			flags["signatures"] = true
@@ -910,30 +925,8 @@ func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
 		if q.Limit != nil {
 			flags["limit"] = *q.Limit
 		}
-		// Grouping is now default in dispatch for text search.
-		// Only pass no_group if explicitly disabled.
 		if q.Group != nil && !*q.Group {
 			flags["no_group"] = true
-		}
-
-	case "explore":
-		if q.Symbol != nil {
-			args = []string{*q.Symbol}
-		}
-		if q.File != nil && *q.File != "" {
-			args = append([]string{*q.File}, args...)
-		}
-		if q.Body != nil && *q.Body {
-			flags["body"] = true
-		}
-		if q.Callers != nil && *q.Callers {
-			flags["callers"] = true
-		}
-		if q.Deps != nil && *q.Deps {
-			flags["deps"] = true
-		}
-		if q.Signatures != nil && *q.Signatures {
-			flags["signatures"] = true
 		}
 
 	case "refs":
@@ -951,6 +944,18 @@ func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
 		}
 		if q.Depth != nil {
 			flags["depth"] = *q.Depth
+		}
+		if q.Callers != nil && *q.Callers {
+			flags["callers"] = true
+		}
+		if q.Deps != nil && *q.Deps {
+			flags["deps"] = true
+		}
+		if q.Body != nil && *q.Body {
+			flags["body"] = true
+		}
+		if q.Signatures != nil && *q.Signatures {
+			flags["signatures"] = true
 		}
 
 	case "map":
@@ -971,14 +976,6 @@ func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
 		}
 		if q.Locals != nil && *q.Locals {
 			flags["locals"] = true
-		}
-
-	case "find":
-		if q.Pattern != nil {
-			args = []string{*q.Pattern}
-		}
-		if q.Dir != nil && *q.Dir != "" {
-			flags["dir"] = *q.Dir
 		}
 	}
 
@@ -1084,6 +1081,22 @@ func normalizeReadBody(result any) any {
 		}
 	}
 	return result
+}
+
+// stripEditPrefix removes the "edit: edit N: " prefix that the multi-edit
+// dispatcher adds to error messages. Batch consumers should see the same
+// error text as standalone edit commands.
+func stripEditPlanPrefix(msg string) string {
+	// Pattern: "edit: edit 0: <actual error>"
+	if strings.HasPrefix(msg, "edit: ") {
+		rest := strings.TrimPrefix(msg, "edit: ")
+		// Strip the optional "edit N: " part
+		if idx := strings.Index(rest, ": "); idx >= 0 && strings.HasPrefix(rest, "edit ") {
+			return rest[idx+2:]
+		}
+		return rest
+	}
+	return msg
 }
 
 // ambiguousResult is the structured JSON response for ambiguous symbol errors.

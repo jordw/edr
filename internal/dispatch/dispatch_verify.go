@@ -75,32 +75,111 @@ func runVerify(ctx context.Context, db *index.DB, root string, args []string, fl
 	return result, nil
 }
 
-// goVerifyScope returns Go package arguments scoped to the edited files.
-// If "files" is set in flags, it computes the unique ./dir packages.
+// goVerifyScope returns Go package arguments scoped to the edited files
+// plus their reverse dependencies (packages that import the edited packages).
+// If "files" is set in flags, it computes the unique ./dir packages, then
+// uses `go list` to find importers so cross-package breakage is caught.
 // Falls back to "./..." when no files are specified.
 func goVerifyScope(root string, flags map[string]any) string {
 	files, _ := flags["files"].([]string)
 	if len(files) == 0 {
 		return "./..."
 	}
-	seen := map[string]bool{}
+	edited := map[string]bool{}
 	for _, f := range files {
 		dir := filepath.Dir(f)
 		if dir == "" || dir == "." {
 			dir = "."
 		}
-		// Normalize to ./dir form
 		if dir != "." && !strings.HasPrefix(dir, "./") {
 			dir = "./" + dir
 		}
-		seen[dir] = true
+		edited[dir] = true
 	}
-	// Scope to exact package directories only — never expand to ./...
-	// This avoids pulling in junk directories (scratch/, tmp_agent_flow/) that
-	// happen to contain broken .go files.
-	parts := make([]string, 0, len(seen))
-	for dir := range seen {
+
+	// Try to expand scope to include reverse dependencies (importers).
+	// This catches cross-package breakage when a public symbol is renamed
+	// or removed. If go list fails, fall back to just the edited packages.
+	if importers := goReverseImporters(root, edited); len(importers) > 0 {
+		for _, pkg := range importers {
+			edited[pkg] = true
+		}
+	}
+
+	parts := make([]string, 0, len(edited))
+	for dir := range edited {
 		parts = append(parts, dir)
 	}
 	return strings.Join(parts, " ")
+}
+
+// goReverseImporters finds packages that import any of the edited packages.
+// It shells out to `go list` which adds ~100ms but catches breakage that
+// scoped builds miss. Returns relative package dirs (./internal/dispatch etc).
+func goReverseImporters(root string, editedDirs map[string]bool) []string {
+	// Get module path from go.mod to convert dirs to import paths.
+	modData, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return nil
+	}
+	modulePath := ""
+	for _, line := range strings.Split(string(modData), "\n") {
+		if strings.HasPrefix(line, "module ") {
+			modulePath = strings.TrimSpace(strings.TrimPrefix(line, "module"))
+			break
+		}
+	}
+	if modulePath == "" {
+		return nil
+	}
+
+	// Convert edited dirs to full import paths for matching.
+	editedPkgs := map[string]bool{}
+	for dir := range editedDirs {
+		clean := strings.TrimPrefix(dir, "./")
+		if clean == "." || clean == "" {
+			editedPkgs[modulePath] = true
+		} else {
+			editedPkgs[modulePath+"/"+clean] = true
+		}
+	}
+
+	// Ask go list for all packages and their imports.
+	// Use -e to tolerate broken packages (scratch/, tmp_agent_flow/, etc).
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "list", "-e", "-f",
+		`{{.ImportPath}} {{join .Imports ","}}`, "./...")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+
+	var importers []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		pkgPath := parts[0]
+		imports := strings.Split(parts[1], ",")
+		for _, imp := range imports {
+			if editedPkgs[imp] {
+				// Convert import path back to relative dir.
+				rel := strings.TrimPrefix(pkgPath, modulePath)
+				if rel == "" {
+					rel = "."
+				} else {
+					rel = "./" + strings.TrimPrefix(rel, "/")
+				}
+				importers = append(importers, rel)
+				break
+			}
+		}
+	}
+	return importers
 }

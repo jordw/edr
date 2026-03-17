@@ -123,25 +123,11 @@ func (s *Session) SaveToFile(path string) error {
 	return os.Rename(tmp, path)
 }
 
-// ResolveSessionID returns the session ID.
-// Priority: EDR_SESSION env var > auto-detected from parent PID.
-// Falls back to "" if detection is ambiguous (no session is safer than wrong session).
+// ResolveSessionID returns the session ID from the EDR_SESSION env var.
+// Returns "" when unset, which means no session (ephemeral, no dedup).
+// Agents must explicitly set EDR_SESSION to opt into session features.
 func ResolveSessionID() string {
-	if id := os.Getenv("EDR_SESSION"); id != "" {
-		return id
-	}
-	return autoSessionID()
-}
-
-// autoSessionID derives a stable session ID from the parent process.
-// The parent PID is typically the agent process (Claude, Cursor, etc.)
-// which stays alive across multiple edr invocations in one conversation.
-func autoSessionID() string {
-	ppid := os.Getppid()
-	if ppid <= 1 {
-		return "" // init/launchd — ambiguous
-	}
-	return fmt.Sprintf("auto_%d", ppid)
+	return os.Getenv("EDR_SESSION")
 }
 
 // LoadSession loads the session identified by EDR_SESSION env var.
@@ -227,7 +213,7 @@ func (s *Session) invalidateFile(file string) {
 func (s *Session) InvalidateForEdit(cmd string, args []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if cmd == "rename" || cmd == "init" {
+	if cmd == "rename" || cmd == "reindex" {
 		s.FileContent = make(map[string]ContentEntry)
 		s.SymbolContent = make(map[string]ContentEntry)
 		s.SeenBodies = make(map[string]string)
@@ -535,7 +521,7 @@ func (s *Session) StripSeenBodies(result map[string]any, cmd string) {
 	var skipped []string
 
 	switch cmd {
-	case "gather", "explore":
+	case "gather", "refs":
 		if body, ok := result["target_body"].(string); ok && body != "" {
 			if target, ok := result["target"].(map[string]any); ok {
 				file, _ := target["file"].(string)
@@ -681,7 +667,7 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 	}
 
 	// Level 3: Strip seen bodies from gather/search.
-	willStrip := cmd == "gather" || (cmd == "search" && FlagIsTruthy(flags, "body")) || (cmd == "explore" && FlagIsTruthy(flags, "gather") && FlagIsTruthy(flags, "body"))
+	willStrip := cmd == "gather" || (cmd == "search" && FlagIsTruthy(flags, "body")) || (cmd == "refs" && FlagIsTruthy(flags, "body"))
 	if cmdspec.IsBodyTrack(cmd) && !willStrip {
 		s.TrackBodies(m, cmd)
 	}

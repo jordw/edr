@@ -78,7 +78,7 @@ func TestSessionBehaviorFlags(t *testing.T) {
 	}{
 		{"read", false, true, true},
 		{"edit", true, false, false},
-		{"explore", false, true, true},
+		{"refs", false, true, true},
 		{"search", false, false, true},
 		{"map", false, false, false},
 		{"write", false, false, false},

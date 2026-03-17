@@ -16,7 +16,7 @@ import (
 	"github.com/jordw/edr/internal/output"
 )
 
-// editPlanEntry describes a single edit within an edit-plan.
+// editPlanEntry describes a single edit within an edit.
 type editPlanEntry struct {
 	File        string `json:"file"`
 	Symbol      string `json:"symbol,omitempty"`      // symbol-based edit
@@ -41,7 +41,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 	// Edits come from flags.edits as a JSON array
 	rawEdits, ok := flags["edits"]
 	if !ok {
-		return nil, fmt.Errorf("edit-plan requires 'edits' array in flags")
+		return nil, fmt.Errorf("edit requires 'edits' array in flags")
 	}
 
 	// Re-marshal to get proper typing from the any interface
@@ -51,17 +51,17 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 		// JSON came through as []any — need to re-marshal
 		rawJSON, _ := json.Marshal(v)
 		if err := json.Unmarshal(rawJSON, &edits); err != nil {
-			return nil, fmt.Errorf("edit-plan: invalid edits array: %w", err)
+			return nil, fmt.Errorf("edit: invalid edits array: %w", err)
 		}
 	default:
 		rawJSON, _ := json.Marshal(v)
 		if err := json.Unmarshal(rawJSON, &edits); err != nil {
-			return nil, fmt.Errorf("edit-plan: invalid edits: %w", err)
+			return nil, fmt.Errorf("edit: invalid edits: %w", err)
 		}
 	}
 
 	if len(edits) == 0 {
-		return nil, fmt.Errorf("edit-plan: edits array is empty")
+		return nil, fmt.Errorf("edit: edits array is empty")
 	}
 
 	dryRun := flagBool(flags, "dry-run", false)
@@ -70,11 +70,11 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 
 	for i, e := range edits {
 		if e.File == "" {
-			return nil, fmt.Errorf("edit-plan: edit %d missing 'file'", i)
+			return nil, fmt.Errorf("edit: edit %d missing 'file'", i)
 		}
 		file, err := db.ResolvePath(e.File)
 		if err != nil {
-			return nil, fmt.Errorf("edit-plan: edit %d: %w", i, err)
+			return nil, fmt.Errorf("edit: edit %d: %w", i, err)
 		}
 
 		switch {
@@ -82,7 +82,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 			// Symbol-based edit
 			sym, err := db.GetSymbol(ctx, file, e.Symbol)
 			if err != nil {
-				return nil, fmt.Errorf("edit-plan: edit %d: symbol %q: %w", i, e.Symbol, err)
+				return nil, fmt.Errorf("edit: edit %d: symbol %q: %w", i, e.Symbol, err)
 			}
 			expectHash := e.ExpectHash
 			if expectHash == "" {
@@ -101,22 +101,21 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 				if e.ExpectHash != "" {
 					currentHash, err := edit.FileHash(file)
 					if err != nil {
-						return nil, fmt.Errorf("edit-plan: edit %d: hash check: %w", i, err)
+						return nil, fmt.Errorf("edit: edit %d: hash check: %w", i, err)
 					}
 					if currentHash != e.ExpectHash {
-						return nil, fmt.Errorf("edit-plan: edit %d: hash mismatch on %s: expected %s, got %s (file was modified)", i, output.Rel(file), e.ExpectHash, currentHash)
+						return nil, fmt.Errorf("edit: edit %d: hash mismatch on %s: expected %s, got %s (file was modified)", i, output.Rel(file), e.ExpectHash, currentHash)
 					}
 				}
 				return map[string]any{
-					"ok":      true,
-					"noop":    true,
+					"status":  "noop",
 					"message": fmt.Sprintf("edit %d: old_text equals new_text, no change applied", i),
 				}, nil
 			}
 			// Text-based edit — resolve to byte spans
 			data, err := os.ReadFile(file)
 			if err != nil {
-				return nil, fmt.Errorf("edit-plan: edit %d: read %s: %w", i, output.Rel(file), err)
+				return nil, fmt.Errorf("edit: edit %d: read %s: %w", i, output.Rel(file), err)
 			}
 			content := string(data)
 
@@ -134,7 +133,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 					nfErr.EditIndex = intPtr(i)
 					nfErr.EditMode = "old_text"
 					nfErr.TotalEdits = intPtr(len(edits))
-					return nil, fmt.Errorf("edit-plan: edit %d: %w", i, nfErr)
+					return nil, fmt.Errorf("edit: edit %d: %w", i, nfErr)
 				}
 				// Check for ambiguous matches before proceeding
 				totalMatches := strings.Count(content, e.OldText)
@@ -150,7 +149,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 						locs = append(locs, []int{abs, abs + len(e.OldText)})
 						off = abs + len(e.OldText)
 					}
-					return nil, fmt.Errorf("edit-plan: edit %d: %w", i, ambiguousMatchError(content, output.Rel(file), e.OldText, locs))
+					return nil, fmt.Errorf("edit: edit %d: %w", i, ambiguousMatchError(content, output.Rel(file), e.OldText, locs))
 				}
 				if e.All {
 					// For replace-all, collect all occurrences (reverse order for offset stability)
@@ -184,7 +183,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 			// Line-based edit — convert to byte offsets
 			data, err := os.ReadFile(file)
 			if err != nil {
-				return nil, fmt.Errorf("edit-plan: edit %d: read %s: %w", i, output.Rel(file), err)
+				return nil, fmt.Errorf("edit: edit %d: read %s: %w", i, output.Rel(file), err)
 			}
 			var startByte, endByte uint32
 			line := 1
@@ -203,7 +202,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 				}
 			}
 			if !foundStart {
-				return nil, fmt.Errorf("edit-plan: edit %d: start line %d beyond file", i, e.StartLine)
+				return nil, fmt.Errorf("edit: edit %d: start line %d beyond file", i, e.StartLine)
 			}
 			expectHash := e.ExpectHash
 			if expectHash == "" {
@@ -216,7 +215,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 			})
 
 		default:
-			return nil, fmt.Errorf("edit-plan: edit %d: must specify symbol, old_text, or start_line/end_line", i)
+			return nil, fmt.Errorf("edit: edit %d: must specify symbol, old_text, or start_line/end_line", i)
 		}
 	}
 
@@ -240,7 +239,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 				curr := edits[i]
 				// Overlap: curr starts before prev ends (insertions at same point are OK).
 				if curr.StartByte < prev.EndByte && !(prev.StartByte == prev.EndByte || curr.StartByte == curr.EndByte) {
-					return nil, fmt.Errorf("edit-plan: overlapping edits on %s: [%d:%d] and [%d:%d] — split into separate calls",
+					return nil, fmt.Errorf("edit: overlapping edits on %s: [%d:%d] and [%d:%d] — split into separate calls",
 						output.Rel(prev.File), prev.StartByte, prev.EndByte, curr.StartByte, curr.EndByte)
 				}
 			}
@@ -357,7 +356,7 @@ func runEditPlan(ctx context.Context, db *index.DB, root string, args []string, 
 
 	cr, err := commitEdits(ctx, db, resolved)
 	if err != nil {
-		return nil, fmt.Errorf("edit-plan: %w", err)
+		return nil, fmt.Errorf("edit: %w", err)
 	}
 
 	var descriptions []string

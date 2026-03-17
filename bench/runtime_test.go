@@ -182,7 +182,7 @@ func BenchmarkEditMoveDryRun(b *testing.B) {
 
 func BenchmarkExplore(b *testing.B) {
 	db, _ := setupRepo(b)
-	benchDispatch(b, db, "explore", []string{"lib/scheduler.py", "_execute_task"}, map[string]any{
+	benchDispatch(b, db, "refs", []string{"lib/scheduler.py", "_execute_task"}, map[string]any{
 		"body":    true,
 		"callers": true,
 		"deps":    true,
@@ -191,7 +191,7 @@ func BenchmarkExplore(b *testing.B) {
 
 func BenchmarkExploreGather(b *testing.B) {
 	db, _ := setupRepo(b)
-	benchDispatch(b, db, "explore", []string{"_execute_task"}, map[string]any{
+	benchDispatch(b, db, "refs", []string{"_execute_task"}, map[string]any{
 		"gather": true,
 		"body":   true,
 		"budget": 1500,
@@ -214,7 +214,7 @@ func BenchmarkRefsChain(b *testing.B) {
 
 func BenchmarkFind(b *testing.B) {
 	db, _ := setupRepo(b)
-	benchDispatch(b, db, "find", []string{"**/*.py"}, nil)
+	benchDispatch(b, db, "search", []string{"**/*.py"}, nil)
 }
 
 // ---------------------------------------------------------------------------
