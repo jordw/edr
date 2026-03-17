@@ -155,8 +155,8 @@ func TestErrorCodeSpecificity(t *testing.T) {
 		wantCode  string
 		wantInOps bool // batch per-op errors go in ops[].error, not errors[]
 	}{
-		{"file not found", []string{"read", "nonexistent.go"}, "file_not_found", false},
-		{"symbol not found", []string{"read", "hello.go:nonExistentSymbol"}, "symbol_not_found", false},
+		{"file not found", []string{"read", "nonexistent.go"}, "no such file or directory", true},
+		{"symbol not found", []string{"read", "hello.go:nonExistentSymbol"}, "not found", true},
 		{"batch file not found", []string{"-r", "nonexistent.go"}, "no such file or directory", true},
 	}
 
@@ -168,28 +168,9 @@ func TestErrorCodeSpecificity(t *testing.T) {
 			out, _ := cmd.CombinedOutput() // expect non-zero exit
 
 			outStr := string(out)
-			if tt.wantInOps {
-				// Batch per-op errors: check the error message in ops
-				if !contains(outStr, tt.wantCode) {
-					t.Errorf("expected %q in output, got: %s", tt.wantCode, outStr)
-				}
-			} else {
-				// Standalone errors: check envelope error code
-				var env struct {
-					Errors []struct {
-						Code string `json:"code"`
-					} `json:"errors"`
-				}
-				json.Unmarshal(out, &env)
-				found := false
-				for _, e := range env.Errors {
-					if e.Code == tt.wantCode {
-						found = true
-					}
-				}
-				if !found {
-					t.Errorf("expected error code %q, got: %s", tt.wantCode, outStr)
-				}
+			// All per-op errors now go in ops[].error (parity with batch)
+			if !contains(outStr, tt.wantCode) {
+				t.Errorf("expected %q in output, got: %s", tt.wantCode, outStr)
 			}
 		})
 	}
@@ -273,5 +254,420 @@ func TestReadParitySymbolRead(t *testing.T) {
 		if sHas != bHas {
 			t.Errorf("field %q: standalone has=%v, batch has=%v", k, sHas, bHas)
 		}
+	}
+}
+
+// TestNoSessionMeansNoDedup verifies that without EDR_SESSION, repeated reads
+// always return content (no session dedup).
+func TestNoSessionMeansNoDedup(t *testing.T) {
+	binary, repoDir := setupContractRepo(t, "package main\n\nfunc main() {}\n")
+
+	for i := 0; i < 3; i++ {
+		cmd := exec.Command(binary, "read", "hello.go")
+		cmd.Dir = repoDir
+		// Explicitly unset EDR_SESSION
+		cmd.Env = filterEnv(os.Environ(), "EDR_SESSION")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("read %d failed: %v\n%s", i, err, out)
+		}
+
+		var env struct {
+			Ops []map[string]any `json:"ops"`
+		}
+		json.Unmarshal(out, &env)
+		if len(env.Ops) == 0 {
+			t.Fatalf("read %d: no ops", i)
+		}
+		op := env.Ops[0]
+		if _, has := op["content"]; !has {
+			t.Errorf("read %d: missing content (session dedup without EDR_SESSION?)\nop: %s", i, mustJSON(op))
+		}
+		if unchanged, _ := op["unchanged"].(bool); unchanged {
+			t.Errorf("read %d: got unchanged=true without EDR_SESSION set", i)
+		}
+	}
+}
+
+// TestErrorParityBatchStandalone verifies that both batch and standalone put
+// per-op errors in ops[].error (not in the envelope errors[] array).
+func TestErrorParityBatchStandalone(t *testing.T) {
+	binary, repoDir := setupContractRepo(t, "package main\n\nfunc main() {}\n")
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"standalone file not found", []string{"read", "nonexistent.go"}},
+		{"batch file not found", []string{"-r", "nonexistent.go"}},
+		{"standalone symbol not found", []string{"read", "hello.go:noSuchSymbol"}},
+		{"batch symbol not found", []string{"-r", "hello.go:noSuchSymbol"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command(binary, tt.args...)
+			cmd.Dir = repoDir
+			cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=errparity_%d", parityCounter.Add(1)))
+			out, _ := cmd.CombinedOutput()
+
+			var env struct {
+				OK     bool               `json:"ok"`
+				Ops    []map[string]any    `json:"ops"`
+				Errors []map[string]string `json:"errors"`
+			}
+			json.Unmarshal(out, &env)
+
+			if env.OK {
+				t.Errorf("expected ok=false for error case")
+			}
+			if len(env.Errors) != 0 {
+				t.Errorf("per-op errors should be in ops[].error, not errors[]\nerrors: %s", mustJSON(env.Errors))
+			}
+			if len(env.Ops) == 0 {
+				t.Fatalf("expected a failed op in ops[], got empty\noutput: %s", out)
+			}
+			op := env.Ops[0]
+			if _, has := op["error"]; !has {
+				t.Errorf("op missing 'error' field\nop: %s", mustJSON(op))
+			}
+			if _, has := op["op_id"]; !has {
+				t.Errorf("failed op missing 'op_id'\nop: %s", mustJSON(op))
+			}
+			if _, has := op["type"]; !has {
+				t.Errorf("failed op missing 'type'\nop: %s", mustJSON(op))
+			}
+		})
+	}
+}
+
+// TestContentHasNoLineNumbers verifies that read content is raw text,
+// not prefixed with line numbers like "1\tpackage main\n2\t...".
+func TestContentHasNoLineNumbers(t *testing.T) {
+	binary, repoDir := setupContractRepo(t, "package main\n\nfunc main() {}\n")
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"standalone read", []string{"read", "hello.go"}},
+		{"batch read", []string{"-r", "hello.go"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command(binary, tt.args...)
+			cmd.Dir = repoDir
+			cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=nolnum_%d", parityCounter.Add(1)))
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("command failed: %v\n%s", err, out)
+			}
+
+			var env struct {
+				Ops []map[string]any `json:"ops"`
+			}
+			json.Unmarshal(out, &env)
+			if len(env.Ops) == 0 {
+				t.Fatal("no ops")
+			}
+			content, _ := env.Ops[0]["content"].(string)
+			if content == "" {
+				t.Fatal("empty content")
+			}
+			// Content must start with "package", not "1\tpackage"
+			if !strings.HasPrefix(content, "package main") {
+				t.Errorf("content has unexpected prefix (line numbers?)\ngot: %q", content[:min(60, len(content))])
+			}
+			// No line should start with a digit followed by a tab
+			for i, line := range strings.Split(content, "\n") {
+				if len(line) > 0 && line[0] >= '0' && line[0] <= '9' && strings.Contains(line, "\t") {
+					t.Errorf("line %d looks like it has a line number prefix: %q", i+1, line)
+					break
+				}
+			}
+		})
+	}
+}
+
+// TestSearchDeterminism verifies that the same text search returns
+// identical results across multiple runs.
+func TestSearchDeterminism(t *testing.T) {
+	binary, repoDir := setupContractRepo(t, "package main\n\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n\nfunc helper() int {\n\treturn 42\n}\n")
+
+	var firstResult string
+	for i := 0; i < 5; i++ {
+		cmd := exec.Command(binary, "search", "main", "--text")
+		cmd.Dir = repoDir
+		cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=determ_%d", parityCounter.Add(1)))
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("run %d failed: %v\n%s", i, err, out)
+		}
+
+		// Normalize: strip session field (varies per run)
+		var env map[string]any
+		json.Unmarshal(out, &env)
+		if ops, ok := env["ops"].([]any); ok {
+			for _, op := range ops {
+				if m, ok := op.(map[string]any); ok {
+					delete(m, "session")
+					delete(m, "op_id")
+				}
+			}
+		}
+		normalized, _ := json.Marshal(env)
+		result := string(normalized)
+
+		if i == 0 {
+			firstResult = result
+		} else if result != firstResult {
+			t.Errorf("run %d differs from run 0:\nrun 0: %s\nrun %d: %s", i, firstResult, i, result)
+			break
+		}
+	}
+}
+
+// TestNoopParityBatchStandalone verifies that noop edits (old_text == new_text)
+// produce identical op shape from batch and standalone.
+func TestNoopParityBatchStandalone(t *testing.T) {
+	binary, repoDir := setupContractRepo(t, "package main\n\nfunc main() {}\n")
+
+	standaloneArgs := []string{"edit", "hello.go", "--old-text", "package main", "--new-text", "package main", "--dry-run"}
+	batchArgs := []string{"-e", "hello.go", "--old", "package main", "--new", "package main", "--dry-run"}
+
+	standaloneOps := runAndExtractOps(t, binary, repoDir, standaloneArgs)
+	batchOps := runAndExtractOps(t, binary, repoDir, batchArgs)
+
+	if len(standaloneOps) == 0 || len(batchOps) == 0 {
+		t.Fatalf("expected ops: standalone=%d batch=%d", len(standaloneOps), len(batchOps))
+	}
+
+	sOp := standaloneOps[0].(map[string]any)
+	bOp := batchOps[0].(map[string]any)
+
+	// Both must have status: "noop"
+	if s, _ := sOp["status"].(string); s != "noop" {
+		t.Errorf("standalone status = %q, want \"noop\"\nop: %s", s, mustJSON(sOp))
+	}
+	if s, _ := bOp["status"].(string); s != "noop" {
+		t.Errorf("batch status = %q, want \"noop\"\nop: %s", s, mustJSON(bOp))
+	}
+
+	// Neither should have legacy "noop" or "ok" boolean fields
+	for name, op := range map[string]map[string]any{"standalone": sOp, "batch": bOp} {
+		if _, has := op["noop"]; has {
+			t.Errorf("%s op has legacy 'noop' field", name)
+		}
+		if _, has := op["ok"]; has {
+			t.Errorf("%s op has legacy 'ok' field", name)
+		}
+	}
+}
+
+func filterEnv(env []string, key string) []string {
+	out := make([]string, 0, len(env))
+	prefix := key + "="
+	for _, e := range env {
+		if !strings.HasPrefix(e, prefix) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// TestStandaloneEditAutoVerify verifies that standalone edit and write
+// commands auto-verify after successful mutations (parity with batch).
+func TestStandaloneEditAutoVerify(t *testing.T) {
+	binary, repoDir := setupContractRepo(t, "package main\n\nfunc main() {}\n")
+	os.WriteFile(filepath.Join(repoDir, "go.mod"), []byte("module test\ngo 1.21\n"), 0644)
+
+	t.Run("edit verify passes", func(t *testing.T) {
+		cmd := exec.Command(binary, "edit", "hello.go",
+			"--old-text", "func main() {}",
+			"--new-text", "func main() { println(\"ok\") }")
+		cmd.Dir = repoDir
+		cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=autoverify_%d", parityCounter.Add(1)))
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("edit failed: %v\n%s", err, out)
+		}
+		var env struct {
+			OK     bool           `json:"ok"`
+			Verify map[string]any `json:"verify"`
+		}
+		json.Unmarshal(out, &env)
+		if env.Verify == nil {
+			t.Fatal("standalone edit should auto-verify, but verify is null")
+		}
+		if vOK, _ := env.Verify["ok"].(bool); !vOK {
+			t.Errorf("verify should pass, got: %s", mustJSON(env.Verify))
+		}
+	})
+
+	t.Run("edit verify catches bad code", func(t *testing.T) {
+		os.WriteFile(filepath.Join(repoDir, "hello.go"), []byte("package main\n\nfunc main() {}\n"), 0644)
+		run(t, binary, repoDir, "reindex")
+
+		cmd := exec.Command(binary, "edit", "hello.go",
+			"--old-text", "func main() {}",
+			"--new-text", "func main() { return badVar }")
+		cmd.Dir = repoDir
+		cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=autoverify_%d", parityCounter.Add(1)))
+		out, _ := cmd.CombinedOutput()
+
+		var env struct {
+			OK     bool           `json:"ok"`
+			Verify map[string]any `json:"verify"`
+		}
+		json.Unmarshal(out, &env)
+		if env.OK {
+			t.Error("ok should be false when verify fails")
+		}
+		if env.Verify == nil {
+			t.Fatal("verify field missing")
+		}
+		if vOK, _ := env.Verify["ok"].(bool); vOK {
+			t.Error("verify.ok should be false for bad code")
+		}
+	})
+
+	t.Run("dry-run skips verify", func(t *testing.T) {
+		os.WriteFile(filepath.Join(repoDir, "hello.go"), []byte("package main\n\nfunc main() {}\n"), 0644)
+		run(t, binary, repoDir, "reindex")
+
+		cmd := exec.Command(binary, "edit", "hello.go",
+			"--old-text", "package main", "--new-text", "package test", "--dry-run")
+		cmd.Dir = repoDir
+		cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=autoverify_%d", parityCounter.Add(1)))
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("dry-run failed: %v\n%s", err, out)
+		}
+		var env struct {
+			Verify map[string]any `json:"verify"`
+		}
+		json.Unmarshal(out, &env)
+		if env.Verify == nil {
+			t.Fatal("dry-run should set verify to skipped, got null")
+		}
+		if _, has := env.Verify["skipped"]; !has {
+			t.Errorf("dry-run verify should have skipped field, got: %s", mustJSON(env.Verify))
+		}
+	})
+
+	t.Run("write auto-verifies", func(t *testing.T) {
+		cmd := exec.Command(binary, "write", "extra.go",
+			"--content", "package main\n\nfunc extra() int { return 1 }\n")
+		cmd.Dir = repoDir
+		cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=autoverify_%d", parityCounter.Add(1)))
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("write failed: %v\n%s", err, out)
+		}
+		var env struct {
+			Verify map[string]any `json:"verify"`
+		}
+		json.Unmarshal(out, &env)
+		if env.Verify == nil {
+			t.Fatal("standalone write should auto-verify, but verify is null")
+		}
+	})
+
+	t.Run("verify failure exit code is 2", func(t *testing.T) {
+		os.WriteFile(filepath.Join(repoDir, "hello.go"), []byte("package main\n\nfunc main() {}\n"), 0644)
+		run(t, binary, repoDir, "reindex")
+
+		cmd := exec.Command(binary, "edit", "hello.go",
+			"--old-text", "func main() {}",
+			"--new-text", "func main() { return badVar }")
+		cmd.Dir = repoDir
+		cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=autoverify_%d", parityCounter.Add(1)))
+		_, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatal("expected non-zero exit for verify failure")
+		}
+		if ee, ok := err.(*exec.ExitError); ok {
+			if ee.ExitCode() != 2 {
+				t.Errorf("exit code = %d, want 2 (verify-only failure)", ee.ExitCode())
+			}
+		}
+	})
+}
+
+// TestErrorCodeField verifies that failed ops include an error_code field
+// with a specific code, not just a generic string.
+func TestErrorCodeField(t *testing.T) {
+	binary, repoDir := setupContractRepo(t, "package main\n\nfunc main() {}\n")
+
+	tests := []struct {
+		name     string
+		args     []string
+		wantCode string
+	}{
+		{"standalone file not found", []string{"read", "nonexistent.go"}, "file_not_found"},
+		{"standalone symbol not found", []string{"read", "hello.go:noSuchSymbol"}, "not_found"},
+		{"batch file not found", []string{"-r", "nonexistent.go"}, "file_not_found"},
+		{"batch symbol not found", []string{"-r", "hello.go:noSuchSymbol"}, "not_found"},
+		{"standalone edit not found", []string{"edit", "hello.go", "--old-text", "XYZZY", "--new-text", "x"}, "not_found"},
+		{"batch edit not found", []string{"-e", "hello.go", "--old", "XYZZY", "--new", "x"}, "not_found"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command(binary, tt.args...)
+			cmd.Dir = repoDir
+			cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=errcode_%d", parityCounter.Add(1)))
+			out, _ := cmd.CombinedOutput()
+
+			var env struct {
+				Ops []map[string]any `json:"ops"`
+			}
+			json.Unmarshal(out, &env)
+			if len(env.Ops) == 0 {
+				t.Fatalf("no ops: %s", out)
+			}
+			code, _ := env.Ops[0]["error_code"].(string)
+			if code != tt.wantCode {
+				t.Errorf("error_code = %q, want %q\nop: %s", code, tt.wantCode, mustJSON(env.Ops[0]))
+			}
+		})
+	}
+}
+
+// TestMapCodeFirst verifies that map prioritizes code files over
+// documentation files when budget-constrained.
+func TestMapCodeFirst(t *testing.T) {
+	binary := buildBinary(t)
+	repoDir := t.TempDir()
+	repoDir, _ = filepath.EvalSymlinks(repoDir)
+
+	os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("# Title\n\n## Section\n"), 0644)
+	os.WriteFile(filepath.Join(repoDir, "main.go"), []byte("package main\n\nfunc main() {}\n\nfunc helper() int { return 42 }\n"), 0644)
+	run(t, binary, repoDir, "reindex")
+
+	cmd := exec.Command(binary, "map", "--budget", "100")
+	cmd.Dir = repoDir
+	cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=mapcode_%d", parityCounter.Add(1)))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("map failed: %v\n%s", err, out)
+	}
+
+	var env struct {
+		Ops []struct {
+			Content []struct {
+				File string `json:"file"`
+			} `json:"content"`
+		} `json:"ops"`
+	}
+	json.Unmarshal(out, &env)
+	if len(env.Ops) == 0 || len(env.Ops[0].Content) == 0 {
+		t.Fatalf("no content in map output: %s", out)
+	}
+
+	firstFile := env.Ops[0].Content[0].File
+	if !strings.HasSuffix(firstFile, ".go") {
+		t.Errorf("first file in map should be .go, got %q", firstFile)
 	}
 }

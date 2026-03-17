@@ -67,6 +67,17 @@ func (e *Envelope) AddFailedOp(opID, opType string, errMsg string) {
 	})
 }
 
+// AddFailedOpWithCode adds a failed operation with a structured error code.
+func (e *Envelope) AddFailedOpWithCode(opID, opType, code, errMsg string) {
+	e.OK = false
+	e.Ops = append(e.Ops, Op{
+		"op_id":      opID,
+		"type":       opType,
+		"error":      errMsg,
+		"error_code": code,
+	})
+}
+
 // AddSkippedOp adds an op that was not attempted due to a prior failure.
 // Unlike AddFailedOp, this does not set ok=false on the envelope — the
 // failure is on the gating op, not this one.

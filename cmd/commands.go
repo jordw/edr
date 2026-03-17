@@ -6,10 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime/pprof"
 	"strings"
-
-	"path/filepath"
 
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
@@ -44,14 +43,14 @@ func dispatchCmdWithIndex(cmd *cobra.Command, cmdName string, args []string) err
 
 	env := output.NewEnvelope(cmdName)
 
+	opID := cmdName[:1] + "0"
 	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
 	if err != nil {
-		addDispatchError(env, err)
+		addDispatchFailedOp(env, opID, cmdName, err)
 		output.PrintEnvelope(env)
 		return silentError{code: 1}
 	}
 
-	opID := cmdName[:1] + "0"
 	env.AddOp(opID, cmdName, result)
 	env.ComputeOK()
 	output.PrintEnvelope(env)
@@ -77,10 +76,11 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	defer saveSess()
 
 	env := output.NewEnvelope(cmdName)
+	opID := cmdName[:1] + "0"
 
 	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
 	if err != nil {
-		addDispatchError(env, err)
+		addDispatchFailedOp(env, opID, cmdName, err)
 		output.PrintEnvelope(env)
 		return silentError{code: 1}
 	}
@@ -100,7 +100,6 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 		result = liftSymbolFields(result)
 	}
 
-	opID := cmdName[:1] + "0"
 	env.AddOp(opID, cmdName, result)
 	env.ComputeOK()
 	output.PrintEnvelope(env)
@@ -139,10 +138,11 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	defer saveSess()
 
 	env := output.NewEnvelope(cmdName)
+	opID := cmdName[:1] + "0"
 
 	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
 	if err != nil {
-		addDispatchError(env, err)
+		addDispatchFailedOp(env, opID, cmdName, err)
 		output.PrintEnvelope(env)
 		return silentError{code: 1}
 	}
@@ -158,14 +158,57 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 		}
 	}
 
-	opID := cmdName[:1] + "0"
 	env.AddOp(opID, cmdName, result)
+
+	// Auto-verify after successful mutations (parity with batch mode)
+	if cmdName == "edit" || cmdName == "write" {
+		dryRun, _ := flags["dry_run"].(bool)
+		status, _ := resultStatus(result)
+		if !dryRun && status == "applied" {
+			verifyResult, verifyErr := dispatch.Dispatch(context.Background(), db, "verify", []string{}, map[string]any{
+				"files": []string{args[0]},
+			})
+			if verifyErr != nil {
+				env.SetVerify(map[string]any{"ok": false, "error": verifyErr.Error()})
+			} else {
+				env.SetVerify(verifyResult)
+			}
+		} else if dryRun {
+			env.SetVerify(map[string]any{"skipped": "dry run"})
+		}
+	}
+
 	env.ComputeOK()
 	output.PrintEnvelope(env)
 	if !env.OK {
+		if env.IsVerifyOnlyFailure() {
+			return silentError{code: 2}
+		}
 		return silentError{code: 1}
 	}
 	return nil
+}
+
+// resultStatus extracts the "status" field from a dispatch result.
+func resultStatus(result any) (string, bool) {
+	if m, ok := result.(map[string]any); ok {
+		if s, ok := m["status"].(string); ok {
+			return s, true
+		}
+	}
+	// Handle struct types via JSON round-trip
+	data, err := json.Marshal(result)
+	if err != nil {
+		return "", false
+	}
+	var m map[string]any
+	if json.Unmarshal(data, &m) != nil {
+		return "", false
+	}
+	if s, ok := m["status"].(string); ok {
+		return s, true
+	}
+	return "", false
 }
 
 // =====================================================================
@@ -332,43 +375,42 @@ func liftSymbolFields(result any) any {
 	return m
 }
 
-// addDispatchError converts a dispatch error into a structured envelope error
-// with optional metadata (candidates, suggestion).
-func addDispatchError(env *output.Envelope, err error) {
+// addDispatchFailedOp creates a failed op on the envelope, matching batch behavior.
+// Per-op errors go on the op; only index-level errors go in envelope errors[].
+func addDispatchFailedOp(env *output.Envelope, opID, opType string, err error) {
 	var idxErr *IndexError
 	if errors.As(err, &idxErr) {
+		// Index errors are envelope-level (not tied to a specific op)
 		env.AddError(idxErr.Code, idxErr.Message)
 		return
 	}
-	var nfErr *dispatch.NotFoundError
-	if errors.As(err, &nfErr) {
-		opErr := output.OpError{Code: "not_found", Message: nfErr.Error()}
-		if nfErr.Hint != "" {
-			opErr.Suggestion = nfErr.Hint
-		}
-		env.OK = false
-		env.Errors = append(env.Errors, opErr)
-		return
+
+	// Classify op-level errors with specific codes
+	code := classifyError(err)
+	env.AddFailedOpWithCode(opID, opType, code, err.Error())
+}
+
+// classifyError maps dispatch errors to structured error codes.
+func classifyError(err error) string {
+	var nfe *dispatch.NotFoundError
+	if errors.As(err, &nfe) {
+		return "not_found"
 	}
-	if ambErr := asAmbiguousError(err); ambErr != nil {
-		opErr := output.OpError{Code: "ambiguous_symbol", Message: ambErr.Error}
-		for _, c := range ambErr.Candidates {
-			opErr.Candidates = append(opErr.Candidates, c)
-		}
-		env.OK = false
-		env.Errors = append(env.Errors, opErr)
-		return
+	return classifyErrorMsg(err.Error())
+}
+
+// classifyErrorMsg classifies an error message string into a structured code.
+func classifyErrorMsg(msg string) string {
+	switch {
+	case strings.Contains(msg, "not found"):
+		return "not_found"
+	case strings.Contains(msg, "ambiguous"):
+		return "ambiguous_match"
+	case strings.Contains(msg, "no such file"):
+		return "file_not_found"
+	case strings.Contains(msg, "hash mismatch"):
+		return "hash_mismatch"
+	default:
+		return "command_error"
 	}
-	// Detect file-not-found errors from OS or dispatch layer.
-	msg := err.Error()
-	if strings.Contains(msg, "no such file or directory") {
-		env.AddError("file_not_found", msg)
-		return
-	}
-	// Detect symbol-not-found errors reported as plain strings.
-	if strings.Contains(msg, "symbol") && strings.Contains(msg, "not found") {
-		env.AddError("symbol_not_found", msg)
-		return
-	}
-	env.AddError("command_error", msg)
 }

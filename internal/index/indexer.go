@@ -770,10 +770,16 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, RepoMa
 		}
 	}
 
-	// Sort files for budget-friendly output: non-test/bench first, shallower first, alpha
+	// Sort files for budget-friendly output: code first, non-test before test, shallower first, alpha
 	sort.SliceStable(fileOrder, func(i, j int) bool {
 		ri, _ := filepath.Rel(root, fileOrder[i])
 		rj, _ := filepath.Rel(root, fileOrder[j])
+		// Code files before non-code (markdown, config, etc.)
+		ci := isCodeFile(ri)
+		cj := isCodeFile(rj)
+		if ci != cj {
+			return ci
+		}
 		ti := isTestOrBenchFile(ri)
 		tj := isTestOrBenchFile(rj)
 		if ti != tj {
@@ -903,6 +909,18 @@ func matchesLang(relPath, lang string) bool {
 }
 
 // isTestOrBenchFile returns true for common test/benchmark file patterns.
+// isCodeFile returns true for source code files (not docs, config, data).
+func isCodeFile(rel string) bool {
+	ext := strings.ToLower(filepath.Ext(rel))
+	switch ext {
+	case ".go", ".py", ".js", ".jsx", ".ts", ".tsx", ".rs", ".java",
+		".c", ".h", ".cpp", ".hpp", ".cc", ".rb", ".php", ".zig",
+		".lua", ".sh", ".bash", ".cs", ".kt", ".kts", ".swift":
+		return true
+	}
+	return false
+}
+
 func isTestOrBenchFile(rel string) bool {
 	base := filepath.Base(rel)
 	dir := filepath.Dir(rel)

@@ -653,6 +653,10 @@ func inferBatchCommand(p *doParams) string {
 		types++
 		name = "write"
 	}
+	if len(p.Renames) > 0 {
+		types++
+		name = "rename"
+	}
 	if types != 1 {
 		return "batch"
 	}

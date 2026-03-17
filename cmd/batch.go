@@ -388,7 +388,7 @@ func executeWrites(ctx context.Context, db *index.DB, sess *session.Session, env
 		}
 		result, err := dispatch.Dispatch(ctx, db, "write", []string{w.File}, flags)
 		if err != nil {
-			env.AddFailedOp(opID, "write", err.Error())
+			env.AddFailedOpWithCode(opID, "write", classifyError(err), err.Error())
 			anyFailed = true
 		} else {
 			env.AddOp(opID, "write", result)
@@ -440,9 +440,10 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env 
 
 	result, err := dispatch.Dispatch(ctx, db, "edit-plan", []string{}, editFlags)
 	if err != nil {
+		code := classifyError(err)
 		for i, e := range p.Edits {
 			cb.AddEditEvent(e.File, 0, "", "", false)
-			env.AddFailedOp(fmt.Sprintf("e%d", i), "edit", err.Error())
+			env.AddFailedOpWithCode(fmt.Sprintf("e%d", i), "edit", code, err.Error())
 		}
 		return true, false
 	}
@@ -460,7 +461,7 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env 
 	allNoop := false
 	m, _ := result.(map[string]any)
 	if m != nil {
-		if noop, _ := m["noop"].(bool); noop {
+		if st, _ := m["status"].(string); st == "noop" {
 			allNoop = true
 		}
 	}
@@ -493,7 +494,6 @@ func emitPerEditOps(env *output.Envelope, edits []doEdit, result map[string]any)
 	hashes, _ := result["hashes"].(map[string]any)
 	descriptions, _ := result["description"].([]any)
 	diff, _ := result["diff"].(string)
-	noop, _ := result["noop"].(bool)
 
 	// For dry-run, extract per-file preview entries
 	var dryEdits []any
@@ -506,10 +506,6 @@ func emitPerEditOps(env *output.Envelope, edits []doEdit, result map[string]any)
 		op := map[string]any{
 			"file":   e.File,
 			"status": status,
-		}
-
-		if noop {
-			op["status"] = "noop"
 		}
 
 		// Per-edit description
@@ -691,7 +687,7 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 			}
 			result, err := dispatch.Dispatch(ctx, db, "rename", []string{r.OldName, r.NewName}, renameFlags)
 			if err != nil {
-				env.AddFailedOp(opID, "rename", err.Error())
+				env.AddFailedOpWithCode(opID, "rename", classifyError(err), err.Error())
 			} else {
 				env.AddOp(opID, "rename", result)
 			}
@@ -1008,7 +1004,7 @@ func addMultiResultOps(env *output.Envelope, sess *session.Session, cmds []dispa
 		counters[p]++
 
 		if !r.OK {
-			env.AddFailedOp(opID, cmdName, r.Error)
+			env.AddFailedOpWithCode(opID, cmdName, classifyErrorMsg(r.Error), r.Error)
 			continue
 		}
 		if r.Result == nil {
