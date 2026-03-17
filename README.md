@@ -6,24 +6,12 @@
 
 Works with any agent that can run shell commands. Fully local, no telemetry.
 
-## Before and after
+## Example
 
-Task: add a `retries` parameter to a scheduler class.
+Add a `retries` parameter to a scheduler class. Without edr, agents read whole files to find individual symbols — 6 calls, ~59KB of context. With edr:
 
-**Without edr** — agents read whole files to reach individual symbols:
-```
-read src/scheduler.py            → 400 lines, 18KB
-grep "retry" src/                → flat text dump, ~1KB
-read src/config.py               → 200 lines, 9KB
-read src/worker.py               → 300 lines, 13KB
-edit src/scheduler.py            → no build verification
-read src/scheduler.py            → re-read to confirm, 18KB
-```
-6 calls, ~59KB of context consumed.
-
-**With edr:**
 ```bash
-# Read three symbols + search, in one call
+# Read three symbols + search, one call
 edr -r src/scheduler.py:Scheduler --sig \
     -r src/config.py:parse_config \
     -r src/worker.py:Worker --sig \
@@ -33,7 +21,7 @@ edr -r src/scheduler.py:Scheduler --sig \
 edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):" \
     -e src/config.py --old '"timeout": 30' --new '"timeout": 30, "retries": 3'
 ```
-2 calls, ~8KB of context consumed.
+2 calls, ~8KB of context.
 
 ## Benchmarks
 
@@ -142,15 +130,15 @@ edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "..."
 | Command | Example |
 |---|---|
 | `read` | `edr read file:Symbol`, `edr read file:Class --signatures` |
-| `search` | `edr search "pattern"`, `edr search "pattern" --text` |
-| `map` | `edr map`, `edr map --dir src/ --type function` |
-| `edit` | `edr edit file --old "x" --new "y"` |
-| `write` | `edr write file --inside Class --content "..."` |
+| `search` | `edr search "pattern" --text`, `edr search "pattern" --regex` |
+| `map` | `edr map`, `edr map --dir src/ --type function --lang go` |
+| `edit` | `edr edit file --old-text "x" --new-text "y"` |
+| `write` | `edr write file --inside Class --content "..."`, `--append` |
 | `refs` | `edr refs Symbol`, `edr refs Symbol --impact` |
-| `verify` | `edr verify` |
+| `rename` | `edr rename old new --dry-run` |
+| `verify` | `edr verify`, `edr verify --level test` |
+| `setup` | `edr setup .`, `edr setup --claude --force` |
 | `reindex` | `edr reindex` |
-
-`rename` is convenience sugar over `refs` + `edit`: `edr rename old new --dry-run`.
 
 All output is structured JSON.
 
