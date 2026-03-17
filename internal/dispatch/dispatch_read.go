@@ -453,8 +453,17 @@ func runSymbols(ctx context.Context, db *index.DB, root string, args []string, f
 		results = append(results, sym)
 	}
 	return map[string]any{
-		"file":    output.Rel(file),
-		"symbols": results,
+		"content": []any{
+			map[string]any{
+				"file":    output.Rel(file),
+				"symbols": results,
+			},
+		},
+		"files":         1,
+		"shown_files":   1,
+		"shown_symbols": len(results),
+		"symbols":       len(results),
+		"truncated":     false,
 	}, nil
 }
 

@@ -1039,14 +1039,11 @@ func addMultiResultOps(env *output.Envelope, sess *session.Session, cmds []dispa
 			// Lift file and hash from nested "symbol" sub-object to top level
 			if m, ok := result.(map[string]any); ok {
 				if sym, ok := m["symbol"].(map[string]any); ok {
-					if _, has := m["file"]; !has {
-						if f, ok := sym["file"]; ok {
-							m["file"] = f
-						}
-					}
-					if _, has := m["hash"]; !has {
-						if h, ok := sym["hash"]; ok {
-							m["hash"] = h
+					for _, key := range []string{"file", "hash", "lines"} {
+						if _, has := m[key]; !has {
+							if v, ok := sym[key]; ok {
+								m[key] = v
+							}
 						}
 					}
 				}

@@ -1000,19 +1000,46 @@ func (d *DB) SearchSymbols(ctx context.Context, pattern string, limit ...int) ([
 }
 
 // GetSymbol returns a specific symbol by name and file.
+// Returns an error if the symbol is not found or if multiple symbols share the
+// same name in the file (e.g. multiple init functions).
 func (d *DB) GetSymbol(ctx context.Context, file, name string) (*SymbolInfo, error) {
-	var s SymbolInfo
-	err := d.db.QueryRowContext(ctx, `
+	rows, err := d.db.QueryContext(ctx, `
 		SELECT name, type, file, start_line, end_line, start_byte, end_byte
 		FROM symbols WHERE file = ? AND name = ?
-	`, file, name).Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte)
-	if err == sql.ErrNoRows {
-		return nil, d.symbolNotFoundError(ctx, name, file)
-	}
+		ORDER BY start_line
+	`, file, name)
 	if err != nil {
 		return nil, err
 	}
-	return &s, nil
+	defer rows.Close()
+
+	var results []SymbolInfo
+	for rows.Next() {
+		var s SymbolInfo
+		if err := rows.Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte); err != nil {
+			return nil, err
+		}
+		results = append(results, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(results) == 0 {
+		return nil, d.symbolNotFoundError(ctx, name, file)
+	}
+	if len(results) > 1 {
+		lines := make([]string, len(results))
+		for i, s := range results {
+			lines[i] = fmt.Sprintf("%d", s.StartLine)
+		}
+		rel := file
+		if d.root != "" && strings.HasPrefix(rel, d.root+"/") {
+			rel = rel[len(d.root)+1:]
+		}
+		return nil, fmt.Errorf("symbol %q is ambiguous in %s: %d matches at lines %s",
+			name, rel, len(results), strings.Join(lines, ", "))
+	}
+	return &results[0], nil
 }
 
 // ResolveSymbol finds a symbol by name across all files. Returns an error if

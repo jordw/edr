@@ -361,15 +361,12 @@ func liftSymbolFields(result any) any {
 	if !ok {
 		return m
 	}
-	// Lift file and hash to top level if not already present
-	if _, has := m["file"]; !has {
-		if f, ok := sym["file"]; ok {
-			m["file"] = f
-		}
-	}
-	if _, has := m["hash"]; !has {
-		if h, ok := sym["hash"]; ok {
-			m["hash"] = h
+	// Lift file, hash, and lines to top level if not already present
+	for _, key := range []string{"file", "hash", "lines"} {
+		if _, has := m[key]; !has {
+			if v, ok := sym[key]; ok {
+				m[key] = v
+			}
 		}
 	}
 	return m

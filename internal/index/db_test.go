@@ -492,3 +492,53 @@ func TestSymbolSimilarity(t *testing.T) {
 		t.Errorf("'applyedit' should be similar to 'apply', got score %d", s)
 	}
 }
+
+func TestGetSymbolAmbiguousReturnsError(t *testing.T) {
+	tmp := t.TempDir()
+	// Write a Go file with multiple init functions (same name, multiple definitions).
+	src := []byte(`package main
+
+func init() { println("first") }
+func init() { println("second") }
+func init() { println("third") }
+func unique() {}
+`)
+	if err := os.WriteFile(filepath.Join(tmp, "main.go"), src, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if _, _, err := IndexRepo(ctx, db); err != nil {
+		t.Fatalf("IndexRepo: %v", err)
+	}
+
+	file := filepath.Join(tmp, "main.go")
+
+	// Unambiguous symbol should succeed.
+	sym, err := db.GetSymbol(ctx, file, "unique")
+	if err != nil {
+		t.Fatalf("GetSymbol(unique): unexpected error: %v", err)
+	}
+	if sym.Name != "unique" {
+		t.Errorf("GetSymbol(unique).Name = %q, want %q", sym.Name, "unique")
+	}
+
+	// Ambiguous symbol should return an error containing "ambiguous".
+	_, err = db.GetSymbol(ctx, file, "init")
+	if err == nil {
+		t.Fatal("GetSymbol(init): expected error for ambiguous symbol, got nil")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") {
+		t.Errorf("GetSymbol(init): expected error to contain \"ambiguous\", got: %v", err)
+	}
+	// Error should mention the match count and at least one line number.
+	if !strings.Contains(err.Error(), "3 matches") {
+		t.Errorf("GetSymbol(init): expected error to contain \"3 matches\", got: %v", err)
+	}
+}

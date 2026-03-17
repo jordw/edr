@@ -13,7 +13,6 @@ import (
 	"github.com/jordw/edr/internal/edit"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
-	"github.com/jordw/edr/internal/search"
 )
 
 var setRootOnce sync.Once
@@ -283,21 +282,7 @@ func runSearchUnified(ctx context.Context, db *index.DB, args []string, flags ma
 	if isText {
 		return runSearchText(ctx, db, args, flags)
 	}
-	result, err := runSearch(ctx, db, args, flags)
-	if err != nil {
-		return nil, err
-	}
-	if sr, ok := result.(*search.SearchResult); ok && sr.TotalMatches == 0 {
-		// Auto-fallback to text search when symbol search finds nothing
-		budget := flagInt(flags, "budget", 0)
-		textResult, textErr := search.SearchText(ctx, db, args[0], budget, false)
-		if textErr == nil && textResult.TotalMatches > 0 {
-			textResult.Hint = "no symbol matches; showing text results"
-			return textResult, nil
-		}
-		sr.Hint = "no symbol or text matches found"
-	}
-	return result, nil
+	return runSearch(ctx, db, args, flags)
 }
 
 // runExploreUnified routes to expand or gather based on flags.

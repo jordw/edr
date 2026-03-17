@@ -687,19 +687,23 @@ func TestCorrectnessMapConsistency(t *testing.T) {
 	})
 
 	t.Run("map per-file is consistent with read", func(t *testing.T) {
-		// Map a specific file returns {"file": ..., "symbols": [...]}
+		// Map a specific file now returns unified shape with content array
 		var mapResult struct {
-			File    string `json:"file"`
-			Symbols []struct {
-				Name string `json:"name"`
-				Type string `json:"type"`
-			} `json:"symbols"`
+			Content []struct {
+				File    string `json:"file"`
+				Symbols []struct {
+					Name string `json:"name"`
+					Type string `json:"type"`
+				} `json:"symbols"`
+			} `json:"content"`
 		}
 		dispatchResult(t, ctx, db, "map", []string{"go/pkg_a/config.go"}, nil, &mapResult)
 
 		symNames := make(map[string]bool)
-		for _, s := range mapResult.Symbols {
-			symNames[s.Name] = true
+		if len(mapResult.Content) > 0 {
+			for _, s := range mapResult.Content[0].Symbols {
+				symNames[s.Name] = true
+			}
 		}
 		for _, expected := range []string{"Config", "Init", "Validate"} {
 			if !symNames[expected] {

@@ -469,6 +469,6 @@ func ambiguousMatchError(content, relFile, matchText string, locs [][]int) error
 	for i, l := range lines {
 		lineStrs[i] = fmt.Sprintf("%d", l)
 	}
-	return fmt.Errorf("old_text %q matched %d locations in %s (lines %s); provide more surrounding context to make it unique, or use all: true to replace all",
+	return fmt.Errorf("ambiguous: old_text %q matched %d locations in %s (lines %s); provide more surrounding context to make it unique, or use all: true to replace all",
 		matchText, len(locs), relFile, strings.Join(lineStrs, ", "))
 }

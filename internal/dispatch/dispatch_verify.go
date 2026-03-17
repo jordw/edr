@@ -61,14 +61,17 @@ func runVerify(ctx context.Context, db *index.DB, root string, args []string, fl
 	}
 
 	if err != nil {
-		result["ok"] = false
 		if cmdCtx.Err() == context.DeadlineExceeded {
+			result["status"] = "timeout"
+			result["ok"] = false
 			result["error"] = fmt.Sprintf("timeout after %ds (may need longer for cold builds with dependency downloads)", timeout)
-			result["timeout"] = true
 		} else {
+			result["status"] = "failed"
+			result["ok"] = false
 			result["error"] = err.Error()
 		}
 	} else {
+		result["status"] = "passed"
 		result["ok"] = true
 	}
 
@@ -83,6 +86,12 @@ func runVerify(ctx context.Context, db *index.DB, root string, args []string, fl
 func goVerifyScope(root string, flags map[string]any) string {
 	files, _ := flags["files"].([]string)
 	if len(files) == 0 {
+		// No files specified: use go list to get valid packages, excluding
+		// dirs that aren't part of the main module (testdata, scratch, tmp_*, etc).
+		scope := goListValidPackages(root)
+		if scope != "" {
+			return scope
+		}
 		return "./..."
 	}
 	edited := map[string]bool{}
@@ -111,6 +120,60 @@ func goVerifyScope(root string, flags map[string]any) string {
 		parts = append(parts, dir)
 	}
 	return strings.Join(parts, " ")
+}
+
+// goListValidPackages uses `go list` to enumerate valid packages, excluding
+// dirs with build errors (scratch/, tmp_*, testdata/, etc). Returns space-joined
+// package dirs or empty string if go list fails.
+// excludedVerifyDirs are directory prefixes excluded from default verify scope.
+// These commonly contain fixtures, scratch work, or intentionally broken code.
+var excludedVerifyDirs = []string{
+	"testdata/", "scratch/", "tmp_", "examples/", "vendor/",
+}
+
+func goListValidPackages(root string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// Only include packages with non-test Go files (go build fails on test-only packages)
+	cmd := exec.CommandContext(ctx, "go", "list", "-e", "-f",
+		`{{if .GoFiles}}{{.Dir}}{{end}}`, "./...")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	var pkgs []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		rel, err := filepath.Rel(root, line)
+		if err != nil {
+			continue
+		}
+		// Skip excluded directories
+		excluded := false
+		for _, prefix := range excludedVerifyDirs {
+			trimmed := strings.TrimSuffix(prefix, "/")
+			if rel == trimmed || strings.HasPrefix(rel, prefix) || strings.HasPrefix(rel, trimmed+"/") {
+				excluded = true
+				break
+			}
+		}
+		if excluded {
+			continue
+		}
+		if rel == "." {
+			pkgs = append(pkgs, ".")
+		} else {
+			pkgs = append(pkgs, "./"+rel)
+		}
+	}
+	if len(pkgs) == 0 {
+		return ""
+	}
+	return strings.Join(pkgs, " ")
 }
 
 // goReverseImporters finds packages that import any of the edited packages.
