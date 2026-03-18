@@ -323,7 +323,7 @@ func TestPostProcess_FullFlag(t *testing.T) {
 	}
 }
 
-func TestDoQueryToMultiCmd_Search(t *testing.T) {
+func TestQueryToMultiCmd_Search(t *testing.T) {
 	body := true
 	pattern := "TODO"
 	q := doQuery{
@@ -331,7 +331,7 @@ func TestDoQueryToMultiCmd_Search(t *testing.T) {
 		Pattern: &pattern,
 		Body:    &body,
 	}
-	mc, _ := doQueryToMultiCmd(q)
+	mc := queryToMultiCmd(q)
 	if mc.Cmd != "search" {
 		t.Errorf("cmd = %q, want search", mc.Cmd)
 	}
@@ -343,13 +343,13 @@ func TestDoQueryToMultiCmd_Search(t *testing.T) {
 	}
 }
 
-func TestDoQueryToMultiCmd_SearchEmptyPattern(t *testing.T) {
+func TestQueryToMultiCmd_SearchEmptyPattern(t *testing.T) {
 	empty := ""
 	q := doQuery{
 		Cmd:     "search",
 		Pattern: &empty,
 	}
-	mc, _ := doQueryToMultiCmd(q)
+	mc := queryToMultiCmd(q)
 	if mc.Cmd != "search" {
 		t.Errorf("cmd = %q, want search", mc.Cmd)
 	}
@@ -358,7 +358,7 @@ func TestDoQueryToMultiCmd_SearchEmptyPattern(t *testing.T) {
 	}
 }
 
-func TestDoQueryToMultiCmd_Explore(t *testing.T) {
+func TestNormalizeQueryCmd_Explore(t *testing.T) {
 	// Legacy "explore" cmd should be translated to "refs" when callers/deps are set
 	sym := "Dispatch"
 	body := true
@@ -369,7 +369,8 @@ func TestDoQueryToMultiCmd_Explore(t *testing.T) {
 		Body:    &body,
 		Callers: &callers,
 	}
-	mc, _ := doQueryToMultiCmd(q)
+	normalizeQueryCmd(&q)
+	mc := queryToMultiCmd(q)
 	if mc.Cmd != "refs" {
 		t.Errorf("cmd = %q, want refs (explore with callers translates to refs)", mc.Cmd)
 	}
@@ -381,7 +382,7 @@ func TestDoQueryToMultiCmd_Explore(t *testing.T) {
 	}
 }
 
-func TestDoQueryToMultiCmd_Map(t *testing.T) {
+func TestQueryToMultiCmd_Map(t *testing.T) {
 	dir := "internal/"
 	typ := "function"
 	grep := "run"
@@ -391,7 +392,7 @@ func TestDoQueryToMultiCmd_Map(t *testing.T) {
 		Type: &typ,
 		Grep: &grep,
 	}
-	mc, _ := doQueryToMultiCmd(q)
+	mc := queryToMultiCmd(q)
 	if mc.Cmd != "map" {
 		t.Errorf("cmd = %q, want map", mc.Cmd)
 	}
@@ -406,12 +407,13 @@ func TestDoQueryToMultiCmd_Map(t *testing.T) {
 	}
 }
 
-func TestDoQueryToMultiCmd_DefaultsToRead(t *testing.T) {
+func TestNormalizeQueryCmd_DefaultsToRead(t *testing.T) {
 	file := "main.go"
 	q := doQuery{
 		File: &file,
 	}
-	mc, _ := doQueryToMultiCmd(q)
+	normalizeQueryCmd(&q)
+	mc := queryToMultiCmd(q)
 	if mc.Cmd != "read" {
 		t.Errorf("cmd = %q, want read (default)", mc.Cmd)
 	}
@@ -420,7 +422,7 @@ func TestDoQueryToMultiCmd_DefaultsToRead(t *testing.T) {
 	}
 }
 
-func TestDoQueryToMultiCmd_Refs(t *testing.T) {
+func TestQueryToMultiCmd_Refs(t *testing.T) {
 	sym := "Dispatch"
 	impact := true
 	depth := 2
@@ -430,7 +432,7 @@ func TestDoQueryToMultiCmd_Refs(t *testing.T) {
 		Impact: &impact,
 		Depth:  &depth,
 	}
-	mc, _ := doQueryToMultiCmd(q)
+	mc := queryToMultiCmd(q)
 	if mc.Cmd != "refs" {
 		t.Errorf("cmd = %q, want refs", mc.Cmd)
 	}
@@ -442,15 +444,16 @@ func TestDoQueryToMultiCmd_Refs(t *testing.T) {
 	}
 }
 
-func TestDoQueryToMultiCmd_InferredDefaultBudget(t *testing.T) {
-	// When cmd is not set (inferred), doQueryToMultiCmd should apply a default budget of 200
+func TestNormalizeQueryCmd_InferredDefaultBudget(t *testing.T) {
+	// When cmd is not set (inferred), normalizeQueryCmd should apply a default budget of 200
 	pattern := "TODO"
 	q := doQuery{
 		Pattern: &pattern,
 		// No Cmd set — will be inferred as "search"
 		// No Budget set — should get default 200
 	}
-	mc, _ := doQueryToMultiCmd(q)
+	normalizeQueryCmd(&q)
+	mc := queryToMultiCmd(q)
 	if mc.Cmd != "search" {
 		t.Errorf("cmd = %q, want search", mc.Cmd)
 	}
@@ -459,7 +462,7 @@ func TestDoQueryToMultiCmd_InferredDefaultBudget(t *testing.T) {
 	}
 }
 
-func TestDoQueryToMultiCmd_ExplicitCmdNoBudgetDefault(t *testing.T) {
+func TestNormalizeQueryCmd_ExplicitCmdNoBudgetDefault(t *testing.T) {
 	// When cmd is explicitly set, no default budget should be applied
 	pattern := "TODO"
 	q := doQuery{
@@ -467,13 +470,14 @@ func TestDoQueryToMultiCmd_ExplicitCmdNoBudgetDefault(t *testing.T) {
 		Pattern: &pattern,
 		// Explicit Cmd — should NOT get default budget
 	}
-	mc, _ := doQueryToMultiCmd(q)
+	normalizeQueryCmd(&q)
+	mc := queryToMultiCmd(q)
 	if _, ok := mc.Flags["budget"]; ok {
 		t.Errorf("budget should not be set for explicit cmd, got %v", mc.Flags["budget"])
 	}
 }
 
-func TestDoQueryToMultiCmd_InferredWithExplicitBudget(t *testing.T) {
+func TestNormalizeQueryCmd_InferredWithExplicitBudget(t *testing.T) {
 	// When cmd is inferred but budget is explicitly set, keep the explicit budget
 	pattern := "TODO"
 	budget := 500
@@ -481,37 +485,38 @@ func TestDoQueryToMultiCmd_InferredWithExplicitBudget(t *testing.T) {
 		Pattern: &pattern,
 		Budget:  &budget,
 	}
-	mc, _ := doQueryToMultiCmd(q)
+	normalizeQueryCmd(&q)
+	mc := queryToMultiCmd(q)
 	if mc.Flags["budget"] != 500 {
 		t.Errorf("budget = %v, want 500 (explicit budget should be preserved)", mc.Flags["budget"])
 	}
 }
 
-func TestDoQueryToMultiCmd_InferredReturnValue(t *testing.T) {
-	// When cmd is inferred, second return value should be true
+func TestNormalizeQueryCmd_InferredReturnValue(t *testing.T) {
+	// When cmd is inferred, return value should be true
 	pattern := "TODO"
 	q := doQuery{Pattern: &pattern}
-	_, inferred := doQueryToMultiCmd(q)
+	inferred := normalizeQueryCmd(&q)
 	if !inferred {
 		t.Error("expected inferred=true when cmd is not set")
 	}
 
-	// When cmd is explicit, second return value should be false
+	// When cmd is explicit, return value should be false
 	q2 := doQuery{Cmd: "search", Pattern: &pattern}
-	_, inferred2 := doQueryToMultiCmd(q2)
+	inferred2 := normalizeQueryCmd(&q2)
 	if inferred2 {
 		t.Error("expected inferred=false when cmd is explicitly set")
 	}
 }
 
-func TestDoQueryToMultiCmd_TextSearchGrouping(t *testing.T) {
+func TestQueryToMultiCmd_TextSearchGrouping(t *testing.T) {
 	pattern := "TODO"
 	textTrue := true
 
 	// Text search without explicit group: grouping is now default in dispatch,
 	// so batch should NOT set any group flag (dispatch handles the default)
 	q := doQuery{Cmd: "search", Pattern: &pattern, Text: &textTrue}
-	mc, _ := doQueryToMultiCmd(q)
+	mc := queryToMultiCmd(q)
 	if _, ok := mc.Flags["group"]; ok {
 		t.Error("text search should not set group flag (default is in dispatch)")
 	}
@@ -522,36 +527,67 @@ func TestDoQueryToMultiCmd_TextSearchGrouping(t *testing.T) {
 	// Explicit group=false should pass no_group=true to dispatch
 	groupFalse := false
 	q2 := doQuery{Cmd: "search", Pattern: &pattern, Text: &textTrue, Group: &groupFalse}
-	mc2, _ := doQueryToMultiCmd(q2)
+	mc2 := queryToMultiCmd(q2)
 	if mc2.Flags["no_group"] != true {
 		t.Error("explicit group=false should set no_group=true")
 	}
 }
 
-// TestDoQueryToMultiCmd_LegacyExploreWithoutCallers verifies that legacy
+// TestNormalizeQueryCmd_LegacyExploreWithoutCallers verifies that legacy
 // "explore" cmd with no callers/deps translates to "read".
-func TestDoQueryToMultiCmd_LegacyExploreWithoutCallers(t *testing.T) {
+func TestNormalizeQueryCmd_LegacyExploreWithoutCallers(t *testing.T) {
 	sym := "Dispatch"
 	q := doQuery{
 		Cmd:    "explore",
 		Symbol: &sym,
 	}
-	mc, _ := doQueryToMultiCmd(q)
-	if mc.Cmd != "read" {
-		t.Errorf("explore without callers/deps should translate to read, got %q", mc.Cmd)
+	normalizeQueryCmd(&q)
+	if q.Cmd != "read" {
+		t.Errorf("explore without callers/deps should translate to read, got %q", q.Cmd)
 	}
 }
 
-// TestDoQueryToMultiCmd_LegacyFind verifies that legacy "find" cmd translates to "search".
-func TestDoQueryToMultiCmd_LegacyFind(t *testing.T) {
+// TestNormalizeQueryCmd_LegacyFind verifies that legacy "find" cmd translates to "search".
+func TestNormalizeQueryCmd_LegacyFind(t *testing.T) {
 	pattern := "**/*.go"
 	q := doQuery{
 		Cmd:     "find",
 		Pattern: &pattern,
 	}
-	mc, _ := doQueryToMultiCmd(q)
-	if mc.Cmd != "search" {
-		t.Errorf("find should translate to search, got %q", mc.Cmd)
+	normalizeQueryCmd(&q)
+	if q.Cmd != "search" {
+		t.Errorf("find should translate to search, got %q", q.Cmd)
+	}
+}
+
+// TestNormalizeQueryCmd_EmptyNoInference verifies that normalizeQueryCmd leaves
+// Cmd empty when no fields allow inference, so executeQueries catches the error.
+func TestNormalizeQueryCmd_EmptyNoInference(t *testing.T) {
+	q := doQuery{} // no fields set
+	inferred := normalizeQueryCmd(&q)
+	if !inferred {
+		t.Error("expected inferred=true when Cmd was empty")
+	}
+	if q.Cmd != "" {
+		t.Errorf("Cmd = %q, want empty (no fields to infer from)", q.Cmd)
+	}
+}
+
+// TestNormalizeQueryCmd_Idempotent verifies that calling normalizeQueryCmd twice
+// produces the same result (important since executeQueries normalizes up front).
+func TestNormalizeQueryCmd_Idempotent(t *testing.T) {
+	pattern := "TODO"
+	q := doQuery{Pattern: &pattern}
+	normalizeQueryCmd(&q)
+	cmd1 := q.Cmd
+	budget1 := *q.Budget
+
+	normalizeQueryCmd(&q)
+	if q.Cmd != cmd1 {
+		t.Errorf("second normalize changed Cmd: %q → %q", cmd1, q.Cmd)
+	}
+	if *q.Budget != budget1 {
+		t.Errorf("second normalize changed Budget: %d → %d", budget1, *q.Budget)
 	}
 }
 
@@ -1993,11 +2029,11 @@ func TestHandleDo_SkippedWritesNotFailed(t *testing.T) {
 	}
 }
 
-// --- normalizeReadBody ---
+// --- normalizeReadResult (body→content rename) ---
 
-func TestNormalizeReadBody_RenamesBody(t *testing.T) {
+func TestNormalizeReadResult_RenamesBody(t *testing.T) {
 	m := map[string]any{"body": "hello", "symbol": "Foo"}
-	result := normalizeReadBody(m)
+	result := normalizeReadResult(m)
 	rm := result.(map[string]any)
 	if rm["content"] != "hello" {
 		t.Errorf("content = %v, want hello", rm["content"])
@@ -2007,18 +2043,18 @@ func TestNormalizeReadBody_RenamesBody(t *testing.T) {
 	}
 }
 
-func TestNormalizeReadBody_PreservesContent(t *testing.T) {
+func TestNormalizeReadResult_PreservesContent(t *testing.T) {
 	m := map[string]any{"content": "hello", "file": "test.go"}
-	result := normalizeReadBody(m)
+	result := normalizeReadResult(m)
 	rm := result.(map[string]any)
 	if rm["content"] != "hello" {
 		t.Errorf("content = %v, want hello", rm["content"])
 	}
 }
 
-func TestNormalizeReadBody_NoBodyNoOp(t *testing.T) {
+func TestNormalizeReadResult_NoBodyNoOp(t *testing.T) {
 	m := map[string]any{"file": "test.go", "hash": "abc"}
-	result := normalizeReadBody(m)
+	result := normalizeReadResult(m)
 	rm := result.(map[string]any)
 	if _, has := rm["content"]; has {
 		t.Error("should not add content when no body present")

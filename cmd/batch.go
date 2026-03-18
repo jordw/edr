@@ -253,6 +253,7 @@ func executeReads(ctx context.Context, db *index.DB, sess *session.Session, env 
 }
 
 // executeQueries dispatches query operations and adds results as ops on the envelope.
+// Follows the same normalize-then-build-then-dispatch pattern as executeReads.
 func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams, cb *trace.CallBuilder) {
 	// Distribute top-level budget to queries that lack individual budgets.
 	if p.Budget != nil && len(p.Queries) > 0 {
@@ -272,38 +273,37 @@ func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, en
 		}
 	}
 
-	// Partition into dispatch, diff, and error queries
-	var dispatchIdxs, diffIdxs, errorIdxs []int
-	inferredCmds := make(map[int]string)
+	// 1. Normalize all queries: set Cmd, apply defaults
+	for i := range p.Queries {
+		normalizeQueryCmd(&p.Queries[i])
+	}
+
+	// 2. Build MultiCmds and partition into dispatch vs diff vs error
+	allCmds := make([]dispatch.MultiCmd, len(p.Queries))
+	allResults := make([]dispatch.MultiResult, len(p.Queries))
+	var dispatchIdxs, diffIdxs []int
+
 	for i, q := range p.Queries {
 		if q.Cmd == "diff" {
+			allCmds[i] = dispatch.MultiCmd{Cmd: "diff"}
 			diffIdxs = append(diffIdxs, i)
-		} else {
-			mc, wasInferred := doQueryToMultiCmd(q)
-			if mc.Cmd == "" {
-				errorIdxs = append(errorIdxs, i)
-			} else {
-				if wasInferred {
-					inferredCmds[i] = mc.Cmd
-				}
-				dispatchIdxs = append(dispatchIdxs, i)
+		} else if q.Cmd == "" {
+			allCmds[i] = dispatch.MultiCmd{}
+			allResults[i] = dispatch.MultiResult{
+				OK:    false,
+				Error: `query requires a "cmd" field (search, map, refs, read, diff)`,
 			}
+		} else {
+			allCmds[i] = queryToMultiCmd(q)
+			dispatchIdxs = append(dispatchIdxs, i)
 		}
 	}
 
-	allResults := make([]dispatch.MultiResult, len(p.Queries))
-
-	for _, qi := range errorIdxs {
-		allResults[qi] = dispatch.MultiResult{
-			OK:    false,
-			Error: `query requires a "cmd" field (search, map, refs, read, diff)`,
-		}
-	}
-
+	// 3. Dispatch
 	if len(dispatchIdxs) > 0 {
 		cmds := make([]dispatch.MultiCmd, len(dispatchIdxs))
 		for ci, qi := range dispatchIdxs {
-			cmds[ci], _ = doQueryToMultiCmd(p.Queries[qi])
+			cmds[ci] = allCmds[qi]
 		}
 		var budgetOpt []int
 		if p.Budget != nil {
@@ -315,6 +315,7 @@ func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, en
 		}
 	}
 
+	// Handle diff queries (session-based, not dispatched)
 	for _, qi := range diffIdxs {
 		q := p.Queries[qi]
 		var diffArgs []string
@@ -335,19 +336,7 @@ func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, en
 		}
 	}
 
-	allCmds := make([]dispatch.MultiCmd, len(p.Queries))
-	for i, q := range p.Queries {
-		if q.Cmd == "diff" {
-			allCmds[i] = dispatch.MultiCmd{Cmd: "diff"}
-		} else {
-			allCmds[i], _ = doQueryToMultiCmd(q)
-		}
-	}
-	for qi, inferredCmd := range inferredCmds {
-		allResults[qi].InferredCmd = inferredCmd
-	}
-
-	// Add ops to envelope
+	// 4. Post-process results
 	addMultiResultOps(env, sess, allCmds, allResults, "")
 
 	// Trace query events
@@ -814,7 +803,6 @@ func traceVerifyEvent(cb *trace.CallBuilder, result any) {
 	cb.AddVerifyEvent(command, verifyOK, durationMs, outputBytes)
 }
 
-// doQueryToMultiCmd converts a generalized doQuery into a dispatch.MultiCmd.
 // inferQueryCmd determines the public command from populated fields when cmd is omitted.
 // Only returns public command names: search, refs, map, read.
 func inferQueryCmd(q doQuery) string {
@@ -842,26 +830,25 @@ func inferQueryCmd(q doQuery) string {
 	return "" // will be caught as error below
 }
 
-// doQueryToMultiCmd converts a doQuery to a dispatch.MultiCmd using only public commands.
-// Returns the MultiCmd and whether the cmd was inferred (not explicitly set).
-func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
-	cmd := q.Cmd
+// normalizeQueryCmd mutates a doQuery in-place: translates legacy command names
+// (explore→refs/read, find→search), infers Cmd from fields if empty, and applies
+// a default budget when Cmd was inferred. Returns whether Cmd was inferred.
+func normalizeQueryCmd(q *doQuery) bool {
 	inferred := false
-	if cmd == "" {
-		cmd = inferQueryCmd(q)
-		inferred = true
-	}
 
 	// Translate legacy internal command names to public commands
-	switch cmd {
+	switch q.Cmd {
 	case "explore":
 		if (q.Callers != nil && *q.Callers) || (q.Deps != nil && *q.Deps) {
-			cmd = "refs"
+			q.Cmd = "refs"
 		} else {
-			cmd = "read"
+			q.Cmd = "read"
 		}
 	case "find":
-		cmd = "search"
+		q.Cmd = "search"
+	case "":
+		q.Cmd = inferQueryCmd(*q)
+		inferred = true
 	}
 
 	// When cmd is inferred and no budget is set, apply a default cap
@@ -870,6 +857,13 @@ func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
 		q.Budget = &defaultBudget
 	}
 
+	return inferred
+}
+
+// queryToMultiCmd converts a doQuery to a dispatch.MultiCmd. Assumes Cmd is already set
+// (call normalizeQueryCmd first for legacy/inference handling).
+func queryToMultiCmd(q doQuery) dispatch.MultiCmd {
+	cmd := q.Cmd
 	args := []string{}
 	flags := map[string]any{}
 
@@ -889,7 +883,7 @@ func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
 			}
 			args = []string{f}
 		} else if q.Symbol != nil && *q.Symbol != "" {
-			// Symbol-only query (formerly routed to explore) → read symbol
+			// Symbol-only query → read symbol
 			args = []string{*q.Symbol}
 		}
 		if q.Signatures != nil && *q.Signatures {
@@ -901,7 +895,7 @@ func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
 
 	case "search":
 		if q.Pattern == nil || *q.Pattern == "" {
-			return dispatch.MultiCmd{Cmd: "search", Args: []string{}, Flags: flags}, inferred
+			return dispatch.MultiCmd{Cmd: "search", Args: []string{}, Flags: flags}
 		}
 		args = []string{*q.Pattern}
 		if q.Body != nil && *q.Body {
@@ -979,7 +973,7 @@ func doQueryToMultiCmd(q doQuery) (dispatch.MultiCmd, bool) {
 		}
 	}
 
-	return dispatch.MultiCmd{Cmd: cmd, Args: args, Flags: flags}, inferred
+	return dispatch.MultiCmd{Cmd: cmd, Args: args, Flags: flags}
 }
 
 // addMultiResultOps applies session post-processing to each result and adds them as ops.
@@ -1033,52 +1027,15 @@ func addMultiResultOps(env *output.Envelope, sess *session.Session, cmds []dispa
 			}
 		}
 
-		// Normalize read results: rename "body" to "content"
+		// Normalize read results: rename "body" → "content", lift symbol fields
 		if cmd == "read" {
-			result = normalizeReadBody(result)
-			// Lift file and hash from nested "symbol" sub-object to top level
-			if m, ok := result.(map[string]any); ok {
-				if sym, ok := m["symbol"].(map[string]any); ok {
-					for _, key := range []string{"file", "hash", "lines"} {
-						if _, has := m[key]; !has {
-							if v, ok := sym[key]; ok {
-								m[key] = v
-							}
-						}
-					}
-				}
-			}
+			result = normalizeReadResult(result)
 		}
 
 		env.AddOp(opID, cmdName, result)
 	}
 }
 
-// normalizeReadBody renames "body" to "content" in read results.
-func normalizeReadBody(result any) any {
-	if m, ok := result.(map[string]any); ok {
-		if body, has := m["body"]; has {
-			if _, hasC := m["content"]; !hasC {
-				m["content"] = body
-			}
-			delete(m, "body")
-		}
-		return m
-	}
-	// Struct result — round-trip through JSON
-	d2, _ := json.Marshal(result)
-	var m2 map[string]any
-	if json.Unmarshal(d2, &m2) == nil {
-		if body, has := m2["body"]; has {
-			if _, hasC := m2["content"]; !hasC {
-				m2["content"] = body
-			}
-			delete(m2, "body")
-			return m2
-		}
-	}
-	return result
-}
 
 // stripEditPrefix removes the "edit: edit N: " prefix that the multi-edit
 // dispatcher adds to error messages. Batch consumers should see the same
