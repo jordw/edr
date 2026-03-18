@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -471,4 +472,118 @@ func ambiguousMatchError(content, relFile, matchText string, locs [][]int) error
 	}
 	return fmt.Errorf("ambiguous: old_text %q matched %d locations in %s (lines %s); provide more surrounding context to make it unique, or use all: true to replace all",
 		matchText, len(locs), relFile, strings.Join(lineStrs, ", "))
+}
+
+func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("rename-symbol requires 2 arguments: <old-name> <new-name>")
+	}
+	oldName := args[0]
+	newName := args[1]
+	dryRun := flagBool(flags, "dry-run", false)
+
+	// Find all identifier occurrences (exact byte ranges for replacement).
+	refs, err := index.FindIdentifierOccurrences(ctx, db, oldName)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(refs) == 0 {
+		return output.RenameResult{OldName: oldName, NewName: newName, DryRun: dryRun, Noop: true}, nil
+	}
+
+	// Group refs by file
+	grouped := make(map[string][]index.SymbolInfo)
+	for _, r := range refs {
+		grouped[r.File] = append(grouped[r.File], r)
+	}
+
+	// Collect file list
+	var filesChanged []string
+	for file := range grouped {
+		filesChanged = append(filesChanged, output.Rel(file))
+	}
+
+	// Dry-run: show what would change without applying
+	if dryRun {
+		var preview []output.RenameOccurrence
+		for _, r := range refs {
+			src, err := os.ReadFile(r.File)
+			if err != nil {
+				continue
+			}
+			lines := strings.SplitAfter(string(src), "\n")
+			lineIdx := int(r.StartLine) - 1
+			lineText := ""
+			if lineIdx >= 0 && lineIdx < len(lines) {
+				lineText = strings.TrimRight(lines[lineIdx], "\n")
+			}
+			preview = append(preview, output.RenameOccurrence{
+				File: output.Rel(r.File),
+				Line: int(r.StartLine),
+				Text: lineText,
+			})
+		}
+		return output.RenameResult{
+			OldName:      oldName,
+			NewName:      newName,
+			FilesChanged: filesChanged,
+			Occurrences:  len(refs),
+			DryRun:       true,
+			Preview:      preview,
+		}, nil
+	}
+
+	var edits []resolvedEdit
+	for file, fileRefs := range grouped {
+		hash, _ := edit.FileHash(file)
+		for i, r := range fileRefs {
+			h := ""
+			if i == 0 {
+				h = hash
+			}
+			edits = append(edits, resolvedEdit{
+				File: file, StartByte: r.StartByte, EndByte: r.EndByte,
+				Replacement: newName, ExpectHash: h,
+			})
+		}
+	}
+
+	cr, err := commitEdits(ctx, db, edits)
+	if err != nil {
+		return nil, fmt.Errorf("rename failed: %w", err)
+	}
+
+	var renameWarnings []string
+	if len(cr.IndexErrors) > 0 {
+		var parts []string
+		for file, errMsg := range cr.IndexErrors {
+			parts = append(parts, file+": "+errMsg)
+		}
+		renameWarnings = append(renameWarnings, "re-index partial failure: "+strings.Join(parts, "; "))
+	}
+
+	// Verify the new symbol is queryable. ResolveSymbol fails if the name is
+	// ambiguous (exists in multiple files), which is expected after a rename
+	// that touched multiple files. Treat ambiguity as success, only warn on
+	// true not-found (stale index / WAL issue).
+	if _, err := db.ResolveSymbol(ctx, newName); err != nil {
+		var ambErr *index.AmbiguousSymbolError
+		if errors.As(err, &ambErr) {
+			// Multiple matches is fine — the rename worked, symbol exists
+		} else {
+			renameWarnings = append(renameWarnings,
+				fmt.Sprintf("new symbol %q not found in index — try 'edr init'", newName))
+		}
+	}
+
+	result := output.RenameResult{
+		OldName:      oldName,
+		NewName:      newName,
+		FilesChanged: filesChanged,
+		Occurrences:  len(refs),
+		Hashes:       cr.Hashes,
+		Warnings:     renameWarnings,
+	}
+	return result, nil
 }

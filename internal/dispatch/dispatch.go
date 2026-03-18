@@ -59,11 +59,7 @@ func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flag
 	case "write":
 		result, err = runWriteUnified(ctx, db, root, args, flags)
 	case "edit":
-		if _, hasEdits := flags["edits"]; hasEdits {
-			result, err = runEditPlan(ctx, db, root, args, flags)
-		} else {
-			result, err = runSmartEdit(ctx, db, root, args, flags)
-		}
+		result, err = runSmartEdit(ctx, db, root, args, flags)
 	case "map":
 		result, err = runMapUnified(ctx, db, root, args, flags)
 	case "search":

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
@@ -387,150 +386,92 @@ func executeWrites(ctx context.Context, db *index.DB, sess *session.Session, env
 	return anyFailed
 }
 
-// executeEdits dispatches edit operations via edit-plan and emits per-edit ops.
+// executeEdits dispatches edit operations individually via DispatchMulti
+// (same path as standalone `edr edit`), and emits per-edit ops.
 // Returns (editsFailed, allNoop).
 func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams, warnings *[]string, cb *trace.CallBuilder) (bool, bool) {
-	editFlags := map[string]any{}
-
-	editsRaw := make([]map[string]any, len(p.Edits))
-	for i, e := range p.Edits {
-		m := map[string]any{"file": e.File}
-		if e.OldText != "" {
-			m["old_text"] = e.OldText
-		}
-		if e.NewText != "" || e.OldText != "" || e.Symbol != "" || (e.StartLine != nil && e.EndLine != nil) {
-			m["new_text"] = e.NewText
-		}
-		if e.Symbol != "" {
-			m["symbol"] = e.Symbol
-		}
-		if e.StartLine != nil {
-			m["start_line"] = *e.StartLine
-		}
-		if e.EndLine != nil {
-			m["end_line"] = *e.EndLine
-		}
-		if e.All != nil && *e.All {
-			m["all"] = true
-		}
-		if e.ExpectHash != "" {
-			m["expect_hash"] = e.ExpectHash
-		}
-		editsRaw[i] = m
-	}
-	editFlags["edits"] = editsRaw
-	if p.DryRun != nil && *p.DryRun {
-		editFlags["dry_run"] = true
-	}
+	dryRun := p.DryRun != nil && *p.DryRun
 
 	sess.InvalidateForEdit("edit", []string{})
 
-	result, err := dispatch.Dispatch(ctx, db, "edit", []string{}, editFlags)
-	if err != nil {
-		code := classifyError(err)
-		errMsg := stripEditPlanPrefix(err.Error())
-		for i, e := range p.Edits {
-			cb.AddEditEvent(e.File, 0, "", "", false)
-			env.AddFailedOpWithCode(fmt.Sprintf("e%d", i), "edit", code, errMsg)
+	cmds := make([]dispatch.MultiCmd, len(p.Edits))
+	for i, e := range p.Edits {
+		args := []string{e.File}
+		if e.Symbol != "" {
+			args = []string{e.File, e.Symbol}
 		}
-		return true, false
-	}
-
-	// Apply session post-processing
-	data, _ := json.Marshal(result)
-	text := sess.PostProcess("edit", []string{}, editFlags, result, string(data))
-	var processed any
-	if json.Unmarshal([]byte(text), &processed) == nil {
-		result = processed
-	}
-	traceEditEvents(cb, result)
-
-	// Decompose the aggregate edit result into per-edit ops.
-	allNoop := false
-	m, _ := result.(map[string]any)
-	if m != nil {
-		if st, _ := m["status"].(string); st == "noop" {
-			allNoop = true
+		flags := map[string]any{}
+		if e.OldText != "" {
+			flags["old_text"] = e.OldText
 		}
-	}
-	emitPerEditOps(env, p.Edits, m)
-	return false, allNoop
-}
-
-// emitPerEditOps creates one op per original edit request from the aggregate edit-plan result.
-func emitPerEditOps(env *output.Envelope, edits []doEdit, result map[string]any) {
-	if result == nil {
-		// Shouldn't happen if dispatch succeeded, but be safe
-		for i, e := range edits {
-			env.AddOp(fmt.Sprintf("e%d", i), "edit", map[string]any{
-				"file":   e.File,
-				"status": "applied",
-			})
+		if e.NewText != "" || e.OldText != "" || e.Symbol != "" || (e.StartLine != nil && e.EndLine != nil) {
+			flags["new_text"] = e.NewText
 		}
-		return
-	}
-
-	// Extract shared fields from aggregate result
-	status, _ := result["status"].(string)
-	if status == "" {
-		if _, isDry := result["dry_run"]; isDry {
-			status = "dry_run"
-		} else {
-			status = "applied"
+		if e.StartLine != nil {
+			flags["start_line"] = *e.StartLine
 		}
+		if e.EndLine != nil {
+			flags["end_line"] = *e.EndLine
+		}
+		if e.All != nil && *e.All {
+			flags["all"] = true
+		}
+		if e.ExpectHash != "" {
+			flags["expect_hash"] = e.ExpectHash
+		}
+		if dryRun {
+			flags["dry_run"] = true
+		}
+		cmds[i] = dispatch.MultiCmd{Cmd: "edit", Args: args, Flags: flags}
 	}
-	hashes, _ := result["hashes"].(map[string]any)
-	descriptions, _ := result["description"].([]any)
-	diff, _ := result["diff"].(string)
 
-	// For dry-run, extract per-file preview entries
-	var dryEdits []any
-	if de, ok := result["edits"].([]any); ok {
-		dryEdits = de
-	}
+	results := dispatch.DispatchMulti(ctx, db, cmds)
 
-	for i, e := range edits {
+	// Emit per-edit ops and check for failures/noops.
+	anyFailed := false
+	allNoop := true
+	for i, r := range results {
 		opID := fmt.Sprintf("e%d", i)
-		op := map[string]any{
-			"file":   e.File,
-			"status": status,
+
+		if !r.OK {
+			cb.AddEditEvent(p.Edits[i].File, 0, "", "", false)
+			env.AddFailedOpWithCode(opID, "edit", classifyErrorMsg(r.Error), r.Error)
+			anyFailed = true
+			allNoop = false
+			continue
 		}
 
-		// Per-edit description
-		if i < len(descriptions) {
-			op["description"] = descriptions[i]
-		}
-
-		// File hash
-		if hashes != nil {
-			if h, ok := hashes[e.File]; ok {
-				op["hash"] = h
+		// Apply session post-processing
+		result := r.Result
+		data, _ := json.Marshal(result)
+		text := sess.PostProcess("edit", cmds[i].Args, cmds[i].Flags, result, string(data))
+		if text != string(data) {
+			var newResult any
+			if json.Unmarshal([]byte(text), &newResult) == nil {
+				result = newResult
 			}
 		}
 
-		// For dry-run, attach the per-file preview if available
-		if len(dryEdits) > 0 {
-			// Match by file name and copy all enrichment fields
-			for _, de := range dryEdits {
-				if dm, ok := de.(map[string]any); ok {
-					if f, _ := dm["file"].(string); f == e.File {
-						for _, key := range []string{"diff", "destructive", "old_size", "new_size",
-							"lines_added", "lines_removed", "lines_changed", "diff_available"} {
-							if v, ok := dm[key]; ok {
-								op[key] = v
-							}
-						}
-						break
-					}
-				}
+		// Trace
+		traceEditEvents(cb, result)
+
+		// Check noop status
+		if m, ok := result.(map[string]any); ok {
+			if st, _ := m["status"].(string); st != "noop" {
+				allNoop = false
 			}
-		} else if len(edits) == 1 && diff != "" {
-			// Single edit: attach the aggregate diff directly
-			op["diff"] = diff
+		} else {
+			allNoop = false
 		}
 
-		env.AddOp(opID, "edit", op)
+		env.AddOp(opID, "edit", result)
 	}
+
+	if allNoop && len(p.Edits) == 0 {
+		allNoop = false
+	}
+
+	return anyFailed, allNoop
 }
 
 // executeVerify dispatches the verify command and sets verify on the envelope.
@@ -578,6 +519,7 @@ func executeVerify(ctx context.Context, db *index.DB, env *output.Envelope, p *d
 // handleDo dispatches batch operations and builds an *output.Envelope directly.
 func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trace.Collector, env *output.Envelope, raw json.RawMessage) error {
 	ctx = index.WithSourceCache(ctx)
+	output.SetRoot(db.Root())
 
 	p, warnings, err := parseDo(raw)
 	if err != nil {
@@ -1037,21 +979,6 @@ func addMultiResultOps(env *output.Envelope, sess *session.Session, cmds []dispa
 }
 
 
-// stripEditPrefix removes the "edit: edit N: " prefix that the multi-edit
-// dispatcher adds to error messages. Batch consumers should see the same
-// error text as standalone edit commands.
-func stripEditPlanPrefix(msg string) string {
-	// Pattern: "edit: edit 0: <actual error>"
-	if strings.HasPrefix(msg, "edit: ") {
-		rest := strings.TrimPrefix(msg, "edit: ")
-		// Strip the optional "edit N: " part
-		if idx := strings.Index(rest, ": "); idx >= 0 && strings.HasPrefix(rest, "edit ") {
-			return rest[idx+2:]
-		}
-		return rest
-	}
-	return msg
-}
 
 // ambiguousResult is the structured JSON response for ambiguous symbol errors.
 type ambiguousResult struct {

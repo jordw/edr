@@ -1500,7 +1500,9 @@ func TestHandleDo_OverlappingEditsRejected(t *testing.T) {
 		defer tc.Close()
 	}
 
-	// Two edits with overlapping byte ranges on the same file
+	// Two edits with overlapping text on the same file.
+	// With sequential per-edit dispatch, edit 1 succeeds and edit 2 fails
+	// because its old_text was consumed by edit 1.
 	raw := json.RawMessage(`{
 		"edits": [
 			{"file": "main.go", "old_text": "func alpha() {}\n\nfunc beta", "new_text": "REPLACED1"},
@@ -1513,14 +1515,15 @@ func TestHandleDo_OverlappingEditsRejected(t *testing.T) {
 		t.Fatalf("handleDo: %v", err)
 	}
 
-	if !strings.Contains(result, "overlapping edits") {
-		t.Errorf("expected overlapping edits error, got: %s", result)
+	// Edit 1 should succeed, edit 2 should fail (old_text not found)
+	if !strings.Contains(result, "not_found") && !strings.Contains(result, "old_text not found") {
+		t.Errorf("expected not_found error for second edit, got: %s", result)
 	}
 
-	// File should be unchanged
+	// File should have edit 1 applied
 	data, _ := os.ReadFile(filepath.Join(tmp, "main.go"))
-	if !strings.Contains(string(data), "func alpha()") {
-		t.Error("file was modified despite overlap rejection")
+	if !strings.Contains(string(data), "REPLACED1") {
+		t.Error("edit 1 should have been applied")
 	}
 }
 
@@ -1979,6 +1982,187 @@ func TestHandleDo_EditFailurePerEditOps(t *testing.T) {
 	}
 }
 
+// --- Multi-file batch edits ---
+
+func TestHandleDo_MultiFileEditsParallel(t *testing.T) {
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "a.go"), []byte("package main\n\nfunc alpha() {}\n"), 0644)
+	os.WriteFile(filepath.Join(tmp, "b.go"), []byte("package main\n\nfunc beta() {}\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	index.IndexRepo(context.Background(), db)
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test")
+	defer tc.Close()
+
+	raw := json.RawMessage(`{
+		"edits": [
+			{"file": "a.go", "old_text": "func alpha()", "new_text": "func alphaNew()"},
+			{"file": "b.go", "old_text": "func beta()", "new_text": "func betaNew()"}
+		]
+	}`)
+
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	var parsed map[string]any
+	json.Unmarshal([]byte(result), &parsed)
+
+	ops := parsed["ops"].([]any)
+	editOps := []map[string]any{}
+	for _, op := range ops {
+		m := op.(map[string]any)
+		if m["type"] == "edit" {
+			editOps = append(editOps, m)
+		}
+	}
+
+	if len(editOps) != 2 {
+		t.Fatalf("expected 2 edit ops, got %d: %s", len(editOps), result)
+	}
+
+	// Both should succeed
+	for i, op := range editOps {
+		if op["error"] != nil {
+			t.Errorf("edit e%d failed: %v", i, op["error"])
+		}
+	}
+
+	// Both files should be modified
+	dataA, _ := os.ReadFile(filepath.Join(tmp, "a.go"))
+	dataB, _ := os.ReadFile(filepath.Join(tmp, "b.go"))
+	if !strings.Contains(string(dataA), "alphaNew") {
+		t.Error("a.go should have alphaNew")
+	}
+	if !strings.Contains(string(dataB), "betaNew") {
+		t.Error("b.go should have betaNew")
+	}
+}
+
+func TestHandleDo_MultiFileEditPartialFailure(t *testing.T) {
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "a.go"), []byte("package main\n\nfunc alpha() {}\n"), 0644)
+	os.WriteFile(filepath.Join(tmp, "b.go"), []byte("package main\n\nfunc beta() {}\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	index.IndexRepo(context.Background(), db)
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test")
+	defer tc.Close()
+
+	// Edit on a.go succeeds, edit on b.go fails (old_text not found)
+	raw := json.RawMessage(`{
+		"edits": [
+			{"file": "a.go", "old_text": "func alpha()", "new_text": "func alphaNew()"},
+			{"file": "b.go", "old_text": "DOES_NOT_EXIST", "new_text": "replacement"}
+		]
+	}`)
+
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	var parsed map[string]any
+	json.Unmarshal([]byte(result), &parsed)
+
+	ops := parsed["ops"].([]any)
+	editOps := []map[string]any{}
+	for _, op := range ops {
+		m := op.(map[string]any)
+		if m["type"] == "edit" {
+			editOps = append(editOps, m)
+		}
+	}
+
+	if len(editOps) != 2 {
+		t.Fatalf("expected 2 edit ops, got %d: %s", len(editOps), result)
+	}
+
+	// e0 (a.go) should succeed, e1 (b.go) should fail
+	if editOps[0]["error"] != nil {
+		t.Errorf("edit e0 should succeed, got error: %v", editOps[0]["error"])
+	}
+	if editOps[1]["error"] == nil {
+		t.Error("edit e1 should fail (old_text not found)")
+	}
+
+	// a.go should be modified, b.go unchanged
+	dataA, _ := os.ReadFile(filepath.Join(tmp, "a.go"))
+	dataB, _ := os.ReadFile(filepath.Join(tmp, "b.go"))
+	if !strings.Contains(string(dataA), "alphaNew") {
+		t.Error("a.go should have edit applied")
+	}
+	if !strings.Contains(string(dataB), "func beta()") {
+		t.Error("b.go should be unchanged")
+	}
+}
+
+func TestHandleDo_BatchEditResultShapeParity(t *testing.T) {
+	// Batch edit result should have the same fields as standalone edit
+	tmp := t.TempDir()
+	edrDir := filepath.Join(tmp, ".edr")
+	os.MkdirAll(edrDir, 0755)
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	index.IndexRepo(context.Background(), db)
+
+	sess := session.New()
+	tc := trace.NewCollector(edrDir, "test")
+	defer tc.Close()
+
+	raw := json.RawMessage(`{
+		"edits": [
+			{"file": "main.go", "old_text": "func hello()", "new_text": "func world()"}
+		]
+	}`)
+
+	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+
+	var parsed map[string]any
+	json.Unmarshal([]byte(result), &parsed)
+
+	ops := parsed["ops"].([]any)
+	editOp := ops[0].(map[string]any)
+
+	// Must have these fields (same as standalone edr edit)
+	for _, key := range []string{"file", "status", "hash"} {
+		if _, ok := editOp[key]; !ok {
+			t.Errorf("batch edit result missing %q field: %v", key, editOp)
+		}
+	}
+	if editOp["status"] != "applied" {
+		t.Errorf("status = %v, want applied", editOp["status"])
+	}
+	if editOp["file"] != "main.go" {
+		t.Errorf("file = %v, want main.go", editOp["file"])
+	}
+}
+
 // --- Skipped writes: status distinction ---
 
 func TestHandleDo_SkippedWritesNotFailed(t *testing.T) {
@@ -2190,29 +2374,6 @@ func TestDetectCommandName(t *testing.T) {
 	}
 }
 
-func TestStripEditPlanPrefix(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"edit: edit 0: old_text not found in main.go", "old_text not found in main.go"},
-		{"edit: edit 1: hash mismatch on config.go", "hash mismatch on config.go"},
-		{"edit: edit 12: symbol \"foo\": not found", "symbol \"foo\": not found"},
-		{"edit: edits array is empty", "edits array is empty"},
-		{"edit: invalid edits: bad json", "invalid edits: bad json"},
-		{"old_text not found in main.go", "old_text not found in main.go"},
-		{"some other error", "some other error"},
-		{"", ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := stripEditPlanPrefix(tt.input)
-			if got != tt.want {
-				t.Errorf("stripEditPlanPrefix(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}
 
 func TestHandleDo_BatchEditErrorParity(t *testing.T) {
 	// Batch edit errors should not contain "edit:" prefix from multi-edit dispatcher.

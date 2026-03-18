@@ -110,7 +110,7 @@ func hello() {
 	}
 }
 
-func TestEditPlanDryRunIncludesDiff(t *testing.T) {
+func TestEditDryRunIncludesDiff(t *testing.T) {
 	tmp := t.TempDir()
 	goFile := filepath.Join(tmp, "main.go")
 	if err := os.WriteFile(goFile, []byte(`package main
@@ -133,20 +133,11 @@ func hello() {
 		t.Fatal(err)
 	}
 
-	edits := []map[string]any{
-		{
-			"file":     "main.go",
-			"old_text": `println("hello")`,
-			"new_text": `println("world")`,
-		},
-	}
-
-	flags := map[string]any{
-		"dry-run": true,
-		"edits":   edits,
-	}
-
-	result, err := dispatch.Dispatch(ctx, db, "edit", nil, flags)
+	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+		"dry_run":  true,
+		"old_text": `println("hello")`,
+		"new_text": `println("world")`,
+	})
 	if err != nil {
 		t.Fatalf("Dispatch returned error: %v", err)
 	}
@@ -161,26 +152,13 @@ func hello() {
 		t.Fatalf("json.Unmarshal: %v\nraw: %s", err, string(raw))
 	}
 
-	if dryRun, ok := out["dry_run"].(bool); !ok || !dryRun {
-		t.Errorf("expected dry_run=true, got %v", out["dry_run"])
+	if status, _ := out["status"].(string); status != "dry_run" {
+		t.Errorf("expected status=dry_run, got %v", out["status"])
 	}
 
-	editsRaw, ok := out["edits"].([]any)
-	if !ok {
-		t.Fatalf("expected edits to be array, got %T: %s", out["edits"], string(raw))
-	}
-	if len(editsRaw) != 1 {
-		t.Fatalf("expected 1 edit, got %d", len(editsRaw))
-	}
-
-	entry, ok := editsRaw[0].(map[string]any)
-	if !ok {
-		t.Fatalf("expected edit entry to be object, got %T", editsRaw[0])
-	}
-
-	diff, ok := entry["diff"].(string)
+	diff, ok := out["diff"].(string)
 	if !ok || diff == "" {
-		t.Fatalf("expected non-empty diff field in edit entry, got %v", entry["diff"])
+		t.Fatalf("expected non-empty diff field, got %v", out["diff"])
 	}
 	if !strings.Contains(diff, "-") {
 		t.Errorf("expected diff to contain '-' lines, got: %s", diff)
@@ -520,15 +498,11 @@ func TestFlagNormalization_DryRunUnderscore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Test edit-plan with dry_run (underscore)
-	edits := []map[string]any{{
-		"file":     "main.go",
+	// Test edit with dry_run (underscore)
+	_, err = dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+		"dry_run":  true,
 		"old_text": "func hello()",
 		"new_text": "func goodbye()",
-	}}
-	_, err = dispatch.Dispatch(ctx, db, "edit", nil, map[string]any{
-		"dry_run": true,
-		"edits":   edits,
 	})
 	if err != nil {
 		t.Fatalf("edit with dry_run: %v", err)
