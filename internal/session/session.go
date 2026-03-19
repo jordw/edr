@@ -151,7 +151,6 @@ var ReadCommands = deriveSet(cmdspec.IsRead)
 var EditCommands = deriveSet(cmdspec.ModifiesState)
 var DiffEditCommands = func() map[string]bool {
 	m := deriveSet(cmdspec.IsDiffEdit)
-	m["edit-plan"] = true // internal batch edit implementation
 	return m
 }()
 var DeltaReadCommands = deriveSet(cmdspec.IsDeltaRead)
