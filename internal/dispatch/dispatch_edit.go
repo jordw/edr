@@ -319,9 +319,6 @@ type NotFoundError struct {
 	OldText    string         `json:"old_text"`
 	Hint       string         `json:"hint"`
 	NearMatch  *nearMatchInfo `json:"near_match,omitempty"`
-	EditIndex  *int           `json:"edit_index,omitempty"`
-	EditMode   string         `json:"edit_mode,omitempty"`
-	TotalEdits *int           `json:"total_edits,omitempty"`
 	NextAction string         `json:"next_action,omitempty"`
 }
 

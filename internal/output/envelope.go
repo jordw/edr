@@ -78,6 +78,31 @@ func (e *Envelope) AddFailedOpWithCode(opID, opType, code, errMsg string) {
 	})
 }
 
+// AddFailedOpResult adds a failed operation with a structured result object.
+// The result is JSON-marshaled into the op, preserving diagnostic fields.
+func (e *Envelope) AddFailedOpResult(opID, opType, code string, result any) {
+	e.OK = false
+	data, err := json.Marshal(result)
+	if err != nil {
+		e.AddFailedOpWithCode(opID, opType, code, fmt.Sprintf("%v", result))
+		return
+	}
+	var flat Op
+	if json.Unmarshal(data, &flat) != nil {
+		e.AddFailedOpWithCode(opID, opType, code, string(data))
+		return
+	}
+	flat["op_id"] = opID
+	flat["type"] = opType
+	flat["error_code"] = code
+	// Ensure "error" field has human-readable message if the struct
+	// only set it to a type string (e.g. "not_found")
+	if errStr, ok := result.(error); ok {
+		flat["error"] = errStr.Error()
+	}
+	e.Ops = append(e.Ops, flat)
+}
+
 // AddSkippedOp adds an op that was not attempted due to a prior failure.
 // Unlike AddFailedOp, this does not set ok=false on the envelope — the
 // failure is on the gating op, not this one.

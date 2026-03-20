@@ -405,7 +405,14 @@ func addDispatchFailedOp(env *output.Envelope, opID, opType string, err error) {
 		return
 	}
 
-	// Classify op-level errors with specific codes
+	// Surface structured not-found errors with diagnostic hints
+	var nfe *dispatch.NotFoundError
+	if errors.As(err, &nfe) {
+		env.AddFailedOpResult(opID, opType, "not_found", nfe)
+		return
+	}
+
+	// Classify remaining op-level errors with specific codes
 	code := classifyError(err)
 	env.AddFailedOpWithCode(opID, opType, code, err.Error())
 }

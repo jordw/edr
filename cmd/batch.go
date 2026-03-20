@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strconv"
 
@@ -979,48 +978,6 @@ func addMultiResultOps(env *output.Envelope, sess *session.Session, cmds []dispa
 }
 
 
-
-// ambiguousResult is the structured JSON response for ambiguous symbol errors.
-type ambiguousResult struct {
-	Error      string               `json:"error"`
-	Symbol     string               `json:"symbol"`
-	Candidates []ambiguousCandidate `json:"candidates"`
-	Hint       string               `json:"hint"`
-}
-
-type ambiguousCandidate struct {
-	File string `json:"file"`
-	Line int    `json:"line"`
-	Type string `json:"type"`
-}
-
-func asAmbiguousError(err error) *ambiguousResult {
-	var ambErr *index.AmbiguousSymbolError
-	if !errors.As(err, &ambErr) {
-		return nil
-	}
-	r := &ambiguousResult{
-		Error:  "ambiguous",
-		Symbol: ambErr.Name,
-		Hint:   "use file param to disambiguate",
-	}
-	for _, c := range ambErr.Candidates {
-		r.Candidates = append(r.Candidates, ambiguousCandidate{
-			File: output.Rel(c.File),
-			Line: int(c.StartLine),
-			Type: c.Type,
-		})
-	}
-	return r
-}
-
-func asNotFoundError(err error) *dispatch.NotFoundError {
-	var nfErr *dispatch.NotFoundError
-	if !errors.As(err, &nfErr) {
-		return nil
-	}
-	return nfErr
-}
 
 // suggestField finds the closest known field name by Levenshtein distance.
 func suggestField(input string, known map[string]bool) string {
