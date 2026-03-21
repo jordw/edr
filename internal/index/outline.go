@@ -26,6 +26,8 @@ var blockNodeTypes = map[string]bool{
 	"if_expression_rust": true, "match_expression": true, "loop_expression": true,
 	// Ruby
 	"if": true, "unless": true, "while": true, "for": true, "begin": true, "case": true,
+	// C/C++ definitions — collapsed at depth=1 (--sig) but visible at depth=2 (--skeleton)
+	"function_definition": true, "struct_specifier": true, "enum_specifier": true,
 }
 
 // bodyNodeTypes are the AST node types that contain the "body" of a block
@@ -33,6 +35,8 @@ var blockNodeTypes = map[string]bool{
 var bodyNodeTypes = map[string]bool{
 	"block": true, "body": true, "block_statement": true,
 	"statement_block": true, "compound_statement": true,
+	// C/C++ struct/enum bodies
+	"field_declaration_list": true, "enumerator_list": true,
 }
 
 // OutlineFile produces a depth-limited view of a source file.
@@ -209,6 +213,8 @@ func collapseBlockToHeader(node *tree_sitter.Node, src []byte) string {
 func isBraceLanguageBlock(childKind, parentKind string) bool {
 	return childKind == "statement_block" || childKind == "block_statement" ||
 		childKind == "compound_statement" ||
+		// C/C++ struct/enum bodies
+		childKind == "field_declaration_list" || childKind == "enumerator_list" ||
 		// Go blocks
 		(childKind == "block" && (parentKind == "if_statement" || parentKind == "for_statement" ||
 			parentKind == "expression_switch_statement" || parentKind == "type_switch_statement" ||
