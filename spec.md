@@ -33,7 +33,7 @@ In order:
 
 ## Semantic surface
 
-edr has **ten semantic commands** and **one batch syntax**.
+edr has **twelve semantic commands** and **one batch syntax**.
 
 Public semantic commands:
 
@@ -48,6 +48,8 @@ Public semantic commands:
 | `verify` | Build/test verification |
 | `reindex` | Force re-index |
 | `rename` | Cross-file rename (sugar over refs + edit) |
+| `run` | Execute command with block-level output dedup |
+| `session` | Session management (`session new`) |
 | `setup` | Index repo, install global agent instructions |
 
 Batch syntax:
@@ -493,6 +495,7 @@ Rules:
 - `verify.status` is the only source of truth for verify outcome
 - `verify` MUST NOT use `ok: true/false`
 - If verify is attempted, `command` MUST reflect the actual executed scope
+- Auto-detection chain: `go.mod` → `package.json` → `Cargo.toml` → `Makefile` → skip
 
 ## Verify scope
 
@@ -593,25 +596,46 @@ There is no batch-only routing layer in the ideal design. No `inferQueryCmd`, no
 
 ## Session contract
 
-Sessions are driven by the `EDR_SESSION` environment variable.
+Sessions are always active. Resolution order:
+
+1. `EDR_SESSION` env var (explicit ID)
+2. PPID-based lookup (`.edr/sessions/ppid_<ppid>` maps to a session ID)
+3. Fallback to `"default"` session
+
+`edr session new` generates a unique session ID, creates the session file, and writes a PPID mapping so subsequent calls from the same parent process auto-resolve to that session. Old session files are cleaned up after 7 days.
 
 Rules:
 
-- Without `EDR_SESSION`, reads always return full content; no dedup state exists
-- With `EDR_SESSION`, content-returning ops include `session`
+- Content-returning ops include `session`
 - `session` is one of:
   - `"new"`: first time this content was seen in the session
   - `"unchanged"`: same content as previously seen; body MAY be omitted
-- If session detection is ambiguous, edr MUST fall back to no-session
+- After a context reset, agents SHOULD run `edr session new` to clear stale dedup state
 
 Concurrency rules:
 
 - Session files are per session, not per process
-- Concurrent writers with the same `EDR_SESSION` MUST NOT corrupt session state
+- Concurrent writers with the same session MUST NOT corrupt session state
 - Atomic rename is sufficient
 - Last-write-wins is acceptable if the only consequence is a missed dedup
+- Multiple agents get separate sessions via different PPIDs
 
 Session state MUST be bounded in size. A cap plus eviction is required.
+
+## Run contract
+
+`edr run <command>` executes a shell command and deduplicates output blocks across calls.
+
+Rules:
+
+- Output is split into blocks separated by blank lines
+- Each block is hashed and checked against the session's seen set
+- Previously seen blocks are replaced with `[unchanged: N lines]`
+- The command string is part of the dedup key (different commands don't interfere)
+- `--full` bypasses dedup entirely
+- `--fuzzy` normalizes digits before hashing (tolerates timing changes)
+- Exit code passes through from the wrapped command
+- `--` separates edr flags from the wrapped command's flags
 
 ## Result consistency
 
