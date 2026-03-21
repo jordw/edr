@@ -1,17 +1,18 @@
 Use `edr` (via shell) instead of cat, sed, grep, and find for all file operations. edr uses 90%+ less context via progressive disclosure and batching.
 
+Set `EDR_SESSION=1` in your first shell call to enable cross-call caching.
+
 Workflow — start narrow, widen only as needed:
-1. Orient: `edr map --budget 500` — see all symbols across files
-2. Skim: `edr -r file.go --sig` — signatures only (75-85% smaller than full read)
-3. Deep read: `edr -r file.go:FuncName` — read one symbol's full body
-4. Search: `edr -s "pattern" --text` — search across codebase
-5. Edit: `edr -e file.go --old "exact old text" --new "new text"`
-   Line-range edit: `edr -e file.go --start-line 10 --end-line 20 --new "replacement"`
-   Replace all occurrences: `edr -e file.go --old "x" --new "y" --all`
-6. Write: `edr -w file.go --content "..."`
+1. Orient: `edr map --budget 500` (filter: --dir, --lang, --grep)
+2. Skim: `edr -r file.go --sig` (signatures) or `--skeleton` (structure)
+3. Deep read: `edr -r file.go:FuncName`
+4. Search: `edr -s "pattern" --text` | scoped: `--in file.go:FuncName`
+5. Edit: `edr -e file.go --old "old" --new "new"`
+   Also: `--start-line N --end-line M`, `--all`, `--dry-run`
+6. Write: `edr -w file.go --content "..."` | `--inside Symbol`, `--after Symbol`, `--append`
+7. Rename: `edr rename Old New` (cross-file, import-aware, `--dry-run`)
+8. Verify: `edr verify` — auto-detects go/npm/cargo/make. Auto-runs after edits.
 
-Batch multiple ops in one call to save round-trips:
-`edr -r f.go --sig -s "pat" -e f.go --old "x" --new "y"`
-Multiple edits in one call: `edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"`
-
-Before refactoring, check callers: `edr refs Symbol --impact`
+Batch: `edr -r f.go --sig -s "pat" -e f.go --old "x" --new "y"`
+Repeat -e for multi-edit: `edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"`
+Before refactoring: `edr refs Symbol --impact`
