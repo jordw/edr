@@ -160,10 +160,47 @@ func (s *Session) SaveToFile(path string) error {
 // Agents must explicitly set EDR_SESSION to opt into session features.
 func ResolveSessionID() string {
 	id := os.Getenv("EDR_SESSION")
+	if id != "" {
+		return id
+	}
+	return resolveByPPID()
+}
+
+// resolveByPPID reads the session ID from .edr/sessions/ppid_<ppid>.
+func resolveByPPID() string {
+	ppid := os.Getppid()
+	root, err := findRepoRoot()
+	if err != nil {
+		return "default"
+	}
+	path := filepath.Join(root, ".edr", "sessions", fmt.Sprintf("ppid_%d", ppid))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "default"
+	}
+	id := strings.TrimSpace(string(data))
 	if id == "" {
 		return "default"
 	}
 	return id
+}
+
+// findRepoRoot walks up from cwd to find .edr directory.
+func findRepoRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".edr")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("no .edr found")
+		}
+		dir = parent
+	}
 }
 
 // GenerateID creates a short unique session ID (8 hex chars from timestamp + random).

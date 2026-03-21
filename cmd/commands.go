@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime/pprof"
 	"strings"
+	"time"
 
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
@@ -396,7 +397,28 @@ var sessionNewCmd = &cobra.Command{
 		if err := sess.SaveToFile(path); err != nil {
 			return err
 		}
+		// Write PPID mapping so subsequent calls auto-resolve this session
+		ppid := os.Getppid()
+		ppidPath := filepath.Join(edrDir, "sessions", fmt.Sprintf("ppid_%d", ppid))
+		os.WriteFile(ppidPath, []byte(id), 0644)
+
 		fmt.Println(id)
+
+		// Clean up session files older than 7 days
+		sessDir := filepath.Join(edrDir, "sessions")
+		entries, _ := os.ReadDir(sessDir)
+		cutoff := time.Now().Add(-7 * 24 * time.Hour)
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			info, err := e.Info()
+			if err != nil || info.ModTime().After(cutoff) {
+				continue
+			}
+			os.Remove(filepath.Join(sessDir, e.Name()))
+		}
+
 		return nil
 	},
 }
