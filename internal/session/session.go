@@ -158,7 +158,11 @@ func (s *Session) SaveToFile(path string) error {
 // Returns "" when unset, which means no session (ephemeral, no dedup).
 // Agents must explicitly set EDR_SESSION to opt into session features.
 func ResolveSessionID() string {
-	return os.Getenv("EDR_SESSION")
+	id := os.Getenv("EDR_SESSION")
+	if id == "" {
+		return "default"
+	}
+	return id
 }
 
 // LoadSession loads the session identified by EDR_SESSION env var.
