@@ -97,31 +97,29 @@ func diffAgainstPrevious(runDir, command, current string) string {
 // regions are collapsed and changed lines show inline {old → new} markers.
 // Uses positional alignment (line N vs line N).
 func sparseDiff(oldLines, newLines []string) string {
-	// Use LCS to align lines correctly even when lines are inserted/removed.
-	// Then render with sparse format: unchanged collapsed, changed shown inline.
-	lcs := computeLCS(oldLines, newLines)
+	// Phase 1: Classify each line using LCS alignment.
+	type entry struct {
+		kind    string // "same", "modified", "added", "removed"
+		newText string
+		oldText string
+		digitOnly bool // true if modification is digits-only
+	}
+	var entries []entry
 
-	var result strings.Builder
+	lcs := computeLCS(oldLines, newLines)
 	oi, ni, li := 0, 0, 0
 
 	for oi < len(oldLines) || ni < len(newLines) {
-		// Both match LCS — unchanged
 		if li < len(lcs) && oi < len(oldLines) && ni < len(newLines) &&
 			oldLines[oi] == lcs[li] && newLines[ni] == lcs[li] {
-			count := 0
-			for li < len(lcs) && oi < len(oldLines) && ni < len(newLines) &&
-				oldLines[oi] == lcs[li] && newLines[ni] == lcs[li] {
-				count++
-				oi++
-				ni++
-				li++
-			}
-			fmt.Fprintf(&result, "[%d unchanged lines]\n", count)
+			entries = append(entries, entry{kind: "same", newText: newLines[ni]})
+			oi++
+			ni++
+			li++
 			continue
 		}
 
-		// Consume non-LCS lines from both sides together as modifications
-		// when both have lines to consume before the next LCS match.
+		// Collect non-LCS runs from both sides
 		oldEnd := oi
 		for oldEnd < len(oldLines) && (li >= len(lcs) || oldLines[oldEnd] != lcs[li]) {
 			oldEnd++
@@ -131,26 +129,86 @@ func sparseDiff(oldLines, newLines []string) string {
 			newEnd++
 		}
 
-		// Pair up as many as possible for inline diff
+		// Pair modifications
 		for oi < oldEnd && ni < newEnd {
-			result.WriteString(inlineDiff(oldLines[oi], newLines[ni]))
-			result.WriteByte('\n')
+			entries = append(entries, entry{
+				kind:      "modified",
+				newText:   newLines[ni],
+				oldText:   oldLines[oi],
+				digitOnly: isDigitOnlyChange(oldLines[oi], newLines[ni]),
+			})
 			oi++
 			ni++
 		}
-		// Remaining old lines were removed
 		for oi < oldEnd {
-			fmt.Fprintf(&result, "{- %s}\n", oldLines[oi])
+			entries = append(entries, entry{kind: "removed", oldText: oldLines[oi]})
 			oi++
 		}
-		// Remaining new lines were added
 		for ni < newEnd {
-			fmt.Fprintf(&result, "{+ %s}\n", newLines[ni])
+			entries = append(entries, entry{kind: "added", newText: newLines[ni]})
 			ni++
 		}
 	}
 
+	// Phase 2: Render with collapsing.
+	var result strings.Builder
+	i := 0
+	for i < len(entries) {
+		e := entries[i]
+		switch e.kind {
+		case "same":
+			count := 0
+			for i < len(entries) && entries[i].kind == "same" {
+				count++
+				i++
+			}
+			fmt.Fprintf(&result, "[%d unchanged lines]\n", count)
+
+		case "modified":
+			if e.digitOnly {
+				// Collapse consecutive digit-only modifications
+				count := 0
+				for i < len(entries) && entries[i].kind == "modified" && entries[i].digitOnly {
+					count++
+					i++
+				}
+				fmt.Fprintf(&result, "[%d lines, numbers changed]\n", count)
+			} else {
+				// Show structural change inline
+				result.WriteString(inlineDiff(e.oldText, e.newText))
+				result.WriteByte('\n')
+				i++
+			}
+
+		case "added":
+			fmt.Fprintf(&result, "{+ %s}\n", e.newText)
+			i++
+
+		case "removed":
+			fmt.Fprintf(&result, "{- %s}\n", e.oldText)
+			i++
+		}
+	}
+
 	return result.String()
+}
+
+// isDigitOnlyChange returns true if two strings of equal length differ
+// only at byte positions where at least one side has a digit.
+func isDigitOnlyChange(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	hasDiff := false
+	for i := 0; i < len(a); i++ {
+		if a[i] != b[i] {
+			hasDiff = true
+			if !(a[i] >= '0' && a[i] <= '9') && !(b[i] >= '0' && b[i] <= '9') {
+				return false
+			}
+		}
+	}
+	return hasDiff
 }
 
 // computeLCS returns the longest common subsequence of two string slices.

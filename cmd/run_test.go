@@ -159,3 +159,38 @@ func TestSparseDiff_MixedChanges(t *testing.T) {
 		t.Errorf("should have unchanged sections, got: %q", out)
 	}
 }
+
+func TestSparseDiff_DigitOnlyCollapse(t *testing.T) {
+	old := []string{
+		"PASS Test1 (0.003s)",
+		"PASS Test2 (0.005s)",
+		"PASS Test3 (0.001s)",
+		"ok",
+	}
+	new := []string{
+		"PASS Test1 (0.004s)",
+		"PASS Test2 (0.006s)",
+		"PASS Test3 (0.002s)",
+		"ok",
+	}
+	out := sparseDiff(old, new)
+	if !strings.Contains(out, "numbers changed") {
+		t.Errorf("digit-only changes should collapse, got: %q", out)
+	}
+	// Should NOT show individual inline diffs for timing
+	if strings.Contains(out, "→") {
+		t.Errorf("digit-only lines should not show inline diff, got: %q", out)
+	}
+}
+
+func TestIsDigitOnlyChange(t *testing.T) {
+	if !isDigitOnlyChange("test 0.003s", "test 0.005s") {
+		t.Error("should be digit-only")
+	}
+	if isDigitOnlyChange("PASS test", "FAIL test") {
+		t.Error("should not be digit-only")
+	}
+	if isDigitOnlyChange("short", "longer string") {
+		t.Error("different lengths should not be digit-only")
+	}
+}
