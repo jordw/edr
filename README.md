@@ -26,8 +26,8 @@ edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):"
     -e src/config.py --old '"timeout": 30' --new '"timeout": 30, "retries": 3'
 
 # 3. Deltas: run tests, fix a bug, run again — only the diff comes back
-edr run --fuzzy -- pytest
-# → [unchanged: 80 lines]  FAIL: test_retry — expected 3, got 0
+edr run -- pytest
+# → [no changes, 80 lines]  or just the diff of what changed
 ```
 3 calls. Re-reads of files already in context: zero tokens.
 
