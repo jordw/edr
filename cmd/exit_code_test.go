@@ -240,7 +240,7 @@ func TestSetupEnvelope(t *testing.T) {
 	}
 
 	var env struct {
-		SchemaVersion int    `json:"schema_version"`
+		SchemaVersion int    `json:"schema_version,omitempty"`
 		OK            bool   `json:"ok"`
 		Command       string `json:"cmd"`
 		Ops           []any  `json:"ops"`
@@ -251,9 +251,7 @@ func TestSetupEnvelope(t *testing.T) {
 	if env.Command != "setup" {
 		t.Errorf("command = %q, want setup", env.Command)
 	}
-	if env.SchemaVersion != 2 {
-		t.Errorf("schema_version = %d, want 2", env.SchemaVersion)
-	}
+	// schema_version is omitted from wire format
 	if !env.OK {
 		t.Errorf("ok = false, want true\noutput: %s", out)
 	}
@@ -422,7 +420,7 @@ func TestVerifyOutputShape(t *testing.T) {
 	out, _ := cmd.CombinedOutput() // may exit non-zero if build fails
 
 	var env struct {
-		Command string `json:"command"`
+		Command string `json:"cmd"`
 		Ops     []any  `json:"ops"`
 		Verify  any    `json:"verify"`
 	}

@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"unicode"
 	"sync"
 	"sync/atomic"
 
@@ -18,9 +19,9 @@ import (
 // SearchResult wraps matches with truncation metadata.
 type SearchResult struct {
 	Kind         string         `json:"kind"` // "symbol" or "text"
-	Matches      []output.Match `json:"matches"`
-	TotalMatches int            `json:"total_matches"`
-	Truncated    bool           `json:"truncated"`
+	Matches      []output.Match `json:"m"`
+	TotalMatches int            `json:"n"`
+	Truncated    bool           `json:"trunc"`
 	Hint         string         `json:"hint,omitempty"`
 }
 
@@ -267,12 +268,19 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 
 	var re *regexp.Regexp
 	var lowerPattern string
+	caseSensitive := hasUpperCase(pattern) // smart-case: uppercase in pattern → exact match
 	if useRegex {
+		p := pattern
+		if !caseSensitive {
+			p = "(?i)" + p
+		}
 		var err error
-		re, err = regexp.Compile(pattern)
+		re, err = regexp.Compile(p)
 		if err != nil {
 			return nil, err
 		}
+	} else if caseSensitive {
+		// exact case match — no lowering
 	} else {
 		lowerPattern = strings.ToLower(pattern)
 	}
@@ -338,6 +346,8 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 				var matched bool
 				if re != nil {
 					matched = re.MatchString(line)
+				} else if caseSensitive {
+					matched = strings.Contains(line, pattern)
 				} else {
 					matched = strings.Contains(strings.ToLower(line), lowerPattern)
 				}
@@ -466,6 +476,17 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 		sr.Hint = "pattern contains regex metacharacters but matched nothing (tried literal and regex)"
 	}
 	return sr, nil
+}
+
+// hasUpperCase returns true if s contains any uppercase letter.
+// Used for smart-case: patterns with uppercase → case-sensitive search.
+func hasUpperCase(s string) bool {
+	for _, r := range s {
+		if unicode.IsUpper(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // looksLikeRegex returns true if pattern contains common regex metacharacters

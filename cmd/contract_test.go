@@ -61,7 +61,7 @@ func TestContentFieldNotBody(t *testing.T) {
 			if _, has := op["body"]; has {
 				t.Errorf("op has 'body' field — should be 'content'")
 			}
-			if _, has := op["content"]; !has {
+			if _, has := op["c"]; !has {
 				t.Errorf("op missing 'content' field")
 			}
 		})
@@ -134,7 +134,7 @@ func TestBatchCommandFieldParity(t *testing.T) {
 				t.Fatalf("command failed: %v\n%s", err, out)
 			}
 			var env struct {
-				Command string `json:"command"`
+				Command string `json:"cmd"`
 			}
 			json.Unmarshal(out, &env)
 			if env.Command != tt.wantCmd {
@@ -189,7 +189,7 @@ func TestDryRunEnrichmentFields(t *testing.T) {
 		{"batch dry-run", []string{"-e", "hello.go", "--old", "package main", "--new", "package test", "--dry-run"}},
 	}
 
-	requiredFields := []string{"diff", "status", "file", "destructive", "lines_added", "lines_removed"}
+	requiredFields := []string{"diff", "status", "file", "la", "lr"}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -280,7 +280,7 @@ func TestNoSessionMeansNoDedup(t *testing.T) {
 			t.Fatalf("read %d: no ops", i)
 		}
 		op := env.Ops[0]
-		if _, has := op["content"]; !has {
+		if _, has := op["c"]; !has {
 			t.Errorf("read %d: missing content (session dedup without EDR_SESSION?)\nop: %s", i, mustJSON(op))
 		}
 		if unchanged, _ := op["unchanged"].(bool); unchanged {
@@ -331,7 +331,7 @@ func TestErrorParityBatchStandalone(t *testing.T) {
 			if _, has := op["error"]; !has {
 				t.Errorf("op missing 'error' field\nop: %s", mustJSON(op))
 			}
-			if _, has := op["op_id"]; !has {
+			if _, has := op["id"]; !has {
 				t.Errorf("failed op missing 'op_id'\nop: %s", mustJSON(op))
 			}
 			if _, has := op["type"]; !has {
@@ -371,7 +371,7 @@ func TestContentHasNoLineNumbers(t *testing.T) {
 			if len(env.Ops) == 0 {
 				t.Fatal("no ops")
 			}
-			content, _ := env.Ops[0]["content"].(string)
+			content, _ := env.Ops[0]["c"].(string)
 			if content == "" {
 				t.Fatal("empty content")
 			}
@@ -628,7 +628,7 @@ func TestErrorCodeField(t *testing.T) {
 			if len(env.Ops) == 0 {
 				t.Fatalf("no ops: %s", out)
 			}
-			code, _ := env.Ops[0]["error_code"].(string)
+			code, _ := env.Ops[0]["ec"].(string)
 			if code != tt.wantCode {
 				t.Errorf("error_code = %q, want %q\nop: %s", code, tt.wantCode, mustJSON(env.Ops[0]))
 			}
@@ -659,7 +659,7 @@ func TestMapCodeFirst(t *testing.T) {
 		Ops []struct {
 			Content []struct {
 				File string `json:"file"`
-			} `json:"content"`
+			} `json:"c"`
 		} `json:"ops"`
 	}
 	json.Unmarshal(out, &env)
@@ -709,7 +709,7 @@ func TestMultiFileReadProducesMultipleOps(t *testing.T) {
 		if op["file"] == nil {
 			t.Errorf("op[%d] missing file", i)
 		}
-		if op["content"] == nil {
+		if op["c"] == nil {
 			t.Errorf("op[%d] missing content", i)
 		}
 		if op["hash"] == nil {

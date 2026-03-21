@@ -171,12 +171,32 @@ func (e *Envelope) IsVerifyOnlyFailure() bool {
 	return false
 }
 
-// PrintEnvelope marshals the envelope to stdout.
+// PrintEnvelope transforms the internal envelope to compact wire format
+// and writes it to stdout. Field names are shortened and noise fields
+// are stripped — see wire.go for the mapping.
 func PrintEnvelope(e *Envelope) {
-	data, err := json.MarshalIndent(e, "", "  ")
+	// Transform ops from internal names to wire format
+	for _, op := range e.Ops {
+		transformOp(op)
+	}
+
+	// Build wire envelope with short field names
+	wire := map[string]any{
+		"ok":  e.OK,
+		"cmd": e.Command,
+		"ops": e.Ops,
+	}
+	if e.Verify != nil {
+		wire["verify"] = e.Verify
+	}
+	if len(e.Errors) > 0 {
+		wire["errors"] = e.Errors
+	}
+
+	data, err := json.Marshal(wire)
 	if err != nil {
-		fmt.Fprintf(os.Stdout, `{"schema_version":%d,"ok":false,"command":"%s","ops":[],"verify":null,"errors":[{"code":"marshal_error","message":"%v"}]}`+"\n",
-			SchemaVersion, e.Command, err)
+		fmt.Fprintf(os.Stdout, `{"ok":false,"cmd":"%s","ops":[],"errors":[{"code":"marshal_error","message":"%v"}]}`+"\n",
+			e.Command, err)
 		return
 	}
 	fmt.Println(string(data))
