@@ -34,6 +34,7 @@ const (
 // FlagSpec describes a single command flag/parameter.
 type FlagSpec struct {
 	Name    string   // canonical name (underscore convention, matches JSON)
+	Alias   string   // short alias (e.g. "sig" for "signatures"); registered on standalone commands
 	Type    FlagType // value type
 	Default any      // default value: bool, int, string, or []string
 	Desc    string   // human-readable description
@@ -65,7 +66,7 @@ var Registry = []*Spec{
 		DeltaRead: true, BodyTrack: true,
 		Flags: []FlagSpec{
 			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens"},
-			{Name: "signatures", Type: FlagBool, Default: false, Desc: "Signatures only (75-86% fewer tokens)"},
+			{Name: "signatures", Alias: "sig", Type: FlagBool, Default: false, Desc: "Signatures only (75-86% fewer tokens)"},
 			{Name: "skeleton", Type: FlagBool, Default: false, Desc: "Skeleton view: blocks collapsed"},
 			{Name: "lines", Type: FlagString, Default: "", Desc: "Line range (e.g. 10:50)"},
 			{Name: "full", Type: FlagBool, Default: false, Desc: "Force full content (skip session delta)"},
@@ -169,11 +170,30 @@ var Registry = []*Spec{
 
 var byName map[string]*Spec
 
+// aliasToCanonical maps CLI alias names (e.g. "sig") to canonical flag names
+// (e.g. "signatures"). Used by extractFlags to normalize alias usage.
+var aliasToCanonical map[string]string
+
 func init() {
 	byName = make(map[string]*Spec, len(Registry))
+	aliasToCanonical = make(map[string]string)
 	for _, s := range Registry {
 		byName[s.Name] = s
+		for _, f := range s.Flags {
+			if f.Alias != "" {
+				aliasToCanonical[strings.ReplaceAll(f.Alias, "_", "-")] = strings.ReplaceAll(f.Name, "_", "-")
+			}
+		}
 	}
+}
+
+// CanonicalFlagName returns the canonical name for a flag, resolving aliases.
+// If the name is not an alias, it is returned unchanged.
+func CanonicalFlagName(name string) string {
+	if canonical, ok := aliasToCanonical[name]; ok {
+		return canonical
+	}
+	return name
 }
 
 // ByName returns the spec for a command, or nil if unknown.
@@ -347,6 +367,21 @@ func RegisterFlags(flags *pflag.FlagSet, name string) {
 				def, _ = f.Default.([]string)
 			}
 			flags.StringSlice(cliName, def, f.Desc)
+		}
+		// Register alias as a hidden flag sharing the same underlying value
+		if f.Alias != "" {
+			aliasName := strings.ReplaceAll(f.Alias, "_", "-")
+			canonical := flags.Lookup(cliName)
+			if canonical != nil {
+				flags.AddFlag(&pflag.Flag{
+					Name:        aliasName,
+					Usage:       f.Desc,
+					Value:       canonical.Value,
+					DefValue:    canonical.DefValue,
+					NoOptDefVal: canonical.NoOptDefVal,
+					Hidden:      true,
+				})
+			}
 		}
 	}
 }

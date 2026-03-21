@@ -324,6 +324,11 @@ type MultiResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
+// MultiResults is returned by Dispatch when a single command expands into
+// multiple ops (e.g. standalone multi-file read). The caller should add
+// each result as a separate op on the envelope.
+type MultiResults []MultiResult
+
 // DispatchMulti runs multiple commands concurrently where safe.
 // Commands targeting different files run in parallel. Commands targeting
 // the same file run sequentially in their original order. Global-mutating

@@ -86,18 +86,40 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 		return silentError{code: 1}
 	}
 
-	// Apply session post-processing (delta reads, body dedup)
-	data, marshalErr := json.Marshal(result)
-	if marshalErr == nil {
-		processed := sess.PostProcess(cmdName, args, flags, result, string(data))
-		if processed != string(data) {
-			var postResult any
-			json.Unmarshal([]byte(processed), &postResult)
-			result = postResult
+	// Multi-result: expand into individual ops (e.g. multi-file read)
+	if multi, ok := result.(dispatch.MultiResults); ok {
+		for i, r := range multi {
+			mOpID := fmt.Sprintf("%s%d", string(cmdName[0]), i)
+			if !r.OK {
+				env.AddFailedOp(mOpID, cmdName, r.Error)
+				continue
+			}
+			// Apply session post-processing per result
+			data, marshalErr := json.Marshal(r.Result)
+			if marshalErr == nil {
+				processed := sess.PostProcess(r.Cmd, args, map[string]any{}, r.Result, string(data))
+				if processed != string(data) {
+					var postResult any
+					json.Unmarshal([]byte(processed), &postResult)
+					r.Result = postResult
+				}
+			}
+			env.AddOp(mOpID, cmdName, r.Result)
 		}
-	}
+	} else {
+		// Apply session post-processing (delta reads, body dedup)
+		data, marshalErr := json.Marshal(result)
+		if marshalErr == nil {
+			processed := sess.PostProcess(cmdName, args, flags, result, string(data))
+			if processed != string(data) {
+				var postResult any
+				json.Unmarshal([]byte(processed), &postResult)
+				result = postResult
+			}
+		}
 
-	env.AddOp(opID, cmdName, result)
+		env.AddOp(opID, cmdName, result)
+	}
 	env.ComputeOK()
 	output.PrintEnvelope(env)
 	if !env.OK {

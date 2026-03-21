@@ -260,124 +260,30 @@ func runBatchRead(ctx context.Context, db *index.DB, root string, args []string,
 	if len(args) < 1 {
 		return nil, fmt.Errorf("batch-read requires at least 1 argument: <file-or-file:symbol> ...")
 	}
+
+	// Build individual read commands for each arg
+	cmds := make([]MultiCmd, len(args))
+	for i, arg := range args {
+		readFlags := make(map[string]any)
+		// Copy relevant flags
+		for _, k := range []string{"signatures", "skeleton", "symbols", "full", "lines", "depth"} {
+			if v, ok := flags[k]; ok {
+				readFlags[k] = v
+			}
+		}
+		cmds[i] = MultiCmd{Cmd: "read", Args: []string{arg}, Flags: readFlags}
+	}
+
 	budget := flagInt(flags, "budget", 0)
-	perFile := 0
+	var budgetOpt []int
 	if budget > 0 {
-		perFile = budget / len(args)
-		if perFile < 1 {
-			perFile = 1
-		}
+		budgetOpt = []int{budget}
 	}
 
-	type batchEntry struct {
-		File    string          `json:"file"`
-		Symbol  string          `json:"symbol,omitempty"`
-		OK      bool            `json:"ok"`
-		Error   string          `json:"error,omitempty"`
-		Content string          `json:"content,omitempty"`
-		Hash    string          `json:"hash,omitempty"`
-		Lines   [2]int          `json:"lines,omitempty"`
-		Size    int             `json:"size,omitempty"`
-		Symbols []output.Symbol `json:"symbols,omitempty"`
-	}
-
-	showSymbols := flagBool(flags, "symbols", false)
-	var results []batchEntry
-
-	for _, arg := range args {
-		var filePath, symName string
-		if idx := strings.LastIndex(arg, ":"); idx > 0 {
-			filePath = arg[:idx]
-			symName = arg[idx+1:]
-		} else {
-			filePath = arg
-		}
-
-		if symName != "" {
-			// Read a specific symbol
-			sym, err := resolveSymbolArgs(ctx, db, root, []string{filePath, symName})
-			if err != nil {
-				results = append(results, batchEntry{File: filePath, Symbol: symName, OK: false, Error: err.Error()})
-				continue
-			}
-			src, err := os.ReadFile(sym.File)
-			if err != nil {
-				results = append(results, batchEntry{File: filePath, Symbol: symName, OK: false, Error: err.Error()})
-				continue
-			}
-			body := string(src[sym.StartByte:sym.EndByte])
-			size := len(body) / 4
-			if perFile > 0 && size > perFile {
-				chars := perFile * 4
-				body, _ = output.TruncateAtLine(body, chars)
-			}
-			hash, _ := edit.FileHash(sym.File)
-			results = append(results, batchEntry{
-				File:    output.Rel(sym.File),
-				Symbol:  symName,
-				OK:      true,
-				Content: body,
-				Hash:    hash,
-				Lines:   [2]int{int(sym.StartLine), int(sym.EndLine)},
-				Size:    size,
-			})
-		} else {
-			// Read entire file
-			file, err := db.ResolvePath(filePath)
-			if err != nil {
-				results = append(results, batchEntry{File: filePath, OK: false, Error: err.Error()})
-				continue
-			}
-			data, err := os.ReadFile(file)
-			if err != nil {
-				results = append(results, batchEntry{File: filePath, OK: false, Error: err.Error()})
-				continue
-			}
-			body := string(data)
-			lines := strings.SplitAfter(body, "\n")
-			size := len(body) / 4
-			if perFile > 0 && size > perFile {
-				chars := perFile * 4
-				body, _ = output.TruncateAtLine(body, chars)
-			}
-			hash, _ := edit.FileHash(file)
-			entry := batchEntry{
-				File:    output.Rel(file),
-				OK:      true,
-				Content: body,
-				Hash:    hash,
-				Lines:   [2]int{1, len(lines)},
-				Size:    size,
-			}
-			if showSymbols {
-				syms, err := db.GetSymbolsByFile(ctx, file)
-				if err == nil {
-					symTokens := 0
-					for _, s := range syms {
-						symSize := len(s.Name)/4 + 5 // rough token estimate per symbol entry
-						symTokens += symSize
-						entry.Symbols = append(entry.Symbols, output.Symbol{
-							Type:  s.Type,
-							Name:  s.Name,
-							Lines: [2]int{int(s.StartLine), int(s.EndLine)},
-							Size:  int(s.EndByte-s.StartByte) / 4,
-						})
-					}
-					// When budget is tight and symbols are requested, count symbols toward budget
-					if perFile > 0 && symTokens+size > perFile*2 {
-						// Content was large; strip it and keep only symbols as the summary
-						if len(entry.Content) > perFile*4 {
-							entry.Content, _ = output.TruncateAtLine(entry.Content, perFile*2)
-						}
-					}
-				}
-			}
-			results = append(results, entry)
-		}
-	}
-
-	return results, nil
+	results := DispatchMulti(ctx, db, cmds, budgetOpt...)
+	return MultiResults(results), nil
 }
+
 
 func runSymbols(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {

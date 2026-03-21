@@ -138,7 +138,6 @@ func smartEditByteRange(ctx context.Context, db *index.DB, file string, startByt
 	}
 
 	result := map[string]any{
-		"ok":       true,
 		"file":     output.Rel(file),
 		"diff":     diff,
 		"hash":     cr.Hashes[output.Rel(file)],
@@ -296,7 +295,6 @@ func applyReplaceAll(ctx context.Context, db *index.DB, file, oldContent, newCon
 	}
 
 	result := map[string]any{
-		"ok":       true,
 		"file":     output.Rel(file),
 		"hash":     cr.Hashes[output.Rel(file)],
 		"status":   cr.Status,

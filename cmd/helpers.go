@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -16,7 +17,8 @@ import (
 func extractFlags(cmd *cobra.Command) map[string]any {
 	flags := make(map[string]any)
 	cmd.Flags().Visit(func(f *pflag.Flag) {
-		key := strings.ReplaceAll(f.Name, "-", "_")
+		name := cmdspec.CanonicalFlagName(f.Name)
+		key := strings.ReplaceAll(name, "-", "_")
 		switch f.Value.Type() {
 		case "bool":
 			v, _ := cmd.Flags().GetBool(f.Name)

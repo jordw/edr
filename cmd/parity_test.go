@@ -43,6 +43,11 @@ func TestBatchStandaloneParity(t *testing.T) {
 			batchArgs:      []string{"-r", "hello.go", "--sig"},
 		},
 		{
+			name:           "read sig alias standalone",
+			standaloneArgs: []string{"read", "hello.go", "--sig"},
+			batchArgs:      []string{"-r", "hello.go", "--sig"},
+		},
+		{
 			name:           "search symbol",
 			standaloneArgs: []string{"search", "main"},
 			batchArgs:      []string{"-s", "main"},

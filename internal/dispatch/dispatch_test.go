@@ -52,61 +52,52 @@ func hello() {
 		t.Fatalf("Dispatch returned error: %v", err)
 	}
 
-	// Marshal and unmarshal to inspect structured output.
-	raw, err := json.Marshal(result)
-	if err != nil {
-		t.Fatalf("json.Marshal: %v", err)
-	}
-
-	var entries []struct {
-		File    string `json:"file"`
-		Symbol  string `json:"symbol,omitempty"`
-		OK      bool   `json:"ok"`
-		Error   string `json:"error,omitempty"`
-		Content string `json:"content,omitempty"`
-	}
-	if err := json.Unmarshal(raw, &entries); err != nil {
-		t.Fatalf("json.Unmarshal: %v", err)
+	// Multi-file reads now return MultiResults
+	multi, ok := result.(dispatch.MultiResults)
+	if !ok {
+		t.Fatalf("expected MultiResults, got %T", result)
 	}
 
 	// We should get exactly 4 entries — one per arg, no silent drops.
-	if len(entries) != 4 {
-		t.Fatalf("expected 4 entries, got %d: %s", len(entries), string(raw))
+	if len(multi) != 4 {
+		t.Fatalf("expected 4 entries, got %d", len(multi))
 	}
 
 	// Entry 0: valid file read
-	if !entries[0].OK {
-		t.Errorf("entry 0 (main.go): expected ok=true, got ok=false, error=%q", entries[0].Error)
+	if !multi[0].OK {
+		t.Errorf("entry 0 (main.go): expected ok=true, error=%q", multi[0].Error)
 	}
-	if entries[0].Content == "" {
-		t.Error("entry 0 (main.go): expected non-empty content")
+	if multi[0].Result == nil {
+		t.Error("entry 0 (main.go): expected non-nil result")
 	}
 
 	// Entry 1: invalid file
-	if entries[1].OK {
-		t.Error("entry 1 (nonexistent.go): expected ok=false, got ok=true")
+	if multi[1].OK {
+		t.Error("entry 1 (nonexistent.go): expected ok=false")
 	}
-	if entries[1].Error == "" {
-		t.Error("entry 1 (nonexistent.go): expected non-empty error message")
+	if multi[1].Error == "" {
+		t.Error("entry 1 (nonexistent.go): expected non-empty error")
 	}
 
 	// Entry 2: valid symbol read
-	if !entries[2].OK {
-		t.Errorf("entry 2 (main.go:hello): expected ok=true, got ok=false, error=%q", entries[2].Error)
+	if !multi[2].OK {
+		t.Errorf("entry 2 (main.go:hello): expected ok=true, error=%q", multi[2].Error)
 	}
-	if entries[2].Content == "" {
-		t.Error("entry 2 (main.go:hello): expected non-empty content")
-	}
-	if entries[2].Symbol != "hello" {
-		t.Errorf("entry 2: expected symbol=\"hello\", got %q", entries[2].Symbol)
+	if multi[2].Result != nil {
+		raw, _ := json.Marshal(multi[2].Result)
+		var m map[string]any
+		json.Unmarshal(raw, &m)
+		if m["symbol"] != "hello" {
+			t.Errorf("entry 2: expected symbol=\"hello\", got %v", m["symbol"])
+		}
 	}
 
 	// Entry 3: invalid symbol
-	if entries[3].OK {
-		t.Error("entry 3 (main.go:nosuchsymbol): expected ok=false, got ok=true")
+	if multi[3].OK {
+		t.Error("entry 3 (main.go:nosuchsymbol): expected ok=false")
 	}
-	if entries[3].Error == "" {
-		t.Error("entry 3 (main.go:nosuchsymbol): expected non-empty error message")
+	if multi[3].Error == "" {
+		t.Error("entry 3 (main.go:nosuchsymbol): expected non-empty error")
 	}
 }
 
@@ -354,12 +345,12 @@ func TestEditReindexesImmediately(t *testing.T) {
 		t.Fatalf("edit dispatch: %v", err)
 	}
 
-	// Verify the edit response has ok=true and no index_error
+	// Verify the edit response has status and no index_error
 	raw, _ := json.Marshal(result)
 	var editOut map[string]any
 	json.Unmarshal(raw, &editOut)
-	if editOut["ok"] != true {
-		t.Fatalf("expected ok=true, got: %s", string(raw))
+	if editOut["status"] == nil {
+		t.Fatalf("expected status field, got: %s", string(raw))
 	}
 	if ie, ok := editOut["index_error"]; ok && ie != "" {
 		t.Errorf("unexpected index_error: %v", ie)
@@ -958,8 +949,8 @@ func TestEditEmptyNewTextIsDeletion(t *testing.T) {
 	}
 
 	raw, _ := json.Marshal(result)
-	if !strings.Contains(string(raw), `"ok":true`) {
-		t.Fatalf("expected ok:true, got: %s", string(raw))
+	if !strings.Contains(string(raw), `"status"`) {
+		t.Fatalf("expected status field, got: %s", string(raw))
 	}
 
 	data, _ := os.ReadFile(goFile)

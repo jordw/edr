@@ -671,3 +671,95 @@ func TestMapCodeFirst(t *testing.T) {
 		t.Errorf("first file in map should be .go, got %q", firstFile)
 	}
 }
+
+// TestMultiFileReadProducesMultipleOps verifies that standalone multi-file
+// read produces one op per file, matching batch behavior.
+func TestMultiFileReadProducesMultipleOps(t *testing.T) {
+	binary := buildBinary(t)
+	repoDir := t.TempDir()
+	repoDir, _ = filepath.EvalSymlinks(repoDir)
+	os.WriteFile(filepath.Join(repoDir, "a.go"), []byte("package main\nfunc A() {}\n"), 0644)
+	os.WriteFile(filepath.Join(repoDir, "b.go"), []byte("package main\nfunc B() {}\n"), 0644)
+	run(t, binary, repoDir, "reindex")
+
+	cmd := exec.Command(binary, "read", "a.go", "b.go")
+	cmd.Dir = repoDir
+	cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=multifile_%d", parityCounter.Add(1)))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("multi-file read failed: %v\n%s", err, out)
+	}
+
+	var env struct {
+		OK  bool `json:"ok"`
+		Ops []map[string]interface{} `json:"ops"`
+	}
+	if err := json.Unmarshal(out, &env); err != nil {
+		t.Fatalf("parse: %v\n%s", err, out)
+	}
+	if !env.OK {
+		t.Fatalf("expected ok=true, got false\n%s", out)
+	}
+	if len(env.Ops) != 2 {
+		t.Fatalf("expected 2 ops (one per file), got %d\n%s", len(env.Ops), out)
+	}
+	// Each op should have file, content, hash
+	for i, op := range env.Ops {
+		if op["file"] == nil {
+			t.Errorf("op[%d] missing file", i)
+		}
+		if op["content"] == nil {
+			t.Errorf("op[%d] missing content", i)
+		}
+		if op["hash"] == nil {
+			t.Errorf("op[%d] missing hash", i)
+		}
+	}
+}
+
+// TestEditOpsNeverHaveOKField verifies that edit results do not include
+// an "ok" field at the op level — ok belongs on the envelope only.
+func TestEditOpsNeverHaveOKField(t *testing.T) {
+	binary := buildBinary(t)
+	repoDir := t.TempDir()
+	repoDir, _ = filepath.EvalSymlinks(repoDir)
+	os.WriteFile(filepath.Join(repoDir, "main.go"), []byte("package main\nfunc main() {}\n"), 0644)
+	run(t, binary, repoDir, "reindex")
+
+	// Test both dry-run and real edit
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"dry-run", []string{"edit", "main.go", "--old-text", "package main", "--new-text", "package test", "--dry-run"}},
+		{"applied", []string{"edit", "main.go", "--old-text", "package main", "--new-text", "package test"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command(binary, tc.args...)
+			cmd.Dir = repoDir
+			cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=editok_%d", parityCounter.Add(1)))
+			out, _ := cmd.CombinedOutput()
+
+			var env struct {
+				Ops []map[string]interface{} `json:"ops"`
+			}
+			if err := json.Unmarshal(out, &env); err != nil {
+				t.Fatalf("parse: %v\n%s", err, out)
+			}
+			if len(env.Ops) == 0 {
+				t.Fatalf("no ops\n%s", out)
+			}
+			for i, op := range env.Ops {
+				if _, has := op["ok"]; has {
+					t.Errorf("op[%d] has 'ok' field — should only be on envelope\n%s", i, out)
+				}
+				if op["status"] == nil {
+					t.Errorf("op[%d] missing 'status' field\n%s", i, out)
+				}
+			}
+
+			// Restore file for next subtest
+			os.WriteFile(filepath.Join(repoDir, "main.go"), []byte("package main\nfunc main() {}\n"), 0644)
+		})
+	}
+}
