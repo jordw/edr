@@ -65,10 +65,10 @@ Scenarios and methodology in [`bench/scenarios/`](bench/scenarios/). Reproduce: 
 
 ```bash
 brew install jordw/tap/edr
-edr setup .
+edr setup
 ```
 
-`edr setup` indexes your project, adds `.edr/` to `.gitignore`, and appends agent instructions (~2KB) to your config (`CLAUDE.md`, `.cursorrules`, or `AGENTS.md`). Existing content is preserved. The instructions teach the agent to use edr instead of built-in file tools.
+`edr setup` indexes your project, adds `.edr/` to `.gitignore`, and installs agent instructions to your global config (`~/.claude/CLAUDE.md`, `~/.cursor/rules/edr.mdc`, or `~/.codex/AGENTS.md`). Instructions auto-update when edr is rebuilt. They teach the agent to use edr instead of built-in file tools.
 
 <details>
 <summary>Other install methods</summary>
@@ -83,7 +83,7 @@ curl -fsSL https://raw.githubusercontent.com/jordw/edr/main/install.sh | sh
 
 ```bash
 CGO_ENABLED=1 go install github.com/jordw/edr@latest
-edr setup /path/to/your/project
+edr setup
 ```
 
 > `CGO_ENABLED=1` is required — tree-sitter grammars are C libraries. You need `gcc` and `g++` installed.
@@ -102,11 +102,11 @@ The index lives in `.edr/` at the repo root and rebuilds automatically if delete
 
 edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and stores symbols in a SQLite index. This gives agents three capabilities they don't have with raw file tools:
 
-**Symbol-level operations.** Read one function instead of a 400-line file. Get a class API with `--signatures` (85% fewer tokens). Add a method with `--inside ClassName` without reading the file. Edits re-index immediately and auto-verify the build.
+**Symbol-level operations.** Read one function instead of a 400-line file. Get a class API with `--signatures` (85% fewer tokens). Add a method with `--inside ClassName` without reading the file. Edits re-index immediately and auto-verify the build (Go, Node, Rust, Make).
 
 **Batching.** `-r`, `-s`, `-e`, `-w` combine reads, searches, edits, and writes in one CLI call. One call to gather context, one to apply mutations.
 
-**Sessions.** Set `EDR_SESSION` to a stable ID to enable cross-call dedup. Re-reading an unchanged file returns `{unchanged: true}`. Search results replace already-seen bodies with `[in context]`. Without a session, each call is independent.
+**Sessions.** Always active — delta reads and body dedup work across calls automatically. Re-reading an unchanged file returns `{session: "unchanged"}`. Use `edr session new` to start a fresh session (recommended after context resets). Multiple agents get isolated sessions via PPID-based resolution.
 
 ## Commands
 
@@ -137,10 +137,12 @@ edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "..."
 | `refs` | `edr refs Symbol`, `edr refs Symbol --impact` |
 | `rename` | `edr rename old new --dry-run` |
 | `verify` | `edr verify`, `edr verify --level test` |
-| `setup` | `edr setup .`, `edr setup --claude --force` |
+| `run` | `edr run -- make test`, `edr run --fuzzy -- pytest` |
+| `session` | `edr session new` |
+| `setup` | `edr setup`, `edr setup --claude --force` |
 | `reindex` | `edr reindex` |
 
-All output is structured JSON.
+All output is structured JSON. `edr run` wraps external commands with block-level output dedup — on repeat runs, only changed blocks are shown. `--fuzzy` normalizes numbers before hashing so timing changes don't defeat dedup.
 
 ## Languages
 
