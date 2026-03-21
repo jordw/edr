@@ -5,11 +5,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/jordw/edr/internal/session"
 	"github.com/spf13/cobra"
 )
+
+var digitRe = regexp.MustCompile(`[0-9]+`)
 
 var runCmd = &cobra.Command{
 	Use:   "run <command...>",
@@ -21,6 +24,7 @@ replaced with [unchanged: N lines]. Use --full to bypass dedup.`,
 	DisableFlagParsing:    false,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		full, _ := cmd.Flags().GetBool("full")
+		fuzzy, _ := cmd.Flags().GetBool("fuzzy")
 
 		// Build the shell command
 		shellCmd := strings.Join(args, " ")
@@ -49,7 +53,7 @@ replaced with [unchanged: N lines]. Use --full to bypass dedup.`,
 
 		// Dedup by blocks
 		key := "run:" + shellCmd
-		output := dedupBlocks(sess, key, string(out))
+		output := dedupBlocks(sess, key, string(out), fuzzy)
 		fmt.Print(output)
 
 		if execErr != nil {
@@ -64,12 +68,13 @@ replaced with [unchanged: N lines]. Use --full to bypass dedup.`,
 
 func init() {
 	runCmd.Flags().Bool("full", false, "Bypass dedup, show full output")
+	runCmd.Flags().Bool("fuzzy", false, "Normalize numbers before hashing (tolerates timing changes)")
 	rootCmd.AddCommand(runCmd)
 }
 
 // dedupBlocks splits output into blank-line-separated blocks, deduplicates
 // against the session, and returns the filtered output.
-func dedupBlocks(sess *session.Session, key, text string) string {
+func dedupBlocks(sess *session.Session, key, text string, fuzzy bool) string {
 	if text == "" {
 		return ""
 	}
@@ -79,7 +84,11 @@ func dedupBlocks(sess *session.Session, key, text string) string {
 	unchangedLines := 0
 
 	for _, block := range blocks {
-		h := session.ContentHash(block)
+		hashInput := block
+		if fuzzy {
+			hashInput = digitRe.ReplaceAllString(block, "N")
+		}
+		h := session.ContentHash(hashInput)
 		sessKey := key + ":" + h
 
 		if sess.IsBlockSeen(sessKey) {
