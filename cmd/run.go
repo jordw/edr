@@ -17,9 +17,9 @@ var runCmd = &cobra.Command{
 	Use:   "run <command...>",
 	Short: "Run a command, show only what changed since last run",
 	Long: `Execute a shell command and diff output against the previous run.
-First run shows full output. Subsequent runs show only the diff.
-If output is identical, prints "[no changes]".
-Use --full to bypass diffing and show raw output.`,
+First run shows full output. Subsequent runs show a sparse view:
+unchanged regions collapse to [N unchanged lines], changed lines
+show inline {old → new} markers. Use --full for raw output.`,
 	Args:               cobra.MinimumNArgs(1),
 	DisableFlagParsing: false,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -62,7 +62,7 @@ func exitError(err error) error {
 
 // diffAgainstPrevious diffs current output against the stored previous run.
 // First run shows full output. Identical output prints "[no changes]".
-// Otherwise shows a unified diff with context.
+// Otherwise shows sparse output with inline diffs.
 func diffAgainstPrevious(runDir, command, current string) string {
 	key := fmt.Sprintf("%x", sha256.Sum256([]byte(command)))[:12]
 	lastFile := filepath.Join(runDir, key+".last")
@@ -70,7 +70,7 @@ func diffAgainstPrevious(runDir, command, current string) string {
 	prev, err := os.ReadFile(lastFile)
 	hasPrev := err == nil
 
-	// Store current (truncate from front if over 1MB)
+	// Store current (truncate from front if over cap)
 	store := current
 	if len(store) > maxRunOutput {
 		store = store[len(store)-maxRunOutput:]
@@ -88,169 +88,76 @@ func diffAgainstPrevious(runDir, command, current string) string {
 		return fmt.Sprintf("[no changes, %d lines]\n", lines)
 	}
 
-	return lineDiff(prevStr, current)
+	oldLines := strings.Split(strings.TrimRight(prevStr, "\n"), "\n")
+	newLines := strings.Split(strings.TrimRight(current, "\n"), "\n")
+	return sparseDiff(oldLines, newLines)
 }
 
-// lineDiff produces a unified diff between old and new.
-// If the diff is >80% of the output, shows full output instead.
-func lineDiff(old, new string) string {
-	oldLines := strings.Split(strings.TrimRight(old, "\n"), "\n")
-	newLines := strings.Split(strings.TrimRight(new, "\n"), "\n")
-
-	hunks := computeHunks(oldLines, newLines)
-	if len(hunks) == 0 {
-		return fmt.Sprintf("[no changes, %d lines]\n", len(newLines))
-	}
-
+// sparseDiff produces a sparse version of the new output where unchanged
+// regions are collapsed and changed lines show inline {old → new} markers.
+// Uses positional alignment (line N vs line N).
+func sparseDiff(oldLines, newLines []string) string {
 	var result strings.Builder
-	diffLines := 0
-	for _, h := range hunks {
-		fmt.Fprintf(&result, "@@ -%d,%d +%d,%d @@\n",
-			h.oldStart+1, h.oldCount, h.newStart+1, h.newCount)
-		for _, line := range h.lines {
-			result.WriteString(line)
+	i := 0
+
+	for i < len(newLines) {
+		if i < len(oldLines) && newLines[i] == oldLines[i] {
+			// Count consecutive unchanged
+			count := 0
+			for i < len(newLines) && i < len(oldLines) && newLines[i] == oldLines[i] {
+				count++
+				i++
+			}
+			fmt.Fprintf(&result, "[%d unchanged lines]\n", count)
+		} else if i < len(oldLines) {
+			// Modified — inline diff
+			result.WriteString(inlineDiff(oldLines[i], newLines[i]))
 			result.WriteByte('\n')
-			diffLines++
+			i++
+		} else {
+			// Added
+			fmt.Fprintf(&result, "{+ %s}\n", newLines[i])
+			i++
 		}
 	}
 
-	unchanged := len(newLines) - diffLines
-	if unchanged > 0 {
-		fmt.Fprintf(&result, "[%d unchanged lines omitted]\n", unchanged)
+	// Removed lines at end
+	for i < len(oldLines) {
+		fmt.Fprintf(&result, "{- %s}\n", oldLines[i])
+		i++
 	}
+
 	return result.String()
 }
 
-type hunk struct {
-	oldStart, oldCount int
-	newStart, newCount int
-	lines              []string
-}
-
-const contextLines = 3
-
-// computeHunks builds diff hunks from two line slices using LCS.
-func computeHunks(old, new []string) []hunk {
-	m, n := len(old), len(new)
-
-	// Too large for DP — show as one big hunk
-	if m*n > 10_000_000 {
-		return []hunk{{
-			oldStart: 0, oldCount: m,
-			newStart: 0, newCount: n,
-			lines:    prefixLines(new, "+"),
-		}}
+// inlineDiff produces a line with {old → new} markers for changed segments.
+// Unchanged prefix and suffix are kept as-is.
+func inlineDiff(old, new string) string {
+	// Find common prefix
+	pfx := 0
+	for pfx < len(old) && pfx < len(new) && old[pfx] == new[pfx] {
+		pfx++
+	}
+	// Find common suffix
+	sfx := 0
+	for sfx < len(old)-pfx && sfx < len(new)-pfx && old[len(old)-1-sfx] == new[len(new)-1-sfx] {
+		sfx++
 	}
 
-	lcs := computeLCS(old, new)
+	oldMid := old[pfx : len(old)-sfx]
+	newMid := new[pfx : len(new)-sfx]
 
-	var hunks []hunk
-	var cur *hunk
-	oi, ni, li := 0, 0, 0
-
-	flush := func() {
-		if cur != nil && len(cur.lines) > 0 {
-			hunks = append(hunks, *cur)
-			cur = nil
-		}
+	if oldMid == "" && newMid == "" {
+		return new
 	}
 
-	for oi < m || ni < n {
-		if li < len(lcs) && oi < m && ni < n && old[oi] == lcs[li] && new[ni] == lcs[li] {
-			// Matching line
-			if cur != nil {
-				cur.lines = append(cur.lines, " "+old[oi])
-				cur.oldCount++
-				cur.newCount++
-				trailing := 0
-				for j := len(cur.lines) - 1; j >= 0 && cur.lines[j][0] == ' '; j-- {
-					trailing++
-				}
-				if trailing >= contextLines {
-					flush()
-				}
-			}
-			oi++
-			ni++
-			li++
-			continue
-		}
-
-		// Start or extend a hunk
-		if cur == nil {
-			cur = &hunk{oldStart: oi, newStart: ni}
-			start := oi - contextLines
-			if start < 0 {
-				start = 0
-			}
-			for i := start; i < oi; i++ {
-				cur.lines = append(cur.lines, " "+old[i])
-				cur.oldCount++
-				cur.newCount++
-				cur.oldStart = i
-				cur.newStart = ni - (oi - i)
-			}
-		}
-
-		for oi < m && (li >= len(lcs) || old[oi] != lcs[li]) {
-			cur.lines = append(cur.lines, "-"+old[oi])
-			cur.oldCount++
-			oi++
-		}
-
-		for ni < n && (li >= len(lcs) || new[ni] != lcs[li]) {
-			cur.lines = append(cur.lines, "+"+new[ni])
-			cur.newCount++
-			ni++
-		}
-	}
-
-	flush()
-	return hunks
-}
-
-// computeLCS returns the longest common subsequence of a and b.
-func computeLCS(a, b []string) []string {
-	m, n := len(a), len(b)
-	dp := make([][]int, m+1)
-	for i := range dp {
-		dp[i] = make([]int, n+1)
-	}
-	for i := 1; i <= m; i++ {
-		for j := 1; j <= n; j++ {
-			if a[i-1] == b[j-1] {
-				dp[i][j] = dp[i-1][j-1] + 1
-			} else if dp[i-1][j] > dp[i][j-1] {
-				dp[i][j] = dp[i-1][j]
-			} else {
-				dp[i][j] = dp[i][j-1]
-			}
-		}
-	}
-
-	result := make([]string, 0, dp[m][n])
-	i, j := m, n
-	for i > 0 && j > 0 {
-		if a[i-1] == b[j-1] {
-			result = append(result, a[i-1])
-			i--
-			j--
-		} else if dp[i-1][j] > dp[i][j-1] {
-			i--
-		} else {
-			j--
-		}
-	}
-	for l, r := 0, len(result)-1; l < r; l, r = l+1, r-1 {
-		result[l], result[r] = result[r], result[l]
-	}
-	return result
-}
-
-func prefixLines(lines []string, prefix string) []string {
-	out := make([]string, len(lines))
-	for i, l := range lines {
-		out[i] = prefix + l
-	}
-	return out
+	var b strings.Builder
+	b.WriteString(new[:pfx])
+	b.WriteString("{")
+	b.WriteString(oldMid)
+	b.WriteString(" → ")
+	b.WriteString(newMid)
+	b.WriteString("}")
+	b.WriteString(new[len(new)-sfx:])
+	return b.String()
 }

@@ -24,47 +24,41 @@ func TestDiffAgainstPrevious_Identical(t *testing.T) {
 	}
 }
 
-func TestDiffAgainstPrevious_ShowsDiff(t *testing.T) {
+func TestDiffAgainstPrevious_ShowsInlineDiff(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "run")
+	diffAgainstPrevious(runDir, "test", "aaa\nbbb\nccc\nddd\neee\n")
+	out := diffAgainstPrevious(runDir, "test", "aaa\nBBB\nccc\nddd\neee\n")
 
-	first := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n"
-	diffAgainstPrevious(runDir, "test", first)
-
-	second := "line1\nline2\nline3\nline4\nCHANGED\nline6\nline7\nline8\nline9\nline10\n"
-	out := diffAgainstPrevious(runDir, "test", second)
-
-	if !strings.Contains(out, "+CHANGED") {
-		t.Errorf("diff should show +CHANGED, got: %q", out)
+	if !strings.Contains(out, "{bbb → BBB}") {
+		t.Errorf("should show inline diff, got: %q", out)
 	}
-	if !strings.Contains(out, "-line5") {
-		t.Errorf("diff should show -line5, got: %q", out)
-	}
-	if !strings.Contains(out, "unchanged lines omitted") {
-		t.Errorf("should mention unchanged lines, got: %q", out)
+	if !strings.Contains(out, "unchanged") {
+		t.Errorf("should collapse unchanged, got: %q", out)
 	}
 }
 
-func TestDiffAgainstPrevious_CompletelyDifferent(t *testing.T) {
+func TestDiffAgainstPrevious_AddedLines(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "run")
-
-	diffAgainstPrevious(runDir, "test", "aaa\nbbb\nccc\n")
-	out := diffAgainstPrevious(runDir, "test", "xxx\nyyy\nzzz\n")
-
-	// Completely different — shows as diff with all lines changed
-	if !strings.Contains(out, "+xxx") {
-		t.Errorf("should show new lines, got: %q", out)
+	diffAgainstPrevious(runDir, "test", "aaa\nbbb\n")
+	out := diffAgainstPrevious(runDir, "test", "aaa\nbbb\nccc\n")
+	if !strings.Contains(out, "{+ ccc}") {
+		t.Errorf("should show added line, got: %q", out)
 	}
-	if !strings.Contains(out, "-aaa") {
-		t.Errorf("should show removed lines, got: %q", out)
+}
+
+func TestDiffAgainstPrevious_RemovedLines(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "run")
+	diffAgainstPrevious(runDir, "test", "aaa\nbbb\nccc\n")
+	out := diffAgainstPrevious(runDir, "test", "aaa\nbbb\n")
+	if !strings.Contains(out, "{- ccc}") {
+		t.Errorf("should show removed line, got: %q", out)
 	}
 }
 
 func TestDiffAgainstPrevious_DifferentCommands(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "run")
-
 	diffAgainstPrevious(runDir, "cmd1", "output1\n")
 	diffAgainstPrevious(runDir, "cmd2", "output2\n")
-
 	out := diffAgainstPrevious(runDir, "cmd1", "output1\n")
 	if !strings.Contains(out, "no changes") {
 		t.Errorf("cmd1 should match its own history, got: %q", out)
@@ -73,7 +67,6 @@ func TestDiffAgainstPrevious_DifferentCommands(t *testing.T) {
 
 func TestDiffAgainstPrevious_OverwritesPrevious(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "run")
-
 	diffAgainstPrevious(runDir, "test", "v1\n")
 	diffAgainstPrevious(runDir, "test", "v2\n")
 	out := diffAgainstPrevious(runDir, "test", "v2\n")
@@ -84,10 +77,8 @@ func TestDiffAgainstPrevious_OverwritesPrevious(t *testing.T) {
 
 func TestDiffAgainstPrevious_TruncatesLargeOutput(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "run")
-
 	big := strings.Repeat("x", maxRunOutput+1000)
 	diffAgainstPrevious(runDir, "test", big)
-
 	files, _ := os.ReadDir(runDir)
 	for _, f := range files {
 		info, _ := f.Info()
@@ -97,56 +88,49 @@ func TestDiffAgainstPrevious_TruncatesLargeOutput(t *testing.T) {
 	}
 }
 
-func TestLineDiff_OneLine(t *testing.T) {
-	old := "PASS TestA\nPASS TestB\nPASS TestC\nPASS TestD\nPASS TestE\nPASS TestF\nok 0.003s\n"
-	new := "PASS TestA\nPASS TestB\nPASS TestC\nPASS TestD\nPASS TestE\nPASS TestF\nok 0.005s\n"
-
-	out := lineDiff(old, new)
-	if !strings.Contains(out, "-ok 0.003s") {
-		t.Errorf("should show old timing, got: %q", out)
+func TestInlineDiff_TimingChange(t *testing.T) {
+	got := inlineDiff("ok  pkg  0.150s", "ok  pkg  0.131s")
+	if !strings.Contains(got, "{") || !strings.Contains(got, "→") {
+		t.Errorf("should have inline markers, got: %q", got)
 	}
-	if !strings.Contains(out, "+ok 0.005s") {
-		t.Errorf("should show new timing, got: %q", out)
+	if !strings.HasPrefix(got, "ok  pkg  0.1") {
+		t.Errorf("should preserve common prefix, got: %q", got)
+	}
+}
+
+func TestInlineDiff_StructuralChange(t *testing.T) {
+	got := inlineDiff("--- PASS: TestBar", "--- FAIL: TestBar")
+	if !strings.Contains(got, "{PASS → FAIL}") {
+		t.Errorf("should show PASS→FAIL, got: %q", got)
+	}
+}
+
+func TestInlineDiff_Identical(t *testing.T) {
+	got := inlineDiff("same line", "same line")
+	if got != "same line" {
+		t.Errorf("identical lines should return as-is, got: %q", got)
+	}
+}
+
+func TestSparseDiff_AllUnchanged(t *testing.T) {
+	lines := []string{"a", "b", "c", "d", "e"}
+	out := sparseDiff(lines, lines)
+	if !strings.Contains(out, "[5 unchanged lines]") {
+		t.Errorf("should collapse all, got: %q", out)
+	}
+}
+
+func TestSparseDiff_MixedChanges(t *testing.T) {
+	old := []string{"a", "b", "c", "d", "e"}
+	new := []string{"a", "B", "c", "d", "E"}
+	out := sparseDiff(old, new)
+	if !strings.Contains(out, "{b → B}") {
+		t.Errorf("should show b→B, got: %q", out)
+	}
+	if !strings.Contains(out, "{e → E}") {
+		t.Errorf("should show e→E, got: %q", out)
 	}
 	if !strings.Contains(out, "unchanged") {
-		t.Errorf("should mention unchanged lines, got: %q", out)
-	}
-}
-
-func TestLineDiff_TestFlip(t *testing.T) {
-	old := "PASS Test1\nPASS Test2\nPASS Test3\nPASS Test4\nPASS Test5\nPASS Test6\nPASS Test7\nPASS Test8\nPASS Test9\nPASS Test10\nPASS TestFoo\nPASS TestBar\nPASS\n"
-	new := "PASS Test1\nPASS Test2\nPASS Test3\nPASS Test4\nPASS Test5\nPASS Test6\nPASS Test7\nPASS Test8\nPASS Test9\nPASS Test10\nPASS TestFoo\nFAIL TestBar\n    expected 42\nFAIL\n"
-
-	out := lineDiff(old, new)
-	if !strings.Contains(out, "+FAIL TestBar") {
-		t.Errorf("should show FAIL, got: %q", out)
-	}
-	if !strings.Contains(out, "+    expected 42") {
-		t.Errorf("should show error, got: %q", out)
-	}
-}
-
-func TestComputeLCS(t *testing.T) {
-	a := []string{"a", "b", "c", "d", "e"}
-	b := []string{"a", "c", "d", "f", "e"}
-	lcs := computeLCS(a, b)
-	got := strings.Join(lcs, ",")
-	if got != "a,c,d,e" {
-		t.Errorf("LCS = %q, want a,c,d,e", got)
-	}
-}
-
-func TestComputeLCS_Empty(t *testing.T) {
-	lcs := computeLCS([]string{}, []string{"a", "b"})
-	if len(lcs) != 0 {
-		t.Errorf("LCS of empty should be empty, got %v", lcs)
-	}
-}
-
-func TestComputeLCS_Identical(t *testing.T) {
-	a := []string{"a", "b", "c"}
-	lcs := computeLCS(a, a)
-	if len(lcs) != 3 {
-		t.Errorf("LCS of identical should be full length, got %d", len(lcs))
+		t.Errorf("should have unchanged sections, got: %q", out)
 	}
 }
