@@ -400,7 +400,9 @@ func allCandidatesLackImports(candidates []SymbolInfo) bool {
 }
 
 func findReferencesTextBased(ctx context.Context, db *DB, symbolName string) ([]SymbolInfo, error) {
-	rows, err := db.db.QueryContext(ctx, `SELECT DISTINCT file FROM symbols`)
+	// Query the files table (all indexed files) rather than DISTINCT file FROM symbols,
+	// so we also scan files that have no extracted symbols (e.g., headers with only prototypes).
+	rows, err := db.db.QueryContext(ctx, `SELECT path FROM files`)
 	if err != nil {
 		return nil, err
 	}
