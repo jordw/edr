@@ -112,7 +112,7 @@ edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-s
 
 **Sessions.** Agents re-read files constantly — to get exact text for edits, to check results, to refresh context. edr tracks what the agent has already seen and elides it. Second read of an unchanged file: 0 tokens. Zero config — sessions activate automatically. Multiple agents get isolated sessions via PPID.
 
-**Command wrapping.** `edr run -- make test` executes a command and deduplicates the output across calls. After a fix, only the changed test results show — passing tests collapse to `[unchanged: 80 lines]`. `--fuzzy` normalizes numbers before hashing so timing jitter doesn't defeat dedup.
+**Command caching.** `edr run -- make test` executes a command and caches the output. Run it again after a fix — only the changed test results show, passing tests collapse to `[unchanged: 80 lines]`. `--fuzzy` normalizes numbers before hashing so timing jitter doesn't defeat dedup.
 
 ## Commands
 
