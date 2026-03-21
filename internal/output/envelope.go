@@ -171,10 +171,13 @@ func (e *Envelope) IsVerifyOnlyFailure() bool {
 	return false
 }
 
-// PrintEnvelope transforms the internal envelope to compact wire format
-// and writes it to stdout. Field names are shortened and noise fields
-// are stripped — see wire.go for the mapping.
+// PrintEnvelope renders the envelope to stdout.
+// Uses plain text format when EDR_FORMAT=plain, otherwise compact JSON.
 func PrintEnvelope(e *Envelope) {
+	if os.Getenv("EDR_FORMAT") == "plain" {
+		printPlain(e)
+		return
+	}
 	// Transform ops from internal names to wire format
 	for _, op := range e.Ops {
 		transformOp(op)
