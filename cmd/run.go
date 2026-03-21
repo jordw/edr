@@ -151,34 +151,42 @@ func sparseDiff(oldLines, newLines []string) string {
 	}
 
 	// Phase 2: Render with collapsing.
+	// Merge adjacent "same" and "digit-only modified" into one summary.
 	var result strings.Builder
 	i := 0
 	for i < len(entries) {
 		e := entries[i]
-		switch e.kind {
-		case "same":
-			count := 0
-			for i < len(entries) && entries[i].kind == "same" {
-				count++
-				i++
-			}
-			fmt.Fprintf(&result, "[%d unchanged lines]\n", count)
 
-		case "modified":
-			if e.digitOnly {
-				// Collapse consecutive digit-only modifications
-				count := 0
-				for i < len(entries) && entries[i].kind == "modified" && entries[i].digitOnly {
-					count++
+		// Collapsible: unchanged or digit-only modified
+		if e.kind == "same" || (e.kind == "modified" && e.digitOnly) {
+			total := 0
+			numChanged := 0
+			for i < len(entries) {
+				ei := entries[i]
+				if ei.kind == "same" {
+					total++
 					i++
+				} else if ei.kind == "modified" && ei.digitOnly {
+					total++
+					numChanged++
+					i++
+				} else {
+					break
 				}
-				fmt.Fprintf(&result, "[%d lines, numbers changed]\n", count)
-			} else {
-				// Show structural change inline
-				result.WriteString(inlineDiff(e.oldText, e.newText))
-				result.WriteByte('\n')
-				i++
 			}
+			if numChanged == 0 {
+				fmt.Fprintf(&result, "[%d unchanged lines]\n", total)
+			} else {
+				fmt.Fprintf(&result, "[%d lines, %d with numbers changed]\n", total, numChanged)
+			}
+			continue
+		}
+
+		switch e.kind {
+		case "modified":
+			result.WriteString(inlineDiff(e.oldText, e.newText))
+			result.WriteByte('\n')
+			i++
 
 		case "added":
 			fmt.Fprintf(&result, "{+ %s}\n", e.newText)
@@ -195,20 +203,21 @@ func sparseDiff(oldLines, newLines []string) string {
 
 // isDigitOnlyChange returns true if two strings of equal length differ
 // only at byte positions where at least one side has a digit.
+// isDigitOnlyChange returns true if two lines have the same non-digit
+// skeleton. "test 18 in 0.003s" vs "test 9 in 0.005s" → both strip to
+// "test  in .s" → digit-only change, even though lengths differ.
 func isDigitOnlyChange(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	hasDiff := false
-	for i := 0; i < len(a); i++ {
-		if a[i] != b[i] {
-			hasDiff = true
-			if !(a[i] >= '0' && a[i] <= '9') && !(b[i] >= '0' && b[i] <= '9') {
-				return false
-			}
+	return a != b && stripDigits(a) == stripDigits(b)
+}
+
+func stripDigits(s string) string {
+	var b []byte
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			b = append(b, s[i])
 		}
 	}
-	return hasDiff
+	return string(b)
 }
 
 // computeLCS returns the longest common subsequence of two string slices.

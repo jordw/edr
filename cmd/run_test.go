@@ -181,6 +181,20 @@ func TestSparseDiff_DigitOnlyCollapse(t *testing.T) {
 	if strings.Contains(out, "→") {
 		t.Errorf("digit-only lines should not show inline diff, got: %q", out)
 	}
+	// Merged: unchanged + digit-only should be one line
+	lines := strings.Count(out, "\n")
+	if lines != 1 {
+		t.Errorf("should merge to 1 summary line, got %d: %q", lines, out)
+	}
+}
+
+func TestSparseDiff_DigitOnlyDifferentLengths(t *testing.T) {
+	old := []string{"test 18 items", "ok"}
+	new := []string{"test 9 items", "ok"}
+	out := sparseDiff(old, new)
+	if !strings.Contains(out, "numbers changed") {
+		t.Errorf("18→9 should be digit-only despite length change, got: %q", out)
+	}
 }
 
 func TestIsDigitOnlyChange(t *testing.T) {
