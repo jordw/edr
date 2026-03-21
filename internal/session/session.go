@@ -9,6 +9,7 @@
 package session
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -163,6 +164,14 @@ func ResolveSessionID() string {
 		return "default"
 	}
 	return id
+}
+
+// GenerateID creates a short unique session ID (8 hex chars from timestamp + random).
+func GenerateID() string {
+	b := make([]byte, 4)
+	// Use crypto/rand for uniqueness
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // LoadSession loads the session identified by EDR_SESSION env var.

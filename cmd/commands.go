@@ -30,6 +30,7 @@ func init() {
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(setupCmd)
+	rootCmd.AddCommand(sessionCmd)
 }
 
 // dispatchCmdWithIndex is like dispatchCmd but auto-indexes if needed.
@@ -373,6 +374,36 @@ var verifyCmd = &cobra.Command{
 }
 
 func init() { cmdspec.RegisterFlags(verifyCmd.Flags(), "verify") }
+
+var sessionCmd = &cobra.Command{
+	Use:   "session",
+	Short: "Manage sessions",
+}
+
+var sessionNewCmd = &cobra.Command{
+	Use:   "new",
+	Short: "Create a new session and print its ID",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		root := getRoot(cmd)
+		edrDir := filepath.Join(root, ".edr")
+		if err := os.MkdirAll(filepath.Join(edrDir, "sessions"), 0755); err != nil {
+			return err
+		}
+		id := session.GenerateID()
+		sess := session.New()
+		path := filepath.Join(edrDir, "sessions", id+".json")
+		if err := sess.SaveToFile(path); err != nil {
+			return err
+		}
+		fmt.Println(id)
+		return nil
+	},
+}
+
+func init() {
+	sessionCmd.AddCommand(sessionNewCmd)
+}
 
 // addDispatchFailedOp creates a failed op on the envelope, matching batch behavior.
 // Per-op errors go on the op; only index-level errors go in envelope errors[].

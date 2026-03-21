@@ -1,5 +1,6 @@
 Use `edr` (via terminal) instead of built-in file tools for all file operations. edr uses 90%+ less context via progressive disclosure and batching.
 
+First call: run `edr session new` and prefix subsequent calls with `EDR_SESSION=<id> edr ...` for cross-call caching.
 
 Workflow — start narrow, widen only as needed:
 1. Orient: `edr map --budget 500` (filter: --dir, --lang, --grep)
