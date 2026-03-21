@@ -4,21 +4,40 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
+	"github.com/jordw/edr/internal/setup"
 	"github.com/spf13/cobra"
 )
 
 // Version and BuildHash are set at build time via ldflags:
 //
 //	go build -ldflags "-X github.com/jordw/edr/cmd.Version=... -X github.com/jordw/edr/cmd.BuildHash=..."
+//
+// For dev builds, BuildHash falls back to the current git HEAD.
 var (
 	Version   = "dev"
-	BuildHash = "unknown"
+	BuildHash = ""
 )
+
+func init() {
+	if BuildHash == "" {
+		BuildHash = gitHead()
+	}
+}
+
+// gitHead returns the short git commit hash, or "unknown" if git is unavailable.
+func gitHead() string {
+	out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(out))
+}
 
 var rootCmd = &cobra.Command{
 	Use:           "edr",
@@ -27,6 +46,9 @@ var rootCmd = &cobra.Command{
 	Version:       Version,
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		setup.AutoUpdate(BuildHash)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return cmd.Help()
 	},

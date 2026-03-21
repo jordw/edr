@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/setup"
@@ -11,38 +13,35 @@ import (
 
 var setupCmd = &cobra.Command{
 	Use:   "setup [path]",
-	Short: "Index repo and configure agent instructions",
-	Long: `Index the repository and inject edr instructions into your agent's config file.
+	Short: "Index repo and install global agent instructions",
+	Long: `Index the repository and install edr instructions globally.
 
-Auto-detects the target if CLAUDE.md, .cursorrules, or AGENTS.md exists.
-Use --claude, --cursor, --codex, or --generic to specify explicitly.
-Use --force to update previously injected instructions to the latest version.`,
+Writes a versioned instruction block to ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md
+so all agent sessions use edr for file operations.
+
+The block is wrapped in sentinel comments and can be surgically updated on future runs.
+Use --force to replace existing instructions with the latest version.
+Use --generic to print instructions to stdout (for other agents).`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runSetup,
 }
 
 func init() {
-	setupCmd.Flags().Bool("claude", false, "Configure CLAUDE.md")
-	setupCmd.Flags().Bool("cursor", false, "Configure .cursorrules")
-	setupCmd.Flags().Bool("codex", false, "Configure AGENTS.md")
+	setupCmd.Flags().Bool("global", false, "Install global instructions without prompting")
+	setupCmd.Flags().Bool("no-global", false, "Skip global instruction prompt")
 	setupCmd.Flags().Bool("generic", false, "Print instructions to stdout")
 	setupCmd.Flags().Bool("force", false, "Replace existing edr instructions with latest version")
-	setupCmd.Flags().Bool("skip-index", false, "Skip indexing (only inject instructions)")
+	setupCmd.Flags().Bool("skip-index", false, "Skip indexing (only install instructions)")
 	setupCmd.Flags().Bool("json", false, "Output JSON instead of human-readable text")
 }
 
 type setupResult struct {
-	Indexed        bool   `json:"indexed,omitempty"`
-	Target         string `json:"target"`
-	File           string `json:"file,omitempty"`
-	AlreadyCurrent bool   `json:"already_current,omitempty"`
-	Outdated       bool   `json:"outdated,omitempty"`
-	InstalledHash  string `json:"installed_hash,omitempty"`
-	CurrentHash    string `json:"current_hash,omitempty"`
-	Updated        bool   `json:"updated,omitempty"`
-	Gitignore      bool   `json:"gitignore,omitempty"`
-	Instructions   string `json:"instructions,omitempty"` // only for --generic
-	Error          string `json:"error,omitempty"`
+	Indexed      bool                 `json:"indexed,omitempty"`
+	Gitignore    bool                 `json:"gitignore,omitempty"`
+	Global       []setup.InjectResult `json:"global,omitempty"`
+	Instructions string               `json:"instructions,omitempty"` // only for --generic
+	CurrentHash  string               `json:"current_hash,omitempty"`
+	Error        string               `json:"error,omitempty"`
 }
 
 func runSetup(cmd *cobra.Command, args []string) error {
@@ -59,33 +58,24 @@ func runSetup(cmd *cobra.Command, args []string) error {
 
 	force, _ := cmd.Flags().GetBool("force")
 	jsonOut, _ := cmd.Flags().GetBool("json")
+	generic, _ := cmd.Flags().GetBool("generic")
+	globalExplicit, _ := cmd.Flags().GetBool("global")
+	noGlobal, _ := cmd.Flags().GetBool("no-global")
 
-	// Determine target.
-	var target setup.Target
-	if b, _ := cmd.Flags().GetBool("claude"); b {
-		target = setup.TargetClaude
-	} else if b, _ := cmd.Flags().GetBool("cursor"); b {
-		target = setup.TargetCursor
-	} else if b, _ := cmd.Flags().GetBool("codex"); b {
-		target = setup.TargetCodex
-	} else if b, _ := cmd.Flags().GetBool("generic"); b {
-		target = setup.TargetGeneric
-	} else {
-		target = setup.DetectTarget(root)
-		if target == "" {
-			// No existing config file found — default to CLAUDE.md (most common).
-			target = setup.TargetClaude
-			if !jsonOut {
-				fmt.Fprintf(os.Stderr, "  no agent config detected, creating %s\n", setup.ConfigFile(target))
-				fmt.Fprintf(os.Stderr, "  use --cursor or --codex for other agents\n")
-			}
+	result := setupResult{CurrentHash: BuildHash}
+
+	// --generic: just print instructions to stdout and exit.
+	if generic {
+		text, err := setup.Instructions(setup.TargetGeneric)
+		if err != nil {
+			result.Error = err.Error()
+			return printSetupOutput(result, jsonOut)
 		}
+		result.Instructions = text
+		return printSetupOutput(result, jsonOut)
 	}
 
-	result := setupResult{Target: string(target), CurrentHash: BuildHash}
-
 	// Step 1: Index (unless --skip-index).
-	// openDBAndIndex prints progress ("edr: index ready (N files, M symbols)") to stderr.
 	skipIndex, _ := cmd.Flags().GetBool("skip-index")
 	if !skipIndex {
 		db, err := openDBAndIndex(root, jsonOut)
@@ -104,48 +94,79 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		result.Gitignore = true
 	}
 
-	// Step 3: Inject instructions.
-	if target == setup.TargetGeneric {
-		text, err := setup.Instructions(target)
-		if err != nil {
-			result.Error = err.Error()
+	// Step 3: Global instructions.
+	if noGlobal {
+		return printSetupOutput(result, jsonOut)
+	}
+
+	shouldInstall := globalExplicit || force
+	if !shouldInstall && !jsonOut {
+		// Check current status to decide whether to prompt.
+		status := setup.GlobalStatus(BuildHash)
+		allCurrent := true
+		for _, s := range status {
+			if !s.AlreadyCurrent {
+				allCurrent = false
+				break
+			}
+		}
+		if allCurrent {
+			// Already up to date — just report and skip.
+			result.Global = status
 			return printSetupOutput(result, jsonOut)
 		}
-		result.Instructions = text
-		return printSetupOutput(result, jsonOut)
+
+		// Prompt user.
+		shouldInstall = promptGlobalInstall(status)
 	}
 
-	ir, err := setup.InjectInstructions(root, target, BuildHash, force)
-	if err != nil {
-		result.Error = err.Error()
-		return printSetupOutput(result, jsonOut)
-	}
-	result.File = ir.Path
-	result.AlreadyCurrent = ir.AlreadyCurrent
-	result.Outdated = ir.Outdated
-	result.InstalledHash = ir.InstalledHash
-	result.Updated = ir.Updated
+	if shouldInstall {
+		results, _ := setup.InjectAllGlobal(BuildHash, force)
+		result.Global = results
+		// Record opt-in so future edr runs auto-update.
+		_ = setup.WriteSentinel(BuildHash)
 
-	if !jsonOut {
-		file := setup.ConfigFile(target)
-		switch {
-		case ir.AlreadyCurrent:
-			fmt.Fprintf(os.Stderr, "  %s up-to-date (hash:%s)\n", file, BuildHash)
-		case ir.Outdated:
-			installed := ir.InstalledHash
-			if installed == "" {
-				installed = "none"
+		if !jsonOut {
+			for _, r := range results {
+				if r.Error != "" {
+					fmt.Fprintf(os.Stderr, "  %s: error: %s\n", r.Target, r.Error)
+				} else if r.AlreadyCurrent {
+					fmt.Fprintf(os.Stderr, "  %s up-to-date (hash:%s)\n", r.Path, BuildHash)
+				} else if r.Outdated {
+					fmt.Fprintf(os.Stderr, "  %s outdated (installed:%s current:%s)\n", r.Path, r.InstalledHash, BuildHash)
+					fmt.Fprintf(os.Stderr, "  run: edr setup --force\n")
+				} else if r.Updated {
+					fmt.Fprintf(os.Stderr, "  updated %s (hash:%s)\n", r.Path, BuildHash)
+				} else if r.Created {
+					fmt.Fprintf(os.Stderr, "  wrote %s (hash:%s)\n", r.Path, BuildHash)
+				}
 			}
-			fmt.Fprintf(os.Stderr, "  %s outdated (installed:%s current:%s)\n", file, installed, BuildHash)
-			fmt.Fprintf(os.Stderr, "  run: edr setup --force\n")
-		case ir.Updated:
-			fmt.Fprintf(os.Stderr, "  updated %s (hash:%s)\n", file, BuildHash)
-		default:
-			fmt.Fprintf(os.Stderr, "  wrote %s (hash:%s)\n", file, BuildHash)
 		}
 	}
 
 	return printSetupOutput(result, jsonOut)
+}
+
+// promptGlobalInstall asks the user whether to install global instructions.
+func promptGlobalInstall(status []setup.InjectResult) bool {
+	fmt.Fprintf(os.Stderr, "\n  Install edr instructions globally? This writes a short block to:\n")
+	for _, s := range status {
+		state := "new"
+		if s.Outdated {
+			state = fmt.Sprintf("outdated, installed:%s", s.InstalledHash)
+		} else if s.AlreadyCurrent {
+			state = "up-to-date"
+		}
+		fmt.Fprintf(os.Stderr, "    %s (%s)\n", s.Path, state)
+	}
+	fmt.Fprintf(os.Stderr, "  [y/N]: ")
+
+	scanner := bufio.NewScanner(os.Stdin)
+	if scanner.Scan() {
+		answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
+		return answer == "y" || answer == "yes"
+	}
+	return false
 }
 
 func printSetupOutput(r setupResult, jsonOut bool) error {
