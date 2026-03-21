@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/hints"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
@@ -542,7 +543,7 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			verbose = true
 
 		default:
-			return nil, fmt.Errorf("unknown flag: %s", arg)
+			return nil, suggestBatchFlag(arg, s.currentOp)
 		}
 
 		i++
@@ -825,3 +826,74 @@ func countSearchResults(env *output.Envelope) int {
 	}
 	return total
 }
+
+// allBatchFlags returns every flag recognized by parseBatchArgs, grouped by
+// which operation(s) they belong to. Used for "did you mean" suggestions.
+var batchFlagOps = map[string][]string{
+	"--sig":            {"-r"},
+	"--signatures":     {"-r"},
+	"--skeleton":       {"-r"},
+	"--depth":          {"-r"},
+	"--budget":         {"-r", "-s"},
+	"--lines":          {"-r", "-e"},
+	"--full":           {"-r", "-s"},
+	"--symbols":        {"-r"},
+	"--body":           {"-s"},
+	"--no-body":        {"-s"},
+	"--include":        {"-s"},
+	"--exclude":        {"-s"},
+	"--text":           {"-s"},
+	"--context":        {"-s"},
+	"--limit":          {"-s"},
+	"--in":             {"-s"},
+	"--regex":          {"-s"},
+	"--old":            {"-e"},
+	"--old-text":       {"-e"},
+	"--new":            {"-e", "-w"},
+	"--new-text":       {"-e", "-w"},
+	"--all":            {"-e"},
+	"--after":          {"-w"},
+	"--content":        {"-w"},
+	"--inside":         {"-w"},
+	"--mkdir":          {"-w"},
+	"--append":         {"-w"},
+	"--dry-run":        {"-e"},
+	"--command":        {"--verify"},
+	"--read-after-edit": {"global"},
+	"--root":           {"global"},
+	"--verbose":        {"global"},
+}
+
+// suggestBatchFlag builds a helpful error for an unknown batch flag.
+// Priority: (1) exact match on standalone command flag, (2) Levenshtein-close batch flag.
+func suggestBatchFlag(flag string, currentOp batchOp) error {
+	clean := strings.TrimLeft(flag, "-")
+
+	// 1. Exact match on a standalone command flag (e.g. --dir → `edr map`).
+	for _, spec := range cmdspec.Registry {
+		for _, f := range spec.Flags {
+			cliName := strings.ReplaceAll(f.Name, "_", "-")
+			if cliName == clean || f.Alias == clean {
+				return fmt.Errorf("unknown flag: %s (this flag is available on `edr %s`, not in batch mode)", flag, spec.Name)
+			}
+		}
+	}
+
+	// 2. Levenshtein match against known batch flags.
+	bestFlag := ""
+	bestDist := 3
+	for known := range batchFlagOps {
+		d := fieldLevenshtein(strings.TrimLeft(known, "-"), clean)
+		if d < bestDist {
+			bestDist = d
+			bestFlag = known
+		}
+	}
+	if bestFlag != "" {
+		ops := batchFlagOps[bestFlag]
+		return fmt.Errorf("unknown flag: %s (did you mean %s? valid after %s)", flag, bestFlag, strings.Join(ops, " or "))
+	}
+
+	return fmt.Errorf("unknown flag: %s", flag)
+}
+

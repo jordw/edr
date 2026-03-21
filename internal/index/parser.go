@@ -195,8 +195,8 @@ func extractName(node *tree_sitter.Node, src []byte, lang *LangConfig) string {
 
 	// C/C++: function_definition uses declarator field → function_declarator → identifier
 	if decl := node.ChildByFieldName("declarator"); decl != nil {
-		// Direct identifier (e.g., variable declarator)
-		if decl.Kind() == "identifier" {
+		// Direct identifier or type_identifier (e.g., variable declarator, C typedef)
+		if decl.Kind() == "identifier" || decl.Kind() == "type_identifier" {
 			return string(src[decl.StartByte():decl.EndByte()])
 		}
 		// function_declarator or pointer_declarator wrapping an identifier
@@ -232,9 +232,10 @@ func extractName(node *tree_sitter.Node, src []byte, lang *LangConfig) string {
 	}
 
 	// For variable_declarator patterns (e.g., const foo = () => {})
+	// Also matches type_identifier for C type_definition (typedef struct { ... } Name;)
 	for i := 0; i < int(node.ChildCount()); i++ {
 		child := node.Child(uint(i))
-		if child != nil && child.Kind() == "identifier" {
+		if child != nil && (child.Kind() == "identifier" || child.Kind() == "type_identifier") {
 			return string(src[child.StartByte():child.EndByte()])
 		}
 	}

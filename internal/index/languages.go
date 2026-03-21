@@ -128,6 +128,8 @@ func GetLangConfig(filename string) *LangConfig {
 			SymbolNodes: []string{
 				"function_definition",
 				"struct_specifier",
+				"declaration",
+				"type_definition",
 			},
 			NameField:      "name",
 			LangID:         "c",
@@ -226,6 +228,8 @@ func GetLangConfig(filename string) *LangConfig {
 				"enum_specifier",
 				"namespace_definition",
 				"template_declaration",
+				"declaration",
+				"type_definition",
 			},
 			NameField:      "name",
 			LangID:         "cpp",
