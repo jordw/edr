@@ -30,12 +30,21 @@ func resolveSymbolArgs(ctx context.Context, db *index.DB, root string, args []st
 
 	switch len(args) {
 	case 1:
-		return db.ResolveSymbol(ctx, args[0])
+		sym, err := db.ResolveSymbol(ctx, args[0])
+		if err != nil {
+			return nil, err
+		}
+		if reindexed, _ := index.EnsureFileFresh(ctx, db, sym.File); reindexed {
+			// Re-resolve to get updated byte offsets.
+			return db.ResolveSymbol(ctx, args[0])
+		}
+		return sym, nil
 	case 2:
 		file, err := db.ResolvePath(args[0])
 		if err != nil {
 			return nil, err
 		}
+		index.EnsureFileFresh(ctx, db, file)
 		return db.GetSymbol(ctx, file, args[1])
 	default:
 		return nil, fmt.Errorf("expected 1 or 2 arguments: [file] <symbol>")

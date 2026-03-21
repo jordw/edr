@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -454,7 +455,15 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 		Truncated:    truncated,
 	}
 	if !useRegex && sr.TotalMatches == 0 && looksLikeRegex(pattern) {
-		sr.Hint = "pattern contains regex metacharacters; use --regex for regex matching"
+		// Auto-retry with regex when literal search finds nothing.
+		if _, compileErr := regexp.Compile(pattern); compileErr == nil {
+			retrySr, retryErr := SearchText(ctx, db, pattern, budget, true, opts...)
+			if retryErr == nil && retrySr.TotalMatches > 0 {
+				retrySr.Hint = fmt.Sprintf("no literal matches; auto-retried with regex (%d matches)", retrySr.TotalMatches)
+				return retrySr, nil
+			}
+		}
+		sr.Hint = "pattern contains regex metacharacters but matched nothing (tried literal and regex)"
 	}
 	return sr, nil
 }
@@ -464,7 +473,7 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 func looksLikeRegex(pattern string) bool {
 	// Match patterns like .*, .+, \w, \d, [abc], (a|b), ^...$
 	// Single dots are common in filenames, so we only flag "strong" indicators.
-	indicators := []string{".*", ".+", "\\w", "\\d", "\\s", "\\b", "[", "(", "^", "$"}
+	indicators := []string{".*", ".+", "\\w", "\\d", "\\s", "\\b", "[", "(", "^", "$", "|", "{"}
 	for _, ind := range indicators {
 		if strings.Contains(pattern, ind) {
 			return true

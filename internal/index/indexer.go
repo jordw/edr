@@ -431,6 +431,38 @@ func IndexRepo(ctx context.Context, db *DB, progress ...ProgressFunc) (int, int,
 	return filesIndexed, symbolsFound, nil
 }
 
+// EnsureFileFresh checks whether a single file's index is stale by comparing
+// the on-disk mtime against the indexed mtime. If stale, it reindexes just
+// that file under the writer lock. Returns true if reindexing occurred.
+// Cost: ~20µs when fresh (one stat + one SQL query), ~2ms when stale (+ parse).
+func EnsureFileFresh(ctx context.Context, db *DB, path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false, nil // file gone; let caller handle
+	}
+	diskMtime := info.ModTime().UnixNano()
+
+	indexedMtime, err := db.GetFileMtime(ctx, path)
+	if err != nil || indexedMtime == 0 {
+		return false, nil // not in index; let caller handle
+	}
+
+	if diskMtime <= indexedMtime {
+		return false, nil // fresh
+	}
+
+	// Stale — reindex this single file.
+	reindexErr := db.WithWriteLock(func() error {
+		// Re-check after acquiring lock (another goroutine may have refreshed).
+		freshMtime, _ := db.GetFileMtime(ctx, path)
+		if freshMtime >= diskMtime {
+			return nil
+		}
+		return IndexFile(ctx, db, path)
+	})
+	return reindexErr == nil, reindexErr
+}
+
 // IndexFile re-indexes a single file, updating the DB with fresh symbols.
 func IndexFile(ctx context.Context, db *DB, path string) error {
 	path, err := db.ResolvePath(path)

@@ -1,11 +1,11 @@
 package cmd_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -81,7 +81,9 @@ func TestStandaloneExitCodes(t *testing.T) {
 
 // TestNoIndexError verifies that read-only commands fail with a clear error
 // when the repository has not been indexed.
-func TestNoIndexError(t *testing.T) {
+// TestAutoIndexOnFirstUse verifies that read-only operations auto-index
+// on an unindexed repo instead of failing with no_index.
+func TestAutoIndexOnFirstUse(t *testing.T) {
 	binary := buildBinary(t)
 
 	tests := []struct {
@@ -95,56 +97,35 @@ func TestNoIndexError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Fresh temp repo per subtest so .edr does not exist yet.
 			repoDir := t.TempDir()
 			os.WriteFile(filepath.Join(repoDir, "hello.go"), []byte("package main\nfunc main() {}\n"), 0644)
 
 			cmd := exec.Command(binary, tt.args...)
 			cmd.Dir = repoDir
-			out, err := cmd.CombinedOutput()
+			var stdout bytes.Buffer
+			cmd.Stdout = &stdout
+			err := cmd.Run()
 
-			if err == nil {
-				t.Fatal("expected non-zero exit, got 0")
+			if err != nil {
+				t.Fatalf("expected success (auto-index), got error: %v\nstdout: %s", err, stdout.String())
 			}
 
 			var env struct {
-				OK     bool `json:"ok"`
-				Errors []struct {
-					Code    string `json:"code"`
-					Message string `json:"message"`
-				} `json:"errors"`
+				OK bool `json:"ok"`
 			}
-			if jsonErr := json.Unmarshal(out, &env); jsonErr != nil {
-				t.Fatalf("failed to parse output as JSON: %v\noutput: %s", jsonErr, out)
+			if jsonErr := json.Unmarshal(stdout.Bytes(), &env); jsonErr != nil {
+				t.Fatalf("failed to parse output as JSON: %v\nstdout: %s", jsonErr, stdout.String())
 			}
-
-			if env.OK {
-				t.Errorf("expected ok:false, got ok:true\noutput: %s", out)
-			}
-
-			foundCode := false
-			foundMsg := false
-			for _, e := range env.Errors {
-				if e.Code == "no_index" {
-					foundCode = true
-				}
-				if strings.Contains(e.Message, "no index found") {
-					foundMsg = true
-				}
-			}
-			if !foundCode {
-				t.Errorf("expected error code \"no_index\", got: %s", out)
-			}
-			if !foundMsg {
-				t.Errorf("expected \"no index found\" error message, got: %s", out)
+			if !env.OK {
+				t.Errorf("expected ok:true after auto-index, got ok:false\nstdout: %s", stdout.String())
 			}
 		})
 	}
 }
 
-// TestBatchNoIndex verifies that batch read-only operations fail with
-// a clear error on an unindexed repo, matching standalone behavior.
-func TestBatchNoIndex(t *testing.T) {
+// TestBatchAutoIndex verifies that batch read-only operations auto-index
+// on an unindexed repo instead of failing.
+func TestBatchAutoIndex(t *testing.T) {
 	binary := buildBinary(t)
 
 	tests := []struct {
@@ -156,18 +137,26 @@ func TestBatchNoIndex(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Fresh temp repo per subtest so .edr does not exist yet.
 			repoDir := t.TempDir()
 			os.WriteFile(filepath.Join(repoDir, "hello.go"), []byte("package main\n"), 0644)
 
 			cmd := exec.Command(binary, tt.args...)
 			cmd.Dir = repoDir
-			out, err := cmd.CombinedOutput()
-			if err == nil {
-				t.Fatal("expected non-zero exit, got 0")
+			var stdout bytes.Buffer
+			cmd.Stdout = &stdout
+			err := cmd.Run()
+			if err != nil {
+				t.Fatalf("expected success (auto-index), got error: %v\nstdout: %s", err, stdout.String())
 			}
-			if !strings.Contains(string(out), "no_index") {
-				t.Errorf("expected no_index error code, got: %s", out)
+
+			var env struct {
+				OK bool `json:"ok"`
+			}
+			if jsonErr := json.Unmarshal(stdout.Bytes(), &env); jsonErr != nil {
+				t.Fatalf("failed to parse output as JSON: %v\nstdout: %s", jsonErr, stdout.String())
+			}
+			if !env.OK {
+				t.Errorf("expected ok:true after auto-index\nstdout: %s", stdout.String())
 			}
 		})
 	}
@@ -221,12 +210,13 @@ func TestVerifyNoSideEffects(t *testing.T) {
 		t.Error(".edr directory was created by verify — verify should have no side effects")
 	}
 
-	// Subsequent read should get no_index, not empty_index
+	// Subsequent read should auto-index and succeed.
 	cmd = exec.Command(binary, "read", "main.go")
 	cmd.Dir = repoDir
-	out, _ := cmd.CombinedOutput()
-	if !strings.Contains(string(out), "no_index") {
-		t.Errorf("expected no_index error after verify, got: %s", out)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("expected read to auto-index and succeed, got error: %v\nstdout: %s", err, stdout.String())
 	}
 }
 

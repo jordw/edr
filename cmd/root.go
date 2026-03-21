@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/jordw/edr/internal/index"
@@ -147,11 +146,6 @@ func (e *IndexError) Error() string { return e.Message }
 
 // openDBStrictRoot opens the DB, validates the index exists, and returns an error if not.
 func openDBStrictRoot(root string) (*index.DB, error) {
-	// Check whether .edr directory existed before OpenDB creates it.
-	edrDir := filepath.Join(root, ".edr")
-	_, statErr := os.Stat(edrDir)
-	edrExisted := statErr == nil
-
 	db, err := index.OpenDB(root)
 	if err != nil {
 		return nil, err
@@ -163,16 +157,25 @@ func openDBStrictRoot(root string) (*index.DB, error) {
 		return nil, err
 	}
 	if files == 0 {
-		db.Close()
-		if !edrExisted {
-			return nil, &IndexError{
-				Code:    "no_index",
-				Message: "no index found — run \"edr reindex\" first",
+		// Auto-index on first use instead of failing.
+		indexed := false
+		if lockErr := db.WithWriteLock(func() error {
+			// Recheck after acquiring lock — another process may have indexed.
+			currentFiles, _, _ := db.Stats(ctx)
+			if currentFiles > 0 {
+				return nil
 			}
+			fmt.Fprintf(os.Stderr, "edr: no index found, indexing repository...\n")
+			_, _, e := index.IndexRepo(ctx, db)
+			indexed = e == nil
+			return e
+		}); lockErr != nil {
+			db.Close()
+			return nil, lockErr
 		}
-		return nil, &IndexError{
-			Code:    "empty_index",
-			Message: "index contains 0 files — run \"edr reindex\"",
+		if indexed {
+			totalFiles, totalSyms, _ := db.Stats(ctx)
+			fmt.Fprintf(os.Stderr, "edr: index ready (%d files, %d symbols)\n", totalFiles, totalSyms)
 		}
 	}
 	output.SetRoot(db.Root())

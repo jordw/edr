@@ -516,6 +516,17 @@ func (d *DB) GetFileHash(ctx context.Context, path string) (string, error) {
 	return hash, err
 }
 
+// GetFileMtime returns the indexed mtime (UnixNano) for a single file.
+// Returns 0 if the file is not in the index.
+func (d *DB) GetFileMtime(ctx context.Context, path string) (int64, error) {
+	var mtime int64
+	err := d.db.QueryRowContext(ctx, "SELECT mtime FROM files WHERE path = ?", path).Scan(&mtime)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return mtime, err
+}
+
 // ClearFileData removes all symbols, imports, and refs for a file.
 func (d *DB) ClearFileData(ctx context.Context, file string) error {
 	q := d.writerExecer()
