@@ -1,6 +1,6 @@
 Use `edr` (via shell) instead of cat, sed, grep, and find for all file operations. edr uses 90%+ less context via progressive disclosure and batching.
 
-First call: run `edr session new` to enable cross-call caching. Run it again if context is cleared.
+After a context reset, run `edr session new` to clear stale dedup state. Otherwise sessions are automatic.
 
 Workflow — start narrow, widen only as needed:
 1. Orient: `edr map --budget 500` (filter: --dir, --lang, --grep)
