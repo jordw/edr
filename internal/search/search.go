@@ -266,10 +266,30 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 	}
 	root := db.Root()
 
+	// Comma-separated OR: "foo,bar,baz" → match any term
+	var orTerms []string
+	var orTermsLower []string
+	if !useRegex && strings.Contains(pattern, ",") {
+		for _, t := range strings.Split(pattern, ",") {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				orTerms = append(orTerms, t)
+				orTermsLower = append(orTermsLower, strings.ToLower(t))
+			}
+		}
+	}
+
 	var re *regexp.Regexp
 	var lowerPattern string
 	caseSensitive := hasUpperCase(pattern) // smart-case: uppercase in pattern → exact match
-	if useRegex {
+	if len(orTerms) > 0 {
+		// OR mode — matching handled below
+		if !caseSensitive {
+			orTerms = nil // use orTermsLower instead
+		} else {
+			orTermsLower = nil // use orTerms with exact case
+		}
+	} else if useRegex {
 		p := pattern
 		if !caseSensitive {
 			p = "(?i)" + p
@@ -346,6 +366,23 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 				var matched bool
 				if re != nil {
 					matched = re.MatchString(line)
+				} else if len(orTerms) > 0 {
+					// Case-sensitive OR
+					for _, term := range orTerms {
+						if strings.Contains(line, term) {
+							matched = true
+							break
+						}
+					}
+				} else if len(orTermsLower) > 0 {
+					// Case-insensitive OR
+					lower := strings.ToLower(line)
+					for _, term := range orTermsLower {
+						if strings.Contains(lower, term) {
+							matched = true
+							break
+						}
+					}
 				} else if caseSensitive {
 					matched = strings.Contains(line, pattern)
 				} else {
@@ -465,9 +502,15 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 		Truncated:    truncated,
 	}
 	if !useRegex && sr.TotalMatches == 0 && looksLikeRegex(pattern) {
+		// Normalize BRE syntax (grep default) to ERE (Go regexp):
+		// \| → |, \( → (, \) → )
+		normalized := pattern
+		for _, pair := range [][2]string{{`\|`, "|"}, {`\(`, "("}, {`\)`, ")"}} {
+			normalized = strings.ReplaceAll(normalized, pair[0], pair[1])
+		}
 		// Auto-retry with regex when literal search finds nothing.
-		if _, compileErr := regexp.Compile(pattern); compileErr == nil {
-			retrySr, retryErr := SearchText(ctx, db, pattern, budget, true, opts...)
+		if _, compileErr := regexp.Compile(normalized); compileErr == nil {
+			retrySr, retryErr := SearchText(ctx, db, normalized, budget, true, opts...)
 			if retryErr == nil && retrySr.TotalMatches > 0 {
 				retrySr.Hint = fmt.Sprintf("no literal matches; auto-retried with regex (%d matches)", retrySr.TotalMatches)
 				return retrySr, nil
