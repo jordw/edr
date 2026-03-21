@@ -130,9 +130,11 @@ func (e *Envelope) SetVerify(v any) {
 // True only when: len(errors)==0 AND no op has "error" key AND verify (if present) has ok:true.
 func (e *Envelope) ComputeOK() {
 	e.OK = true
-	if len(e.Errors) > 0 {
-		e.OK = false
-		return
+	for _, err := range e.Errors {
+		if err.Code != "warning" {
+			e.OK = false
+			return
+		}
 	}
 	for _, op := range e.Ops {
 		if _, hasErr := op["error"]; hasErr {

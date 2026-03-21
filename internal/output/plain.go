@@ -25,11 +25,15 @@ import (
 func printPlain(e *Envelope) {
 	w := os.Stdout
 
-	// Envelope-level errors
-	if len(e.Errors) > 0 {
-		for _, err := range e.Errors {
+	// Envelope-level errors (non-warning errors block ops)
+	hasBlockingErrors := false
+	for _, err := range e.Errors {
+		if err.Code != "warning" {
 			writeHeader(w, map[string]any{"error": err.Message, "ec": err.Code})
+			hasBlockingErrors = true
 		}
+	}
+	if hasBlockingErrors {
 		return
 	}
 
@@ -129,6 +133,10 @@ func plainRead(w *os.File, op Op) {
 }
 
 func plainSearch(w *os.File, op Op) {
+	if v, ok := op["session"].(string); ok && v == "unchanged" {
+		writeHeader(w, map[string]any{"session": "unchanged"})
+		return
+	}
 	h := map[string]any{}
 	if v := anyInt(op["total_matches"]); v > 0 {
 		h["n"] = v
@@ -206,21 +214,35 @@ func plainEdit(w *os.File, op Op) {
 
 func plainRename(w *os.File, op Op) {
 	h := map[string]any{}
-	if v, ok := op["status"].(string); ok {
+	if noop, ok := op["noop"].(bool); ok && noop {
+		h["status"] = "noop"
+	} else if v, ok := op["status"].(string); ok {
 		h["status"] = v
 	}
-	if v, ok := op["from"].(string); ok {
+	if v, ok := op["old_name"].(string); ok {
 		h["from"] = v
 	}
-	if v, ok := op["to"].(string); ok {
+	if v, ok := op["new_name"].(string); ok {
 		h["to"] = v
+	}
+	if v, ok := op["occurrences"].(int); ok && v > 0 {
+		h["n"] = v
 	}
 	writeHeader(w, h)
 
-	if changes, ok := op["changes"].([]any); ok {
+	if preview, ok := op["preview"].([]any); ok {
+		for _, p := range preview {
+			if pm, ok := p.(map[string]any); ok {
+				f, _ := pm["file"].(string)
+				line := anyInt(pm["line"])
+				text, _ := pm["text"].(string)
+				fmt.Fprintf(w, "%s:%d: %s\n", f, line, text)
+			}
+		}
+	}
+	if changes, ok := op["files_changed"].([]any); ok && len(op) > 0 {
 		for _, c := range changes {
-			if cm, ok := c.(map[string]any); ok {
-				f, _ := cm["file"].(string)
+			if f, ok := c.(string); ok {
 				fmt.Fprintf(w, "  %s\n", f)
 			}
 		}
@@ -265,11 +287,34 @@ func plainMap(w *os.File, op Op) {
 }
 
 func plainRefs(w *os.File, op Op) {
+	if v, ok := op["session"].(string); ok && v == "unchanged" {
+		writeHeader(w, map[string]any{"session": "unchanged"})
+		return
+	}
 	h := map[string]any{}
 	if sym, ok := op["symbol"].(map[string]any); ok {
 		f, _ := sym["file"].(string)
 		name, _ := sym["name"].(string)
 		h["sym"] = f + ":" + name
+	}
+	if sn, ok := op["symbol"].(string); ok && sn != "" {
+		h["sym"] = sn
+	}
+	// Impact results
+	if total := anyInt(op["total"]); total > 0 {
+		h["n"] = total
+		writeHeader(w, h)
+		if impacted, ok := op["impacted"].([]any); ok {
+			for _, item := range impacted {
+				if im, ok := item.(map[string]any); ok {
+					name, _ := im["name"].(string)
+					file, _ := im["file"].(string)
+					depth := anyInt(im["depth"])
+					fmt.Fprintf(w, "%s:%s (depth %d)\n", file, name, depth)
+				}
+			}
+		}
+		return
 	}
 	refs, _ := op["references"].([]any)
 	h["n"] = len(refs)

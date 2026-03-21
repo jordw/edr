@@ -497,6 +497,8 @@ func classifyErrorMsg(msg string) string {
 		return "ambiguous_match"
 	case strings.Contains(msg, "no such file"):
 		return "file_not_found"
+	case strings.Contains(msg, "outside repo root"):
+		return "outside_repo"
 	case strings.Contains(msg, "hash mismatch"):
 		return "hash_mismatch"
 	default:

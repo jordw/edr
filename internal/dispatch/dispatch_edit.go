@@ -483,6 +483,10 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 		return nil, err
 	}
 
+	if oldName == newName {
+		return output.RenameResult{OldName: oldName, NewName: newName, DryRun: dryRun, Noop: true}, nil
+	}
+
 	if len(refs) == 0 {
 		return output.RenameResult{OldName: oldName, NewName: newName, DryRun: dryRun, Noop: true}, nil
 	}
