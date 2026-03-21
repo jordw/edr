@@ -143,7 +143,7 @@ func TestComputeOK_OpWithError(t *testing.T) {
 func TestComputeOK_VerifyFailure(t *testing.T) {
 	env := NewEnvelope("test")
 	env.AddOp("e0", "edit", map[string]any{"status": "applied"})
-	env.SetVerify(map[string]any{"ok": false, "error": "exit status 1"})
+	env.SetVerify(map[string]any{"status": "failed", "error": "exit status 1"})
 	env.ComputeOK()
 	if env.OK {
 		t.Error("envelope with failed verify should be ok=false")
@@ -178,7 +178,7 @@ func TestHasOpErrors(t *testing.T) {
 func TestIsVerifyOnlyFailure(t *testing.T) {
 	env := NewEnvelope("test")
 	env.AddOp("e0", "edit", map[string]any{"status": "applied"})
-	env.SetVerify(map[string]any{"ok": false, "error": "exit 1"})
+	env.SetVerify(map[string]any{"status": "failed", "error": "exit 1"})
 	env.ComputeOK()
 
 	if !env.IsVerifyOnlyFailure() {

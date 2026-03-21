@@ -12,6 +12,7 @@ import (
 
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
+	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
 	"github.com/spf13/cobra"
@@ -169,12 +170,12 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 				"files": []string{args[0]},
 			})
 			if verifyErr != nil {
-				env.SetVerify(map[string]any{"ok": false, "error": verifyErr.Error()})
+				env.SetVerify(map[string]any{"status": "failed", "error": verifyErr.Error()})
 			} else {
 				env.SetVerify(verifyResult)
 			}
 		} else if dryRun {
-			env.SetVerify(map[string]any{"skipped": "dry run"})
+			env.SetVerify(map[string]any{"status": "skipped", "reason": "dry run"})
 		}
 	}
 
@@ -328,7 +329,7 @@ var verifyCmd = &cobra.Command{
 
 		result, dispErr := dispatch.DispatchVerify(context.Background(), absRoot, args, flags)
 		if dispErr != nil {
-			env.SetVerify(map[string]any{"ok": false, "error": dispErr.Error()})
+			env.SetVerify(map[string]any{"status": "failed", "error": dispErr.Error()})
 		} else {
 			env.SetVerify(result)
 		}
@@ -412,6 +413,30 @@ func addDispatchFailedOp(env *output.Envelope, opID, opType string, err error) {
 		return
 	}
 
+	// Surface ambiguous symbol errors with candidates
+	var ambErr *index.AmbiguousSymbolError
+	if errors.As(err, &ambErr) {
+		candidates := make([]map[string]any, len(ambErr.Candidates))
+		for i, c := range ambErr.Candidates {
+			rel := c.File
+			if ambErr.Root != "" {
+				rel = output.Rel(c.File)
+			}
+			candidates[i] = map[string]any{
+				"file": rel,
+				"line": c.StartLine,
+				"type": c.Type,
+			}
+		}
+		env.AddFailedOpResult(opID, opType, "ambiguous_symbol", map[string]any{
+			"error":      ambErr.Error(),
+			"symbol":     ambErr.Name,
+			"candidates": candidates,
+			"hint":       "use file:symbol to disambiguate",
+		})
+		return
+	}
+
 	// Classify remaining op-level errors with specific codes
 	code := classifyError(err)
 	env.AddFailedOpWithCode(opID, opType, code, err.Error())
@@ -423,6 +448,10 @@ func classifyError(err error) string {
 	if errors.As(err, &nfe) {
 		return "not_found"
 	}
+	var ambErr *index.AmbiguousSymbolError
+	if errors.As(err, &ambErr) {
+		return "ambiguous_symbol"
+	}
 	return classifyErrorMsg(err.Error())
 }
 
@@ -431,6 +460,8 @@ func classifyErrorMsg(msg string) string {
 	switch {
 	case strings.Contains(msg, "not found"):
 		return "not_found"
+	case strings.Contains(msg, "is ambiguous"):
+		return "ambiguous_symbol"
 	case strings.Contains(msg, "ambiguous"):
 		return "ambiguous_match"
 	case strings.Contains(msg, "no such file"):

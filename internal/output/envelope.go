@@ -140,9 +140,9 @@ func (e *Envelope) ComputeOK() {
 			return
 		}
 	}
-	// Check verify
+	// Check verify: status != "passed" means failure
 	if m, ok := e.Verify.(map[string]any); ok {
-		if vOK, exists := m["ok"].(bool); exists && !vOK {
+		if status, exists := m["status"].(string); exists && status != "passed" && status != "skipped" {
 			e.OK = false
 		}
 	}
@@ -164,7 +164,7 @@ func (e *Envelope) IsVerifyOnlyFailure() bool {
 		return false
 	}
 	if m, ok := e.Verify.(map[string]any); ok {
-		if vOK, exists := m["ok"].(bool); exists && !vOK {
+		if status, exists := m["status"].(string); exists && status != "passed" && status != "skipped" {
 			return true
 		}
 	}

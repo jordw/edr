@@ -508,7 +508,7 @@ func executeVerify(ctx context.Context, db *index.DB, env *output.Envelope, p *d
 	result, err := dispatch.Dispatch(ctx, db, "verify", []string{}, verifyFlags)
 	if err != nil {
 		cb.AddVerifyEvent("", false, 0, 0)
-		env.SetVerify(map[string]any{"ok": false, "error": err.Error()})
+		env.SetVerify(map[string]any{"status": "failed", "error": err.Error()})
 		return
 	}
 	traceVerifyEvent(cb, result)
@@ -661,11 +661,11 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 
 	// 6. Verify — skip for failed edits, dry-run, or all-noop (#19)
 	if editsFailed && hasVerify {
-		env.SetVerify(map[string]any{"skipped": "edits failed"})
+		env.SetVerify(map[string]any{"status": "skipped", "reason": "edits failed"})
 	} else if isDryRun && hasVerify {
-		env.SetVerify(map[string]any{"skipped": "dry run"})
+		env.SetVerify(map[string]any{"status": "skipped", "reason": "dry run"})
 	} else if allNoop && hasVerify {
-		env.SetVerify(map[string]any{"skipped": "no-op edit"})
+		env.SetVerify(map[string]any{"status": "skipped", "reason": "no-op edit"})
 	} else if hasVerify {
 		executeVerify(ctx, db, env, &p, cb)
 	}
@@ -730,8 +730,8 @@ func traceVerifyEvent(cb *trace.CallBuilder, result any) {
 	}
 	command, _ := m["command"].(string)
 	verifyOK := true
-	if ok, exists := m["ok"].(bool); exists {
-		verifyOK = ok
+	if status, exists := m["status"].(string); exists {
+		verifyOK = status == "passed"
 	}
 	durationMs := 0
 	if d, ok := m["duration_ms"].(float64); ok {

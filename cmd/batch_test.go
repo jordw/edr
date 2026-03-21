@@ -1180,8 +1180,8 @@ func TestHandleDo_SkipsPostEditReadsAndVerifyOnEditFailure(t *testing.T) {
 	}
 
 	// verify should be skipped (edits failed).
-	if !strings.Contains(result, `"skipped":"edits failed"`) {
-		t.Errorf("expected verify to be skipped, got: %s", result)
+	if !strings.Contains(result, `"status":"skipped"`) || !strings.Contains(result, `"reason":"edits failed"`) {
+		t.Errorf("expected verify to be skipped with reason, got: %s", result)
 	}
 }
 
@@ -1295,8 +1295,8 @@ func TestHandleDo_NoopEditSkipsVerify(t *testing.T) {
 
 	// Verify should be skipped for no-op
 	verifyMap, ok := parsed["verify"].(map[string]any)
-	if !ok || verifyMap["skipped"] != "no-op edit" {
-		t.Errorf("verify = %v, want {skipped: no-op edit}", parsed["verify"])
+	if !ok || verifyMap["status"] != "skipped" || verifyMap["reason"] != "no-op edit" {
+		t.Errorf("verify = %v, want {status: skipped, reason: no-op edit}", parsed["verify"])
 	}
 
 	// File should be unchanged
@@ -1349,8 +1349,8 @@ func TestHandleDo_VerifyFailedSummaryStatus(t *testing.T) {
 	if !ok {
 		t.Fatalf("verify should be object, got: %v", parsed["verify"])
 	}
-	if ok, _ := verify["ok"].(bool); ok {
-		t.Error("verify should have ok=false")
+	if status, _ := verify["status"].(string); status == "passed" || status == "" {
+		t.Errorf("verify status should be failed, got %q", status)
 	}
 
 	// Envelope ok should be false when verify fails

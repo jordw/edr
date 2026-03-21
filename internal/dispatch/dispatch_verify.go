@@ -63,17 +63,16 @@ func runVerify(ctx context.Context, db *index.DB, root string, args []string, fl
 	if err != nil {
 		if cmdCtx.Err() == context.DeadlineExceeded {
 			result["status"] = "timeout"
-			result["ok"] = false
+			
 			result["error"] = fmt.Sprintf("timeout after %ds (may need longer for cold builds with dependency downloads)", timeout)
 		} else {
 			result["status"] = "failed"
-			result["ok"] = false
+			
 			result["error"] = err.Error()
 		}
 	} else {
 		result["status"] = "passed"
-		result["ok"] = true
-	}
+			}
 
 	return result, nil
 }

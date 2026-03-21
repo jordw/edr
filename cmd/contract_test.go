@@ -500,8 +500,8 @@ func TestStandaloneEditAutoVerify(t *testing.T) {
 		if env.Verify == nil {
 			t.Fatal("standalone edit should auto-verify, but verify is null")
 		}
-		if vOK, _ := env.Verify["ok"].(bool); !vOK {
-			t.Errorf("verify should pass, got: %s", mustJSON(env.Verify))
+		if status, _ := env.Verify["status"].(string); status != "passed" {
+			t.Errorf("verify status should be passed, got: %s", mustJSON(env.Verify))
 		}
 	})
 
@@ -527,8 +527,8 @@ func TestStandaloneEditAutoVerify(t *testing.T) {
 		if env.Verify == nil {
 			t.Fatal("verify field missing")
 		}
-		if vOK, _ := env.Verify["ok"].(bool); vOK {
-			t.Error("verify.ok should be false for bad code")
+		if status, _ := env.Verify["status"].(string); status == "passed" {
+			t.Error("verify.status should be failed for bad code")
 		}
 	})
 
@@ -551,8 +551,8 @@ func TestStandaloneEditAutoVerify(t *testing.T) {
 		if env.Verify == nil {
 			t.Fatal("dry-run should set verify to skipped, got null")
 		}
-		if _, has := env.Verify["skipped"]; !has {
-			t.Errorf("dry-run verify should have skipped field, got: %s", mustJSON(env.Verify))
+		if status, _ := env.Verify["status"].(string); status != "skipped" {
+			t.Errorf("dry-run verify should have status=skipped, got: %s", mustJSON(env.Verify))
 		}
 	})
 
