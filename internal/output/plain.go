@@ -1,31 +1,34 @@
 package output
 
-// plain.go renders the envelope as plain text instead of JSON.
-// Activated by EDR_FORMAT=plain. Zero overhead — content is emitted raw
-// with real newlines, no escaping. Metadata goes in key-value headers.
+// plain.go renders the envelope as a compact JSON header line followed by
+// raw text body. Activated by EDR_FORMAT=plain.
 //
-// Format:
-//   Success read:    headers + blank line + raw content
-//   Success search:  "N matches" + grep-style lines
-//   Success edit:    "applied file hash" + diff
-//   Error:           "ERR code: message"
-//   Batch:           ops separated by "---"
-//   Verify:          "verify passed|failed|skipped" after edits
+// Format: first line is a short JSON object with metadata, everything
+// after the first newline is raw content (code, diff, grep-style matches).
+// Agents parse metadata with json.Unmarshal(line1), read body as-is.
+//
+//   Read:    {"file":"f.go","sym":"Foo","lines":[10,20],"hash":"abc"}\n<raw code>
+//   Search:  {"n":4}\n<grep-style lines>
+//   Edit:    {"file":"f.go","status":"applied","hash":"abc"}\n<diff>
+//   Error:   {"error":"...","ec":"not_found"}\n
+//   Batch:   ops separated by "---\n"
+//   Verify:  {"verify":"passed"}\n  (or {"verify":"skipped","reason":"..."})
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 )
 
-// printPlain renders the envelope as plain text to stdout.
+// printPlain renders the envelope as JSON-header + raw-body to stdout.
 func printPlain(e *Envelope) {
 	w := os.Stdout
 
 	// Envelope-level errors
 	if len(e.Errors) > 0 {
 		for _, err := range e.Errors {
-			fmt.Fprintf(w, "ERR %s: %s\n", err.Code, err.Message)
+			writeHeader(w, map[string]any{"error": err.Message, "ec": err.Code})
 		}
 		return
 	}
@@ -39,37 +42,32 @@ func printPlain(e *Envelope) {
 
 		// Error ops
 		if errMsg, ok := op["error"].(string); ok {
-			code, _ := op["error_code"].(string)
-			if code == "" {
-				code = "error"
+			h := map[string]any{"error": errMsg}
+			if code, ok := op["error_code"].(string); ok {
+				h["ec"] = code
 			}
-			fmt.Fprintf(w, "ERR %s: %s\n", code, errMsg)
+			writeHeader(w, h)
 			continue
 		}
 
 		opType, _ := op["type"].(string)
 		switch opType {
 		case "read":
-			printPlainRead(w, op)
+			plainRead(w, op)
 		case "search":
-			printPlainSearch(w, op)
-		case "edit":
-			printPlainEdit(w, op)
-		case "write":
-			printPlainWrite(w, op)
+			plainSearch(w, op)
+		case "edit", "write":
+			plainEdit(w, op)
 		case "rename":
-			printPlainRename(w, op)
+			plainRename(w, op)
 		case "map":
-			printPlainMap(w, op)
+			plainMap(w, op)
 		case "refs":
-			printPlainRefs(w, op)
+			plainRefs(w, op)
 		case "reindex":
-			printPlainReindex(w, op)
+			plainReindex(w, op)
 		default:
-			// Fallback: print key-value pairs
-			for k, v := range op {
-				fmt.Fprintf(w, "%s %v\n", k, v)
-			}
+			writeHeader(w, op)
 		}
 	}
 
@@ -77,69 +75,76 @@ func printPlain(e *Envelope) {
 	if m, ok := e.Verify.(map[string]any); ok {
 		status, _ := m["status"].(string)
 		if status != "" {
-			fmt.Fprintf(w, "verify %s", status)
+			h := map[string]any{"verify": status}
 			if reason, ok := m["reason"].(string); ok {
-				fmt.Fprintf(w, ": %s", reason)
+				h["reason"] = reason
 			}
 			if errMsg, ok := m["error"].(string); ok {
-				fmt.Fprintf(w, ": %s", errMsg)
+				h["error"] = errMsg
 			}
-			fmt.Fprintln(w)
+			writeHeader(w, h)
 		}
 	}
 }
 
-func printPlainRead(w *os.File, op Op) {
-	file, _ := op["file"].(string)
-	sym, _ := op["symbol"].(string)
-	hash, _ := op["hash"].(string)
-	content, _ := op["content"].(string)
+// writeHeader writes a compact JSON line.
+func writeHeader(w *os.File, m map[string]any) {
+	data, _ := json.Marshal(m)
+	w.Write(data)
+	w.Write([]byte{'\n'})
+}
 
-	// Headers
-	if file != "" {
-		fmt.Fprintf(w, "file %s\n", file)
+// writeBody writes raw text, ensuring it ends with a newline.
+func writeBody(w *os.File, body string) {
+	if body == "" {
+		return
 	}
-	if sym != "" {
-		fmt.Fprintf(w, "sym %s\n", sym)
-	}
-	if lines, ok := op["lines"].([]any); ok && len(lines) == 2 {
-		fmt.Fprintf(w, "lines %v-%v\n", lines[0], lines[1])
-	}
-	if hash != "" {
-		fmt.Fprintf(w, "hash %s\n", hash)
-	}
-	if trunc, ok := op["truncated"].(bool); ok && trunc {
-		fmt.Fprintln(w, "truncated")
-	}
-	if session, ok := op["session"].(string); ok && session == "unchanged" {
-		fmt.Fprintln(w, "unchanged")
-	}
-
-	// Body
-	if content != "" {
+	fmt.Fprint(w, body)
+	if !strings.HasSuffix(body, "\n") {
 		fmt.Fprintln(w)
-		fmt.Fprint(w, content)
-		if !strings.HasSuffix(content, "\n") {
-			fmt.Fprintln(w)
-		}
 	}
 }
 
-func printPlainSearch(w *os.File, op Op) {
-	total, _ := op["total_matches"].(int)
-	if totalF, ok := op["total_matches"].(float64); ok {
-		total = int(totalF)
+func plainRead(w *os.File, op Op) {
+	h := map[string]any{}
+	if v, ok := op["file"].(string); ok {
+		h["file"] = v
 	}
-	fmt.Fprintf(w, "%d matches\n", total)
+	if v, ok := op["symbol"].(string); ok {
+		h["sym"] = v
+	}
+	if v, ok := op["lines"]; ok {
+		h["lines"] = v
+	}
+	if v, ok := op["hash"].(string); ok {
+		h["hash"] = v
+	}
+	if v, ok := op["truncated"].(bool); ok && v {
+		h["trunc"] = true
+	}
+	if v, ok := op["session"].(string); ok && v == "unchanged" {
+		h["session"] = "unchanged"
+	}
+	writeHeader(w, h)
 
-	if hint, ok := op["hint"].(string); ok && hint != "" {
-		fmt.Fprintf(w, "hint: %s\n", hint)
+	content, _ := op["content"].(string)
+	writeBody(w, content)
+}
+
+func plainSearch(w *os.File, op Op) {
+	h := map[string]any{}
+	if v := anyInt(op["total_matches"]); v > 0 {
+		h["n"] = v
 	}
+	if v, ok := op["hint"].(string); ok && v != "" {
+		h["hint"] = v
+	}
+	writeHeader(w, h)
 
 	// Flat matches
 	if matches, ok := op["matches"].([]any); ok {
 		for _, m := range matches {
-			printPlainMatch(w, "", m)
+			writeMatch(w, "", m)
 		}
 	}
 
@@ -153,76 +158,67 @@ func printPlainSearch(w *os.File, op Op) {
 			file, _ := fm["file"].(string)
 			if matches, ok := fm["matches"].([]any); ok {
 				for _, m := range matches {
-					printPlainMatch(w, file, m)
+					writeMatch(w, file, m)
 				}
 			}
 		}
 	}
 }
 
-func printPlainMatch(w *os.File, file string, m any) {
+func writeMatch(w *os.File, file string, m any) {
 	mm, ok := m.(map[string]any)
 	if !ok {
 		return
 	}
-	line := 0
-	if v, ok := mm["line"].(float64); ok {
-		line = int(v)
-	} else if v, ok := mm["line"].(int); ok {
-		line = v
-	}
+	line := anyInt(mm["line"])
 	text, _ := mm["text"].(string)
 
 	if file != "" {
 		fmt.Fprintf(w, "%s:%d: %s\n", file, line, text)
 	} else {
-		// Symbol search — different shape
+		// Symbol search
 		if sym, ok := mm["symbol"].(map[string]any); ok {
 			f, _ := sym["file"].(string)
 			name, _ := sym["name"].(string)
 			body, _ := mm["body"].(string)
 			fmt.Fprintf(w, "%s:%s\n", f, name)
-			if body != "" {
-				fmt.Fprintln(w, body)
-			}
+			writeBody(w, body)
 		}
 	}
 }
 
-func printPlainEdit(w *os.File, op Op) {
-	file, _ := op["file"].(string)
-	status, _ := op["status"].(string)
-	hash, _ := op["hash"].(string)
+func plainEdit(w *os.File, op Op) {
+	h := map[string]any{}
+	if v, ok := op["file"].(string); ok {
+		h["file"] = v
+	}
+	if v, ok := op["status"].(string); ok {
+		h["status"] = v
+	}
+	if v, ok := op["hash"].(string); ok {
+		h["hash"] = v
+	}
+	if v, ok := op["message"].(string); ok {
+		h["msg"] = v
+	}
+	writeHeader(w, h)
+
 	diff, _ := op["diff"].(string)
-	msg, _ := op["message"].(string)
-
-	fmt.Fprintf(w, "%s %s", status, file)
-	if hash != "" {
-		fmt.Fprintf(w, " %s", hash)
-	}
-	fmt.Fprintln(w)
-
-	if msg != "" {
-		fmt.Fprintln(w, msg)
-	}
-	if diff != "" {
-		fmt.Fprint(w, diff)
-		if !strings.HasSuffix(diff, "\n") {
-			fmt.Fprintln(w)
-		}
-	}
+	writeBody(w, diff)
 }
 
-func printPlainWrite(w *os.File, op Op) {
-	// Same shape as edit
-	printPlainEdit(w, op)
-}
-
-func printPlainRename(w *os.File, op Op) {
-	status, _ := op["status"].(string)
-	from, _ := op["from"].(string)
-	to, _ := op["to"].(string)
-	fmt.Fprintf(w, "%s %s → %s\n", status, from, to)
+func plainRename(w *os.File, op Op) {
+	h := map[string]any{}
+	if v, ok := op["status"].(string); ok {
+		h["status"] = v
+	}
+	if v, ok := op["from"].(string); ok {
+		h["from"] = v
+	}
+	if v, ok := op["to"].(string); ok {
+		h["to"] = v
+	}
+	writeHeader(w, h)
 
 	if changes, ok := op["changes"].([]any); ok {
 		for _, c := range changes {
@@ -234,68 +230,81 @@ func printPlainRename(w *os.File, op Op) {
 	}
 }
 
-func printPlainMap(w *os.File, op Op) {
-	// Map content is a list of file entries with symbols
-	content, ok := op["content"].([]any)
-	if !ok {
-		// Try string content (file-scoped map)
-		if s, ok := op["content"].(string); ok && s != "" {
-			fmt.Fprint(w, s)
-			if !strings.HasSuffix(s, "\n") {
-				fmt.Fprintln(w)
-			}
-			return
-		}
-	}
-	for _, entry := range content {
-		fe, ok := entry.(map[string]any)
-		if !ok {
-			continue
-		}
-		file, _ := fe["file"].(string)
-		symbols, _ := fe["symbols"].([]any)
-		for _, s := range symbols {
-			sm, ok := s.(map[string]any)
+func plainMap(w *os.File, op Op) {
+	writeHeader(w, map[string]any{})
+
+	// Structured map: list of file entries
+	if content, ok := op["content"].([]any); ok {
+		for _, entry := range content {
+			fe, ok := entry.(map[string]any)
 			if !ok {
 				continue
 			}
-			name, _ := sm["name"].(string)
-			kind, _ := sm["kind"].(string)
-			line := anyInt(sm["line"])
-			endLine := anyInt(sm["end_line"])
-			if endLine > 0 {
-				fmt.Fprintf(w, "%s:%d-%d: %s %s\n", file, line, endLine, kind, name)
-			} else {
-				fmt.Fprintf(w, "%s:%d: %s %s\n", file, line, kind, name)
+			file, _ := fe["file"].(string)
+			symbols, _ := fe["symbols"].([]any)
+			for _, s := range symbols {
+				sm, ok := s.(map[string]any)
+				if !ok {
+					continue
+				}
+				name, _ := sm["name"].(string)
+				kind, _ := sm["kind"].(string)
+				line := anyInt(sm["line"])
+				endLine := anyInt(sm["end_line"])
+				if endLine > 0 {
+					fmt.Fprintf(w, "%s:%d-%d: %s %s\n", file, line, endLine, kind, name)
+				} else {
+					fmt.Fprintf(w, "%s:%d: %s %s\n", file, line, kind, name)
+				}
 			}
 		}
+		return
+	}
+
+	// String content (file-scoped map)
+	if s, ok := op["content"].(string); ok && s != "" {
+		writeBody(w, s)
 	}
 }
 
-func printPlainRefs(w *os.File, op Op) {
-	// Target symbol
+func plainRefs(w *os.File, op Op) {
+	h := map[string]any{}
 	if sym, ok := op["symbol"].(map[string]any); ok {
-		file, _ := sym["file"].(string)
+		f, _ := sym["file"].(string)
 		name, _ := sym["name"].(string)
-		fmt.Fprintf(w, "%s:%s\n", file, name)
+		h["sym"] = f + ":" + name
 	}
-
-	// References
 	refs, _ := op["references"].([]any)
-	fmt.Fprintf(w, "%d refs\n", len(refs))
+	h["n"] = len(refs)
+	writeHeader(w, h)
+
 	for _, r := range refs {
 		rm, ok := r.(map[string]any)
 		if !ok {
 			continue
 		}
 		file, _ := rm["file"].(string)
-		line := anyInt(rm["lines"])
+		line := 0
 		if lines, ok := rm["lines"].([]any); ok && len(lines) > 0 {
 			line = anyInt(lines[0])
 		}
 		name, _ := rm["name"].(string)
 		fmt.Fprintf(w, "%s:%d: %s\n", file, line, name)
 	}
+}
+
+func plainReindex(w *os.File, op Op) {
+	h := map[string]any{}
+	if v, ok := op["status"].(string); ok {
+		h["status"] = v
+	}
+	if v, ok := op["files_changed"]; ok {
+		h["files"] = v
+	}
+	if v, ok := op["symbols_changed"]; ok {
+		h["symbols"] = v
+	}
+	writeHeader(w, h)
 }
 
 // anyInt extracts an int from any (handles float64 from JSON and int from Go).
@@ -307,15 +316,4 @@ func anyInt(v any) int {
 		return n
 	}
 	return 0
-}
-
-func printPlainReindex(w *os.File, op Op) {
-	status, _ := op["status"].(string)
-	fmt.Fprintf(w, "reindex %s\n", status)
-	if fc, ok := op["files_changed"]; ok {
-		fmt.Fprintf(w, "files_changed %v\n", fc)
-	}
-	if sc, ok := op["symbols_changed"]; ok {
-		fmt.Fprintf(w, "symbols_changed %v\n", sc)
-	}
 }
