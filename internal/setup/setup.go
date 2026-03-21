@@ -1,5 +1,5 @@
 // Package setup implements the `edr setup` command: index a repo and inject
-// agent instructions into global config files (~/.claude/CLAUDE.md, ~/.codex/AGENTS.md).
+// agent instructions into global config files.
 package setup
 
 import (
@@ -20,12 +20,19 @@ type Target string
 const (
 	TargetClaude  Target = "claude"
 	TargetCodex   Target = "codex"
+	TargetCursor  Target = "cursor"
 	TargetGeneric Target = "generic"
 )
 
 // GlobalTargets returns the targets that support global installation.
 func GlobalTargets() []Target {
-	return []Target{TargetClaude, TargetCodex}
+	return []Target{TargetClaude, TargetCodex, TargetCursor}
+}
+
+// ownsFile reports whether edr owns the entire config file for a target.
+// When true, InjectGlobal overwrites the file instead of appending a block.
+func ownsFile(t Target) bool {
+	return t == TargetCursor
 }
 
 // GlobalConfigPath returns the full path for a target's global config file.
@@ -39,6 +46,8 @@ func GlobalConfigPath(t Target) (string, error) {
 		return filepath.Join(home, ".claude", "CLAUDE.md"), nil
 	case TargetCodex:
 		return filepath.Join(home, ".codex", "AGENTS.md"), nil
+	case TargetCursor:
+		return filepath.Join(home, ".cursor", "rules", "edr.mdc"), nil
 	default:
 		return "", fmt.Errorf("no global config path for target %q", t)
 	}
@@ -63,6 +72,7 @@ type InjectResult struct {
 	InstalledHash  string `json:"installed_hash,omitempty"`
 	Updated        bool   `json:"updated,omitempty"`
 	Created        bool   `json:"created,omitempty"`
+	Removed        bool   `json:"removed,omitempty"`
 	Error          string `json:"error,omitempty"`
 }
 
@@ -147,6 +157,24 @@ func containsLegacyMarker(line string) bool {
 	return false
 }
 
+// cursorMDC wraps instruction text in Cursor's .mdc format with frontmatter.
+func cursorMDC(text, hash string) string {
+	var buf strings.Builder
+	buf.WriteString("---\n")
+	buf.WriteString("description: edr — use for all file operations\n")
+	buf.WriteString("alwaysApply: true\n")
+	buf.WriteString("---\n\n")
+	buf.WriteString(text)
+	if !strings.HasSuffix(text, "\n") {
+		buf.WriteString("\n")
+	}
+	buf.WriteString(formatOpenSentinel(hash))
+	buf.WriteString("\n")
+	buf.WriteString(blockClose)
+	buf.WriteString("\n")
+	return buf.String()
+}
+
 // InjectGlobal writes edr instructions into a single global config file.
 // The block is wrapped in sentinel comments for surgical future updates.
 func InjectGlobal(target Target, buildHash string, force bool) (InjectResult, error) {
@@ -181,7 +209,27 @@ func InjectGlobal(target Target, buildHash string, force bool) (InjectResult, er
 		return result, nil
 	}
 
-	// Strip old block if present.
+	// Ensure parent directory exists.
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return InjectResult{}, fmt.Errorf("create directory %s: %w", dir, err)
+	}
+
+	// For targets where edr owns the entire file, overwrite it.
+	if ownsFile(target) {
+		fileContent := cursorMDC(text, buildHash)
+		if err := os.WriteFile(path, []byte(fileContent), 0644); err != nil {
+			return InjectResult{}, fmt.Errorf("write %s: %w", path, err)
+		}
+		if hasBlock {
+			result.Updated = true
+		} else {
+			result.Created = true
+		}
+		return result, nil
+	}
+
+	// For shared config files, strip old block and append new one.
 	if hasBlock {
 		content = stripEdrBlock(content)
 	}
@@ -208,12 +256,6 @@ func InjectGlobal(target Target, buildHash string, force bool) (InjectResult, er
 	}
 	buf.WriteString(block.String())
 
-	// Ensure parent directory exists.
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return InjectResult{}, fmt.Errorf("create directory %s: %w", dir, err)
-	}
-
 	if err := os.WriteFile(path, []byte(buf.String()), 0644); err != nil {
 		return InjectResult{}, fmt.Errorf("write %s: %w", path, err)
 	}
@@ -226,7 +268,7 @@ func InjectGlobal(target Target, buildHash string, force bool) (InjectResult, er
 	return result, nil
 }
 
-// InjectAllGlobal writes edr instructions to all global targets (Claude + Codex).
+// InjectAllGlobal writes edr instructions to all global targets.
 func InjectAllGlobal(buildHash string, force bool) ([]InjectResult, error) {
 	var results []InjectResult
 	for _, t := range GlobalTargets() {
@@ -235,6 +277,62 @@ func InjectAllGlobal(buildHash string, force bool) ([]InjectResult, error) {
 			r = InjectResult{Target: string(t), Error: err.Error()}
 		}
 		results = append(results, r)
+	}
+	return results, nil
+}
+
+// UninstallGlobal removes edr instructions from a single global config file.
+func UninstallGlobal(target Target) (InjectResult, error) {
+	path, err := GlobalConfigPath(target)
+	if err != nil {
+		return InjectResult{}, err
+	}
+
+	result := InjectResult{Path: path, Target: string(target)}
+
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		// File doesn't exist — nothing to remove.
+		return result, nil
+	}
+	content := string(existing)
+	hasBlock := containsEdrBlock(content) || containsLegacyMarkerInContent(content)
+	if !hasBlock {
+		return result, nil
+	}
+
+	// For owned files, just delete the file.
+	if ownsFile(target) {
+		if err := os.Remove(path); err != nil {
+			return InjectResult{}, fmt.Errorf("remove %s: %w", path, err)
+		}
+		result.Removed = true
+		return result, nil
+	}
+
+	// For shared config files, strip the edr block.
+	cleaned := stripEdrBlock(content)
+	if err := os.WriteFile(path, []byte(cleaned), 0644); err != nil {
+		return InjectResult{}, fmt.Errorf("write %s: %w", path, err)
+	}
+	result.Removed = true
+	return result, nil
+}
+
+// UninstallAllGlobal removes edr instructions from all global targets.
+func UninstallAllGlobal() ([]InjectResult, error) {
+	var results []InjectResult
+	for _, t := range GlobalTargets() {
+		r, err := UninstallGlobal(t)
+		if err != nil {
+			r = InjectResult{Target: string(t), Error: err.Error()}
+		}
+		results = append(results, r)
+	}
+	// Remove sentinel so auto-update doesn't re-install.
+	path, err := sentinelPath()
+	if err == nil {
+		os.Remove(path)
 	}
 	return results, nil
 }
@@ -313,7 +411,7 @@ func EnsureGitignore(repoRoot string) error {
 
 // AllTargets returns the list of valid target names.
 func AllTargets() []string {
-	return []string{"claude", "codex", "generic"}
+	return []string{"claude", "codex", "cursor", "generic"}
 }
 
 // sentinelPath returns ~/.edr/global_hash.

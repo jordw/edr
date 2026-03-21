@@ -1,4 +1,4 @@
-Use `edr` (via shell) instead of cat, sed, grep, and find for all file operations. edr uses 90%+ less context via progressive disclosure and batching.
+Use `edr` (via terminal) instead of built-in file tools for all file operations. edr uses 90%+ less context via progressive disclosure and batching.
 
 Workflow — start narrow, widen only as needed:
 1. Orient: `edr map --budget 500` — see all symbols across files

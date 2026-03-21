@@ -163,8 +163,8 @@ func TestInjectAllGlobal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InjectAllGlobal: %v", err)
 	}
-	if len(results) != 2 {
-		t.Fatalf("expected 2 results, got %d", len(results))
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
 	}
 	for _, r := range results {
 		if r.Error != "" {
@@ -181,6 +181,9 @@ func TestInjectAllGlobal(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".codex", "AGENTS.md")); err != nil {
 		t.Error("~/.codex/AGENTS.md not created")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".cursor", "rules", "edr.mdc")); err != nil {
+		t.Error("~/.cursor/rules/edr.mdc not created")
 	}
 }
 
@@ -357,13 +360,130 @@ func TestAutoUpdateStaleHash(t *testing.T) {
 
 func TestAllTargets(t *testing.T) {
 	targets := AllTargets()
-	if len(targets) != 3 {
-		t.Errorf("expected 3 targets, got %d: %v", len(targets), targets)
+	if len(targets) != 4 {
+		t.Errorf("expected 4 targets, got %d: %v", len(targets), targets)
 	}
 	for _, target := range targets {
 		_, err := Instructions(Target(target))
 		if err != nil {
 			t.Errorf("Instructions(%q) failed: %v", target, err)
 		}
+	}
+}
+
+func TestCursorInject(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	r, err := InjectGlobal(TargetCursor, "abc1234", false)
+	if err != nil {
+		t.Fatalf("InjectGlobal(cursor): %v", err)
+	}
+	if !r.Created {
+		t.Error("expected Created=true")
+	}
+
+	data, _ := os.ReadFile(r.Path)
+	content := string(data)
+
+	// Should have MDC frontmatter at the start.
+	if !strings.HasPrefix(content, "---\n") {
+		t.Error("cursor file should start with frontmatter")
+	}
+	if !strings.Contains(content, "alwaysApply: true") {
+		t.Error("cursor file should have alwaysApply frontmatter")
+	}
+	// Should have hash sentinel at the end.
+	if !strings.Contains(content, "hash:abc1234") {
+		t.Error("cursor file should contain hash sentinel")
+	}
+
+	// Force update with new hash.
+	r2, err := InjectGlobal(TargetCursor, "new5678", true)
+	if err != nil {
+		t.Fatalf("InjectGlobal(cursor) force: %v", err)
+	}
+	if !r2.Updated {
+		t.Error("expected Updated=true on force")
+	}
+
+	data, _ = os.ReadFile(r.Path)
+	content = string(data)
+	if !strings.Contains(content, "hash:new5678") {
+		t.Error("cursor file should have new hash")
+	}
+	if strings.Contains(content, "hash:abc1234") {
+		t.Error("cursor file should not have old hash")
+	}
+}
+
+func TestUninstallGlobal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Install first.
+	InjectAllGlobal("abc1234", false)
+
+	// Uninstall Claude (shared file — block removed, file preserved).
+	r, err := UninstallGlobal(TargetClaude)
+	if err != nil {
+		t.Fatalf("UninstallGlobal(claude): %v", err)
+	}
+	if !r.Removed {
+		t.Error("expected Removed=true")
+	}
+	data, _ := os.ReadFile(r.Path)
+	if strings.Contains(string(data), "edr-instructions") {
+		t.Error("edr block should be removed from claude file")
+	}
+
+	// Uninstall Cursor (owned file — file deleted).
+	r2, err := UninstallGlobal(TargetCursor)
+	if err != nil {
+		t.Fatalf("UninstallGlobal(cursor): %v", err)
+	}
+	if !r2.Removed {
+		t.Error("expected Removed=true for cursor")
+	}
+	if _, err := os.Stat(r2.Path); err == nil {
+		t.Error("cursor file should be deleted")
+	}
+}
+
+func TestUninstallAllGlobal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Install + write sentinel.
+	InjectAllGlobal("abc1234", false)
+	WriteSentinel("abc1234")
+
+	results, err := UninstallAllGlobal()
+	if err != nil {
+		t.Fatalf("UninstallAllGlobal: %v", err)
+	}
+	for _, r := range results {
+		if !r.Removed {
+			t.Errorf("target %s: expected Removed=true", r.Target)
+		}
+	}
+
+	// Sentinel should be removed.
+	if got := ReadSentinel(); got != "" {
+		t.Errorf("sentinel should be cleared, got %q", got)
+	}
+}
+
+func TestUninstallNotInstalled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Uninstall when nothing is installed — should not error.
+	r, err := UninstallGlobal(TargetClaude)
+	if err != nil {
+		t.Fatalf("UninstallGlobal: %v", err)
+	}
+	if r.Removed {
+		t.Error("Removed should be false when nothing installed")
 	}
 }

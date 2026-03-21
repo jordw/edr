@@ -242,7 +242,7 @@ func TestSetupEnvelope(t *testing.T) {
 	var env struct {
 		SchemaVersion int    `json:"schema_version"`
 		OK            bool   `json:"ok"`
-		Command       string `json:"command"`
+		Command       string `json:"cmd"`
 		Ops           []any  `json:"ops"`
 	}
 	if err := json.Unmarshal(out, &env); err != nil {
@@ -259,6 +259,154 @@ func TestSetupEnvelope(t *testing.T) {
 	}
 	if len(env.Ops) == 0 {
 		t.Error("expected at least one op")
+	}
+}
+
+// TestSetupPathValidation verifies that setup fails early with a clear error for bad paths.
+func TestSetupPathValidation(t *testing.T) {
+	binary := buildBinary(t)
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"nonexistent", "/tmp/edr-test-nonexistent-path-xyz", "does not exist"},
+		{"file not dir", "", "not a directory"}, // filled in below
+	}
+
+	// Create a file for the "not a directory" test.
+	f := filepath.Join(t.TempDir(), "afile.txt")
+	os.WriteFile(f, []byte("hi"), 0644)
+	tests[1].path = f
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command(binary, "setup", "--json", "--skip-index", "--no-global", tc.path)
+			cmd.Env = testEnv()
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatal("expected non-zero exit")
+			}
+			var env struct {
+				OK     bool `json:"ok"`
+				Errors []struct {
+					Message string `json:"message"`
+				} `json:"errors"`
+			}
+			if err := json.Unmarshal(out, &env); err != nil {
+				t.Fatalf("failed to parse: %v\n%s", err, out)
+			}
+			if env.OK {
+				t.Error("expected ok=false")
+			}
+			found := false
+			for _, e := range env.Errors {
+				if bytes.Contains([]byte(e.Message), []byte(tc.want)) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected error containing %q, got: %s", tc.want, out)
+			}
+		})
+	}
+}
+
+// TestSetupStatus verifies --status returns JSON with all targets.
+func TestSetupStatus(t *testing.T) {
+	binary := buildBinary(t)
+	home := t.TempDir()
+
+	cmd := exec.Command(binary, "setup", "--status", "--json")
+	cmd.Env = testEnv("HOME=" + home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("setup --status failed: %v\n%s", err, out)
+	}
+
+	var env struct {
+		OK  bool `json:"ok"`
+		Ops []struct {
+			Global []struct {
+				Target string `json:"target"`
+				Path   string `json:"path"`
+			} `json:"global"`
+		} `json:"ops"`
+	}
+	if err := json.Unmarshal(out, &env); err != nil {
+		t.Fatalf("failed to parse: %v\n%s", err, out)
+	}
+	if !env.OK {
+		t.Errorf("expected ok=true, got: %s", out)
+	}
+	if len(env.Ops) == 0 || len(env.Ops[0].Global) < 3 {
+		t.Fatalf("expected at least 3 global targets, got: %s", out)
+	}
+	targets := map[string]bool{}
+	for _, g := range env.Ops[0].Global {
+		targets[g.Target] = true
+	}
+	for _, want := range []string{"claude", "codex", "cursor"} {
+		if !targets[want] {
+			t.Errorf("missing target %q in status output", want)
+		}
+	}
+}
+
+// TestSetupUninstall verifies --uninstall removes instructions and exits cleanly.
+func TestSetupUninstall(t *testing.T) {
+	binary := buildBinary(t)
+	home := t.TempDir()
+	env := testEnv("HOME=" + home)
+
+	// Install first.
+	cmd := exec.Command(binary, "setup", "--json", "--skip-index", "--global", ".")
+	cmd.Dir = t.TempDir()
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("setup --global failed: %v\n%s", err, out)
+	}
+
+	// Verify files exist.
+	for _, rel := range []string{".claude/CLAUDE.md", ".codex/AGENTS.md", ".cursor/rules/edr.mdc"} {
+		if _, err := os.Stat(filepath.Join(home, rel)); err != nil {
+			t.Fatalf("expected %s to exist after install", rel)
+		}
+	}
+
+	// Uninstall.
+	cmd = exec.Command(binary, "setup", "--uninstall", "--json")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("setup --uninstall failed: %v\n%s", err, out)
+	}
+
+	var result struct {
+		OK  bool `json:"ok"`
+		Ops []struct {
+			Global []struct {
+				Target  string `json:"target"`
+				Removed bool   `json:"removed"`
+			} `json:"global"`
+		} `json:"ops"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("failed to parse: %v\n%s", err, out)
+	}
+	if !result.OK {
+		t.Errorf("expected ok=true")
+	}
+	for _, g := range result.Ops[0].Global {
+		if !g.Removed {
+			t.Errorf("target %s: expected removed=true", g.Target)
+		}
+	}
+
+	// Cursor file should be deleted entirely.
+	if _, err := os.Stat(filepath.Join(home, ".cursor", "rules", "edr.mdc")); err == nil {
+		t.Error("cursor file should be deleted after uninstall")
 	}
 }
 

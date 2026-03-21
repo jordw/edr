@@ -16,12 +16,18 @@ var setupCmd = &cobra.Command{
 	Short: "Index repo and install global agent instructions",
 	Long: `Index the repository and install edr instructions globally.
 
-Writes a versioned instruction block to ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md
-so all agent sessions use edr for file operations.
+Writes a versioned instruction block to agent config files:
+  ~/.claude/CLAUDE.md    (Claude Code)
+  ~/.codex/AGENTS.md     (Codex)
+  ~/.cursor/rules/edr.mdc (Cursor)
 
 The block is wrapped in sentinel comments and can be surgically updated on future runs.
-Use --force to replace existing instructions with the latest version.
-Use --generic to print instructions to stdout (for other agents).`,
+
+Flags:
+  --force      Replace existing instructions with the latest version
+  --status     Show what's installed without modifying anything
+  --uninstall  Remove edr instructions from all global configs
+  --generic    Print instructions to stdout (for other agents)`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runSetup,
 }
@@ -33,6 +39,8 @@ func init() {
 	setupCmd.Flags().Bool("force", false, "Replace existing edr instructions with latest version")
 	setupCmd.Flags().Bool("skip-index", false, "Skip indexing (only install instructions)")
 	setupCmd.Flags().Bool("json", false, "Output JSON instead of human-readable text")
+	setupCmd.Flags().Bool("status", false, "Show installation status without modifying anything")
+	setupCmd.Flags().Bool("uninstall", false, "Remove edr instructions from all global configs")
 }
 
 type setupResult struct {
@@ -45,22 +53,10 @@ type setupResult struct {
 }
 
 func runSetup(cmd *cobra.Command, args []string) error {
-	root := getRoot(cmd)
-	if len(args) > 0 && args[0] != "" {
-		root = args[0]
-	}
-	if root == "" || root == "." {
-		wd, err := os.Getwd()
-		if err == nil {
-			root = wd
-		}
-	}
-
-	force, _ := cmd.Flags().GetBool("force")
 	jsonOut, _ := cmd.Flags().GetBool("json")
 	generic, _ := cmd.Flags().GetBool("generic")
-	globalExplicit, _ := cmd.Flags().GetBool("global")
-	noGlobal, _ := cmd.Flags().GetBool("no-global")
+	statusOnly, _ := cmd.Flags().GetBool("status")
+	uninstall, _ := cmd.Flags().GetBool("uninstall")
 
 	result := setupResult{CurrentHash: BuildHash}
 
@@ -74,6 +70,69 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		result.Instructions = text
 		return printSetupOutput(result, jsonOut)
 	}
+
+	// --status: show what's installed and exit.
+	if statusOnly {
+		status := setup.GlobalStatus(BuildHash)
+		result.Global = status
+		if !jsonOut {
+			for _, s := range status {
+				state := "not installed"
+				if s.AlreadyCurrent {
+					state = fmt.Sprintf("current (hash:%s)", s.InstalledHash)
+				} else if s.Outdated {
+					state = fmt.Sprintf("outdated (installed:%s current:%s)", s.InstalledHash, BuildHash)
+				}
+				fmt.Fprintf(os.Stderr, "  %s: %s\n", s.Path, state)
+			}
+		}
+		return printSetupOutput(result, jsonOut)
+	}
+
+	// --uninstall: remove edr instructions and exit.
+	if uninstall {
+		results, _ := setup.UninstallAllGlobal()
+		result.Global = results
+		if !jsonOut {
+			for _, r := range results {
+				if r.Error != "" {
+					fmt.Fprintf(os.Stderr, "  %s: error: %s\n", r.Target, r.Error)
+				} else if r.Removed {
+					fmt.Fprintf(os.Stderr, "  removed from %s\n", r.Path)
+				} else {
+					fmt.Fprintf(os.Stderr, "  %s: not installed\n", r.Path)
+				}
+			}
+		}
+		return printSetupOutput(result, jsonOut)
+	}
+
+	// Resolve target path.
+	root := getRoot(cmd)
+	if len(args) > 0 && args[0] != "" {
+		root = args[0]
+	}
+	if root == "" || root == "." {
+		wd, err := os.Getwd()
+		if err == nil {
+			root = wd
+		}
+	}
+
+	// Validate target path exists.
+	info, err := os.Stat(root)
+	if err != nil {
+		result.Error = fmt.Sprintf("target path does not exist: %s", root)
+		return printSetupOutput(result, jsonOut)
+	}
+	if !info.IsDir() {
+		result.Error = fmt.Sprintf("target path is not a directory: %s", root)
+		return printSetupOutput(result, jsonOut)
+	}
+
+	force, _ := cmd.Flags().GetBool("force")
+	globalExplicit, _ := cmd.Flags().GetBool("global")
+	noGlobal, _ := cmd.Flags().GetBool("no-global")
 
 	// Step 1: Index (unless --skip-index).
 	skipIndex, _ := cmd.Flags().GetBool("skip-index")
@@ -121,9 +180,9 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	}
 
 	if shouldInstall {
-		results, _ := setup.InjectAllGlobal(BuildHash, force)
+		// User consented (or --force/--global) — always force to update outdated blocks.
+		results, _ := setup.InjectAllGlobal(BuildHash, true)
 		result.Global = results
-		// Record opt-in so future edr runs auto-update.
 		_ = setup.WriteSentinel(BuildHash)
 
 		if !jsonOut {
@@ -132,9 +191,6 @@ func runSetup(cmd *cobra.Command, args []string) error {
 					fmt.Fprintf(os.Stderr, "  %s: error: %s\n", r.Target, r.Error)
 				} else if r.AlreadyCurrent {
 					fmt.Fprintf(os.Stderr, "  %s up-to-date (hash:%s)\n", r.Path, BuildHash)
-				} else if r.Outdated {
-					fmt.Fprintf(os.Stderr, "  %s outdated (installed:%s current:%s)\n", r.Path, r.InstalledHash, BuildHash)
-					fmt.Fprintf(os.Stderr, "  run: edr setup --force\n")
 				} else if r.Updated {
 					fmt.Fprintf(os.Stderr, "  updated %s (hash:%s)\n", r.Path, BuildHash)
 				} else if r.Created {

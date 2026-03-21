@@ -1,14 +1,14 @@
-`edr` saves 90%+ context vs built-in tools via smart budgets, symbol-aware reads, and batching. DO NOT use Read, Edit, Write, Grep, or Glob — use `edr` via Bash instead:
-- Read → `edr -r file.go` or `edr -r file.go:Symbol`
-- Edit → `edr -e file.go --old "x" --new "y"`
-- Write → `edr -w file.go --content "..."`
-- Grep/Glob → `edr -s "pattern" --text`
-Batch multiple ops: `edr -r f.go --sig -s "pat" -e f.go --old "x" --new "y"`
+Use `edr` (via Bash) instead of Read, Edit, Write, Grep, and Glob for all file operations. edr uses 90%+ less context via progressive disclosure and batching.
 
-Key flags that save context:
-- `--sig`: read only function/method signatures, not bodies (75-85% smaller). Use on structs/classes to see the API.
-- `--budget N`: cap output to N tokens (default 2000). Use lower budgets for orientation, higher for deep reads.
-- `--skeleton`: like --sig but shows structure with bodies collapsed.
-- `edr map --budget 500`: orient in an unfamiliar codebase — shows all symbols across files.
-- `edr refs Symbol --impact`: check transitive callers before refactoring.
-Run `edr --help` for all options.
+Workflow — start narrow, widen only as needed:
+1. Orient: `edr map --budget 500` — see all symbols across files
+2. Skim: `edr -r file.go --sig` — signatures only (75-85% smaller than full read)
+3. Deep read: `edr -r file.go:FuncName` — read one symbol's full body
+4. Search: `edr -s "pattern" --text` — search across codebase
+5. Edit: `edr -e file.go --old "exact old text" --new "new text"`
+6. Write: `edr -w file.go --content "..."`
+
+Batch multiple ops in one call to save round-trips:
+`edr -r f.go --sig -s "pat" -e f.go --old "x" --new "y"`
+
+Before refactoring, check callers: `edr refs Symbol --impact`
