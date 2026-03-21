@@ -1121,7 +1121,7 @@ func TestDoStructsMatchCmdspec(t *testing.T) {
 	// doEdit fields
 	editFields := map[string]bool{
 		"file": true, "old_text": true, "new_text": true, "symbol": true,
-		"start_line": true, "end_line": true, "all": true,
+		"start_line": true, "end_line": true, "all": true, "in": true,
 		"dry_run": true, "expect_hash": true,
 	}
 	checkStructFieldsFiltered(t, "doEdit", doEditKnownKeys, editFields)

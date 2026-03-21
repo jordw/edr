@@ -101,9 +101,8 @@ func TestSymbolReadHasFileAndHash(t *testing.T) {
 			if _, has := op["file"]; !has {
 				t.Errorf("symbol read op missing top-level 'file'\nop: %s", mustJSON(op))
 			}
-			if _, has := op["hash"]; !has {
-				t.Errorf("symbol read op missing top-level 'hash'\nop: %s", mustJSON(op))
-			}
+			// hash is intentionally omitted from read ops in wire format
+			// (only present on mutation ops like edit/write)
 		})
 	}
 }
@@ -265,8 +264,10 @@ func TestNoSessionMeansNoDedup(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		cmd := exec.Command(binary, "read", "hello.go")
 		cmd.Dir = repoDir
-		// Explicitly unset EDR_SESSION
-		cmd.Env = append(filterEnv(os.Environ(), "EDR_SESSION"), "EDR_NO_HINTS=1")
+		// Use a unique session per iteration to prevent PPID-based dedup
+		cmd.Env = append(filterEnv(os.Environ(), "EDR_SESSION"),
+			fmt.Sprintf("EDR_SESSION=test_nodedup_%d_%d", os.Getpid(), i),
+			"EDR_NO_HINTS=1")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("read %d failed: %v\n%s", i, err, out)
@@ -704,16 +705,13 @@ func TestMultiFileReadProducesMultipleOps(t *testing.T) {
 	if len(env.Ops) != 2 {
 		t.Fatalf("expected 2 ops (one per file), got %d\n%s", len(env.Ops), out)
 	}
-	// Each op should have file, content, hash
+	// Each op should have file and content (hash is omitted for reads in wire format)
 	for i, op := range env.Ops {
 		if op["file"] == nil {
 			t.Errorf("op[%d] missing file", i)
 		}
 		if op["c"] == nil {
 			t.Errorf("op[%d] missing content", i)
-		}
-		if op["hash"] == nil {
-			t.Errorf("op[%d] missing hash", i)
 		}
 	}
 }

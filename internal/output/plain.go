@@ -214,9 +214,7 @@ func plainEdit(w *os.File, op Op) {
 
 func plainRename(w *os.File, op Op) {
 	h := map[string]any{}
-	if noop, ok := op["noop"].(bool); ok && noop {
-		h["status"] = "noop"
-	} else if v, ok := op["status"].(string); ok {
+	if v, ok := op["status"].(string); ok && v != "" {
 		h["status"] = v
 	}
 	if v, ok := op["old_name"].(string); ok {

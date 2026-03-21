@@ -68,9 +68,10 @@ type RenameResult struct {
 	NewName      string             `json:"new_name"`
 	FilesChanged []string           `json:"files_changed"`
 	Occurrences  int                `json:"occurrences"`
-	Noop         bool               `json:"noop,omitempty"`
-	Hashes       map[string]string  `json:"hashes,omitempty"` // file -> new hash for chaining
-	DryRun       bool               `json:"dry_run,omitempty"`
+	Status       string             `json:"status"` // "applied", "dry_run", "noop"
+	Noop         bool               `json:"noop,omitempty"` // deprecated: use Status
+	Hashes       map[string]string  `json:"hashes,omitempty"`
+	DryRun       bool               `json:"dry_run,omitempty"` // deprecated: use Status
 	Preview      []RenameOccurrence `json:"preview,omitempty"`
 	Warnings     []string           `json:"warnings,omitempty"`
 }

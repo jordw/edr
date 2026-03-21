@@ -581,11 +581,11 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 	}
 
 	if oldName == newName {
-		return output.RenameResult{OldName: oldName, NewName: newName, DryRun: dryRun, Noop: true}, nil
+		return output.RenameResult{OldName: oldName, NewName: newName, Status: "noop", DryRun: dryRun, Noop: true}, nil
 	}
 
 	if len(refs) == 0 {
-		return output.RenameResult{OldName: oldName, NewName: newName, DryRun: dryRun, Noop: true}, nil
+		return output.RenameResult{OldName: oldName, NewName: newName, Status: "noop", DryRun: dryRun, Noop: true}, nil
 	}
 
 	// Group refs by file
@@ -625,6 +625,7 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 			NewName:      newName,
 			FilesChanged: filesChanged,
 			Occurrences:  len(refs),
+			Status:       "dry_run",
 			DryRun:       true,
 			Preview:      preview,
 		}, nil
@@ -678,6 +679,7 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 		NewName:      newName,
 		FilesChanged: filesChanged,
 		Occurrences:  len(refs),
+		Status:       "applied",
 		Hashes:       cr.Hashes,
 		Warnings:     renameWarnings,
 	}

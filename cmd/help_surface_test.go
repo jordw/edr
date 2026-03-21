@@ -10,7 +10,7 @@ import (
 
 func TestHelpSurface(t *testing.T) {
 	// Verify that edr --help lists exactly the expected public commands.
-	expected := []string{"edit", "map", "read", "refs", "reindex", "rename", "search", "setup", "verify", "write"}
+	expected := []string{"edit", "map", "read", "refs", "reindex", "rename", "run", "search", "session", "setup", "verify", "write"}
 
 	buf := new(bytes.Buffer)
 	rootCmd.SetOut(buf)
