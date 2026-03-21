@@ -64,6 +64,7 @@ replaced with [unchanged: N lines]. Use --full to bypass dedup.`,
 
 func init() {
 	runCmd.Flags().Bool("full", false, "Bypass dedup, show full output")
+	rootCmd.AddCommand(runCmd)
 }
 
 // dedupBlocks splits output into blank-line-separated blocks, deduplicates
