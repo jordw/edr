@@ -94,6 +94,7 @@ var Registry = []*Spec{
 			{Name: "old_text", Type: FlagString, Default: "", Desc: "Text to find"},
 			{Name: "new_text", Type: FlagString, Default: "", Desc: "Replacement text"},
 			{Name: "all", Type: FlagBool, Default: false, Desc: "Replace all matches"},
+			{Name: "in", Type: FlagString, Default: "", Desc: "Scope text match to within a symbol body (file:Symbol)"},
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
 			{Name: "expect_hash", Type: FlagString, Default: "", Desc: "Reject edit if file hash doesn't match"},
 		},

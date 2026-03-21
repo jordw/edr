@@ -16,17 +16,18 @@ import (
 
 // doParams holds the parsed params for batch operations.
 type doParams struct {
-	Reads         []doRead   `json:"reads"`
-	Queries       []doQuery  `json:"queries"`
-	Edits         []doEdit   `json:"edits"`
-	Writes        []doWrite  `json:"writes"`
-	Renames       []doRename `json:"renames"`
-	Budget        *int       `json:"budget"`
-	DryRun        *bool      `json:"dry_run"`
-	Verify        any        `json:"verify"`
-	Reindex       *bool      `json:"reindex,omitempty"`
-	Init          *bool      `json:"init,omitempty"` // legacy alias for reindex
-	ReadAfterEdit *bool      `json:"read_after_edit,omitempty"`
+	Reads          []doRead   `json:"reads"`
+	Queries        []doQuery  `json:"queries"`
+	Edits          []doEdit   `json:"edits"`
+	Writes         []doWrite  `json:"writes"`
+	Renames        []doRename `json:"renames"`
+	PostEditReads  []doRead   `json:"post_edit_reads,omitempty"` // reads that follow edits in CLI order
+	Budget         *int       `json:"budget"`
+	DryRun         *bool      `json:"dry_run"`
+	Verify         any        `json:"verify"`
+	Reindex        *bool      `json:"reindex,omitempty"`
+	Init           *bool      `json:"init,omitempty"` // legacy alias for reindex
+	ReadAfterEdit  *bool      `json:"read_after_edit,omitempty"`
 }
 
 type doRead struct {
@@ -90,6 +91,7 @@ type doEdit struct {
 	StartLine  *int   `json:"start_line,omitempty"`
 	EndLine    *int   `json:"end_line,omitempty"`
 	All        *bool  `json:"all,omitempty"`
+	In         string `json:"in,omitempty"`
 	DryRun     *bool  `json:"dry_run,omitempty"`
 	ExpectHash string `json:"expect_hash,omitempty"`
 }
@@ -249,6 +251,47 @@ func executeReads(ctx context.Context, db *index.DB, sess *session.Session, env 
 	}
 	results := dispatch.DispatchMulti(ctx, db, cmds, budgetOpt...)
 	addMultiResultOps(env, sess, cmds, results, "r")
+}
+
+// executePostEditReads runs reads that were placed after edits in CLI order.
+// These see post-edit file state since edits have already been committed.
+func executePostEditReads(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams) {
+	cmds := make([]dispatch.MultiCmd, len(p.PostEditReads))
+	for i, r := range p.PostEditReads {
+		readArgs := []string{r.File}
+		if r.Symbol != "" {
+			readArgs = []string{r.File + ":" + r.Symbol}
+		}
+		if r.StartLine != nil && r.EndLine != nil && r.Symbol == "" {
+			readArgs = []string{r.File, strconv.Itoa(*r.StartLine), strconv.Itoa(*r.EndLine)}
+		}
+		readFlags := map[string]any{"full": true} // force full read (post-edit, skip session delta)
+		if r.Budget != nil {
+			readFlags["budget"] = *r.Budget
+		}
+		if r.Signatures != nil && *r.Signatures {
+			readFlags["signatures"] = true
+		}
+		if r.Skeleton != nil && *r.Skeleton {
+			readFlags["skeleton"] = true
+		}
+		if r.Lines != "" {
+			readFlags["lines"] = r.Lines
+		}
+		if r.Depth != nil {
+			readFlags["depth"] = *r.Depth
+		}
+		if r.Symbols != nil && *r.Symbols {
+			readFlags["symbols"] = true
+		}
+		cmds[i] = dispatch.MultiCmd{Cmd: "read", Args: readArgs, Flags: readFlags}
+	}
+	var budgetOpt []int
+	if p.Budget != nil {
+		budgetOpt = []int{*p.Budget}
+	}
+	results := dispatch.DispatchMulti(ctx, db, cmds, budgetOpt...)
+	addMultiResultOps(env, sess, cmds, results, "pr")
 }
 
 // executeQueries dispatches query operations and adds results as ops on the envelope.
@@ -415,6 +458,9 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env 
 		}
 		if e.All != nil && *e.All {
 			flags["all"] = true
+		}
+		if e.In != "" {
+			flags["in"] = e.In
 		}
 		if e.ExpectHash != "" {
 			flags["expect_hash"] = e.ExpectHash
@@ -633,7 +679,12 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 		executeWrites(ctx, db, sess, env, &p, isDryRun)
 	}
 
-	// 5b. Post-edit reads
+	// 5b. Post-edit reads (reads that followed edits in CLI order)
+	if !editsFailed && len(p.PostEditReads) > 0 {
+		executePostEditReads(ctx, db, sess, env, &p)
+	}
+
+	// 5c. Legacy --read-after-edit (auto-reads edited files with --signatures)
 	if !editsFailed && (hasEdits || hasWrites) && p.ReadAfterEdit != nil && *p.ReadAfterEdit && !isDryRun {
 		editedFiles := make(map[string]bool)
 		for _, e := range p.Edits {

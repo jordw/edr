@@ -8,12 +8,13 @@ Workflow — start narrow, widen only as needed:
 3. Deep read: `edr -r file.go:FuncName`
 4. Search: `edr -s "pattern" --text` | scoped: `--in file.go:FuncName`
 5. Edit: `edr -e file.go --old "old" --new "new"`
-   Also: `--start-line N --end-line M`, `--all`, `--dry-run`
+   Also: `--start-line N --end-line M`, `--all`, `--dry-run`, `--in Symbol` (scope match to symbol body)
 6. Write: `edr -w file.go --content "..."` | `--inside Symbol`, `--after Symbol`, `--append`
 7. Rename: `edr rename Old New` (cross-file, import-aware, `--dry-run`)
 8. Verify: `edr verify` — auto-detects go/npm/cargo/make. Auto-runs after edits. Set custom: `.edr/config.json` → `{"verify": "make -C tests test"}`
-9. Run: `edr run -- make test` — runs command, shows sparse diff against previous run. Unchanged regions collapse, changed lines show inline `{old → new}` markers. `--full` for raw output.
+9. Run: `edr run -- make test` — runs command, shows sparse diff against previous run. Unchanged regions collapse, changed lines show inline `{old → new}` markers. `--full` for raw output. `--reset` to clear baseline.
 
 Batch: `edr -r f.go --sig -s "pat" -e f.go --old "x" --new "y"`
 Repeat -e for multi-edit: `edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"`
+Chained edit-then-read: `edr -e f.go --old "x" --new "y" -r f.go:200-210` (read sees post-edit state)
 Before refactoring: `edr refs Symbol --impact`
