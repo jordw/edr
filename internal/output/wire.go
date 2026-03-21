@@ -58,6 +58,12 @@ func transformOp(op Op) {
 		delete(op, key)
 	}
 
+	// Drop hash from read/search/map ops (only useful for edit chaining)
+	opType, _ := op["type"].(string)
+	if opType == "read" || opType == "search" || opType == "map" || opType == "refs" {
+		delete(op, "hash")
+	}
+
 	// Drop default-valued fields
 	for key, defVal := range dropIfDefault {
 		if v, ok := op[key]; ok && v == defVal {

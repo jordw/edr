@@ -116,9 +116,6 @@ func plainRead(w *os.File, op Op) {
 	if v, ok := op["lines"]; ok {
 		h["lines"] = v
 	}
-	if v, ok := op["hash"].(string); ok {
-		h["hash"] = v
-	}
 	if v, ok := op["truncated"].(bool); ok && v {
 		h["trunc"] = true
 	}
