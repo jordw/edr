@@ -1,59 +1,57 @@
-You are testing `edr`, a CLI tool for coding agents. Your goal is to use it heavily on this codebase, find contract violations against spec.md, and report them.
+You are testing `edr`, a CLI tool for coding agents. Your goal is to use it on this codebase, find bugs and ergonomic issues, and report them.
 
-## Phase 1: Exercise every command
+**Important:** Your agent config already has edr instructions installed (via `edr setup`). Use those instructions to figure out how to accomplish the tasks below — do not look at this file for edr command syntax. The point is to test whether the installed instructions are sufficient for an agent to discover and use edr correctly.
 
-Run each command below against this repo. For each, note: did it work? Was the output shape correct per spec.md? Was anything confusing, redundant, or missing?
+If a task is unclear or the instructions don't cover it, note that as a finding.
 
-```bash
-# Orient
-edr map --budget 300
-edr map internal/dispatch/
+## Phase 1: Task-driven discovery
 
-# Read - all modes
-edr read cmd/batch.go --budget 200
-edr read cmd/batch.go --lines 1-20
-edr read cmd/batch.go:executeReads
-edr read cmd/batch.go:executeReads --sig
-edr read cmd/batch.go:executeReads --skeleton
-edr read cmd/batch.go cmd/commands.go --budget 300
-edr read cmd/batch.go --full
+Work through these tasks using only the edr instructions in your agent config. For each, note: did the instructions guide you to the right command? Was the output useful? Was anything confusing or missing from the instructions?
 
-# Search - both modes
-edr search "executeReads"
-edr search "executeReads" --text
-edr search "TODO" --text --include "*.go" --context 2
-edr search "nonexistent_xyz_12345"
+### Orientation
+1. Get a structural overview of this codebase, limited to ~300 tokens
+2. Get a structural overview of just the `internal/dispatch/` directory
 
-# Refs
-edr refs executeReads
-edr refs executeReads --impact
-edr refs Dispatch --chain executeReads
+### Reading
+3. Read a file with a budget of 200 tokens
+4. Read just lines 1-20 of a file
+5. Pick a function you found in the map and read just that function
+6. Read just the signatures of a type or struct you found
+7. Read the skeleton of a file
+8. Read two files in a single call
+9. Read a file with no budget limit
 
-# Edit - dry run
-edr edit cmd/batch.go --old-text "executeReads" --new-text "executeReads" --dry-run
-edr edit cmd/batch.go --old-text "NONEXISTENT" --new-text "x"
+### Searching
+10. Search for a symbol by name
+11. Search for a text pattern across the codebase
+12. Search for something you know doesn't exist
 
-# Write - dry run
-edr write /tmp/edr_test_file.go --content "package main" --dry-run
+### References
+13. Find all references to a function you've been reading
+14. Check the impact of that function (what depends on it)
 
-# Session
-edr session new
+### Mutations (dry run only)
+15. Dry-run an edit: change a string in a file and preview the result
+16. Try to edit a string that doesn't exist in the file
+17. Dry-run writing a new file
 
-# Verify
-edr verify
+### Sessions
+18. Start a new session, then read the same file twice — observe the dedup behavior
 
-# Run - dedup across repeated calls
-edr run -- echo "hello"
-edr run -- echo "hello"
-edr run --fuzzy -- printf 'PASS in 0.003s\n\nFAIL test2\n'
-edr run --full -- echo "hello"
+### Verification
+19. Run the project's build/test verification
 
-# Batch - combine operations
-edr -r cmd/batch.go:executeReads --sig -s "DispatchMulti" --text -r internal/dispatch/dispatch.go --budget 300
-edr -e cmd/batch.go --old "executeReads" --new "executeReads" --dry-run
-```
+### Running commands
+20. Run a shell command through edr twice — observe the sparse diff behavior
+21. Run the same command with `--full` to bypass diffing
+
+### Batching
+22. Combine a symbol read, a text search, and a file read in one call
+23. Combine a dry-run edit with another operation in one call
 
 ## Phase 2: Stress the edges
+
+Phase 1 tested whether the instructions are sufficient for discovery. From here on, use exact commands — this is edge-case validation, not discovery testing.
 
 Test these specific scenarios that tend to surface bugs:
 
@@ -70,117 +68,23 @@ Test these specific scenarios that tend to surface bugs:
 11. **Signatures on function**: `edr read cmd/batch.go:executeReads --signatures` (should fail — signatures is for containers)
 12. **Contradictory flags**: `edr read cmd/batch.go --signatures --skeleton` (should be a parse error)
 13. **Internal command rejected**: `edr explore` (should be rejected with structured error, not silently handled)
-14. **Run dedup**: `edr run -- echo "x"` twice — second should show `[unchanged: 1 lines]`
+14. **Run dedup**: `edr run -- echo "x"` twice — second should show `[no changes, 1 lines]`
 15. **Run exit code passthrough**: `edr run -- false` should exit non-zero
 16. **Session PPID resolution**: After `edr session new`, a plain `edr read` should use the new session without `EDR_SESSION` env
 
-## Phase 3: Check contracts against spec.md
-
-### Transport contract
-- [ ] Stdout contains only the envelope JSON, nothing else
-- [ ] Stderr is empty (no `--verbose`)
-- [ ] Exit code 0 iff `envelope.ok == true`
-- [ ] Exit code 1 iff `envelope.ok == false`
-
-### Envelope shape
-- [ ] Envelope has `schema_version`, `ok`, `command`, `ops`, `verify`, `errors`
-- [ ] `ops` is always an array, even for single ops
-- [ ] `errors` is always an array
-- [ ] `verify` is `null` when not attempted, an object when attempted
-- [ ] `command` reflects the public invocation target, never internal names
-
-### Op shape (all types)
-- [ ] Every op has `op_id` and `type`
-- [ ] `op_id` uses correct prefix (`r`, `s`, `m`, `e`, `w`, `x`, `n`) and zero-based count
-- [ ] Ops preserve request order in batch
-- [ ] Individual ops NEVER have an `ok` field
-
-### Failure shape
-- [ ] Failed ops have both `error` and `error_code`, never just one
-- [ ] Successful ops never have `error` or `error_code`
-- [ ] Failed ops do NOT include success fields (`content`, `matches`, `hash`, etc.)
-- [ ] Per-op failures are in `ops[]`, not in envelope `errors[]`
-- [ ] Every `error_code` is from the documented set (no undocumented codes)
-
-### Path and position normalization
-- [ ] `file` paths are repo-relative in all ops
-- [ ] No absolute paths in successful output
-- [ ] `lines` is `[start, end]`, 1-based, inclusive
-- [ ] `column` values are 1-based (in search results)
-
-### Read ops
-- [ ] Successful reads have `file`, `hash`, `content`, `lines` at top level
-- [ ] Symbol reads have `"symbol": "name"` (string, not sub-object)
-- [ ] `--signatures` and `--skeleton` change content, not op shape
-- [ ] `truncated` present when content was budget-limited
-- [ ] Multi-file reads produce one op per file
-
-### Search ops
-- [ ] Has `kind` field: `"symbol"` or `"text"`
-- [ ] Has `matches` array and `total_matches` integer
-- [ ] Zero matches returns `ok: true`, not an error
-- [ ] No silent fallback from symbol to text search
-
-### Map ops
-- [ ] Has `files`, `shown_files`, `shown_symbols`, `truncated`, `symbols`
-- [ ] File-scoped maps have same fields with trivial values
-
-### Mutation ops (edit, write, rename)
-- [ ] Have `file`, `status`, `hash`
-- [ ] `status` is one of: `applied`, `failed`, `skipped`, `dry_run`, `noop`
-- [ ] Noop edits (old == new) return `status: "noop"`
-- [ ] Noop renames (old == new) return `status: "noop"`
-- [ ] Diff metadata present: `destructive`, `lines_changed`, `lines_added`, `lines_removed`, `diff`, `diff_available`
-- [ ] `old_size` and `new_size` present on applied and dry-run edits
-
-### Verify
-- [ ] Uses `status`: `"passed"`, `"failed"`, or `"skipped"` — never `ok`
-- [ ] Has `command` reflecting actual executed scope
-- [ ] Has `output` with stdout/stderr
-- [ ] Has `error` only when `status: "failed"`
-- [ ] Has `reason` only when `status: "skipped"`
-- [ ] Verify works without an index (does not create `.edr/`)
-
-### Session
-- [ ] Sessions are always active (default to "default" session)
-- [ ] `edr session new` creates a unique session and writes PPID mapping
-- [ ] After `session new`, subsequent calls auto-resolve via PPID
-- [ ] First read returns `session: "new"`
-- [ ] Repeated read returns `session: "unchanged"`
-- [ ] `EDR_SESSION` env var overrides PPID-based resolution
-
-### Run
-- [ ] `edr run -- <cmd>` executes and returns output
-- [ ] Second identical run returns `[unchanged: N lines]`
-- [ ] Changed blocks show through, unchanged blocks are collapsed
-- [ ] `--fuzzy` tolerates number changes in output
-- [ ] `--full` bypasses dedup entirely
-- [ ] Exit code passes through from wrapped command
-
-### Budget
-- [ ] Budget shapes response size, does not affect operation success
-- [ ] `--full` bypasses budget cap
-- [ ] Budget is per-operation in batch, not a shared pool
-- [ ] `truncated: true` when content was reduced by budget
-
-### Parity
-- [ ] Standalone and batch produce identical op payloads for equivalent requests
-- [ ] Shorthand flags (`--sig`, `--old`, `--new`) work in both standalone and batch
-- [ ] Flag aliases resolve to canonical names in output
-
-## Phase 4: Report
+## Phase 3: Report
 
 After testing, produce a prioritized list of findings:
 
 ```
-## Contract violations (spec.md says X, edr does Y)
-1. [severity] description — spec section violated — how to reproduce
-
-## Bugs (wrong behavior not covered by spec)
+## Bugs (something is broken or wrong)
 1. [severity] description — how to reproduce
 
-## Spec gaps (behavior exists but spec is silent)
-1. description — what should spec.md say?
+## Ergonomic issues (something is awkward, confusing, or wasteful)
+1. [severity] description — what would be better
+
+## Instruction gaps (agent couldn't figure out how to do something)
+1. description — what was the task, what was missing from the instructions
 ```
 
-Rank by impact on agent trust and token efficiency. Focus on: can an agent write one parser and rely on it?
+Rank by impact on agent trust and token efficiency.

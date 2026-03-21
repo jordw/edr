@@ -24,11 +24,21 @@ show inline {old → new} markers. Use --full for raw output.`,
 	DisableFlagParsing: false,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		full, _ := cmd.Flags().GetBool("full")
+		reset, _ := cmd.Flags().GetBool("reset")
 
 		shellCmd := strings.Join(args, " ")
 
+		root := getRoot(cmd)
+		runDir := filepath.Join(root, ".edr", "run")
+
+		// --reset: clear the stored baseline so this run is treated as first run
+		if reset {
+			key := fmt.Sprintf("%x", sha256.Sum256([]byte(shellCmd)))[:12]
+			os.Remove(filepath.Join(runDir, key+".last"))
+		}
+
 		c := exec.Command("sh", "-c", shellCmd)
-		c.Dir = getRoot(cmd)
+		c.Dir = root
 		out, execErr := c.CombinedOutput()
 
 		exitCode := 0
@@ -45,8 +55,6 @@ show inline {old → new} markers. Use --full for raw output.`,
 			return exitError(execErr)
 		}
 
-		root := getRoot(cmd)
-		runDir := filepath.Join(root, ".edr", "run")
 		output := diffAgainstPrevious(runDir, shellCmd, string(out), exitCode)
 		fmt.Print(output)
 
@@ -56,6 +64,7 @@ show inline {old → new} markers. Use --full for raw output.`,
 
 func init() {
 	runCmd.Flags().Bool("full", false, "Bypass diff, show full output")
+	runCmd.Flags().Bool("reset", false, "Clear baseline before running (treat as first run)")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -128,16 +137,17 @@ type diffStats struct {
 	removed     int
 }
 
+type diffEntry struct {
+	kind      string // "same", "modified", "added", "removed"
+	newText   string
+	oldText   string
+	digitOnly bool // true if modification is digits-only
+}
+
 func sparseDiff(oldLines, newLines []string) (string, diffStats) {
 	var stats diffStats
 	// Phase 1: Classify each line using LCS alignment.
-	type entry struct {
-		kind    string // "same", "modified", "added", "removed"
-		newText string
-		oldText string
-		digitOnly bool // true if modification is digits-only
-	}
-	var entries []entry
+	var entries []diffEntry
 
 	lcs := computeLCS(oldLines, newLines)
 	oi, ni, li := 0, 0, 0
@@ -145,7 +155,7 @@ func sparseDiff(oldLines, newLines []string) (string, diffStats) {
 	for oi < len(oldLines) || ni < len(newLines) {
 		if li < len(lcs) && oi < len(oldLines) && ni < len(newLines) &&
 			oldLines[oi] == lcs[li] && newLines[ni] == lcs[li] {
-			entries = append(entries, entry{kind: "same", newText: newLines[ni]})
+			entries = append(entries, diffEntry{kind: "same", newText: newLines[ni]})
 			oi++
 			ni++
 			li++
@@ -164,7 +174,7 @@ func sparseDiff(oldLines, newLines []string) (string, diffStats) {
 
 		// Pair modifications
 		for oi < oldEnd && ni < newEnd {
-			entries = append(entries, entry{
+			entries = append(entries, diffEntry{
 				kind:      "modified",
 				newText:   newLines[ni],
 				oldText:   oldLines[oi],
@@ -174,28 +184,33 @@ func sparseDiff(oldLines, newLines []string) (string, diffStats) {
 			ni++
 		}
 		for oi < oldEnd {
-			entries = append(entries, entry{kind: "removed", oldText: oldLines[oi]})
+			entries = append(entries, diffEntry{kind: "removed", oldText: oldLines[oi]})
 			oi++
 		}
 		for ni < newEnd {
-			entries = append(entries, entry{kind: "added", newText: newLines[ni]})
+			entries = append(entries, diffEntry{kind: "added", newText: newLines[ni]})
 			ni++
 		}
 	}
 
-	// Phase 2: Render with collapsing.
+	// Phase 2: Merge small unchanged gaps into adjacent collapsed regions.
+	// A "same" run of ≤2 lines between changed lines is too small to be useful
+	// context — absorb it so repeated warnings don't leak through individually.
+	merged := mergeSmallGaps(entries)
+
+	// Phase 3: Render with collapsing.
 	// Merge adjacent "same" and "digit-only modified" into one summary.
 	var result strings.Builder
 	i := 0
-	for i < len(entries) {
-		e := entries[i]
+	for i < len(merged) {
+		e := merged[i]
 
 		// Collapsible: unchanged or digit-only modified
 		if e.kind == "same" || (e.kind == "modified" && e.digitOnly) {
 			total := 0
 			numChanged := 0
-			for i < len(entries) {
-				ei := entries[i]
+			for i < len(merged) {
+				ei := merged[i]
 				if ei.kind == "same" {
 					total++
 					i++
@@ -236,6 +251,49 @@ func sparseDiff(oldLines, newLines []string) (string, diffStats) {
 	}
 
 	return result.String(), stats
+}
+
+// mergeSmallGaps absorbs small runs of "same" lines (≤2) that sit between
+// changed lines. This prevents repeated unchanged output (e.g., compiler
+// warnings) from leaking through as individual [1 unchanged lines] entries
+// when interleaved with changing output.
+func mergeSmallGaps(entries []diffEntry) []diffEntry {
+	if len(entries) == 0 {
+		return entries
+	}
+
+	// Identify runs: for each entry, record if it's part of a "same" run
+	// that is ≤2 lines and has non-same entries on both sides.
+	out := make([]diffEntry, 0, len(entries))
+	i := 0
+	for i < len(entries) {
+		if entries[i].kind != "same" && !(entries[i].kind == "modified" && entries[i].digitOnly) {
+			out = append(out, entries[i])
+			i++
+			continue
+		}
+
+		// Count the collapsible run length
+		runStart := i
+		for i < len(entries) && (entries[i].kind == "same" || (entries[i].kind == "modified" && entries[i].digitOnly)) {
+			i++
+		}
+		runLen := i - runStart
+
+		// If ≤2 lines AND surrounded by changes on both sides, absorb into collapse
+		hasBefore := runStart > 0
+		hasAfter := i < len(entries)
+		if runLen <= 2 && hasBefore && hasAfter {
+			// Re-tag as "same" so they merge with the next collapsed region
+			for j := runStart; j < i; j++ {
+				out = append(out, diffEntry{kind: "same", newText: entries[j].newText})
+			}
+		} else {
+			// Keep as-is
+			out = append(out, entries[runStart:i]...)
+		}
+	}
+	return out
 }
 
 // isDigitOnlyChange returns true if two strings of equal length differ
