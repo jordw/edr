@@ -41,6 +41,7 @@ type Session struct {
 	ContentOrder  int                     `json:"content_order"`
 	SeenBodies    map[string]string       `json:"seen_bodies"`
 	Diffs         map[string]string       `json:"diffs"`
+	SeenHints     map[string]bool         `json:"seen_hints,omitempty"`
 
 	// stats tracks optimization hits per handleDo call (reset between calls).
 	stats PostProcessStats
@@ -69,6 +70,33 @@ func New() *Session {
 		SymbolContent: make(map[string]ContentEntry),
 		SeenBodies:    make(map[string]string),
 		Diffs:         make(map[string]string),
+		SeenHints:     make(map[string]bool),
+	}
+}
+
+// GetSeenHints returns a copy of the seen hints set.
+func (s *Session) GetSeenHints() map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]bool, len(s.SeenHints))
+	for k, v := range s.SeenHints {
+		out[k] = v
+	}
+	return out
+}
+
+// RecordHints marks hint keys as seen so they are not repeated.
+func (s *Session) RecordHints(keys []string) {
+	if len(keys) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.SeenHints == nil {
+		s.SeenHints = make(map[string]bool)
+	}
+	for _, k := range keys {
+		s.SeenHints[k] = true
 	}
 }
 
@@ -97,6 +125,9 @@ func LoadFromFile(path string) *Session {
 	}
 	if s.Diffs == nil {
 		s.Diffs = make(map[string]string)
+	}
+	if s.SeenHints == nil {
+		s.SeenHints = make(map[string]bool)
 	}
 	return s
 }

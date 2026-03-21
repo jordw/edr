@@ -129,7 +129,7 @@ func runAndExtractOps(t *testing.T, binary, dir string, args []string) []interfa
 	cmd.Dir = dir
 	// Use a unique session ID per invocation to avoid session caching
 	// causing the second call to return "unchanged" instead of full content.
-	cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=parity_%d", parityCounter.Add(1)))
+	cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=parity_%d", parityCounter.Add(1)))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("command %v failed: %v\n%s", args, err, out)

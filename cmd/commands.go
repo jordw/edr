@@ -12,6 +12,7 @@ import (
 
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
+	"github.com/jordw/edr/internal/hints"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
@@ -121,6 +122,10 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 		env.AddOp(opID, cmdName, result)
 	}
 	env.ComputeOK()
+
+	// Emit contextual hints to stderr
+	emitStandaloneHints(sess, cmdName, flags, env)
+
 	output.PrintEnvelope(env)
 	if !env.OK {
 		return silentError{code: 1}
@@ -200,9 +205,6 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	env.ComputeOK()
 	output.PrintEnvelope(env)
 	if !env.OK {
-		if env.IsVerifyOnlyFailure() {
-			return silentError{code: 2}
-		}
 		return silentError{code: 1}
 	}
 	return nil
@@ -354,7 +356,7 @@ var verifyCmd = &cobra.Command{
 		env.ComputeOK()
 		output.PrintEnvelope(env)
 		if !env.OK {
-			return silentError{code: 2}
+			return silentError{code: 1}
 		}
 		return nil
 	},
@@ -437,4 +439,28 @@ func classifyErrorMsg(msg string) string {
 	default:
 		return "command_error"
 	}
+}
+
+
+// emitStandaloneHints emits contextual hints for standalone (non-batch) commands.
+func emitStandaloneHints(sess *session.Session, cmdName string, flags map[string]any, env *output.Envelope) {
+	f := make(map[string]bool)
+	for k := range flags {
+		f[k] = true
+	}
+
+	op := hints.Op{
+		Kind:  cmdName,
+		Flags: f,
+		Meta:  make(map[string]string),
+	}
+
+	ctx := hints.Context{
+		Ops:       []hints.Op{op},
+		IsBatch:   false,
+		HasError:  !env.OK,
+		SeenHints: sess.GetSeenHints(),
+	}
+	keys := hints.Emit(ctx)
+	sess.RecordHints(keys)
 }

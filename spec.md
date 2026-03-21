@@ -25,7 +25,7 @@ In order:
 
 **Equivalent operations, identical results.** Batch (`-r`, `-s`, `-e`, `-w`) and standalone (`edr read`, `edr search`, `edr edit`, `edr write`) are two interfaces for the same semantic operations. Same defaults, same semantics, same output shape. Divergence is a bug.
 
-**Fail loud, fail early.** Empty success is misinformation. If edr cannot do what was asked, it says so with a structured error and a useful suggestion. It never returns empty results and exit 0 when the real problem is a missing index, wrong root, or ambiguous input.
+**Fail loud, fail early.** Empty success is misinformation. If edr cannot do what was asked, it says so with a structured error and a useful suggestion. It never returns empty results and exit 0 when the real problem is a wrong root or ambiguous input.
 
 **Install once, works everywhere.** edr is a global tool. `edr setup` installs instructions into the agent's home-directory config; from that point, every repo the agent touches uses edr without per-project configuration. Updates happen silently when edr is rebuilt.
 
@@ -194,14 +194,23 @@ An agent should never need to normalize paths or wonder whether a line range is 
 
 ## Index contract
 
-Index requirements MUST be explicit and command-specific:
+edr auto-indexes on first use. Agents should never see "run edr reindex".
 
-- `reindex` and `setup` create or refresh index state
-- `verify` MUST work without an index and MUST NOT create one as a side effect
-- Commands that require structural repo knowledge (`search`, `map`, `refs`, symbol-scoped `read`, `rename`) MUST fail with `no_index` when no index exists
-- If the index exists but contains zero usable files, those commands MUST fail with `empty_index`
+Rules:
 
-Plain file reads are allowed to be stricter than necessary, but they MUST be consistent. A command MUST NOT sometimes auto-index, sometimes fail with `no_index`, and sometimes read raw disk based on hidden heuristics. Pick one behavior and keep it uniform.
+- If no index exists (or it contains zero files), edr MUST auto-index the repository before proceeding. This happens under the writer lock with a stderr progress message.
+- `reindex` and `setup` explicitly create or refresh index state.
+- `verify` MUST work without an index and MUST NOT create one as a side effect.
+- Auto-indexing is the single consistent behavior. There is no "sometimes fail, sometimes auto-index" ambiguity.
+
+### Per-file freshness
+
+Individual files may become stale between full reindexes (e.g., after an external edit). edr checks per-file freshness on access:
+
+- When resolving a symbol, edr compares the file's on-disk mtime against its indexed mtime.
+- If stale (~20µs check), the single file is reindexed under the writer lock (~2ms) before proceeding.
+- If fresh, no work is done.
+- This MUST be invisible to the agent — no output shape changes, no extra fields.
 
 ## Output envelope
 
@@ -526,8 +535,7 @@ Recommended codes:
 | `not_found` | Symbol or match target not found |
 | `ambiguous_symbol` | Multiple symbols match; `candidates` included |
 | `ambiguous_match` | Edit old-text matched multiple locations |
-| `no_index` | No `.edr` directory |
-| `empty_index` | Index exists but contains no usable files |
+| `index_failed` | Auto-indexing failed |
 | `outside_repo` | Path is outside repository root |
 | `hash_mismatch` | `expect_hash` precondition failed |
 | `invalid_mode` | Mutually exclusive flags or impossible mode |
@@ -540,11 +548,7 @@ Every failed op MUST have an `error_code`. If a path can only produce `error` wi
 edr should be skeptical by default. These are hard errors, not warnings:
 
 ```json
-{"ok": false, "errors": [{"code": "no_index", "message": "No .edr directory. Run: edr reindex"}]}
-```
-
-```json
-{"ok": false, "errors": [{"code": "empty_index", "message": "Index contains 0 files. Run: edr reindex"}]}
+{"ok": false, "errors": [{"code": "index_failed", "message": "auto-indexing failed: permission denied"}]}
 ```
 
 ```json

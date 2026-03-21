@@ -166,11 +166,17 @@ func runReadUnified(ctx context.Context, db *index.DB, root string, args []strin
 		return runBatchRead(ctx, db, root, args, flags)
 	}
 
-	// Single arg with colon → file:symbol (canonical syntax)
+	// Single arg with colon → file:symbol or file:N-M (canonical syntax)
 	arg := args[0]
 	if idx := strings.LastIndex(arg, ":"); idx > 0 && idx < len(arg)-1 {
 		suffix := arg[idx+1:]
 		if _, err := strconv.Atoi(suffix); err != nil {
+			// Not a single number — try as line range (N-M)
+			if start, end, rangeErr := parseColonRange(suffix); rangeErr == nil {
+				flags["start_line"] = start
+				flags["end_line"] = end
+				return runReadFile(ctx, db, root, []string{arg[:idx]}, flags)
+			}
 			return runReadSymbol(ctx, db, root, []string{arg[:idx], suffix}, flags)
 		}
 	}

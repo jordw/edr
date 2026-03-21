@@ -45,7 +45,7 @@ func TestContentFieldNotBody(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd := exec.Command(binary, tt.args...)
 			cmd.Dir = repoDir
-			cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=content_%d", parityCounter.Add(1)))
+			cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=content_%d", parityCounter.Add(1)))
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("command failed: %v\n%s", err, out)
@@ -85,7 +85,7 @@ func TestSymbolReadHasFileAndHash(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd := exec.Command(binary, tt.args...)
 			cmd.Dir = repoDir
-			cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=filehash_%d", parityCounter.Add(1)))
+			cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=filehash_%d", parityCounter.Add(1)))
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("command failed: %v\n%s", err, out)
@@ -128,7 +128,7 @@ func TestBatchCommandFieldParity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd := exec.Command(binary, tt.args...)
 			cmd.Dir = repoDir
-			cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=cmdfield_%d", parityCounter.Add(1)))
+			cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=cmdfield_%d", parityCounter.Add(1)))
 			out, err := cmd.CombinedOutput()
 			if err != nil && tt.wantCmd != "edit" {
 				t.Fatalf("command failed: %v\n%s", err, out)
@@ -164,7 +164,7 @@ func TestErrorCodeSpecificity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd := exec.Command(binary, tt.args...)
 			cmd.Dir = repoDir
-			cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=errcode_%d", parityCounter.Add(1)))
+			cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=errcode_%d", parityCounter.Add(1)))
 			out, _ := cmd.CombinedOutput() // expect non-zero exit
 
 			outStr := string(out)
@@ -195,7 +195,7 @@ func TestDryRunEnrichmentFields(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd := exec.Command(binary, tt.args...)
 			cmd.Dir = repoDir
-			cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=dryrun_%d", parityCounter.Add(1)))
+			cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=dryrun_%d", parityCounter.Add(1)))
 			out, _ := cmd.CombinedOutput()
 
 			var env struct {
@@ -266,7 +266,7 @@ func TestNoSessionMeansNoDedup(t *testing.T) {
 		cmd := exec.Command(binary, "read", "hello.go")
 		cmd.Dir = repoDir
 		// Explicitly unset EDR_SESSION
-		cmd.Env = filterEnv(os.Environ(), "EDR_SESSION")
+		cmd.Env = append(filterEnv(os.Environ(), "EDR_SESSION"), "EDR_NO_HINTS=1")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("read %d failed: %v\n%s", i, err, out)
@@ -308,7 +308,7 @@ func TestErrorParityBatchStandalone(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd := exec.Command(binary, tt.args...)
 			cmd.Dir = repoDir
-			cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=errparity_%d", parityCounter.Add(1)))
+			cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=errparity_%d", parityCounter.Add(1)))
 			out, _ := cmd.CombinedOutput()
 
 			var env struct {
@@ -358,7 +358,7 @@ func TestContentHasNoLineNumbers(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd := exec.Command(binary, tt.args...)
 			cmd.Dir = repoDir
-			cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=nolnum_%d", parityCounter.Add(1)))
+			cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=nolnum_%d", parityCounter.Add(1)))
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("command failed: %v\n%s", err, out)
@@ -399,7 +399,7 @@ func TestSearchDeterminism(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		cmd := exec.Command(binary, "search", "main", "--text")
 		cmd.Dir = repoDir
-		cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=determ_%d", parityCounter.Add(1)))
+		cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=determ_%d", parityCounter.Add(1)))
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("run %d failed: %v\n%s", i, err, out)
@@ -487,7 +487,7 @@ func TestStandaloneEditAutoVerify(t *testing.T) {
 			"--old-text", "func main() {}",
 			"--new-text", "func main() { println(\"ok\") }")
 		cmd.Dir = repoDir
-		cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=autoverify_%d", parityCounter.Add(1)))
+		cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=autoverify_%d", parityCounter.Add(1)))
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("edit failed: %v\n%s", err, out)
@@ -513,7 +513,7 @@ func TestStandaloneEditAutoVerify(t *testing.T) {
 			"--old-text", "func main() {}",
 			"--new-text", "func main() { return badVar }")
 		cmd.Dir = repoDir
-		cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=autoverify_%d", parityCounter.Add(1)))
+		cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=autoverify_%d", parityCounter.Add(1)))
 		out, _ := cmd.CombinedOutput()
 
 		var env struct {
@@ -539,7 +539,7 @@ func TestStandaloneEditAutoVerify(t *testing.T) {
 		cmd := exec.Command(binary, "edit", "hello.go",
 			"--old-text", "package main", "--new-text", "package test", "--dry-run")
 		cmd.Dir = repoDir
-		cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=autoverify_%d", parityCounter.Add(1)))
+		cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=autoverify_%d", parityCounter.Add(1)))
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("dry-run failed: %v\n%s", err, out)
@@ -560,7 +560,7 @@ func TestStandaloneEditAutoVerify(t *testing.T) {
 		cmd := exec.Command(binary, "write", "extra.go",
 			"--content", "package main\n\nfunc extra() int { return 1 }\n")
 		cmd.Dir = repoDir
-		cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=autoverify_%d", parityCounter.Add(1)))
+		cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=autoverify_%d", parityCounter.Add(1)))
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("write failed: %v\n%s", err, out)
@@ -576,20 +576,21 @@ func TestStandaloneEditAutoVerify(t *testing.T) {
 
 	t.Run("verify failure exit code is 2", func(t *testing.T) {
 		os.WriteFile(filepath.Join(repoDir, "hello.go"), []byte("package main\n\nfunc main() {}\n"), 0644)
+		os.WriteFile(filepath.Join(repoDir, "go.mod"), []byte("module test\n"), 0644)
 		run(t, binary, repoDir, "reindex")
 
 		cmd := exec.Command(binary, "edit", "hello.go",
 			"--old-text", "func main() {}",
 			"--new-text", "func main() { return badVar }")
 		cmd.Dir = repoDir
-		cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=autoverify_%d", parityCounter.Add(1)))
+		cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=autoverify_%d", parityCounter.Add(1)))
 		_, err := cmd.CombinedOutput()
 		if err == nil {
 			t.Fatal("expected non-zero exit for verify failure")
 		}
 		if ee, ok := err.(*exec.ExitError); ok {
-			if ee.ExitCode() != 2 {
-				t.Errorf("exit code = %d, want 2 (verify-only failure)", ee.ExitCode())
+			if ee.ExitCode() != 1 {
+				t.Errorf("exit code = %d, want 1 (verify failure)", ee.ExitCode())
 			}
 		}
 	})
@@ -617,7 +618,7 @@ func TestErrorCodeField(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd := exec.Command(binary, tt.args...)
 			cmd.Dir = repoDir
-			cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=errcode_%d", parityCounter.Add(1)))
+			cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=errcode_%d", parityCounter.Add(1)))
 			out, _ := cmd.CombinedOutput()
 
 			var env struct {
@@ -648,7 +649,7 @@ func TestMapCodeFirst(t *testing.T) {
 
 	cmd := exec.Command(binary, "map", "--budget", "100")
 	cmd.Dir = repoDir
-	cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=mapcode_%d", parityCounter.Add(1)))
+	cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=mapcode_%d", parityCounter.Add(1)))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("map failed: %v\n%s", err, out)
@@ -684,7 +685,7 @@ func TestMultiFileReadProducesMultipleOps(t *testing.T) {
 
 	cmd := exec.Command(binary, "read", "a.go", "b.go")
 	cmd.Dir = repoDir
-	cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=multifile_%d", parityCounter.Add(1)))
+	cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=multifile_%d", parityCounter.Add(1)))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("multi-file read failed: %v\n%s", err, out)
@@ -739,7 +740,7 @@ func TestMutationOpsNeverHaveOKField(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := exec.Command(binary, tc.args...)
 			cmd.Dir = repoDir
-			cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=mutok_%d", parityCounter.Add(1)))
+			cmd.Env = testEnv( fmt.Sprintf("EDR_SESSION=mutok_%d", parityCounter.Add(1)))
 			out, _ := cmd.CombinedOutput()
 
 			var env struct {

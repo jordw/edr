@@ -9,6 +9,11 @@ import (
 	"testing"
 )
 
+func TestMain(m *testing.M) {
+	os.Setenv("EDR_NO_HINTS", "1")
+	os.Exit(m.Run())
+}
+
 // TestStandaloneExitCodes verifies that every standalone command path
 // returns non-zero exit when ok:false.
 func TestStandaloneExitCodes(t *testing.T) {
@@ -50,6 +55,7 @@ func TestStandaloneExitCodes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd := exec.Command(binary, tt.args...)
 			cmd.Dir = repoDir
+			cmd.Env = testEnv()
 			out, err := cmd.CombinedOutput()
 
 			var env struct {
@@ -321,7 +327,13 @@ func run(t *testing.T, binary, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "EDR_NO_HINTS=1")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("command %v failed: %v\n%s", args, err, out)
 	}
+}
+
+// testEnv returns os.Environ() with EDR_NO_HINTS=1 to suppress hints in tests.
+func testEnv(extra ...string) []string {
+	return append(append(os.Environ(), "EDR_NO_HINTS=1"), extra...)
 }

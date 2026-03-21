@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/jordw/edr/internal/index"
@@ -256,11 +257,31 @@ func openDBAndIndex(root string, quiet bool) (*index.DB, error) {
 
 func getRoot(cmd *cobra.Command) string {
 	root, _ := cmd.Flags().GetString("root")
-	if root == "." {
+	if root == "." || root == "" {
 		wd, err := os.Getwd()
 		if err == nil {
-			root = wd
+			root = discoverRoot(wd)
 		}
 	}
 	return root
+}
+
+// discoverRoot walks up from dir looking for .edr/ or .git/ to find the repo root.
+// Falls back to dir itself if no marker is found.
+func discoverRoot(dir string) string {
+	cur := dir
+	for {
+		if _, err := os.Stat(filepath.Join(cur, ".edr")); err == nil {
+			return cur
+		}
+		if _, err := os.Stat(filepath.Join(cur, ".git")); err == nil {
+			return cur
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			break // reached filesystem root
+		}
+		cur = parent
+	}
+	return dir // fallback to original dir
 }

@@ -43,7 +43,10 @@ func runVerify(ctx context.Context, db *index.DB, root string, args []string, fl
 				command = "cargo check"
 			}
 		} else {
-			return nil, fmt.Errorf("verify: no command specified and could not auto-detect project type")
+			return map[string]any{
+			"status": "skipped",
+			"reason": "no command specified and could not auto-detect project type",
+		}, nil
 		}
 	}
 
