@@ -11,7 +11,25 @@ import (
 
 func TestMain(m *testing.M) {
 	os.Setenv("EDR_NO_HINTS", "1")
+	// Use JSON format for existing tests; plain format is tested separately.
+	if os.Getenv("EDR_FORMAT") == "" {
+		os.Setenv("EDR_FORMAT", "json")
+	}
 	os.Exit(m.Run())
+}
+
+// parsePlainHeader parses the first line of plain-format output as JSON.
+// Plain format: line 1 is a JSON object, rest is raw body.
+func parsePlainHeader(output []byte) (map[string]any, error) {
+	line := output
+	if i := bytes.IndexByte(output, '\n'); i >= 0 {
+		line = output[:i]
+	}
+	var m map[string]any
+	if err := json.Unmarshal(line, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 // TestStandaloneExitCodes verifies that every standalone command path
@@ -115,15 +133,13 @@ func TestAutoIndexOnFirstUse(t *testing.T) {
 			if err != nil {
 				t.Fatalf("expected success (auto-index), got error: %v\nstdout: %s", err, stdout.String())
 			}
-
-			var env struct {
-				OK bool `json:"ok"`
-			}
+			// Exit 0 = success.
+			var env struct{ OK bool `json:"ok"` }
 			if jsonErr := json.Unmarshal(stdout.Bytes(), &env); jsonErr != nil {
-				t.Fatalf("failed to parse output as JSON: %v\nstdout: %s", jsonErr, stdout.String())
+				t.Fatalf("failed to parse JSON: %v\nstdout: %s", jsonErr, stdout.String())
 			}
 			if !env.OK {
-				t.Errorf("expected ok:true after auto-index, got ok:false\nstdout: %s", stdout.String())
+				t.Errorf("expected ok:true\nstdout: %s", stdout.String())
 			}
 		})
 	}
@@ -154,15 +170,12 @@ func TestBatchAutoIndex(t *testing.T) {
 			if err != nil {
 				t.Fatalf("expected success (auto-index), got error: %v\nstdout: %s", err, stdout.String())
 			}
-
-			var env struct {
-				OK bool `json:"ok"`
-			}
+			var env struct{ OK bool `json:"ok"` }
 			if jsonErr := json.Unmarshal(stdout.Bytes(), &env); jsonErr != nil {
-				t.Fatalf("failed to parse output as JSON: %v\nstdout: %s", jsonErr, stdout.String())
+				t.Fatalf("failed to parse JSON: %v\nstdout: %s", jsonErr, stdout.String())
 			}
 			if !env.OK {
-				t.Errorf("expected ok:true after auto-index\nstdout: %s", stdout.String())
+				t.Errorf("expected ok:true\nstdout: %s", stdout.String())
 			}
 		})
 	}
@@ -481,5 +494,5 @@ func run(t *testing.T, binary, dir string, args ...string) {
 
 // testEnv returns os.Environ() with EDR_NO_HINTS=1 to suppress hints in tests.
 func testEnv(extra ...string) []string {
-	return append(append(os.Environ(), "EDR_NO_HINTS=1"), extra...)
+	return append(append(os.Environ(), "EDR_NO_HINTS=1", "EDR_FORMAT=json"), extra...)
 }

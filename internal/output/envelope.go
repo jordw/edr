@@ -174,7 +174,9 @@ func (e *Envelope) IsVerifyOnlyFailure() bool {
 // PrintEnvelope renders the envelope to stdout.
 // Uses plain text format when EDR_FORMAT=plain, otherwise compact JSON.
 func PrintEnvelope(e *Envelope) {
-	if os.Getenv("EDR_FORMAT") == "plain" {
+	if os.Getenv("EDR_FORMAT") == "json" {
+		// JSON mode — skip plain rendering
+	} else {
 		printPlain(e)
 		return
 	}
