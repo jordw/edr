@@ -31,14 +31,23 @@ show inline {old → new} markers. Use --full for raw output.`,
 		c.Dir = getRoot(cmd)
 		out, execErr := c.CombinedOutput()
 
+		exitCode := 0
+		if execErr != nil {
+			if exitErr, ok := execErr.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			}
+		}
+
 		if full {
 			os.Stdout.Write(out)
+			lines := strings.Count(string(out), "\n")
+			fmt.Fprintf(os.Stderr, "[%d lines, exit %d]\n", lines, exitCode)
 			return exitError(execErr)
 		}
 
 		root := getRoot(cmd)
 		runDir := filepath.Join(root, ".edr", "run")
-		output := diffAgainstPrevious(runDir, shellCmd, string(out))
+		output := diffAgainstPrevious(runDir, shellCmd, string(out), exitCode)
 		fmt.Print(output)
 
 		return exitError(execErr)
@@ -63,7 +72,7 @@ func exitError(err error) error {
 // diffAgainstPrevious diffs current output against the stored previous run.
 // First run shows full output. Identical output prints "[no changes]".
 // Otherwise shows sparse output with inline diffs.
-func diffAgainstPrevious(runDir, command, current string) string {
+func diffAgainstPrevious(runDir, command, current string, exitCode int) string {
 	key := fmt.Sprintf("%x", sha256.Sum256([]byte(command)))[:12]
 	lastFile := filepath.Join(runDir, key+".last")
 
@@ -79,24 +88,48 @@ func diffAgainstPrevious(runDir, command, current string) string {
 	os.WriteFile(lastFile, []byte(store), 0644)
 
 	if !hasPrev {
-		return current
+		lines := strings.Count(current, "\n")
+		return current + fmt.Sprintf("[%d lines, first run, exit %d]\n", lines, exitCode)
 	}
 
 	prevStr := string(prev)
 	if prevStr == current {
 		lines := strings.Count(current, "\n")
-		return fmt.Sprintf("[no changes, %d lines]\n", lines)
+		return fmt.Sprintf("[no changes, %d lines, exit %d]\n", lines, exitCode)
 	}
 
 	oldLines := strings.Split(strings.TrimRight(prevStr, "\n"), "\n")
 	newLines := strings.Split(strings.TrimRight(current, "\n"), "\n")
-	return sparseDiff(oldLines, newLines)
+	diff, stats := sparseDiff(oldLines, newLines)
+	summary := fmt.Sprintf("[%d lines", len(newLines))
+	if stats.changed > 0 {
+		summary += fmt.Sprintf(", %d changed", stats.changed)
+	}
+	if stats.digitChanged > 0 {
+		summary += fmt.Sprintf(", %d with numbers changed", stats.digitChanged)
+	}
+	if stats.added > 0 {
+		summary += fmt.Sprintf(", %d added", stats.added)
+	}
+	if stats.removed > 0 {
+		summary += fmt.Sprintf(", %d removed", stats.removed)
+	}
+	summary += fmt.Sprintf(", exit %d]\n", exitCode)
+	return diff + summary
 }
 
 // sparseDiff produces a sparse version of the new output where unchanged
 // regions are collapsed and changed lines show inline {old → new} markers.
 // Uses positional alignment (line N vs line N).
-func sparseDiff(oldLines, newLines []string) string {
+type diffStats struct {
+	changed     int
+	digitChanged int
+	added       int
+	removed     int
+}
+
+func sparseDiff(oldLines, newLines []string) (string, diffStats) {
+	var stats diffStats
 	// Phase 1: Classify each line using LCS alignment.
 	type entry struct {
 		kind    string // "same", "modified", "added", "removed"
@@ -174,6 +207,7 @@ func sparseDiff(oldLines, newLines []string) string {
 					break
 				}
 			}
+			stats.digitChanged += numChanged
 			if numChanged == 0 {
 				fmt.Fprintf(&result, "[%d unchanged lines]\n", total)
 			} else {
@@ -184,21 +218,24 @@ func sparseDiff(oldLines, newLines []string) string {
 
 		switch e.kind {
 		case "modified":
+			stats.changed++
 			result.WriteString(inlineDiff(e.oldText, e.newText))
 			result.WriteByte('\n')
 			i++
 
 		case "added":
+			stats.added++
 			fmt.Fprintf(&result, "{+ %s}\n", e.newText)
 			i++
 
 		case "removed":
+			stats.removed++
 			fmt.Fprintf(&result, "{- %s}\n", e.oldText)
 			i++
 		}
 	}
 
-	return result.String()
+	return result.String(), stats
 }
 
 // isDigitOnlyChange returns true if two strings of equal length differ
