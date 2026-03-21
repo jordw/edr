@@ -397,6 +397,16 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			s.currentQuery.Limit = ip(n)
 
+		case "--in":
+			if s.currentOp != opSearch {
+				return nil, fmt.Errorf("--in is only valid after -s")
+			}
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentQuery.In = sp(val)
+
 		// ── search modifiers (regex) ──
 
 		case "--regex":

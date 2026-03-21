@@ -1,6 +1,7 @@
 package search
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"path/filepath"
@@ -358,6 +359,14 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 				if err != nil {
 					continue
 				}
+				// Skip binary files (contain NUL bytes in first 8KB)
+				checkLen := len(data)
+				if checkLen > 8192 {
+					checkLen = 8192
+				}
+				if bytes.Contains(data[:checkLen], []byte{0}) {
+					continue
+				}
 				rel, _ := filepath.Rel(root, file)
 				allLines := strings.Split(string(data), "\n")
 
@@ -521,6 +530,155 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 	return sr, nil
 }
 
+// SearchInSymbol searches for a pattern within a specific symbol's body.
+// The symbol is identified by file:name. Matches are returned with line numbers
+// relative to the file (not the symbol).
+func SearchInSymbol(ctx context.Context, db *index.DB, pattern string, symbolFile string, symbolName string, budget int, useRegex bool, opts ...SearchTextOption) (*SearchResult, error) {
+	if pattern == "" {
+		return &SearchResult{Kind: "text"}, nil
+	}
+	cfg := searchTextConfig{}
+	for _, o := range opts {
+		o(&cfg)
+	}
+
+	// Resolve the symbol
+	file, err := db.ResolvePath(symbolFile)
+	if err != nil {
+		return nil, fmt.Errorf("resolving file %q: %w", symbolFile, err)
+	}
+	index.EnsureFileFresh(ctx, db, file)
+	sym, err := db.GetSymbol(ctx, file, symbolName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Read the file
+	data, err := index.CachedReadFile(ctx, file)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", symbolFile, err)
+	}
+
+	// Extract the symbol body
+	if int(sym.EndByte) > len(data) {
+		return nil, fmt.Errorf("symbol %s byte range [%d:%d] exceeds file size %d", symbolName, sym.StartByte, sym.EndByte, len(data))
+	}
+	symbolBody := string(data[sym.StartByte:sym.EndByte])
+	bodyLines := strings.Split(symbolBody, "\n")
+
+	// Set up matching (reuse SearchText logic)
+	caseSensitive := hasUpperCase(pattern)
+	var re *regexp.Regexp
+	var lowerPattern string
+	if useRegex {
+		p := pattern
+		if !caseSensitive {
+			p = "(?i)" + p
+		}
+		re, err = regexp.Compile(p)
+		if err != nil {
+			return nil, err
+		}
+	} else if caseSensitive {
+		// exact case match
+	} else {
+		lowerPattern = strings.ToLower(pattern)
+	}
+
+	rel := output.Rel(file)
+	var matches []output.Match
+	totalCount := 0
+	const maxMatches = 50
+
+	for lineIdx, line := range bodyLines {
+		var matched bool
+		if re != nil {
+			matched = re.MatchString(line)
+		} else if caseSensitive {
+			matched = strings.Contains(line, pattern)
+		} else {
+			matched = strings.Contains(strings.ToLower(line), lowerPattern)
+		}
+		if !matched {
+			continue
+		}
+		totalCount++
+		if len(matches) >= maxMatches {
+			continue
+		}
+
+		lineNum := int(sym.StartLine) + lineIdx
+		matchedLine := strings.TrimSpace(line)
+
+		var snippet string
+		displayStart := lineNum
+		displayEnd := lineNum
+		if cfg.context > 0 {
+			ctxStart := lineIdx - cfg.context
+			if ctxStart < 0 {
+				ctxStart = 0
+			}
+			ctxEnd := lineIdx + cfg.context + 1
+			if ctxEnd > len(bodyLines) {
+				ctxEnd = len(bodyLines)
+			}
+			var ctxLines []string
+			for i := ctxStart; i < ctxEnd; i++ {
+				ctxLines = append(ctxLines, bodyLines[i])
+			}
+			snippet = strings.Join(ctxLines, "\n")
+			displayStart = int(sym.StartLine) + ctxStart
+			displayEnd = int(sym.StartLine) + ctxEnd - 1
+		}
+
+		sizeStr := matchedLine
+		if snippet != "" {
+			sizeStr = snippet
+		}
+		size := len(sizeStr) / 4
+		if size < 1 {
+			size = 1
+		}
+
+		col := 0
+		if re != nil {
+			if loc := re.FindStringIndex(line); loc != nil {
+				col = loc[0] + 1
+			}
+		} else if lowerPattern != "" {
+			col = strings.Index(strings.ToLower(line), lowerPattern) + 1
+		} else {
+			col = strings.Index(line, pattern) + 1
+		}
+
+		matches = append(matches, output.Match{
+			Symbol: output.Symbol{
+				Type:  "text",
+				Name:  matchedLine,
+				File:  rel,
+				Lines: [2]int{displayStart, displayEnd},
+				Size:  size,
+			},
+			Score:   1.0,
+			Snippet: snippet,
+			Column:  col,
+		})
+	}
+
+	truncated := false
+	result := budgetTrimText(matches, budget, &truncated)
+	if result == nil {
+		result = []output.Match{}
+	}
+	return &SearchResult{
+		Kind:         "text",
+		Matches:      result,
+		TotalMatches: totalCount,
+		Truncated:    truncated || totalCount > maxMatches,
+		Hint:         fmt.Sprintf("scoped to %s:%s (lines %d-%d)", rel, symbolName, sym.StartLine, sym.EndLine),
+	}, nil
+}
+
 // hasUpperCase returns true if s contains any uppercase letter.
 // Used for smart-case: patterns with uppercase → case-sensitive search.
 func hasUpperCase(s string) bool {
@@ -554,6 +712,17 @@ func looksLikeRegex(pattern string) bool {
 func budgetTrimText(matches []output.Match, budget int, truncated *bool) []output.Match {
 	if budget <= 0 {
 		return matches
+	}
+
+	// Account for JSON wire overhead: each match adds ~5 tokens of framing
+	// (field names, braces, line numbers), and each file group adds ~8 tokens.
+	// Apply a discount so the final serialized output is closer to the
+	// requested budget.  Estimate: 5 tokens/match overhead.  With an
+	// average match text of ~10 tokens, overhead is ~33%.  A 0.6 multiplier
+	// is a reasonable approximation across typical result sets.
+	budget = int(float64(budget) * 0.6)
+	if budget < 1 {
+		budget = 1
 	}
 
 	if totalSize(matches) <= budget {

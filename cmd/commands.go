@@ -259,7 +259,17 @@ func init() { cmdspec.RegisterFlags(writeCmd.Flags(), "write") }
 var editCmd = &cobra.Command{
 	Use:   "edit <file> [symbol]",
 	Short: ToolDesc["edit"],
-	Args:  cobra.RangeArgs(1, 2),
+	Args: func(cmd *cobra.Command, args []string) error {
+		if len(args) >= 1 && len(args) <= 2 {
+			return nil
+		}
+		for _, a := range args {
+			if a == "edit" {
+				return fmt.Errorf("multiple edits: use batch syntax instead: edr -e file1 --old ... --new ... -e file2 --old ... --new ...")
+			}
+		}
+		return fmt.Errorf("accepts between 1 and 2 arg(s), received %d", len(args))
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return dispatchCmdWithStdin(cmd, "edit", args, "new_text")
 	},

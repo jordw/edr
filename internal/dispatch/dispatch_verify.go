@@ -42,6 +42,8 @@ func runVerify(ctx context.Context, db *index.DB, root string, args []string, fl
 			} else {
 				command = "cargo check"
 			}
+		} else if cmd := detectMakefile(root, level); cmd != "" {
+			command = cmd
 		} else {
 			return map[string]any{
 			"status": "skipped",
@@ -78,6 +80,33 @@ func runVerify(ctx context.Context, db *index.DB, root string, args []string, fl
 			}
 
 	return result, nil
+}
+
+// detectMakefile checks for a Makefile and probes for test/check targets.
+// Returns a make command or "" if no Makefile found.
+func detectMakefile(root, level string) string {
+	if _, err := os.Stat(filepath.Join(root, "Makefile")); err != nil {
+		return ""
+	}
+	if level == "test" {
+		// Probe for common test targets: test, check
+		for _, target := range []string{"test", "check"} {
+			if makeHasTarget(root, target) {
+				return "make " + target
+			}
+		}
+		return "make"
+	}
+	return "make"
+}
+
+// makeHasTarget checks whether a Makefile defines the given target.
+func makeHasTarget(root, target string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "make", "-n", target)
+	cmd.Dir = root
+	return cmd.Run() == nil
 }
 
 // goVerifyScope returns Go package arguments scoped to the edited files

@@ -284,6 +284,11 @@ func runMapUnified(ctx context.Context, db *index.DB, root string, args []string
 //	search pattern --regex             → text search (auto-detected)
 //	search pattern --include "*.go"    → text search (auto-detected)
 func runSearchUnified(ctx context.Context, db *index.DB, args []string, flags map[string]any) (any, error) {
+	// --in implies text search scoped to a symbol body
+	if inSpec := flagString(flags, "in", ""); inSpec != "" {
+		return runSearchInSymbol(ctx, db, args, flags, inSpec)
+	}
+
 	isText := flagBool(flags, "text", false) ||
 		flagBool(flags, "regex", false) ||
 		flagString(flags, "include", "") != "" || len(flagStringSlice(flags, "include")) > 0 ||

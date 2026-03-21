@@ -187,3 +187,40 @@ func runFindFiles(ctx context.Context, db *index.DB, root string, args []string,
 
 	return search.FindFiles(ctx, root, pattern, dir, budget)
 }
+
+func runSearchInSymbol(ctx context.Context, db *index.DB, args []string, flags map[string]any, inSpec string) (any, error) {
+	if len(args) < 1 || args[0] == "" {
+		return nil, fmt.Errorf("search requires a non-empty pattern")
+	}
+	budget := flagInt(flags, "budget", 0)
+	if budget == 0 && !flagBool(flags, "full", false) {
+		budget = defaultSearchBudget
+	}
+	useRegex := flagBool(flags, "regex", false)
+
+	// Parse file:Symbol from --in
+	parts := splitFileSymbol(inSpec)
+	if parts == nil {
+		return nil, fmt.Errorf("--in requires file:Symbol format, got %q", inSpec)
+	}
+
+	var opts []search.SearchTextOption
+	if ctxLines := flagInt(flags, "context", 0); ctxLines > 0 {
+		opts = append(opts, search.WithContext(ctxLines))
+	}
+	if limit := flagInt(flags, "limit", 0); limit > 0 {
+		opts = append(opts, search.WithLimit(limit))
+	}
+
+	result, err := search.SearchInSymbol(ctx, db, args[0], parts[0], parts[1], budget, useRegex, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	// Group text results by file for compact output
+	noGroup := flagBool(flags, "no_group", false) || flagBool(flags, "no-group", false)
+	if !noGroup && result.Kind == "text" && len(result.Matches) > 0 {
+		return groupTextResults(result), nil
+	}
+	return result, nil
+}

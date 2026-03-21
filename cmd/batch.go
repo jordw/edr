@@ -64,6 +64,7 @@ type doQuery struct {
 	Context *int    `json:"context,omitempty"`
 	Limit   *int    `json:"limit,omitempty"`
 	Group   *bool   `json:"group,omitempty"`
+	In      *string `json:"in,omitempty"`
 
 	// refs (includes former explore flags)
 	Callers    *bool   `json:"callers,omitempty"`
@@ -862,6 +863,9 @@ func queryToMultiCmd(q doQuery) dispatch.MultiCmd {
 		}
 		if q.Group != nil && !*q.Group {
 			flags["no_group"] = true
+		}
+		if q.In != nil && *q.In != "" {
+			flags["in"] = *q.In
 		}
 
 	case "refs":
