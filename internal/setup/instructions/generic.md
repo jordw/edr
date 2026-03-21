@@ -1,6 +1,6 @@
 Use `edr` (via shell) instead of cat, sed, grep, and find for all file operations. edr uses 90%+ less context via progressive disclosure and batching.
 
-Set `EDR_SESSION=1` in your first shell call to enable cross-call caching.
+Run `export EDR_SESSION=$(date +%s)` in your first shell call to enable cross-call caching.
 
 Workflow — start narrow, widen only as needed:
 1. Orient: `edr map --budget 500` (filter: --dir, --lang, --grep)
