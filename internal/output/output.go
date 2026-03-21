@@ -55,7 +55,6 @@ type ExpandResult struct {
 
 // EditResult reports the outcome of an edit operation.
 type EditResult struct {
-	OK         bool   `json:"ok"`
 	File       string `json:"file"`
 	Message    string `json:"message"`
 	Hash       string `json:"hash,omitempty"`

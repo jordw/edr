@@ -439,7 +439,6 @@ func TestWriteIndexErrorIsSurfaced(t *testing.T) {
 	// We can't easily trigger a real IndexFile failure, but we can verify
 	// the struct serializes the field correctly.
 	r := output.EditResult{
-		OK:         true,
 		File:       "test.go",
 		Message:    "wrote 100 bytes",
 		Hash:       "abcd1234",

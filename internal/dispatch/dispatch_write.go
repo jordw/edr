@@ -24,7 +24,7 @@ func writeResult(file string, cr *commitResult, message string) output.EditResul
 	if len(cr.IndexErrors) > 0 {
 		indexErr = cr.IndexErrors[rel]
 	}
-	return output.EditResult{OK: true, File: rel, Message: message, Hash: cr.Hashes[rel], Status: cr.Status, IndexError: indexErr}
+	return output.EditResult{File: rel, Message: message, Hash: cr.Hashes[rel], Status: cr.Status, IndexError: indexErr}
 }
 
 func runWriteFile(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
@@ -174,7 +174,7 @@ func runInsertAfter(ctx context.Context, db *index.DB, root string, args []strin
 		Replacement: insertion, ExpectHash: hash,
 	}})
 	if err != nil {
-		return output.EditResult{OK: false, File: output.Rel(sym.File), Message: err.Error()}, nil
+		return nil, err
 	}
 	return writeResult(sym.File, cr, fmt.Sprintf("inserted after %s", sym.Name)), nil
 }
@@ -252,7 +252,7 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 						Replacement: insertion, ExpectHash: hash,
 					}})
 					if err != nil {
-						return output.EditResult{OK: false, File: output.Rel(container.File), Message: err.Error()}, nil
+						return nil, err
 					}
 					return writeResult(container.File, cr, fmt.Sprintf("inserted after %s (auto-rerouted from --inside: Go struct methods go outside)", insertLabel)), nil
 				}
@@ -303,7 +303,7 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 		Replacement: insertion, ExpectHash: edit.HashBytes(data),
 	}})
 	if err != nil {
-		return output.EditResult{OK: false, File: output.Rel(container.File), Message: err.Error()}, nil
+		return nil, err
 	}
 	return writeResult(container.File, cr, fmt.Sprintf("inserted inside %s", container.Name)), nil
 }
@@ -332,7 +332,7 @@ func insertInsideAfterChild(ctx context.Context, db *index.DB, container *index.
 		Replacement: insertion, ExpectHash: edit.HashBytes(data),
 	}})
 	if err != nil {
-		return output.EditResult{OK: false, File: output.Rel(container.File), Message: err.Error()}, nil
+		return nil, err
 	}
 	return writeResult(container.File, cr, fmt.Sprintf("inserted inside %s after %s", container.Name, childName)), nil
 }

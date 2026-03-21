@@ -717,27 +717,29 @@ func TestMultiFileReadProducesMultipleOps(t *testing.T) {
 	}
 }
 
-// TestEditOpsNeverHaveOKField verifies that edit results do not include
-// an "ok" field at the op level — ok belongs on the envelope only.
-func TestEditOpsNeverHaveOKField(t *testing.T) {
+// TestMutationOpsNeverHaveOKField verifies that edit and write results do not
+// include an "ok" field at the op level — ok belongs on the envelope only.
+func TestMutationOpsNeverHaveOKField(t *testing.T) {
 	binary := buildBinary(t)
 	repoDir := t.TempDir()
 	repoDir, _ = filepath.EvalSymlinks(repoDir)
 	os.WriteFile(filepath.Join(repoDir, "main.go"), []byte("package main\nfunc main() {}\n"), 0644)
 	run(t, binary, repoDir, "reindex")
 
-	// Test both dry-run and real edit
 	for _, tc := range []struct {
 		name string
 		args []string
 	}{
-		{"dry-run", []string{"edit", "main.go", "--old-text", "package main", "--new-text", "package test", "--dry-run"}},
-		{"applied", []string{"edit", "main.go", "--old-text", "package main", "--new-text", "package test"}},
+		{"edit dry-run", []string{"edit", "main.go", "--old-text", "package main", "--new-text", "package test", "--dry-run"}},
+		{"edit applied", []string{"edit", "main.go", "--old-text", "package main", "--new-text", "package test"}},
+		{"write new file", []string{"write", "new.go", "--content", "package main"}},
+		{"write overwrite", []string{"write", "new.go", "--content", "package test"}},
+		{"write dry-run", []string{"write", "new.go", "--content", "package dry", "--dry-run"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := exec.Command(binary, tc.args...)
 			cmd.Dir = repoDir
-			cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=editok_%d", parityCounter.Add(1)))
+			cmd.Env = append(os.Environ(), fmt.Sprintf("EDR_SESSION=mutok_%d", parityCounter.Add(1)))
 			out, _ := cmd.CombinedOutput()
 
 			var env struct {

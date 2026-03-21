@@ -354,16 +354,16 @@ func TestCorrectnessEditReindex(t *testing.T) {
 
 		// Edit: add a new field to Config
 		var editResult struct {
-			OK   bool   `json:"ok"`
-			File string `json:"file"`
-			Hash string `json:"hash"`
+			File   string `json:"file"`
+			Hash   string `json:"hash"`
+			Status string `json:"status"`
 		}
 		dispatchResult(t, ctx, db, "edit", []string{"go/pkg_a/config.go"}, map[string]any{
 			"old_text": "Timeout int",
 			"new_text": "Timeout  int\n\tMaxConns int",
 		}, &editResult)
-		if !editResult.OK {
-			t.Fatal("edit should succeed")
+		if editResult.Status != "applied" {
+			t.Fatalf("edit status = %q, want applied", editResult.Status)
 		}
 
 		// Map the file — should show the new symbol or updated lines
