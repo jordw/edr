@@ -110,7 +110,7 @@ edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-s
 
 **Batching.** `-r`, `-s`, `-e`, `-w` combine reads, searches, edits, and writes in one CLI call. One call to gather context, one to apply mutations.
 
-**Deltas for everything.** edr tracks what the agent has already seen — files, symbols, search results, command output — and only shows what changed. Second read of an unchanged file: 0 tokens. `edr run -- make test` after a fix: only the changed test results, passing tests collapse to `[unchanged: 80 lines]`. Same principle for builds, linters, any command. `--fuzzy` normalizes numbers so timing jitter doesn't defeat dedup. Zero config — sessions activate automatically, multiple agents get isolated state via PPID.
+**Deltas for everything.** edr tracks what the agent has already seen — files, symbols, search results, command output — and only shows what changed. Second read of an unchanged file: 0 tokens. `edr run -- make test` after a fix: only the diff from the previous run, unchanged lines collapsed. Same principle for builds, linters, any command. Zero config — sessions activate automatically.
 
 ## Commands
 
@@ -141,7 +141,7 @@ edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "..."
 | `refs` | `edr refs Symbol`, `edr refs Symbol --impact` |
 | `rename` | `edr rename old new --dry-run` |
 | `verify` | `edr verify`, `edr verify --level test` |
-| `run` | `edr run -- make test`, `edr run --fuzzy -- pytest` |
+| `run` | `edr run -- make test` — diffs against previous run |
 | `session` | `edr session new` |
 | `setup` | `edr setup`, `edr setup --claude --force` |
 | `reindex` | `edr reindex` |
