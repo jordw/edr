@@ -80,10 +80,11 @@ const (
 )
 
 type batchState struct {
-	reads   []doRead
-	queries []doQuery
-	edits   []doEdit
-	writes  []doWrite
+	reads         []doRead
+	queries       []doQuery
+	edits         []doEdit
+	writes        []doWrite
+	postEditReads []doRead // reads that follow edits/writes in CLI order
 
 	currentOp    batchOp
 	currentRead  doRead
@@ -97,6 +98,7 @@ type batchState struct {
 
 	dryRun        bool
 	readAfterEdit bool
+	seenMutation  bool // true after first -e or -w
 
 	root      string
 	stdinUsed bool
@@ -106,7 +108,11 @@ func (s *batchState) flush() {
 	switch s.currentOp {
 	case opRead:
 		if s.currentRead.File != "" {
-			s.reads = append(s.reads, s.currentRead)
+			if s.seenMutation {
+				s.postEditReads = append(s.postEditReads, s.currentRead)
+			} else {
+				s.reads = append(s.reads, s.currentRead)
+			}
 		}
 		s.currentRead = doRead{}
 	case opSearch:
@@ -115,11 +121,13 @@ func (s *batchState) flush() {
 	case opEdit:
 		if s.currentEdit.File != "" {
 			s.edits = append(s.edits, s.currentEdit)
+			s.seenMutation = true
 		}
 		s.currentEdit = doEdit{}
 	case opWrite:
 		if s.currentWrite.File != "" {
 			s.writes = append(s.writes, s.currentWrite)
+			s.seenMutation = true
 		}
 		s.currentWrite = doWrite{}
 	}
@@ -130,10 +138,11 @@ func (s *batchState) toParams() doParams {
 	s.flush()
 
 	p := doParams{
-		Reads:   s.reads,
-		Queries: s.queries,
-		Edits:   s.edits,
-		Writes:  s.writes,
+		Reads:         s.reads,
+		Queries:       s.queries,
+		Edits:         s.edits,
+		Writes:        s.writes,
+		PostEditReads: s.postEditReads,
 	}
 
 	if s.dryRun {
@@ -399,14 +408,18 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			s.currentQuery.Limit = ip(n)
 
 		case "--in":
-			if s.currentOp != opSearch {
-				return nil, fmt.Errorf("--in is only valid after -s")
-			}
 			val, err := nextArg(arg)
 			if err != nil {
 				return nil, err
 			}
-			s.currentQuery.In = sp(val)
+			switch s.currentOp {
+			case opSearch:
+				s.currentQuery.In = sp(val)
+			case opEdit:
+				s.currentEdit.In = val
+			default:
+				return nil, fmt.Errorf("--in is only valid after -s or -e")
+			}
 
 		// ── search modifiers (regex) ──
 
@@ -845,7 +858,7 @@ var batchFlagOps = map[string][]string{
 	"--text":           {"-s"},
 	"--context":        {"-s"},
 	"--limit":          {"-s"},
-	"--in":             {"-s"},
+	"--in":             {"-s", "-e"},
 	"--regex":          {"-s"},
 	"--old":            {"-e"},
 	"--old-text":       {"-e"},
