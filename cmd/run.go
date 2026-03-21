@@ -27,7 +27,6 @@ Use --full to bypass diffing and show raw output.`,
 
 		shellCmd := strings.Join(args, " ")
 
-		// Execute the command
 		c := exec.Command("sh", "-c", shellCmd)
 		c.Dir = getRoot(cmd)
 		out, execErr := c.CombinedOutput()
@@ -37,7 +36,6 @@ Use --full to bypass diffing and show raw output.`,
 			return exitError(execErr)
 		}
 
-		// Diff against previous run
 		root := getRoot(cmd)
 		runDir := filepath.Join(root, ".edr", "run")
 		output := diffAgainstPrevious(runDir, shellCmd, string(out))
@@ -62,180 +60,65 @@ func exitError(err error) error {
 	return err
 }
 
-// diffAgainstPrevious loads the previous output for this command,
-// computes a line-level diff, and returns the appropriate display.
-// Stores current output for the next run.
+// diffAgainstPrevious diffs current output against the stored previous run.
+// First run shows full output. Identical output prints "[no changes]".
+// Otherwise shows a unified diff with context.
 func diffAgainstPrevious(runDir, command, current string) string {
 	key := fmt.Sprintf("%x", sha256.Sum256([]byte(command)))[:12]
 	lastFile := filepath.Join(runDir, key+".last")
 
-	// Load previous output
 	prev, err := os.ReadFile(lastFile)
 	hasPrev := err == nil
 
-	// Store current output (truncate from front if over cap)
-	storeCurrent := current
-	if len(storeCurrent) > maxRunOutput {
-		storeCurrent = storeCurrent[len(storeCurrent)-maxRunOutput:]
+	// Store current (truncate from front if over 1MB)
+	store := current
+	if len(store) > maxRunOutput {
+		store = store[len(store)-maxRunOutput:]
 	}
 	os.MkdirAll(runDir, 0755)
-	os.WriteFile(lastFile, []byte(storeCurrent), 0644)
+	os.WriteFile(lastFile, []byte(store), 0644)
 
-	// First run — show full output
 	if !hasPrev {
 		return current
 	}
 
 	prevStr := string(prev)
-
-	// Identical — suppress entirely
 	if prevStr == current {
 		lines := strings.Count(current, "\n")
 		return fmt.Sprintf("[no changes, %d lines]\n", lines)
 	}
 
-	// Compute line diff
 	return lineDiff(prevStr, current)
 }
 
-// lineDiff computes a compact diff between old and new text.
-// If the diff is larger than 80% of the new text, returns full output instead.
+// lineDiff produces a unified diff between old and new.
+// If the diff is >80% of the output, shows full output instead.
 func lineDiff(old, new string) string {
 	oldLines := strings.Split(strings.TrimRight(old, "\n"), "\n")
 	newLines := strings.Split(strings.TrimRight(new, "\n"), "\n")
 
-	// Simple LCS-based diff using the Hunt-McIlroy algorithm approach.
-	// Build a map of old line → positions for matching.
-	type hunk struct {
-		oldStart, oldCount int
-		newStart, newCount int
-		lines              []string // prefixed with +, -, or space
-	}
-
-	// Use patience-style: match identical lines, collect hunks of differences.
 	hunks := computeHunks(oldLines, newLines)
-
 	if len(hunks) == 0 {
-		// Only whitespace/trailing differences
-		lines := len(newLines)
-		return fmt.Sprintf("[no changes, %d lines]\n", lines)
+		return fmt.Sprintf("[no changes, %d lines]\n", len(newLines))
 	}
 
-	// Build unified-style diff output
 	var result strings.Builder
-	totalDiffLines := 0
-
+	diffLines := 0
 	for _, h := range hunks {
-		// Hunk header
-		fmt.Fprintf(&result, "@@ -%d,%d +%d,%d @@\n", h.oldStart+1, h.oldCount, h.newStart+1, h.newCount)
+		fmt.Fprintf(&result, "@@ -%d,%d +%d,%d @@\n",
+			h.oldStart+1, h.oldCount, h.newStart+1, h.newCount)
 		for _, line := range h.lines {
 			result.WriteString(line)
 			result.WriteByte('\n')
-			totalDiffLines++
+			diffLines++
 		}
 	}
 
-	// If diff is bigger than 80% of new output, just show full output
-	if totalDiffLines > len(newLines)*80/100 {
-		return strings.Join(newLines, "\n") + "\n"
+	unchanged := len(newLines) - diffLines
+	if unchanged > 0 {
+		fmt.Fprintf(&result, "[%d unchanged lines omitted]\n", unchanged)
 	}
-
-	unchangedLines := len(newLines) - totalDiffLines
-	if unchangedLines > 0 {
-		fmt.Fprintf(&result, "[%d unchanged lines omitted]\n", unchangedLines)
-	}
-
 	return result.String()
-}
-
-// computeHunks computes diff hunks between old and new line slices.
-// Returns hunks with context showing what changed.
-func computeHunks(old, new []string) []hunk {
-	// Compute LCS using standard DP (fine for outputs up to ~10K lines)
-	m, n := len(old), len(new)
-
-	// For very large outputs, fall back to showing full
-	if m*n > 10_000_000 {
-		return []hunk{{
-			oldStart: 0, oldCount: m,
-			newStart: 0, newCount: n,
-			lines: prefixLines(new, "+"),
-		}}
-	}
-
-	// Build edit script via LCS
-	lcs := computeLCS(old, new)
-
-	// Walk through both sequences, producing hunks where they differ
-	var hunks []hunk
-	var current *hunk
-	oi, ni, li := 0, 0, 0
-	contextLines := 3
-
-	flushHunk := func() {
-		if current != nil && len(current.lines) > 0 {
-			hunks = append(hunks, *current)
-			current = nil
-		}
-	}
-
-	for oi < m || ni < n {
-		// Check if current lines match the next LCS element
-		if li < len(lcs) && oi < m && ni < n && old[oi] == lcs[li] && new[ni] == lcs[li] {
-			// Matching line — context
-			if current != nil {
-				current.lines = append(current.lines, " "+old[oi])
-				current.oldCount++
-				current.newCount++
-				// If we've had enough trailing context, close the hunk
-				trailingContext := 0
-				for j := len(current.lines) - 1; j >= 0 && current.lines[j][0] == ' '; j-- {
-					trailingContext++
-				}
-				if trailingContext >= contextLines {
-					flushHunk()
-				}
-			}
-			oi++
-			ni++
-			li++
-			continue
-		}
-
-		// Difference — start or extend a hunk
-		if current == nil {
-			// Add leading context from already-matched lines
-			current = &hunk{oldStart: oi, newStart: ni}
-			start := oi - contextLines
-			if start < 0 {
-				start = 0
-			}
-			for i := start; i < oi; i++ {
-				current.lines = append(current.lines, " "+old[i])
-				current.oldCount++
-				current.newCount++
-				current.oldStart = i
-				current.newStart = ni - (oi - i)
-			}
-		}
-
-		// Consume removed lines (in old but not matching)
-		for oi < m && (li >= len(lcs) || old[oi] != lcs[li]) {
-			current.lines = append(current.lines, "-"+old[oi])
-			current.oldCount++
-			oi++
-		}
-
-		// Consume added lines (in new but not matching)
-		for ni < n && (li >= len(lcs) || new[ni] != lcs[li]) {
-			current.lines = append(current.lines, "+"+new[ni])
-			current.newCount++
-			ni++
-		}
-	}
-
-	flushHunk()
-	return hunks
 }
 
 type hunk struct {
@@ -244,27 +127,91 @@ type hunk struct {
 	lines              []string
 }
 
+const contextLines = 3
+
+// computeHunks builds diff hunks from two line slices using LCS.
+func computeHunks(old, new []string) []hunk {
+	m, n := len(old), len(new)
+
+	// Too large for DP — show as one big hunk
+	if m*n > 10_000_000 {
+		return []hunk{{
+			oldStart: 0, oldCount: m,
+			newStart: 0, newCount: n,
+			lines:    prefixLines(new, "+"),
+		}}
+	}
+
+	lcs := computeLCS(old, new)
+
+	var hunks []hunk
+	var cur *hunk
+	oi, ni, li := 0, 0, 0
+
+	flush := func() {
+		if cur != nil && len(cur.lines) > 0 {
+			hunks = append(hunks, *cur)
+			cur = nil
+		}
+	}
+
+	for oi < m || ni < n {
+		if li < len(lcs) && oi < m && ni < n && old[oi] == lcs[li] && new[ni] == lcs[li] {
+			// Matching line
+			if cur != nil {
+				cur.lines = append(cur.lines, " "+old[oi])
+				cur.oldCount++
+				cur.newCount++
+				trailing := 0
+				for j := len(cur.lines) - 1; j >= 0 && cur.lines[j][0] == ' '; j-- {
+					trailing++
+				}
+				if trailing >= contextLines {
+					flush()
+				}
+			}
+			oi++
+			ni++
+			li++
+			continue
+		}
+
+		// Start or extend a hunk
+		if cur == nil {
+			cur = &hunk{oldStart: oi, newStart: ni}
+			start := oi - contextLines
+			if start < 0 {
+				start = 0
+			}
+			for i := start; i < oi; i++ {
+				cur.lines = append(cur.lines, " "+old[i])
+				cur.oldCount++
+				cur.newCount++
+				cur.oldStart = i
+				cur.newStart = ni - (oi - i)
+			}
+		}
+
+		for oi < m && (li >= len(lcs) || old[oi] != lcs[li]) {
+			cur.lines = append(cur.lines, "-"+old[oi])
+			cur.oldCount++
+			oi++
+		}
+
+		for ni < n && (li >= len(lcs) || new[ni] != lcs[li]) {
+			cur.lines = append(cur.lines, "+"+new[ni])
+			cur.newCount++
+			ni++
+		}
+	}
+
+	flush()
+	return hunks
+}
+
 // computeLCS returns the longest common subsequence of a and b.
 func computeLCS(a, b []string) []string {
 	m, n := len(a), len(b)
-	// DP table — use rolling two rows to save memory
-	prev := make([]int, n+1)
-	curr := make([]int, n+1)
-
-	for i := 1; i <= m; i++ {
-		for j := 1; j <= n; j++ {
-			if a[i-1] == b[j-1] {
-				curr[j] = prev[j-1] + 1
-			} else if prev[j] > curr[j-1] {
-				curr[j] = prev[j]
-			} else {
-				curr[j] = curr[j-1]
-			}
-		}
-		prev, curr = curr, make([]int, n+1)
-	}
-
-	// Backtrack to recover LCS (need full table for this)
 	dp := make([][]int, m+1)
 	for i := range dp {
 		dp[i] = make([]int, n+1)
@@ -294,7 +241,6 @@ func computeLCS(a, b []string) []string {
 			j--
 		}
 	}
-	// Reverse
 	for l, r := 0, len(result)-1; l < r; l, r = l+1, r-1 {
 		result[l], result[r] = result[r], result[l]
 	}
