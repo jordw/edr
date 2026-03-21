@@ -17,6 +17,15 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 		return nil, fmt.Errorf("read-file requires 1-3 arguments: <file> [start-line] [end-line]")
 	}
 	budget := flagInt(flags, "budget", 0)
+	full := flagBool(flags, "full", false)
+
+	// Default budget for full-file reads: 2000 tokens.
+	// Overridden by explicit --budget or --full.
+	// Line-range reads (start_line/end_line) are excluded — explicit range = explicit intent.
+	hasLineRange := flagInt(flags, "start_line", 0) > 0 || flagInt(flags, "end_line", 0) > 0 || len(args) >= 2
+	if budget == 0 && !full && !hasLineRange {
+		budget = 2000
+	}
 
 	file := args[0]
 	file, err := db.ResolvePath(file)

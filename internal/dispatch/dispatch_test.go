@@ -1425,7 +1425,7 @@ func TestSearch_FullBypassesDefaultBudget(t *testing.T) {
 	}
 }
 
-func TestRead_NoBudgetCapByDefault(t *testing.T) {
+func TestRead_DefaultBudgetCap(t *testing.T) {
 	tmp := t.TempDir()
 	// Create a file larger than 2000 tokens
 	var content strings.Builder
@@ -1444,7 +1444,7 @@ func TestRead_NoBudgetCapByDefault(t *testing.T) {
 	index.IndexRepo(ctx, db)
 	output.SetRoot(db.Root())
 
-	// Read without --budget: should NOT truncate (read has no default cap)
+	// Read without --budget or --full: should truncate at default 2000 tokens
 	result, err := dispatch.Dispatch(ctx, db, "read", []string{"big.go"}, map[string]any{})
 	if err != nil {
 		t.Fatalf("read: %v", err)
@@ -1453,8 +1453,34 @@ func TestRead_NoBudgetCapByDefault(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected map result, got %T", result)
 	}
-	if trunc, _ := m["truncated"].(bool); trunc {
-		t.Error("read should NOT truncate by default — only search/map have default budget cap")
+	if trunc, _ := m["truncated"].(bool); !trunc {
+		t.Error("full-file read should truncate at default 2000 token budget")
+	}
+
+	// Read with --full: should NOT truncate
+	result2, err := dispatch.Dispatch(ctx, db, "read", []string{"big.go"}, map[string]any{"full": true})
+	if err != nil {
+		t.Fatalf("read --full: %v", err)
+	}
+	m2, ok := result2.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", result2)
+	}
+	if trunc, _ := m2["truncated"].(bool); trunc {
+		t.Error("read --full should NOT truncate")
+	}
+
+	// Read with line range: should NOT truncate (explicit range = explicit intent)
+	result3, err := dispatch.Dispatch(ctx, db, "read", []string{"big.go"}, map[string]any{"start_line": 1, "end_line": 999})
+	if err != nil {
+		t.Fatalf("read with line range: %v", err)
+	}
+	m3, ok := result3.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", result3)
+	}
+	if trunc, _ := m3["truncated"].(bool); trunc {
+		t.Error("read with explicit line range should NOT truncate at default budget")
 	}
 }
 
