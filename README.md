@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Coding agents waste most of their context window reading entire files to find one function.** edr gives agents symbol-level file operations and batched calls so they read less and stay under budget longer.
+**Coding agents burn context on full-file reads, redundant re-reads, and walls of test output they've already seen.** edr gives agents symbol-level operations, batched calls, and cross-call dedup so they use 90%+ less context and stay under budget longer.
 
 Works with any agent that can run shell commands. Fully local, no telemetry.
 
@@ -20,8 +20,12 @@ edr -r src/scheduler.py:Scheduler --sig \
 # Edit two files, auto-verifies build
 edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):" \
     -e src/config.py --old '"timeout": 30' --new '"timeout": 30, "retries": 3'
+
+# Run tests — 85 lines of output. Fix a bug, run again:
+edr run --fuzzy -- pytest
+# → only the changed test result shows. Passing tests: [unchanged: 80 lines]
 ```
-2 calls, ~8KB of context.
+3 calls. Re-reads of files already in context return `{session: "unchanged"}` — zero tokens.
 
 ## Benchmarks
 
@@ -100,13 +104,15 @@ The index lives in `.edr/` at the repo root and rebuilds automatically if delete
 
 ## How it works
 
-edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and stores symbols in a SQLite index. This gives agents three capabilities they don't have with raw file tools:
+edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and stores symbols in a SQLite index. This gives agents four capabilities they don't have with raw file tools:
 
 **Symbol-level operations.** Read one function instead of a 400-line file. Get a class API with `--signatures` (85% fewer tokens). Add a method with `--inside ClassName` without reading the file. Edits re-index immediately and auto-verify the build (Go, Node, Rust, Make).
 
 **Batching.** `-r`, `-s`, `-e`, `-w` combine reads, searches, edits, and writes in one CLI call. One call to gather context, one to apply mutations.
 
-**Sessions.** Always active — delta reads and body dedup work across calls automatically. Re-reading an unchanged file returns `{session: "unchanged"}`. Use `edr session new` to start a fresh session (recommended after context resets). Multiple agents get isolated sessions via PPID-based resolution.
+**Sessions.** Agents re-read files constantly — to get exact text for edits, to check results, to refresh context. edr tracks what the agent has already seen and elides it. Second read of an unchanged file: 0 tokens. Zero config — sessions activate automatically. Multiple agents get isolated sessions via PPID.
+
+**Command wrapping.** `edr run -- make test` executes a command and deduplicates the output across calls. After a fix, only the changed test results show — passing tests collapse to `[unchanged: 80 lines]`. `--fuzzy` normalizes numbers before hashing so timing jitter doesn't defeat dedup.
 
 ## Commands
 
@@ -142,7 +148,7 @@ edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "..."
 | `setup` | `edr setup`, `edr setup --claude --force` |
 | `reindex` | `edr reindex` |
 
-All output is structured JSON. `edr run` wraps external commands with block-level output dedup — on repeat runs, only changed blocks are shown. `--fuzzy` normalizes numbers before hashing so timing changes don't defeat dedup.
+All output is structured JSON.
 
 ## Languages
 
