@@ -8,7 +8,6 @@
 # directory if it's a git repo. Pass --skip-setup to install only.
 #
 # Options:
-#   --claude, --cursor, --codex   Agent target for edr setup (default: auto-detect)
 #   --skip-setup                  Skip running edr setup after install
 #   --version VERSION             Install a specific version (default: latest)
 
@@ -18,7 +17,7 @@ REPO="${EDR_REPO:-jordw/edr}"
 INSTALL_DIR="${EDR_INSTALL_DIR:-$HOME/.local/bin}"
 VERSION=""
 SKIP_SETUP=false
-AGENT_FLAG=""
+SETUP_FLAGS=()
 TARGET=""
 
 # --- Parse arguments ---
@@ -32,8 +31,8 @@ while [ $# -gt 0 ]; do
             SKIP_SETUP=true
             shift
             ;;
-        --claude|--cursor|--codex)
-            AGENT_FLAG="$1"
+        --global|--force|--no-global)
+            SETUP_FLAGS+=("$1")
             shift
             ;;
         *)
@@ -47,17 +46,6 @@ done
 if [ -z "$TARGET" ] && [ "$SKIP_SETUP" = false ]; then
     if git rev-parse --show-toplevel >/dev/null 2>&1; then
         TARGET="$(git rev-parse --show-toplevel)"
-    fi
-fi
-
-# --- Auto-detect agent if not specified ---
-if [ -z "$AGENT_FLAG" ] && [ -n "$TARGET" ]; then
-    if [ -f "$TARGET/CLAUDE.md" ] || [ -f "$TARGET/.claude" ]; then
-        AGENT_FLAG="--claude"
-    elif [ -f "$TARGET/.cursorrules" ]; then
-        AGENT_FLAG="--cursor"
-    elif [ -f "$TARGET/AGENTS.md" ]; then
-        AGENT_FLAG="--codex"
     fi
 fi
 
@@ -169,7 +157,7 @@ echo "==> $(edr --version)"
 if [ "$SKIP_SETUP" = false ] && [ -n "$TARGET" ]; then
     TARGET="$(cd "$TARGET" && pwd)"
     echo "==> Setting up ${TARGET}..."
-    edr setup "$TARGET" $AGENT_FLAG
+    edr setup "$TARGET" ${SETUP_FLAGS[@]+"${SETUP_FLAGS[@]}"}
     echo ""
     echo "==> Done! edr is ready."
     echo "    cd $TARGET && edr map       # explore the codebase"

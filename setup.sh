@@ -38,26 +38,25 @@ echo "    source:  $REPO_DIR"
 echo "    target:  $TARGET"
 echo "    install: $INSTALL_DIR"
 
-# --- Check dependencies ---
+# --- Check and install dependencies ---
 missing=()
 command -v go &>/dev/null  || missing+=("go")
 command -v gcc &>/dev/null || missing+=("gcc")
 command -v g++ &>/dev/null || missing+=("g++")
 
 if [ ${#missing[@]} -gt 0 ]; then
-    echo "ERROR: missing required tools: ${missing[*]}"
-    echo ""
-    echo "Install them first:"
+    echo "==> Installing missing tools: ${missing[*]}"
     if command -v brew &>/dev/null; then
-        echo "  brew install go gcc"
+        brew install go gcc
     elif command -v apt-get &>/dev/null; then
-        echo "  sudo apt-get install golang gcc g++"
+        apt-get update -qq && apt-get install -y -qq golang gcc g++ >/dev/null
     elif command -v apk &>/dev/null; then
-        echo "  apk add go gcc g++ musl-dev"
+        apk add --quiet go gcc g++ musl-dev
     else
-        echo "  Install Go (https://go.dev/dl/) and a C/C++ compiler"
+        echo "ERROR: missing tools (${missing[*]}) and no supported package manager found."
+        echo "Install Go (https://go.dev/dl/) and a C/C++ compiler, then re-run."
+        exit 1
     fi
-    exit 1
 fi
 
 # --- Build ---
