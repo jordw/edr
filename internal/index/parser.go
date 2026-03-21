@@ -308,16 +308,26 @@ func FindIdentifierOccurrences(ctx context.Context, db *DB, symbolName string) (
 	// Always check for ambiguity first, regardless of refs table state.
 	sym, err := db.ResolveSymbol(ctx, symbolName)
 	if err != nil {
-		// Ambiguous symbol → fail fast instead of guessing with repo-wide scan.
 		var ambErr *AmbiguousSymbolError
 		if errors.As(err, &ambErr) {
+			// For languages without import extraction (C/C++), "ambiguity"
+			// usually means declaration + definition of the same symbol
+			// across .h/.c files. Use text-based search to rename all.
+			if allCandidatesLackImports(ambErr.Candidates) {
+				return findReferencesTextBased(ctx, db, symbolName)
+			}
 			return nil, err
 		}
 		// Not found → fall back to text-based scan.
 		return findReferencesTextBased(ctx, db, symbolName)
 	}
 
-	if !db.HasRefs(ctx) {
+	// Use text-based fallback when:
+	// 1. No semantic refs exist in the DB at all, OR
+	// 2. The symbol is defined in a language without import extraction (e.g. C/C++),
+	//    since semantic callers will miss all call sites in those languages.
+	lang := GetLangConfig(sym.File)
+	if !db.HasRefs(ctx) || (lang != nil && lang.Imports == nil) {
 		return findReferencesTextBased(ctx, db, symbolName)
 	}
 
@@ -377,6 +387,18 @@ func FindIdentifierOccurrences(ctx context.Context, db *DB, symbolName string) (
 }
 
 // findReferencesTextBased is the legacy text-based reference search.
+// allCandidatesLackImports returns true if every candidate symbol is in a
+// language without import extraction (e.g. C, C++, Rust, Java).
+func allCandidatesLackImports(candidates []SymbolInfo) bool {
+	for _, c := range candidates {
+		lang := GetLangConfig(c.File)
+		if lang != nil && lang.Imports != nil {
+			return false
+		}
+	}
+	return len(candidates) > 0
+}
+
 func findReferencesTextBased(ctx context.Context, db *DB, symbolName string) ([]SymbolInfo, error) {
 	rows, err := db.db.QueryContext(ctx, `SELECT DISTINCT file FROM symbols`)
 	if err != nil {

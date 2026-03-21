@@ -59,7 +59,11 @@ func OutlineFileFromSource(path string, src []byte, depth int) (string, error) {
 
 	var result string
 	cachedParseWith(lang, src, func(root *tree_sitter.Node) {
-		result = collapseNode(root, src, depth, 0)
+		if depth == 1 && (lang.LangID == "c" || lang.LangID == "cpp") {
+			result = collapseCSigView(root, src)
+		} else {
+			result = collapseNode(root, src, depth, 0)
+		}
 	})
 	return result, nil
 }
@@ -208,6 +212,61 @@ func collapseBlockToHeader(node *tree_sitter.Node, src []byte) string {
 		return header + "\n" + indent + "..."
 	}
 	return full
+}
+
+// skipInCSig lists node types to exclude from C/C++ --sig output.
+// These are preprocessor noise that clutters the API surface view.
+var skipInCSig = map[string]bool{
+	"#ifndef": true, "#ifdef": true, "#endif": true, "#define": true,
+	"preproc_include": true, "preproc_def": true, "preproc_call": true,
+	"preproc_function_def": true,
+}
+
+// collapseCSigView produces a clean API surface for C/C++ headers.
+// It unwraps include-guard #ifdef/#ifndef wrappers and strips #include
+// directives, showing only type definitions, declarations, and section comments.
+func collapseCSigView(node *tree_sitter.Node, src []byte) string {
+	var parts []string
+	collectCSigParts(node, src, &parts)
+	return strings.Join(parts, "\n")
+}
+
+func collectCSigParts(node *tree_sitter.Node, src []byte, parts *[]string) {
+	for i := 0; i < int(node.ChildCount()); i++ {
+		child := node.Child(uint(i))
+		if child == nil {
+			continue
+		}
+		kind := child.Kind()
+
+		// Skip preprocessor noise
+		if skipInCSig[kind] || kind == "identifier" {
+			continue
+		}
+
+		// Unwrap include-guard wrappers — recurse into their children
+		if kind == "preproc_ifdef" || kind == "preproc_ifndef" {
+			collectCSigParts(child, src, parts)
+			continue
+		}
+
+		if kind == "comment" {
+			text := string(src[child.StartByte():child.EndByte()])
+			// Skip file-level doc comments (multi-line, before any declaration)
+			if len(*parts) == 0 && strings.Contains(text, "\n") {
+				continue
+			}
+			// Skip include-guard close comments (e.g., /* HEADER_H */)
+			trimmed := strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(text, "*/"), "/*"))
+			if strings.HasSuffix(trimmed, "_H") || strings.HasSuffix(trimmed, "_H_") ||
+				strings.HasSuffix(trimmed, "_HPP") || strings.HasSuffix(trimmed, "_HPP_") {
+				continue
+			}
+		}
+
+		// Keep declarations, type_definitions, and section comments — collapse bodies
+		*parts = append(*parts, collapseNode(child, src, 1, 0))
+	}
 }
 
 func isBraceLanguageBlock(childKind, parentKind string) bool {

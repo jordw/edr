@@ -75,6 +75,10 @@ func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string,
 		if err != nil {
 			return nil, err
 		}
+		// --in: scope text matching to within a symbol body
+		if inSpec := flagString(flags, "in", ""); inSpec != "" {
+			return smartEditMatchInSymbol(ctx, db, file, oldText, newText, flags, inSpec, dryRun)
+		}
 		return smartEditMatch(ctx, db, file, oldText, newText, flags, dryRun)
 	}
 
@@ -250,6 +254,88 @@ func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacem
 	}
 
 	return smartEditByteRange(ctx, db, file, uint32(startByte), uint32(endByte), replacement, "", dryRun)
+}
+
+// smartEditMatchInSymbol scopes a text-match edit to within a symbol's body.
+// The --in flag specifies the symbol (file:Symbol or just Symbol); old_text is
+// searched only within that symbol's byte range.
+func smartEditMatchInSymbol(ctx context.Context, db *index.DB, file, matchText, replacement string, flags map[string]any, inSpec string, dryRun bool) (any, error) {
+	// Parse the symbol spec — accept "Symbol" (same file) or "file:Symbol"
+	parts := splitFileSymbol(inSpec)
+	var symFile, symName string
+	if parts != nil {
+		symFile = parts[0]
+		symName = parts[1]
+	} else {
+		// Plain symbol name, use the file from args
+		symFile = file
+		symName = inSpec
+	}
+
+	// Resolve the symbol to get its byte range
+	resolvedFile, err := db.ResolvePath(symFile)
+	if err != nil {
+		return nil, fmt.Errorf("--in: %w", err)
+	}
+	if resolvedFile != file {
+		return nil, fmt.Errorf("--in symbol file %q doesn't match edit file %q", output.Rel(resolvedFile), output.Rel(file))
+	}
+
+	sym, err := db.GetSymbol(ctx, resolvedFile, symName)
+	if err != nil {
+		return nil, fmt.Errorf("--in: %w", err)
+	}
+
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+
+	// Search within the symbol's byte range only
+	symBody := string(data[sym.StartByte:sym.EndByte])
+	if matchText == replacement {
+		return map[string]any{
+			"status":  "noop",
+			"file":    output.Rel(file),
+			"message": "old_text equals new_text, no change applied",
+		}, nil
+	}
+
+	replaceAll := flagBool(flags, "all", false)
+
+	idx := strings.Index(symBody, matchText)
+	if idx < 0 {
+		return nil, notFoundError(symBody, output.Rel(file)+":"+symName, matchText)
+	}
+
+	totalMatches := strings.Count(symBody, matchText)
+	if replaceAll {
+		resultBody := strings.ReplaceAll(symBody, matchText, replacement)
+		absStart := int(sym.StartByte)
+		absEnd := int(sym.EndByte)
+		fullContent := string(data)
+		newContent := fullContent[:absStart] + resultBody + fullContent[absEnd:]
+		return applyReplaceAll(ctx, db, file, fullContent, newContent, matchText, totalMatches, dryRun)
+	}
+	if totalMatches > 1 {
+		locs := make([][]int, 0, totalMatches)
+		off := 0
+		for {
+			i := strings.Index(symBody[off:], matchText)
+			if i < 0 {
+				break
+			}
+			abs := int(sym.StartByte) + off + i
+			locs = append(locs, []int{abs, abs + len(matchText)})
+			off += i + len(matchText)
+		}
+		content := string(data)
+		return nil, ambiguousMatchError(content, output.Rel(file)+":"+symName, matchText, locs)
+	}
+
+	absStart := uint32(int(sym.StartByte) + idx)
+	absEnd := absStart + uint32(len(matchText))
+	return smartEditByteRange(ctx, db, file, absStart, absEnd, replacement, symName, dryRun)
 }
 
 // applyReplaceAll handles the shared tail of regex and literal replace-all edits.
@@ -473,9 +559,20 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 	if len(args) < 2 {
 		return nil, fmt.Errorf("rename-symbol requires 2 arguments: <old-name> <new-name>")
 	}
-	oldName := args[0]
+	oldRaw := args[0]
 	newName := args[1]
 	dryRun := flagBool(flags, "dry-run", false)
+
+	// Support file:Symbol syntax for disambiguation.
+	oldName := oldRaw
+	if parts := splitFileSymbol(oldRaw); parts != nil {
+		// Resolve to verify the symbol exists and get its canonical name.
+		sym, err := resolveSymbolArgs(ctx, db, root, []string{oldRaw})
+		if err != nil {
+			return nil, err
+		}
+		oldName = sym.Name
+	}
 
 	// Find all identifier occurrences (exact byte ranges for replacement).
 	refs, err := index.FindIdentifierOccurrences(ctx, db, oldName)
