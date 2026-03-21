@@ -678,6 +678,21 @@ func (s *Session) stripSnippetMap(result map[string]any, field string, skipped *
 	}
 }
 
+// IsBlockSeen checks if a block hash has been seen in this session.
+func (s *Session) IsBlockSeen(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.SeenBodies[key]
+	return ok
+}
+
+// MarkBlockSeen records a block hash as seen.
+func (s *Session) MarkBlockSeen(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.SeenBodies[key] = "1"
+}
+
 func (s *Session) isBodySeen(name, body string) bool {
 	h := ContentHash(body)
 	for key, prevHash := range s.SeenBodies {

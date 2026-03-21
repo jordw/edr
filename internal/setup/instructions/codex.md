@@ -12,6 +12,7 @@ Workflow — start narrow, widen only as needed:
 6. Write: `edr -w file.go --content "..."` | `--inside Symbol`, `--after Symbol`, `--append`
 7. Rename: `edr rename Old New` (cross-file, import-aware, `--dry-run`)
 8. Verify: `edr verify` — auto-detects go/npm/cargo/make. Auto-runs after edits.
+9. Run: `edr run make test` — executes command, deduplicates output across calls. Only changed blocks shown on repeat runs.
 
 Batch: `edr -r f.go --sig -s "pat" -e f.go --old "x" --new "y"`
 Repeat -e for multi-edit: `edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"`
