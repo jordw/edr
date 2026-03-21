@@ -6,9 +6,12 @@ Workflow — start narrow, widen only as needed:
 3. Deep read: `edr -r file.go:FuncName` — read one symbol's full body
 4. Search: `edr -s "pattern" --text` — search across codebase
 5. Edit: `edr -e file.go --old "exact old text" --new "new text"`
+   Line-range edit: `edr -e file.go --start-line 10 --end-line 20 --new "replacement"`
+   Replace all occurrences: `edr -e file.go --old "x" --new "y" --all`
 6. Write: `edr -w file.go --content "..."`
 
 Batch multiple ops in one call to save round-trips:
 `edr -r f.go --sig -s "pat" -e f.go --old "x" --new "y"`
+Multiple edits in one call: `edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"`
 
 Before refactoring, check callers: `edr refs Symbol --impact`
