@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,6 +22,10 @@ func DispatchVerify(ctx context.Context, root string, args []string, flags map[s
 func runVerify(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
 	command := flagString(flags, "command", "")
 	level := flagString(flags, "level", "build")
+	if command == "" {
+		// Check .edr/config.json for persistent verify command
+		command = loadVerifyConfig(root, level)
+	}
 	if command == "" {
 		// Auto-detect based on project files
 		if _, err := os.Stat(root + "/go.mod"); err == nil {
@@ -84,6 +89,38 @@ func runVerify(ctx context.Context, db *index.DB, root string, args []string, fl
 
 // detectMakefile checks for a Makefile and probes for test/check targets.
 // Returns a make command or "" if no Makefile found.
+// loadVerifyConfig reads .edr/config.json for a persistent verify command.
+// Supports {"verify": "cmd"} or {"verify": {"build": "cmd", "test": "cmd"}}.
+func loadVerifyConfig(root, level string) string {
+	data, err := os.ReadFile(filepath.Join(root, ".edr", "config.json"))
+	if err != nil {
+		return ""
+	}
+	var cfg map[string]any
+	if json.Unmarshal(data, &cfg) != nil {
+		return ""
+	}
+	v, ok := cfg["verify"]
+	if !ok {
+		return ""
+	}
+	// Simple string: one command for all levels
+	if s, ok := v.(string); ok {
+		return s
+	}
+	// Object with level keys
+	if m, ok := v.(map[string]any); ok {
+		if cmd, ok := m[level].(string); ok {
+			return cmd
+		}
+		// Fall back to "build" if level not found
+		if cmd, ok := m["build"].(string); ok {
+			return cmd
+		}
+	}
+	return ""
+}
+
 func detectMakefile(root, level string) string {
 	if _, err := os.Stat(filepath.Join(root, "Makefile")); err != nil {
 		return ""
