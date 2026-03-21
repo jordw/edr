@@ -97,37 +97,107 @@ func diffAgainstPrevious(runDir, command, current string) string {
 // regions are collapsed and changed lines show inline {old → new} markers.
 // Uses positional alignment (line N vs line N).
 func sparseDiff(oldLines, newLines []string) string {
-	var result strings.Builder
-	i := 0
+	// Use LCS to align lines correctly even when lines are inserted/removed.
+	// Then render with sparse format: unchanged collapsed, changed shown inline.
+	lcs := computeLCS(oldLines, newLines)
 
-	for i < len(newLines) {
-		if i < len(oldLines) && newLines[i] == oldLines[i] {
-			// Count consecutive unchanged
+	var result strings.Builder
+	oi, ni, li := 0, 0, 0
+
+	for oi < len(oldLines) || ni < len(newLines) {
+		// Both match LCS — unchanged
+		if li < len(lcs) && oi < len(oldLines) && ni < len(newLines) &&
+			oldLines[oi] == lcs[li] && newLines[ni] == lcs[li] {
 			count := 0
-			for i < len(newLines) && i < len(oldLines) && newLines[i] == oldLines[i] {
+			for li < len(lcs) && oi < len(oldLines) && ni < len(newLines) &&
+				oldLines[oi] == lcs[li] && newLines[ni] == lcs[li] {
 				count++
-				i++
+				oi++
+				ni++
+				li++
 			}
 			fmt.Fprintf(&result, "[%d unchanged lines]\n", count)
-		} else if i < len(oldLines) {
-			// Modified — inline diff
-			result.WriteString(inlineDiff(oldLines[i], newLines[i]))
+			continue
+		}
+
+		// Consume non-LCS lines from both sides together as modifications
+		// when both have lines to consume before the next LCS match.
+		oldEnd := oi
+		for oldEnd < len(oldLines) && (li >= len(lcs) || oldLines[oldEnd] != lcs[li]) {
+			oldEnd++
+		}
+		newEnd := ni
+		for newEnd < len(newLines) && (li >= len(lcs) || newLines[newEnd] != lcs[li]) {
+			newEnd++
+		}
+
+		// Pair up as many as possible for inline diff
+		for oi < oldEnd && ni < newEnd {
+			result.WriteString(inlineDiff(oldLines[oi], newLines[ni]))
 			result.WriteByte('\n')
-			i++
-		} else {
-			// Added
-			fmt.Fprintf(&result, "{+ %s}\n", newLines[i])
-			i++
+			oi++
+			ni++
+		}
+		// Remaining old lines were removed
+		for oi < oldEnd {
+			fmt.Fprintf(&result, "{- %s}\n", oldLines[oi])
+			oi++
+		}
+		// Remaining new lines were added
+		for ni < newEnd {
+			fmt.Fprintf(&result, "{+ %s}\n", newLines[ni])
+			ni++
 		}
 	}
 
-	// Removed lines at end
-	for i < len(oldLines) {
-		fmt.Fprintf(&result, "{- %s}\n", oldLines[i])
-		i++
+	return result.String()
+}
+
+// computeLCS returns the longest common subsequence of two string slices.
+func computeLCS(a, b []string) []string {
+	m, n := len(a), len(b)
+	if m == 0 || n == 0 {
+		return nil
 	}
 
-	return result.String()
+	// For very large outputs, skip LCS (O(m*n) memory)
+	if m*n > 10_000_000 {
+		return nil
+	}
+
+	dp := make([][]int, m+1)
+	for i := range dp {
+		dp[i] = make([]int, n+1)
+	}
+	for i := 1; i <= m; i++ {
+		for j := 1; j <= n; j++ {
+			if a[i-1] == b[j-1] {
+				dp[i][j] = dp[i-1][j-1] + 1
+			} else if dp[i-1][j] > dp[i][j-1] {
+				dp[i][j] = dp[i-1][j]
+			} else {
+				dp[i][j] = dp[i][j-1]
+			}
+		}
+	}
+
+	result := make([]string, 0, dp[m][n])
+	i, j := m, n
+	for i > 0 && j > 0 {
+		if a[i-1] == b[j-1] {
+			result = append(result, a[i-1])
+			i--
+			j--
+		} else if dp[i-1][j] > dp[i][j-1] {
+			i--
+		} else {
+			j--
+		}
+	}
+	for l, r := 0, len(result)-1; l < r; l, r = l+1, r-1 {
+		result[l], result[r] = result[r], result[l]
+	}
+	return result
 }
 
 // inlineDiff produces a line with {old → new} markers for changed segments.

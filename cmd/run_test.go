@@ -120,6 +120,31 @@ func TestSparseDiff_AllUnchanged(t *testing.T) {
 	}
 }
 
+func TestSparseDiff_InsertedLine(t *testing.T) {
+	old := []string{"aaa", "bbb", "ccc", "ddd"}
+	new := []string{"aaa", "INSERTED", "bbb", "ccc", "ddd"}
+	out := sparseDiff(old, new)
+	if !strings.Contains(out, "{+ INSERTED}") {
+		t.Errorf("should show inserted line, got: %q", out)
+	}
+	if !strings.Contains(out, "unchanged") {
+		t.Errorf("should collapse unchanged, got: %q", out)
+	}
+	// Should NOT show garbled inline diffs
+	if strings.Contains(out, "{aaa") || strings.Contains(out, "{bbb") {
+		t.Errorf("should not garble unchanged lines, got: %q", out)
+	}
+}
+
+func TestSparseDiff_RemovedLine(t *testing.T) {
+	old := []string{"aaa", "REMOVE_ME", "bbb", "ccc"}
+	new := []string{"aaa", "bbb", "ccc"}
+	out := sparseDiff(old, new)
+	if !strings.Contains(out, "{- REMOVE_ME}") {
+		t.Errorf("should show removed line, got: %q", out)
+	}
+}
+
 func TestSparseDiff_MixedChanges(t *testing.T) {
 	old := []string{"a", "b", "c", "d", "e"}
 	new := []string{"a", "B", "c", "d", "E"}
