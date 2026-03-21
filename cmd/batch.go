@@ -968,11 +968,6 @@ func addMultiResultOps(env *output.Envelope, sess *session.Session, cmds []dispa
 			}
 		}
 
-		// Normalize read results: rename "body" → "content", lift symbol fields
-		if cmd == "read" {
-			result = normalizeReadResult(result)
-		}
-
 		env.AddOp(opID, cmdName, result)
 	}
 }

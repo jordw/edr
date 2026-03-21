@@ -122,8 +122,10 @@ func TestProcessReadResult_DepthAffectsKey(t *testing.T) {
 
 	// First: store full body (no depth)
 	result1 := map[string]any{
-		"body":   "func foo() { full body }",
-		"symbol": map[string]any{"file": "f.go", "name": "foo", "hash": "abc"},
+		"content": "func foo() { full body }",
+		"file":    "f.go",
+		"symbol":  "foo",
+		"hash":    "abc",
 	}
 	if delta := s.ProcessReadResult("read", result1, map[string]any{}); delta != nil {
 		t.Error("first read should return nil (new)")
@@ -131,8 +133,10 @@ func TestProcessReadResult_DepthAffectsKey(t *testing.T) {
 
 	// Second: read with depth=2 and different content
 	result2 := map[string]any{
-		"body":   "func foo() { ... }",
-		"symbol": map[string]any{"file": "f.go", "name": "foo", "hash": "abc"},
+		"content": "func foo() { ... }",
+		"file":    "f.go",
+		"symbol":  "foo",
+		"hash":    "abc",
 	}
 	delta := s.ProcessReadResult("read", result2, map[string]any{"depth": 2})
 	if delta != nil {
@@ -532,8 +536,10 @@ func TestProcessReadResult_FullFlag(t *testing.T) {
 func TestProcessReadResult_Symbol(t *testing.T) {
 	s := New()
 	result := map[string]any{
-		"body": "func foo() {}",
-		"symbol": map[string]any{"file": "f.go", "name": "foo", "hash": "abc"},
+		"content": "func foo() {}",
+		"file":    "f.go",
+		"symbol":  "foo",
+		"hash":    "abc",
 	}
 	if delta := s.ProcessReadResult("read", result, map[string]any{}); delta != nil {
 		t.Error("new symbol should return nil")
@@ -549,8 +555,9 @@ func TestProcessReadResult_Symbol(t *testing.T) {
 func TestProcessReadResult_ExpandTracksBody(t *testing.T) {
 	s := New()
 	result := map[string]any{
-		"body": "func bar() {}",
-		"symbol": map[string]any{"file": "f.go", "name": "bar"},
+		"content": "func bar() {}",
+		"file":    "f.go",
+		"symbol":  "bar",
 	}
 	s.ProcessReadResult("explore", result, map[string]any{})
 	if _, ok := s.SeenBodies["f.go:bar"]; !ok {
@@ -585,7 +592,8 @@ func TestExtractFileHash_Direct(t *testing.T) {
 
 func TestExtractFileHash_FromSymbol(t *testing.T) {
 	f, h := ExtractFileHash(map[string]any{
-		"symbol": map[string]any{"file": "f.go", "hash": "abc"},
+		"file":    "f.go",
+		"hash":    "abc",
 	})
 	if f != "f.go" || h != "abc" {
 		t.Errorf("got (%s, %s)", f, h)
@@ -614,8 +622,9 @@ func TestStoreReadContent_ReadFile(t *testing.T) {
 func TestStoreReadContent_ReadSymbol(t *testing.T) {
 	s := New()
 	s.StoreReadContent("read", map[string]any{
-		"body": "func foo() {}",
-		"symbol": map[string]any{"file": "f.go", "name": "foo"},
+		"content": "func foo() {}",
+		"file":    "f.go",
+		"symbol":  "foo",
 	})
 	if len(s.SymbolContent) != 1 {
 		t.Error("should store symbol content")
@@ -628,8 +637,9 @@ func TestStoreReadContent_ReadSymbol(t *testing.T) {
 func TestStoreReadContent_ExpandTracksBody(t *testing.T) {
 	s := New()
 	s.StoreReadContent("explore", map[string]any{
-		"body": "func bar() {}",
-		"symbol": map[string]any{"file": "f.go", "name": "bar"},
+		"content": "func bar() {}",
+		"file":    "f.go",
+		"symbol":  "bar",
 	})
 	if _, ok := s.SeenBodies["f.go:bar"]; !ok {
 		t.Error("expand should track body")
@@ -639,8 +649,9 @@ func TestStoreReadContent_ExpandTracksBody(t *testing.T) {
 func TestStoreReadContent_SkipsEmptyBody(t *testing.T) {
 	s := New()
 	s.StoreReadContent("read", map[string]any{
-		"body":   "",
-		"symbol": map[string]any{"file": "f.go", "name": "foo"},
+		"content": "",
+		"file":    "f.go",
+		"symbol":  "foo",
 	})
 	if len(s.SymbolContent) != 0 {
 		t.Error("should not store empty body")
@@ -652,8 +663,9 @@ func TestStoreReadContent_SkipsEmptyBody(t *testing.T) {
 func TestTrackBodies_ReadSymbol(t *testing.T) {
 	s := New()
 	s.TrackBodies(map[string]any{
-		"body":   "func foo() {}",
-		"symbol": map[string]any{"file": "f.go", "name": "foo"},
+		"content": "func foo() {}",
+		"file":    "f.go",
+		"symbol":  "foo",
 	}, "read")
 	if _, ok := s.SeenBodies["f.go:foo"]; !ok {
 		t.Error("should track")
@@ -693,8 +705,9 @@ func TestTrackBodies_Search(t *testing.T) {
 func TestTrackBodies_SkipsEmptyBody(t *testing.T) {
 	s := New()
 	s.TrackBodies(map[string]any{
-		"body":   "",
-		"symbol": map[string]any{"file": "f.go", "name": "foo"},
+		"content": "",
+		"file":    "f.go",
+		"symbol":  "foo",
 	}, "read")
 	if len(s.SeenBodies) != 0 {
 		t.Error("should not track empty body")
@@ -704,7 +717,7 @@ func TestTrackBodies_SkipsEmptyBody(t *testing.T) {
 func TestTrackBodies_SkipsNoSymbol(t *testing.T) {
 	s := New()
 	s.TrackBodies(map[string]any{
-		"body": "func foo() {}",
+		"content": "func foo() {}",
 	}, "read")
 	if len(s.SeenBodies) != 0 {
 		t.Error("should not track without symbol")
@@ -1022,8 +1035,9 @@ func TestBatchThenSingleReadDelta(t *testing.T) {
 
 	// Single read of same symbol should return unchanged via ProcessReadResult
 	singleResult := map[string]any{
-		"symbol": map[string]any{"file": "f.go", "name": "foo", "type": "function", "lines": []int{1, 3}},
-		"body":   "func foo() {}",
+		"file":    "f.go",
+		"symbol":  "foo",
+		"content": "func foo() {}",
 	}
 	delta := s.ProcessReadResult("read", singleResult, map[string]any{})
 	if delta == nil {

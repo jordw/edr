@@ -2213,59 +2213,6 @@ func TestHandleDo_SkippedWritesNotFailed(t *testing.T) {
 	}
 }
 
-// --- normalizeReadResult (body→content rename) ---
-
-func TestNormalizeReadResult_RenamesBody(t *testing.T) {
-	m := map[string]any{"body": "hello", "symbol": "Foo"}
-	result := normalizeReadResult(m)
-	rm := result.(map[string]any)
-	if rm["content"] != "hello" {
-		t.Errorf("content = %v, want hello", rm["content"])
-	}
-	if _, has := rm["body"]; has {
-		t.Error("body key should be removed")
-	}
-}
-
-func TestNormalizeReadResult_PreservesContent(t *testing.T) {
-	m := map[string]any{"content": "hello", "file": "test.go"}
-	result := normalizeReadResult(m)
-	rm := result.(map[string]any)
-	if rm["content"] != "hello" {
-		t.Errorf("content = %v, want hello", rm["content"])
-	}
-}
-
-func TestNormalizeReadResult_NoBodyNoOp(t *testing.T) {
-	m := map[string]any{"file": "test.go", "hash": "abc"}
-	result := normalizeReadResult(m)
-	rm := result.(map[string]any)
-	if _, has := rm["content"]; has {
-		t.Error("should not add content when no body present")
-	}
-}
-
-// TestNormalizeReadResult_BodyToContent verifies that normalizeReadResult
-// renames "body" to "content" for standalone read commands.
-func TestNormalizeReadResult_BodyToContent(t *testing.T) {
-	input := map[string]any{
-		"body": "func hello() {}",
-		"file": "main.go",
-		"hash": "abc",
-	}
-	result := normalizeReadResult(input)
-	m, ok := result.(map[string]any)
-	if !ok {
-		t.Fatalf("expected map, got %T", result)
-	}
-	if _, has := m["body"]; has {
-		t.Error("body should be removed after normalization")
-	}
-	if c, _ := m["content"].(string); c != "func hello() {}" {
-		t.Errorf("content = %q, want func hello() {}", c)
-	}
-}
-
 // TestHandleDo_ReadShapeParity verifies that batch and standalone symbol reads
 // produce the same set of keys.
 func TestHandleDo_ReadShapeParity(t *testing.T) {
@@ -2307,8 +2254,7 @@ func TestHandleDo_ReadShapeParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	standaloneOp := normalizeReadResult(result)
-	standaloneMap, _ := standaloneOp.(map[string]any)
+	standaloneMap, _ := result.(map[string]any)
 
 	// Compare key sets (excluding op_id/type which are added by envelope)
 	skip := map[string]bool{"op_id": true, "type": true, "session": true}

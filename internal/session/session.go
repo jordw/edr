@@ -382,49 +382,37 @@ func (s *Session) ProcessReadResult(cmd string, result map[string]any, flags map
 		return nil
 	}
 
-	var content, key string
-	var isSymbol bool
+	c, ok := result["content"].(string)
+	if !ok || c == "" {
+		return nil
+	}
+	content := c
 
-	// Detect whether this is a file read or symbol read by result shape
-	if c, ok := result["body"].(string); ok && c != "" {
-		content = c
-		isSymbol = true
-		sym, _ := result["symbol"].(map[string]any)
-		if sym == nil {
-			return nil
-		}
-		file, _ := sym["file"].(string)
-		name, _ := sym["name"].(string)
-		key = file + ":" + name
-		if d, ok := flags["depth"]; ok {
-			if di, isNum := d.(float64); isNum && di > 0 {
-				key += fmt.Sprintf(":depth=%d", int(di))
-			} else if di, isInt := d.(int); isInt && di > 0 {
-				key += fmt.Sprintf(":depth=%d", di)
-			}
-		}
-		if b, ok := flags["budget"]; ok {
-			if bi, isNum := b.(float64); isNum && bi > 0 {
-				key += fmt.Sprintf(":budget=%d", int(bi))
-			} else if bi, isInt := b.(int); isInt && bi > 0 {
-				key += fmt.Sprintf(":budget=%d", bi)
-			}
-		}
-		s.SeenBodies[file+":"+name] = ContentHash(content)
-	} else if c, ok := result["content"].(string); ok && c != "" {
-		content = c
-		file, _ := result["file"].(string)
+	// Detect symbol read: "symbol" field is a string (symbol name)
+	symName, isSymbol := result["symbol"].(string)
+	file, _ := result["file"].(string)
+
+	var key string
+	if isSymbol && symName != "" {
+		key = file + ":" + symName
+		s.SeenBodies[key] = ContentHash(content)
+	} else {
 		lines, _ := result["lines"]
 		key = fmt.Sprintf("%s:%v", file, lines)
-		if b, ok := flags["budget"]; ok {
-			if bi, isNum := b.(float64); isNum && bi > 0 {
-				key += fmt.Sprintf(":budget=%d", int(bi))
-			} else if bi, isInt := b.(int); isInt && bi > 0 {
-				key += fmt.Sprintf(":budget=%d", bi)
-			}
+	}
+	if d, ok := flags["depth"]; ok {
+		if di, isNum := d.(float64); isNum && di > 0 {
+			key += fmt.Sprintf(":depth=%d", int(di))
+		} else if di, isInt := d.(int); isInt && di > 0 {
+			key += fmt.Sprintf(":depth=%d", di)
 		}
-	} else {
-		return nil
+	}
+	if b, ok := flags["budget"]; ok {
+		if bi, isNum := b.(float64); isNum && bi > 0 {
+			key += fmt.Sprintf(":budget=%d", int(bi))
+		} else if bi, isInt := b.(int); isInt && bi > 0 {
+			key += fmt.Sprintf(":budget=%d", bi)
+		}
 	}
 
 	status, _ := s.CheckContent(key, content, isSymbol)
@@ -458,31 +446,46 @@ func ExtractFileHash(result map[string]any) (file, hash string) {
 
 // StoreReadContent stores content from a read result for future delta tracking.
 func (s *Session) StoreReadContent(cmd string, result map[string]any) {
-	if c, ok := result["body"].(string); ok && c != "" {
-		sym, _ := result["symbol"].(map[string]any)
-		if sym != nil {
-			file, _ := sym["file"].(string)
-			name, _ := sym["name"].(string)
-			key := file + ":" + name
-			s.StoreContent(key, c, true)
-			s.SeenBodies[key] = ContentHash(c)
-		}
-	} else if c, ok := result["content"].(string); ok && c != "" {
-		file, _ := result["file"].(string)
+	c, ok := result["content"].(string)
+	if !ok || c == "" {
+		return
+	}
+	file, _ := result["file"].(string)
+	if symName, ok := result["symbol"].(string); ok && symName != "" {
+		key := file + ":" + symName
+		s.StoreContent(key, c, true)
+		s.SeenBodies[key] = ContentHash(c)
+	} else {
 		lines, _ := result["lines"]
 		key := fmt.Sprintf("%s:%v", file, lines)
 		s.StoreContent(key, c, false)
 	}
 }
 
+// firstString returns the first non-empty string value found for the given keys.
+func firstString(m map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if s, ok := m[k].(string); ok && s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
 // --- Level 3: Body tracking ---
 
 func (s *Session) TrackBodies(result map[string]any, cmd string) {
-	if body, ok := result["body"].(string); ok && body != "" {
-		sym, _ := result["symbol"].(map[string]any)
-		if sym != nil {
-			file, _ := sym["file"].(string)
-			name, _ := sym["name"].(string)
+	// Track top-level content — check both "content" (read results) and "body" (gather/refs)
+	if body := firstString(result, "content", "body"); body != "" {
+		file, _ := result["file"].(string)
+		name := ""
+		if s, ok := result["symbol"].(string); ok {
+			name = s
+		} else if sym, ok := result["symbol"].(map[string]any); ok {
+			file, _ = sym["file"].(string)
+			name, _ = sym["name"].(string)
+		}
+		if name != "" {
 			s.SeenBodies[file+":"+name] = ContentHash(body)
 		}
 	}

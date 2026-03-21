@@ -173,26 +173,18 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 }
 
 // symbolReadResult builds a flat result map for symbol reads.
-// Uses "body" as the internal content key (session expects it; normalizeReadBody renames to "content").
-// The "symbol" sub-object contains only name/type/size — file/hash/lines are at top level.
-func symbolReadResult(sym *index.SymbolInfo, body string, hash string, extra map[string]any) map[string]any {
-	size := len(body) / 4
+// Shared fields (file, hash, lines) are at top level only.
+// The "symbol" sub-object contains only name and type metadata.
+func symbolReadResult(sym *index.SymbolInfo, content string, hash string, extra map[string]any) map[string]any {
+	size := len(content) / 4
 	result := map[string]any{
 		"file":      output.Rel(sym.File),
 		"hash":      hash,
 		"lines":     [2]int{int(sym.StartLine), int(sym.EndLine)},
-		"body":      body,
+		"content":   content,
 		"size":      size,
 		"truncated": false,
-		"symbol": map[string]any{
-			"name": sym.Name,
-			"type": sym.Type,
-			"size": size,
-			// Keep file/hash/lines in symbol for session backward compat
-			"file":  output.Rel(sym.File),
-			"hash":  hash,
-			"lines": [2]int{int(sym.StartLine), int(sym.EndLine)},
-		},
+		"symbol":    sym.Name,
 	}
 	for k, v := range extra {
 		result[k] = v

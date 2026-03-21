@@ -97,10 +97,6 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 		}
 	}
 
-	if cmdName == "read" {
-		result = normalizeReadResult(result)
-	}
-
 	env.AddOp(opID, cmdName, result)
 	env.ComputeOK()
 	output.PrintEnvelope(env)
@@ -343,58 +339,6 @@ var verifyCmd = &cobra.Command{
 }
 
 func init() { cmdspec.RegisterFlags(verifyCmd.Flags(), "verify") }
-
-// liftSymbolFields promotes file and hash from the nested "symbol" sub-object
-// to the top level of a read result, for envelope consistency.
-// normalizeReadResult normalizes read results: renames "body" → "content" and lifts symbol fields.
-func normalizeReadResult(result any) any {
-	m, ok := result.(map[string]any)
-	if !ok {
-		data, err := json.Marshal(result)
-		if err != nil {
-			return result
-		}
-		if json.Unmarshal(data, &m) != nil {
-			return result
-		}
-	}
-	// Rename body → content
-	if body, has := m["body"]; has {
-		if _, hasC := m["content"]; !hasC {
-			m["content"] = body
-		}
-		delete(m, "body")
-	}
-	// Lift symbol fields
-	return liftSymbolFields(m)
-}
-
-func liftSymbolFields(result any) any {
-	m, ok := result.(map[string]any)
-	if !ok {
-		// Try JSON roundtrip for struct types
-		data, err := json.Marshal(result)
-		if err != nil {
-			return result
-		}
-		if json.Unmarshal(data, &m) != nil {
-			return result
-		}
-	}
-	sym, ok := m["symbol"].(map[string]any)
-	if !ok {
-		return m
-	}
-	// Lift file, hash, and lines to top level if not already present
-	for _, key := range []string{"file", "hash", "lines"} {
-		if _, has := m[key]; !has {
-			if v, ok := sym[key]; ok {
-				m[key] = v
-			}
-		}
-	}
-	return m
-}
 
 // addDispatchFailedOp creates a failed op on the envelope, matching batch behavior.
 // Per-op errors go on the op; only index-level errors go in envelope errors[].

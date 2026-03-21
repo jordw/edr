@@ -50,8 +50,10 @@ func TestDeltaSettlesToUnchanged_Symbol_ProcessReadResult(t *testing.T) {
 	s := New()
 
 	resultA := map[string]any{
-		"body":   "func foo() { v1 }",
-		"symbol": map[string]any{"file": "f.go", "name": "foo", "hash": "abc"},
+		"content": "func foo() { v1 }",
+		"file":    "f.go",
+		"symbol":  "foo",
+		"hash":    "abc",
 	}
 	delta := s.ProcessReadResult("read", resultA, map[string]any{})
 	if delta != nil {
@@ -59,8 +61,10 @@ func TestDeltaSettlesToUnchanged_Symbol_ProcessReadResult(t *testing.T) {
 	}
 
 	resultB := map[string]any{
-		"body":   "func foo() { v2 }",
-		"symbol": map[string]any{"file": "f.go", "name": "foo", "hash": "def"},
+		"content": "func foo() { v2 }",
+		"file":    "f.go",
+		"symbol":  "foo",
+		"hash":    "def",
 	}
 	// With hash-only storage, changed content is treated as new
 	delta = s.ProcessReadResult("read", resultB, map[string]any{})
@@ -108,8 +112,8 @@ func TestDeltaSettlesToUnchanged_ViaPostProcess(t *testing.T) {
 func TestDeltaSettlesToUnchanged_Symbol_ViaPostProcess(t *testing.T) {
 	s := New()
 
-	textA := `{"body":"func foo() { v1 }","symbol":{"file":"f.go","name":"foo","hash":"abc"}}`
-	textB := `{"body":"func foo() { v2 }","symbol":{"file":"f.go","name":"foo","hash":"def"}}`
+	textA := `{"content":"func foo() { v1 }","file":"f.go","symbol":"foo","hash":"abc"}`
+	textB := `{"content":"func foo() { v2 }","file":"f.go","symbol":"foo","hash":"def"}`
 
 	r1 := s.PostProcess("read", []string{"f.go", "foo"}, map[string]any{}, nil, textA)
 	if strings.Contains(r1, "unchanged") {
@@ -176,8 +180,10 @@ func TestDeltaSkippedWhenOldContentMuchSmaller(t *testing.T) {
 	// Step 1: Store a short signature-like body
 	shortBody := "func handleDo(ctx context.Context) (string, error)"
 	resultSig := map[string]any{
-		"body":   shortBody,
-		"symbol": map[string]any{"file": "cmd/mcp.go", "name": "handleDo", "hash": "abc"},
+		"content": shortBody,
+		"file":    "cmd/mcp.go",
+		"symbol":  "handleDo",
+		"hash":    "abc",
 	}
 	delta := s.ProcessReadResult("read", resultSig, map[string]any{})
 	if delta != nil {
@@ -187,8 +193,10 @@ func TestDeltaSkippedWhenOldContentMuchSmaller(t *testing.T) {
 	// Step 2: Read the full body — treated as new (hash-only, different content)
 	fullBody := shortBody + " {\n" + strings.Repeat("\tline\n", 100) + "}"
 	resultFull := map[string]any{
-		"body":   fullBody,
-		"symbol": map[string]any{"file": "cmd/mcp.go", "name": "handleDo", "hash": "def"},
+		"content": fullBody,
+		"file":    "cmd/mcp.go",
+		"symbol":  "handleDo",
+		"hash":    "def",
 	}
 	delta = s.ProcessReadResult("read", resultFull, map[string]any{})
 	if delta != nil {
@@ -213,16 +221,20 @@ func TestDeltaNewThenUnchanged_SimilarSizedContent(t *testing.T) {
 	// Store a reasonably sized function body
 	oldBody := "func foo() {\n\treturn 1\n}\n" + strings.Repeat("// padding\n", 20)
 	resultA := map[string]any{
-		"body":   oldBody,
-		"symbol": map[string]any{"file": "f.go", "name": "foo", "hash": "aaa"},
+		"content": oldBody,
+		"file":    "f.go",
+		"symbol":  "foo",
+		"hash":    "aaa",
 	}
 	s.ProcessReadResult("read", resultA, map[string]any{})
 
 	// Change one line in a similar-sized body — with hash-only, treated as new
 	newBody := "func foo() {\n\treturn 2\n}\n" + strings.Repeat("// padding\n", 20)
 	resultB := map[string]any{
-		"body":   newBody,
-		"symbol": map[string]any{"file": "f.go", "name": "foo", "hash": "bbb"},
+		"content": newBody,
+		"file":    "f.go",
+		"symbol":  "foo",
+		"hash":    "bbb",
 	}
 	delta := s.ProcessReadResult("read", resultB, map[string]any{})
 	if delta != nil {
