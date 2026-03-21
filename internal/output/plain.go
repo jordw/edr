@@ -61,6 +61,8 @@ func printPlain(e *Envelope) {
 			printPlainRename(w, op)
 		case "map":
 			printPlainMap(w, op)
+		case "refs":
+			printPlainRefs(w, op)
 		case "reindex":
 			printPlainReindex(w, op)
 		default:
@@ -233,31 +235,78 @@ func printPlainRename(w *os.File, op Op) {
 }
 
 func printPlainMap(w *os.File, op Op) {
-	content, _ := op["content"].(string)
-	if content != "" {
-		fmt.Fprint(w, content)
-		if !strings.HasSuffix(content, "\n") {
-			fmt.Fprintln(w)
+	// Map content is a list of file entries with symbols
+	content, ok := op["content"].([]any)
+	if !ok {
+		// Try string content (file-scoped map)
+		if s, ok := op["content"].(string); ok && s != "" {
+			fmt.Fprint(w, s)
+			if !strings.HasSuffix(s, "\n") {
+				fmt.Fprintln(w)
+			}
+			return
 		}
-		return
 	}
-	// Structured map output — print symbols
-	if symbols, ok := op["symbols"].([]any); ok {
+	for _, entry := range content {
+		fe, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		file, _ := fe["file"].(string)
+		symbols, _ := fe["symbols"].([]any)
 		for _, s := range symbols {
-			if sm, ok := s.(map[string]any); ok {
-				name, _ := sm["name"].(string)
-				kind, _ := sm["kind"].(string)
-				file, _ := sm["file"].(string)
-				line := 0
-				if v, ok := sm["line"].(float64); ok {
-					line = int(v)
-				} else if v, ok := sm["line"].(int); ok {
-					line = v
-				}
+			sm, ok := s.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := sm["name"].(string)
+			kind, _ := sm["kind"].(string)
+			line := anyInt(sm["line"])
+			endLine := anyInt(sm["end_line"])
+			if endLine > 0 {
+				fmt.Fprintf(w, "%s:%d-%d: %s %s\n", file, line, endLine, kind, name)
+			} else {
 				fmt.Fprintf(w, "%s:%d: %s %s\n", file, line, kind, name)
 			}
 		}
 	}
+}
+
+func printPlainRefs(w *os.File, op Op) {
+	// Target symbol
+	if sym, ok := op["symbol"].(map[string]any); ok {
+		file, _ := sym["file"].(string)
+		name, _ := sym["name"].(string)
+		fmt.Fprintf(w, "%s:%s\n", file, name)
+	}
+
+	// References
+	refs, _ := op["references"].([]any)
+	fmt.Fprintf(w, "%d refs\n", len(refs))
+	for _, r := range refs {
+		rm, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		file, _ := rm["file"].(string)
+		line := anyInt(rm["lines"])
+		if lines, ok := rm["lines"].([]any); ok && len(lines) > 0 {
+			line = anyInt(lines[0])
+		}
+		name, _ := rm["name"].(string)
+		fmt.Fprintf(w, "%s:%d: %s\n", file, line, name)
+	}
+}
+
+// anyInt extracts an int from any (handles float64 from JSON and int from Go).
+func anyInt(v any) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	}
+	return 0
 }
 
 func printPlainReindex(w *os.File, op Op) {
