@@ -2,30 +2,34 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Coding agents burn context on full-file reads, redundant re-reads, and walls of test output they've already seen.** edr gives agents symbol-level operations, batched calls, and cross-call dedup so they use 90%+ less context and stay under budget longer.
+**Coding agents burn context on full-file reads, redundant calls, and output they've already seen.** edr fixes this three ways:
+
+- **Symbol-level ops** — read one function instead of a 400-line file. 85% smaller.
+- **Batching** — read three files and search in one call instead of four.
+- **Deltas** — re-read a file, re-run tests? Only what changed comes back.
 
 Works with any agent that can run shell commands. Fully local, no telemetry.
 
 ## Example
 
-Add a `retries` parameter to a scheduler class. Without edr, agents read whole files to find individual symbols — 6 calls, ~59KB of context. With edr:
+Add a `retries` parameter to a scheduler class. Without edr: 6 calls, ~59KB of context. With edr:
 
 ```bash
-# Read three symbols + search, one call
+# 1. Symbol-level: read three signatures + search, one call
 edr -r src/scheduler.py:Scheduler --sig \
     -r src/config.py:parse_config \
     -r src/worker.py:Worker --sig \
     -s "retry"
 
-# Edit two files, auto-verifies build
+# 2. Batched edit: two files, auto-verifies build
 edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):" \
     -e src/config.py --old '"timeout": 30' --new '"timeout": 30, "retries": 3'
 
-# Run tests — 85 lines of output. Fix a bug, run again:
+# 3. Deltas: run tests, fix a bug, run again — only the diff comes back
 edr run --fuzzy -- pytest
-# → only the changed test result shows. Passing tests: [unchanged: 80 lines]
+# → [unchanged: 80 lines]  FAIL: test_retry — expected 3, got 0
 ```
-3 calls. Re-reads of files already in context return `{session: "unchanged"}` — zero tokens.
+3 calls. Re-reads of files already in context: zero tokens.
 
 ## Benchmarks
 
@@ -104,7 +108,7 @@ The index lives in `.edr/` at the repo root and rebuilds automatically if delete
 
 ## How it works
 
-edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and stores symbols in a SQLite index. This gives agents four capabilities they don't have with raw file tools:
+edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and stores symbols in a SQLite index. This gives agents three capabilities they don't have with raw file tools:
 
 **Symbol-level operations.** Read one function instead of a 400-line file. Get a class API with `--signatures` (85% fewer tokens). Add a method with `--inside ClassName` without reading the file. Edits re-index immediately and auto-verify the build (Go, Node, Rust, Make).
 
