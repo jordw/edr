@@ -12,7 +12,6 @@ import (
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
-	"github.com/jordw/edr/internal/trace"
 )
 
 // setOptBool sets a boolean flag if the pointer is non-nil and true.
@@ -289,7 +288,7 @@ func executePostEditReads(ctx context.Context, db *index.DB, sess *session.Sessi
 
 // executeQueries dispatches query operations and adds results as ops on the envelope.
 // Follows the same normalize-then-build-then-dispatch pattern as executeReads.
-func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams, cb *trace.CallBuilder) {
+func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams) {
 	// Distribute top-level budget to queries that lack individual budgets.
 	if p.Budget != nil && len(p.Queries) > 0 {
 		n := len(p.Queries)
@@ -373,17 +372,6 @@ func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, en
 
 	// 4. Post-process results
 	addMultiResultOps(env, sess, allCmds, allResults, "")
-
-	// Trace query events
-	for _, r := range allResults {
-		resultBytes := 0
-		if r.Result != nil {
-			if d, err := json.Marshal(r.Result); err == nil {
-				resultBytes = len(d)
-			}
-		}
-		cb.AddQueryEvent(r.Cmd, r.OK, resultBytes)
-	}
 }
 
 // executeWrites dispatches write operations and adds results as ops on the envelope.
@@ -417,7 +405,7 @@ func executeWrites(ctx context.Context, db *index.DB, sess *session.Session, env
 // executeEdits dispatches edit operations individually via DispatchMulti
 // (same path as standalone `edr edit`), and emits per-edit ops.
 // Returns (editsFailed, allNoop).
-func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams, warnings *[]string, cb *trace.CallBuilder) (bool, bool) {
+func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams, warnings *[]string) (bool, bool) {
 	dryRun := p.DryRun != nil && *p.DryRun
 
 	sess.InvalidateForEdit("edit", []string{})
@@ -492,7 +480,6 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env 
 		opID := fmt.Sprintf("e%d", i)
 
 		if !r.OK {
-			cb.AddEditEvent(p.Edits[i].File, 0, "", "", false)
 			env.AddFailedOpWithCode(opID, "edit", classifyErrorMsg(r.Error), r.Error)
 			anyFailed = true
 			allNoop = false
@@ -509,9 +496,6 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env 
 				result = newResult
 			}
 		}
-
-		// Trace
-		traceEditEvents(cb, result)
 
 		// Check noop status
 		if m, ok := result.(map[string]any); ok {
@@ -533,7 +517,7 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env 
 }
 
 // executeVerify dispatches the verify command and sets verify on the envelope.
-func executeVerify(ctx context.Context, db *index.DB, env *output.Envelope, p *doParams, cb *trace.CallBuilder) {
+func executeVerify(ctx context.Context, db *index.DB, env *output.Envelope, p *doParams) {
 	verifyFlags := map[string]any{}
 
 	// Collect edited/written file paths so verify can scope to relevant packages
@@ -566,16 +550,14 @@ func executeVerify(ctx context.Context, db *index.DB, env *output.Envelope, p *d
 	}
 	result, err := dispatch.Dispatch(ctx, db, "verify", []string{}, verifyFlags)
 	if err != nil {
-		cb.AddVerifyEvent("", false, 0, 0)
 		env.SetVerify(map[string]any{"status": "failed", "error": err.Error()})
 		return
 	}
-	traceVerifyEvent(cb, result)
 	env.SetVerify(result)
 }
 
 // handleDo dispatches batch operations and builds an *output.Envelope directly.
-func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trace.Collector, env *output.Envelope, raw json.RawMessage) error {
+func handleDo(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, raw json.RawMessage) error {
 	ctx = index.WithSourceCache(ctx)
 	output.SetRoot(db.Root())
 
@@ -591,11 +573,6 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 	hasWrites := len(p.Writes) > 0
 	hasRenames := len(p.Renames) > 0
 	hasVerify := p.Verify != nil && p.Verify != false
-
-	// Trace: begin call
-	sess.ResetStats()
-	cb := tc.BeginCall()
-	cb.SetRequest(len(p.Reads), len(p.Queries), len(p.Edits), len(p.Writes), len(p.Renames), hasVerify, hasInit, p.Budget)
 
 	// Warn if reads and mutations target the same file(s)
 	if hasReads && (hasEdits || hasWrites) {
@@ -642,7 +619,7 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 
 	// 2. Queries
 	if hasQueries {
-		executeQueries(ctx, db, sess, env, &p, cb)
+		executeQueries(ctx, db, sess, env, &p)
 	}
 
 	// Pre-promote per-edit dry_run to batch level before writes execute.
@@ -661,7 +638,7 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 	editsFailed := false
 	allNoop := false
 	if hasEdits {
-		editsFailed, allNoop = executeEdits(ctx, db, sess, env, &p, &warnings, cb)
+		editsFailed, allNoop = executeEdits(ctx, db, sess, env, &p, &warnings)
 	}
 
 	// 4. Renames
@@ -734,7 +711,7 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 	} else if allNoop && hasVerify {
 		env.SetVerify(map[string]any{"status": "skipped", "reason": "no-op edit"})
 	} else if hasVerify {
-		executeVerify(ctx, db, env, &p, cb)
+		executeVerify(ctx, db, env, &p)
 	}
 
 	// Add warnings as envelope errors
@@ -744,71 +721,7 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 
 	env.ComputeOK()
 
-	// Trace: record session stats and finish
-	resultData, _ := json.Marshal(env)
-	dr, bd := sess.GetStats()
-	cb.SetSessionStats(dr, bd)
-	cb.Finish(len(resultData), false, len(warnings))
-
 	return nil
-}
-
-
-// traceEditEvents extracts per-file edit results and records them on the CallBuilder.
-func traceEditEvents(cb *trace.CallBuilder, result any) {
-	if cb == nil {
-		return
-	}
-	m, ok := result.(map[string]any)
-	if !ok {
-		return
-	}
-
-	editOK := true
-	if ok, exists := m["ok"].(bool); exists {
-		editOK = ok
-	}
-
-	linesChanged := 0
-	if lc, ok := m["lines_changed"].(float64); ok {
-		linesChanged = int(lc)
-	}
-
-	// edit-plan results have a "hashes" map: {file: hash}
-	if hashes, ok := m["hashes"].(map[string]any); ok {
-		for file, hash := range hashes {
-			hashStr, _ := hash.(string)
-			cb.AddEditEvent(file, linesChanged, "", hashStr, editOK)
-		}
-	} else if file, ok := m["file"].(string); ok {
-		hash, _ := m["hash"].(string)
-		cb.AddEditEvent(file, linesChanged, "", hash, editOK)
-	}
-}
-
-// traceVerifyEvent extracts verify result and records it on the CallBuilder.
-func traceVerifyEvent(cb *trace.CallBuilder, result any) {
-	if cb == nil {
-		return
-	}
-	m, ok := result.(map[string]any)
-	if !ok {
-		return
-	}
-	command, _ := m["command"].(string)
-	verifyOK := true
-	if status, exists := m["status"].(string); exists {
-		verifyOK = status == "passed"
-	}
-	durationMs := 0
-	if d, ok := m["duration_ms"].(float64); ok {
-		durationMs = int(d)
-	}
-	outputBytes := 0
-	if o, ok := m["output"].(string); ok {
-		outputBytes = len(o)
-	}
-	cb.AddVerifyEvent(command, verifyOK, durationMs, outputBytes)
 }
 
 // inferQueryCmd determines the public command from populated fields when cmd is omitted.

@@ -14,7 +14,6 @@ import (
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
-	"github.com/jordw/edr/internal/trace"
 	"github.com/spf13/cobra"
 )
 
@@ -761,12 +760,9 @@ func runBatch(args []string) error {
 	sess, saveSess := session.LoadSession(edrDir)
 	defer saveSess()
 
-	tc := trace.NewCollector(edrDir, Version)
-	defer tc.Close()
-
 	cmdName := inferBatchCommand(&params)
 	env := output.NewEnvelope(cmdName)
-	if err := handleDo(context.Background(), db, sess, tc, env, json.RawMessage(paramsJSON)); err != nil {
+	if err := handleDo(context.Background(), db, sess, env, json.RawMessage(paramsJSON)); err != nil {
 		return err
 	}
 

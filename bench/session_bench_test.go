@@ -11,28 +11,13 @@ import (
 	"github.com/jordw/edr/internal/dispatch"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/session"
-	"github.com/jordw/edr/internal/trace"
 )
 
 // handleDoJSON simulates a handleDo call: dispatches through the session
-// post-processing pipeline and records trace events. Returns JSON output bytes.
-func handleDoJSON(t testing.TB, ctx context.Context, db *index.DB, sess *session.Session, tc *trace.Collector,
+// post-processing pipeline. Returns JSON output bytes.
+func handleDoJSON(t testing.TB, ctx context.Context, db *index.DB, sess *session.Session,
 	cmd string, args []string, flags map[string]any) []byte {
 	t.Helper()
-
-	cb := tc.BeginCall()
-	numReads, numQueries, numEdits := 0, 0, 0
-	if cmd == "read" {
-		numReads = 1
-	} else if cmd == "search" || cmd == "map" || cmd == "refs" {
-		numQueries = 1
-	} else if cmd == "edit" || cmd == "write" {
-		numEdits = 1
-	}
-	hasVerify := cmd == "verify"
-	cb.SetRequest(numReads, numQueries, numEdits, 0, 0, hasVerify, false, nil)
-
-	sess.ResetStats()
 
 	if cmdspec.ModifiesState(cmd) {
 		sess.InvalidateForEdit(cmd, args)
@@ -45,11 +30,6 @@ func handleDoJSON(t testing.TB, ctx context.Context, db *index.DB, sess *session
 
 	data, _ := json.Marshal(result)
 	text := sess.PostProcess(cmd, args, flags, result, string(data))
-
-	cb.AddQueryEvent(cmd, true, len(text))
-	dr, bd := sess.GetStats()
-	cb.SetSessionStats(dr, bd)
-	cb.Finish(len(text), false, 0)
 
 	return []byte(text)
 }
@@ -64,25 +44,19 @@ func TestSessionMultiLang(t *testing.T) {
 	db, tmp := setupRepo(t)
 	ctx := context.Background()
 
-	tc := trace.NewCollector(filepath.Join(tmp, ".edr"), "bench-test-1.0")
-	if tc == nil {
-		t.Fatal("failed to create trace collector")
-	}
-	defer tc.Close()
-
 	sess := session.New()
 
 	// Phase 1: Orientation — map the repo, find files, read signatures
 	// This is how an agent starts: get the lay of the land.
 	t.Run("orient/map_repo", func(t *testing.T) {
-		out := handleDoJSON(t, ctx, db, sess, tc, "map", nil, map[string]any{"budget": 500})
+		out := handleDoJSON(t, ctx, db, sess, "map", nil, map[string]any{"budget": 500})
 		assertJSONHas(t, out, "content")
 		assertJSONHas(t, out, "symbols")
 	})
 
 	t.Run("orient/find_all_langs", func(t *testing.T) {
 		for _, pat := range []string{"**/*.go", "**/*.py", "**/*.rs", "**/*.c", "**/*.java", "**/*.rb", "**/*.js", "**/*.tsx"} {
-			out := handleDoJSON(t, ctx, db, sess, tc, "search", []string{pat}, nil)
+			out := handleDoJSON(t, ctx, db, sess, "search", []string{pat}, nil)
 			if len(out) < 10 {
 				t.Errorf("search %s returned too few bytes: %d", pat, len(out))
 			}
@@ -111,7 +85,7 @@ func TestSessionMultiLang(t *testing.T) {
 
 	t.Run("read/signatures_multi_lang", func(t *testing.T) {
 		for _, c := range containers {
-			out := handleDoJSON(t, ctx, db, sess, tc, "read", []string{c.spec}, map[string]any{"signatures": true})
+			out := handleDoJSON(t, ctx, db, sess, "read", []string{c.spec}, map[string]any{"signatures": true})
 			if len(out) == 0 {
 				t.Errorf("[%s] %s: empty response", c.lang, c.spec)
 			}
@@ -135,7 +109,7 @@ func TestSessionMultiLang(t *testing.T) {
 
 	t.Run("read/full_symbols_multi_lang", func(t *testing.T) {
 		for _, r := range fullReads {
-			out := handleDoJSON(t, ctx, db, sess, tc, "read", []string{r.spec}, nil)
+			out := handleDoJSON(t, ctx, db, sess, "read", []string{r.spec}, nil)
 			if len(out) == 0 {
 				t.Errorf("[%s] %s: empty response", r.lang, r.spec)
 			}
@@ -145,7 +119,7 @@ func TestSessionMultiLang(t *testing.T) {
 	// Phase 3: Delta reads — re-read the same symbols, expect deltas/unchanged
 	t.Run("read/delta_unchanged", func(t *testing.T) {
 		for _, r := range fullReads {
-			out := handleDoJSON(t, ctx, db, sess, tc, "read", []string{r.spec}, nil)
+			out := handleDoJSON(t, ctx, db, sess, "read", []string{r.spec}, nil)
 			var m map[string]any
 			json.Unmarshal(out, &m)
 			if _, ok := m["unchanged"]; !ok {
@@ -159,20 +133,20 @@ func TestSessionMultiLang(t *testing.T) {
 	// Phase 4: Search across the codebase
 	t.Run("search/symbol_cross_lang", func(t *testing.T) {
 		// "enqueue" exists in Go, Rust, C, JS
-		out := handleDoJSON(t, ctx, db, sess, tc, "search", []string{"enqueue"}, map[string]any{"body": true, "budget": 500})
+		out := handleDoJSON(t, ctx, db, sess, "search", []string{"enqueue"}, map[string]any{"body": true, "budget": 500})
 		assertJSONHas(t, out, "matches")
 	})
 
 	t.Run("search/text_cross_lang", func(t *testing.T) {
 		// "retry" is a concept in every language's code
 		// Text search defaults to grouped output (key is "files", not "matches")
-		out := handleDoJSON(t, ctx, db, sess, tc, "search", []string{"retry"}, map[string]any{"text": true, "budget": 300})
+		out := handleDoJSON(t, ctx, db, sess, "search", []string{"retry"}, map[string]any{"text": true, "budget": 300})
 		assertJSONHas(t, out, "files")
 	})
 
 	t.Run("search/body_dedup", func(t *testing.T) {
 		// Second search for "enqueue" with body should trigger body dedup
-		out := handleDoJSON(t, ctx, db, sess, tc, "search", []string{"enqueue"}, map[string]any{"body": true, "budget": 500})
+		out := handleDoJSON(t, ctx, db, sess, "search", []string{"enqueue"}, map[string]any{"body": true, "budget": 500})
 		var m map[string]any
 		json.Unmarshal(out, &m)
 		if skipped, ok := m["skipped_bodies"]; ok {
@@ -182,14 +156,14 @@ func TestSessionMultiLang(t *testing.T) {
 
 	// Phase 5: Explore and refs — semantic analysis
 	t.Run("explore/python_gather", func(t *testing.T) {
-		out := handleDoJSON(t, ctx, db, sess, tc, "refs", []string{"_execute_task"}, map[string]any{
+		out := handleDoJSON(t, ctx, db, sess, "refs", []string{"_execute_task"}, map[string]any{
 			"body": true, "budget": 1500,
 		})
 		assertJSONHas(t, out, "symbol")
 	})
 
 	t.Run("explore/go_callers_deps", func(t *testing.T) {
-		out := handleDoJSON(t, ctx, db, sess, tc, "refs", []string{"internal/queue.go", "Dequeue"}, map[string]any{
+		out := handleDoJSON(t, ctx, db, sess, "refs", []string{"internal/queue.go", "Dequeue"}, map[string]any{
 			"callers": true, "deps": true, "body": true,
 		})
 		// refs returns {symbol, body, callers, deps}
@@ -198,14 +172,14 @@ func TestSessionMultiLang(t *testing.T) {
 
 	t.Run("refs/cross_file", func(t *testing.T) {
 		// Scope to Go's TaskQueue to avoid ambiguity with Rust/Ruby
-		out := handleDoJSON(t, ctx, db, sess, tc, "refs", []string{"internal/queue.go", "TaskQueue"}, nil)
+		out := handleDoJSON(t, ctx, db, sess, "refs", []string{"internal/queue.go", "TaskQueue"}, nil)
 		if len(out) < 20 {
 			t.Errorf("refs TaskQueue: too short response: %d bytes", len(out))
 		}
 	})
 
 	t.Run("refs/chain", func(t *testing.T) {
-		out := handleDoJSON(t, ctx, db, sess, tc, "refs", []string{"Scheduler"}, map[string]any{"chain": "_execute_task"})
+		out := handleDoJSON(t, ctx, db, sess, "refs", []string{"Scheduler"}, map[string]any{"chain": "_execute_task"})
 		if len(out) < 10 {
 			t.Errorf("refs chain: too short response: %d bytes", len(out))
 		}
@@ -226,7 +200,7 @@ func TestSessionMultiLang(t *testing.T) {
 
 	t.Run("edit/dry_run_multi_lang", func(t *testing.T) {
 		for _, e := range edits {
-			out := handleDoJSON(t, ctx, db, sess, tc, "edit", []string{e.file}, map[string]any{
+			out := handleDoJSON(t, ctx, db, sess, "edit", []string{e.file}, map[string]any{
 				"old_text": e.oldText,
 				"new_text": e.newText,
 				"dry-run":  true,
@@ -253,7 +227,7 @@ func TestSessionMultiLang(t *testing.T) {
 
 	// Phase 6b: Edit --fuzzy and --in
 	t.Run("edit/fuzzy_dry_run", func(t *testing.T) {
-		out := handleDoJSON(t, ctx, db, sess, tc, "edit", []string{"lib/scheduler.py"}, map[string]any{
+		out := handleDoJSON(t, ctx, db, sess, "edit", []string{"lib/scheduler.py"}, map[string]any{
 			"old_text": "self._running  =  True",
 			"new_text": "self._running = False",
 			"fuzzy":    true,
@@ -267,7 +241,7 @@ func TestSessionMultiLang(t *testing.T) {
 	})
 
 	t.Run("edit/in_symbol_dry_run", func(t *testing.T) {
-		out := handleDoJSON(t, ctx, db, sess, tc, "edit", []string{"lib/scheduler.py"}, map[string]any{
+		out := handleDoJSON(t, ctx, db, sess, "edit", []string{"lib/scheduler.py"}, map[string]any{
 			"in":       "Scheduler",
 			"old_text": "self._running = True",
 			"new_text": "self._running = False",
@@ -282,7 +256,7 @@ func TestSessionMultiLang(t *testing.T) {
 
 	// Phase 6c: Refs --impact
 	t.Run("refs/impact", func(t *testing.T) {
-		out := handleDoJSON(t, ctx, db, sess, tc, "refs", []string{"_execute_task"}, map[string]any{
+		out := handleDoJSON(t, ctx, db, sess, "refs", []string{"_execute_task"}, map[string]any{
 			"impact": true,
 		})
 		if len(out) < 10 {
@@ -292,7 +266,7 @@ func TestSessionMultiLang(t *testing.T) {
 
 	// Phase 6d: Verify
 	t.Run("verify/auto_detect", func(t *testing.T) {
-		out := handleDoJSON(t, ctx, db, sess, tc, "verify", nil, nil)
+		out := handleDoJSON(t, ctx, db, sess, "verify", nil, nil)
 		var m map[string]any
 		json.Unmarshal(out, &m)
 		// verify returns {command, status, duration_ms}
@@ -307,7 +281,7 @@ func TestSessionMultiLang(t *testing.T) {
 
 	t.Run("edit/apply_and_revert", func(t *testing.T) {
 		// Apply edit — use unique context to avoid ambiguity
-		out := handleDoJSON(t, ctx, db, sess, tc, "edit", []string{"lib/scheduler.py"}, map[string]any{
+		out := handleDoJSON(t, ctx, db, sess, "edit", []string{"lib/scheduler.py"}, map[string]any{
 			"old_text": "\"\"\"Start the scheduler loop.\"\"\"\n        self._running = True",
 			"new_text": "\"\"\"Start the scheduler loop.\"\"\"\n        self._running = False  # BENCH EDIT",
 		})
@@ -318,7 +292,7 @@ func TestSessionMultiLang(t *testing.T) {
 		}
 
 		// Revert edit
-		out = handleDoJSON(t, ctx, db, sess, tc, "edit", []string{"lib/scheduler.py"}, map[string]any{
+		out = handleDoJSON(t, ctx, db, sess, "edit", []string{"lib/scheduler.py"}, map[string]any{
 			"old_text": "\"\"\"Start the scheduler loop.\"\"\"\n        self._running = False  # BENCH EDIT",
 			"new_text": "\"\"\"Start the scheduler loop.\"\"\"\n        self._running = True",
 		})
@@ -337,7 +311,7 @@ func TestSessionMultiLang(t *testing.T) {
 	goOriginal, _ := os.ReadFile(goFile)
 
 	t.Run("write/inside_go_struct", func(t *testing.T) {
-		out := handleDoJSON(t, ctx, db, sess, tc, "write", []string{"internal/queue.go"}, map[string]any{
+		out := handleDoJSON(t, ctx, db, sess, "write", []string{"internal/queue.go"}, map[string]any{
 			"inside":  "TaskQueue",
 			"content": "draining bool",
 		})
@@ -381,64 +355,10 @@ func TestSessionMultiLang(t *testing.T) {
 			{"lib/TaskProcessor.java", "processWithRetry", "Java"},
 		}
 		for _, s := range specs {
-			out := handleDoJSON(t, ctx, db, sess, tc, "read", []string{s.file, s.symbol}, map[string]any{"depth": 2})
+			out := handleDoJSON(t, ctx, db, sess, "read", []string{s.file, s.symbol}, map[string]any{"depth": 2})
 			if len(out) == 0 {
 				t.Errorf("[%s] depth-2 %s:%s: empty", s.lang, s.file, s.symbol)
 			}
-		}
-	})
-
-	// Close collector to flush all events, then bench the session
-	tc.Close()
-
-	t.Run("bench_session", func(t *testing.T) {
-		traceDB, err := trace.OpenTraceDB(filepath.Join(tmp, ".edr"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer traceDB.Close()
-
-		result, err := trace.BenchSession(traceDB, "")
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		data, _ := json.MarshalIndent(result, "", "  ")
-		t.Logf("Session bench result:\n%s", string(data))
-
-		// Validate the bench result has reasonable values
-		if result.TotalCalls < 30 {
-			t.Errorf("expected at least 30 calls, got %d", result.TotalCalls)
-		}
-		if result.TotalReads < 20 {
-			t.Errorf("expected at least 20 reads, got %d", result.TotalReads)
-		}
-		if result.TotalQueries < 5 {
-			t.Errorf("expected at least 5 queries, got %d", result.TotalQueries)
-		}
-		if result.DeltaReads < 1 {
-			t.Errorf("expected at least 1 delta read, got %d", result.DeltaReads)
-		}
-		if result.TotalTokensEst < 100 {
-			t.Errorf("expected at least 100 estimated tokens, got %d", result.TotalTokensEst)
-		}
-		if result.ReadEfficiency == nil {
-			t.Error("expected read_efficiency to be computed")
-		} else {
-			t.Logf("Read efficiency: %.1f%%", *result.ReadEfficiency*100)
-		}
-		if result.TokensPerCall == nil {
-			t.Error("expected tokens_per_call to be computed")
-		} else {
-			t.Logf("Tokens/call: %.0f", *result.TokensPerCall)
-		}
-		if result.OptimizationRate == nil {
-			t.Error("expected optimization_rate to be computed")
-		} else {
-			t.Logf("Optimization rate: %.1f%%", *result.OptimizationRate*100)
-		}
-		if result.AvgCallDurationMs == nil {
-			t.Error("expected avg_call_duration_ms to be computed")
 		}
 	})
 }

@@ -13,13 +13,12 @@ import (
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
-	"github.com/jordw/edr/internal/trace"
 )
 
 // testHandleDo wraps handleDo with the old (string, error) return signature for tests.
-func testHandleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trace.Collector, raw json.RawMessage) (string, error) {
+func testHandleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json.RawMessage) (string, error) {
 	env := output.NewEnvelope("batch")
-	if err := handleDo(ctx, db, sess, tc, env, raw); err != nil {
+	if err := handleDo(ctx, db, sess, env, raw); err != nil {
 		return "", err
 	}
 	data, _ := json.Marshal(env)
@@ -782,7 +781,7 @@ func TestHandleDo_ReadLineRangeInvalid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := testHandleDo(context.Background(), db, sess, nil, json.RawMessage(tt.raw))
+			result, err := testHandleDo(context.Background(), db, sess, json.RawMessage(tt.raw))
 			if err != nil {
 				t.Fatalf("handleDo returned error: %v", err)
 			}
@@ -810,16 +809,12 @@ func TestHandleDo_EditEmptyNewTextDeletion(t *testing.T) {
 	}
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc != nil {
-		defer tc.Close()
-	}
 
 	raw := json.RawMessage(`{
 		"edits": [{"file": "main.go", "old_text": "func remove() {}\n\n", "new_text": ""}]
 	}`)
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -870,13 +865,9 @@ func TestHandleDo_VerifyObjectCommand(t *testing.T) {
 	defer db.Close()
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc != nil {
-		defer tc.Close()
-	}
 
 	raw := json.RawMessage(`{"verify": {"command": "echo verify-works", "timeout": 10}}`)
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -904,10 +895,6 @@ func TestHandleDo_BatchEditFailureReporting(t *testing.T) {
 	}
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc != nil {
-		defer tc.Close()
-	}
 
 	// 3 edits, second fails (nonexistent text)
 	raw := json.RawMessage(`{
@@ -918,7 +905,7 @@ func TestHandleDo_BatchEditFailureReporting(t *testing.T) {
 		]
 	}`)
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -975,10 +962,6 @@ func TestHandleDo_BatchEditNotFoundFields(t *testing.T) {
 	}
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc != nil {
-		defer tc.Close()
-	}
 
 	// Single failing edit
 	raw := json.RawMessage(`{
@@ -987,7 +970,7 @@ func TestHandleDo_BatchEditNotFoundFields(t *testing.T) {
 		]
 	}`)
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1095,10 +1078,6 @@ func TestHandleDo_SkipsPostEditReadsAndVerifyOnEditFailure(t *testing.T) {
 	defer db.Close()
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc != nil {
-		defer tc.Close()
-	}
 
 	// Call handleDo with an edit targeting a non-existent file, plus
 	// read_after_edit and verify — both should be skipped.
@@ -1108,7 +1087,7 @@ func TestHandleDo_SkipsPostEditReadsAndVerifyOnEditFailure(t *testing.T) {
 		"verify": true
 	}`)
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo error: %v", err)
 	}
@@ -1143,10 +1122,6 @@ func TestHandleDo_DryRunSkipsWrites(t *testing.T) {
 	}
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc != nil {
-		defer tc.Close()
-	}
 
 	writeTarget := filepath.Join(tmp, "should_not_exist.txt")
 	raw := json.RawMessage(fmt.Sprintf(`{
@@ -1154,7 +1129,7 @@ func TestHandleDo_DryRunSkipsWrites(t *testing.T) {
 		"edits": [{"file": "existing.go", "old_text": "func hello", "new_text": "func world", "dry_run": true}]
 	}`, writeTarget))
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1211,10 +1186,6 @@ func TestHandleDo_NoopEditSkipsVerify(t *testing.T) {
 	}
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc != nil {
-		defer tc.Close()
-	}
 
 	// Edit where old_text == new_text, with verify using a command that would fail
 	raw := json.RawMessage(`{
@@ -1222,7 +1193,7 @@ func TestHandleDo_NoopEditSkipsVerify(t *testing.T) {
 		"verify": "false"
 	}`)
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1262,10 +1233,6 @@ func TestHandleDo_VerifyFailedSummaryStatus(t *testing.T) {
 	}
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc != nil {
-		defer tc.Close()
-	}
 
 	// Real edit that succeeds, but verify command fails
 	raw := json.RawMessage(`{
@@ -1273,7 +1240,7 @@ func TestHandleDo_VerifyFailedSummaryStatus(t *testing.T) {
 		"verify": "false"
 	}`)
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1316,10 +1283,6 @@ func TestHandleDo_WriteInvalidatesSession(t *testing.T) {
 	defer db.Close()
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc != nil {
-		defer tc.Close()
-	}
 
 	targetFile := "written.txt"
 
@@ -1337,7 +1300,7 @@ func TestHandleDo_WriteInvalidatesSession(t *testing.T) {
 		"writes": [{"file": %q, "content": "fresh content"}]
 	}`, targetFile))
 
-	_, err = testHandleDo(context.Background(), db, sess, tc, raw)
+	_, err = testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1347,72 +1310,6 @@ func TestHandleDo_WriteInvalidatesSession(t *testing.T) {
 	status, _ = sess.CheckContent(targetFile+":[1 10]", "stale content", false)
 	if status == "unchanged" {
 		t.Error("session should have been invalidated after write; got unchanged")
-	}
-}
-
-func TestHandleDo_TraceCollectorRecordsEvents(t *testing.T) {
-	// Issue #16: trace events should be recorded when collector is provided
-	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
-	os.WriteFile(filepath.Join(tmp, "f.txt"), []byte("hello\n"), 0644)
-
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
-	defer db.Close()
-	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
-		t.Fatal(err)
-	}
-
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc == nil {
-		t.Fatal("NewCollector returned nil")
-	}
-
-	sess := session.New()
-
-	raw := json.RawMessage(`{
-		"reads": [{"file": "f.txt"}],
-		"edits": [{"file": "f.txt", "old_text": "hello", "new_text": "world"}]
-	}`)
-
-	_, err = testHandleDo(context.Background(), db, sess, tc, raw)
-	if err != nil {
-		t.Fatalf("handleDo: %v", err)
-	}
-
-	// Close the collector to flush events
-	tc.Close()
-
-	// Verify traces.db has at least one call record
-	traceDB, err := trace.OpenTraceDB(edrDir)
-	if err != nil {
-		t.Fatalf("OpenTraceDB: %v", err)
-	}
-	defer traceDB.Close()
-
-	var callCount int
-	err = traceDB.QueryRow("SELECT count(*) FROM calls").Scan(&callCount)
-	if err != nil {
-		t.Fatalf("query calls: %v", err)
-	}
-	if callCount == 0 {
-		t.Error("expected at least 1 call record in traces.db, got 0")
-	}
-
-	// Verify the call record has the right shape (reads + edits)
-	var numReads, numEdits int
-	err = traceDB.QueryRow("SELECT num_reads, num_edits FROM calls ORDER BY id DESC LIMIT 1").Scan(&numReads, &numEdits)
-	if err != nil {
-		t.Fatalf("query call shape: %v", err)
-	}
-	if numReads != 1 {
-		t.Errorf("num_reads = %d, want 1", numReads)
-	}
-	if numEdits != 1 {
-		t.Errorf("num_edits = %d, want 1", numEdits)
 	}
 }
 
@@ -1434,10 +1331,6 @@ func TestHandleDo_OverlappingEditsRejected(t *testing.T) {
 	}
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc != nil {
-		defer tc.Close()
-	}
 
 	// Two edits with overlapping text on the same file.
 	// With sequential per-edit dispatch, edit 1 succeeds and edit 2 fails
@@ -1449,7 +1342,7 @@ func TestHandleDo_OverlappingEditsRejected(t *testing.T) {
 		]
 	}`)
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1482,10 +1375,6 @@ func TestHandleDo_NonOverlappingEditsSameFileSucceed(t *testing.T) {
 	}
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc != nil {
-		defer tc.Close()
-	}
 
 	// Two non-overlapping edits on the same file
 	raw := json.RawMessage(`{
@@ -1495,7 +1384,7 @@ func TestHandleDo_NonOverlappingEditsSameFileSucceed(t *testing.T) {
 		]
 	}`)
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1528,10 +1417,6 @@ func TestHandleDo_EditFailureSkipsWrites(t *testing.T) {
 	}
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc != nil {
-		defer tc.Close()
-	}
 
 	writeTarget := filepath.Join(tmp, "new_file.go")
 	// Edit will fail (old_text not found), write should be skipped
@@ -1540,7 +1425,7 @@ func TestHandleDo_EditFailureSkipsWrites(t *testing.T) {
 		"writes": [{"file": %q, "content": "package new"}]
 	}`, writeTarget))
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1577,10 +1462,6 @@ func TestHandleDo_WriteDryRunPreview(t *testing.T) {
 	}
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc != nil {
-		defer tc.Close()
-	}
 
 	// Global dry-run with writes only (no edits)
 	raw := json.RawMessage(`{
@@ -1588,7 +1469,7 @@ func TestHandleDo_WriteDryRunPreview(t *testing.T) {
 		"dry_run": true
 	}`)
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1636,10 +1517,6 @@ func TestHandleDo_WriteNewFileDryRun(t *testing.T) {
 	defer db.Close()
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc != nil {
-		defer tc.Close()
-	}
 
 	newFile := filepath.Join(tmp, "brand_new.go")
 	raw := json.RawMessage(fmt.Sprintf(`{
@@ -1647,7 +1524,7 @@ func TestHandleDo_WriteNewFileDryRun(t *testing.T) {
 		"dry_run": true
 	}`, newFile))
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1766,8 +1643,6 @@ func TestHandleDo_MultiEditProducesPerEditOps(t *testing.T) {
 	index.IndexRepo(context.Background(), db)
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test")
-	defer tc.Close()
 
 	raw := json.RawMessage(`{
 		"edits": [
@@ -1776,7 +1651,7 @@ func TestHandleDo_MultiEditProducesPerEditOps(t *testing.T) {
 		]
 	}`)
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1823,8 +1698,6 @@ func TestHandleDo_MultiEditDryRunPerEditOps(t *testing.T) {
 	index.IndexRepo(context.Background(), db)
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test")
-	defer tc.Close()
 
 	raw := json.RawMessage(`{
 		"edits": [
@@ -1834,7 +1707,7 @@ func TestHandleDo_MultiEditDryRunPerEditOps(t *testing.T) {
 		"dry_run": true
 	}`)
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1882,8 +1755,6 @@ func TestHandleDo_EditFailurePerEditOps(t *testing.T) {
 	index.IndexRepo(context.Background(), db)
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test")
-	defer tc.Close()
 
 	// Two edits, both will fail because old_text not found
 	raw := json.RawMessage(`{
@@ -1893,7 +1764,7 @@ func TestHandleDo_EditFailurePerEditOps(t *testing.T) {
 		]
 	}`)
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1938,8 +1809,6 @@ func TestHandleDo_MultiFileEditsParallel(t *testing.T) {
 	index.IndexRepo(context.Background(), db)
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test")
-	defer tc.Close()
 
 	raw := json.RawMessage(`{
 		"edits": [
@@ -1948,7 +1817,7 @@ func TestHandleDo_MultiFileEditsParallel(t *testing.T) {
 		]
 	}`)
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -2002,8 +1871,6 @@ func TestHandleDo_MultiFileEditPartialFailure(t *testing.T) {
 	index.IndexRepo(context.Background(), db)
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test")
-	defer tc.Close()
 
 	// Edit on a.go succeeds, edit on b.go fails (old_text not found)
 	raw := json.RawMessage(`{
@@ -2013,7 +1880,7 @@ func TestHandleDo_MultiFileEditPartialFailure(t *testing.T) {
 		]
 	}`)
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -2068,8 +1935,6 @@ func TestHandleDo_BatchEditResultShapeParity(t *testing.T) {
 	index.IndexRepo(context.Background(), db)
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test")
-	defer tc.Close()
 
 	raw := json.RawMessage(`{
 		"edits": [
@@ -2077,7 +1942,7 @@ func TestHandleDo_BatchEditResultShapeParity(t *testing.T) {
 		]
 	}`)
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -2118,8 +1983,6 @@ func TestHandleDo_SkippedWritesNotFailed(t *testing.T) {
 	index.IndexRepo(context.Background(), db)
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test")
-	defer tc.Close()
 
 	writeTarget := filepath.Join(tmp, "new.go")
 	raw := json.RawMessage(fmt.Sprintf(`{
@@ -2127,7 +1990,7 @@ func TestHandleDo_SkippedWritesNotFailed(t *testing.T) {
 		"writes": [{"file": %q, "content": "package new"}]
 	}`, writeTarget))
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -2168,14 +2031,10 @@ func TestHandleDo_ReadShapeParity(t *testing.T) {
 	index.IndexRepo(context.Background(), db)
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc != nil {
-		defer tc.Close()
-	}
 
 	// Batch read via handleDo
 	raw := json.RawMessage(`{"reads":[{"file":"main.go","symbol":"hello"}]}`)
-	batchResult, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	batchResult, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -2278,10 +2137,6 @@ func TestHandleDo_BatchEditErrorParity(t *testing.T) {
 	}
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc != nil {
-		defer tc.Close()
-	}
 
 	raw := json.RawMessage(`{
 		"edits": [
@@ -2289,7 +2144,7 @@ func TestHandleDo_BatchEditErrorParity(t *testing.T) {
 		]
 	}`)
 
-	result, err := testHandleDo(context.Background(), db, sess, tc, raw)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -2320,10 +2175,6 @@ func TestHandleDo_CommandFieldNeverLeaksInternalNames(t *testing.T) {
 	index.IndexRepo(context.Background(), db)
 
 	sess := session.New()
-	tc := trace.NewCollector(edrDir, "test-1.0")
-	if tc != nil {
-		defer tc.Close()
-	}
 
 	// Test various batch operations
 	cases := []string{
@@ -2334,7 +2185,7 @@ func TestHandleDo_CommandFieldNeverLeaksInternalNames(t *testing.T) {
 	}
 
 	for _, rawJSON := range cases {
-		result, err := testHandleDo(context.Background(), db, sess, tc, json.RawMessage(rawJSON))
+		result, err := testHandleDo(context.Background(), db, sess, json.RawMessage(rawJSON))
 		if err != nil {
 			continue // some may fail, that's ok — we're checking the JSON output
 		}
