@@ -257,6 +257,21 @@ footer {
   </div>
 </div>
 
+<!-- Why less context = faster agents -->
+<section>
+  <h2>Why less context = faster agents</h2>
+  <p>Model speed keeps improving &mdash; Claude with extended thinking, Codex in the background &mdash; but agents still bottleneck on the same thing: <strong>how much text they have to process per step</strong>.</p>
+  <p>An agent that <code>cat</code>s a 400-line file to read one function just added 15KB to its context. Multiply by every read, search, and test run in a task. The model has to attend over all of it &mdash; prefill cost is quadratic in context length, and every output token generated is slower because it attends over a larger KV cache. Trimming a few milliseconds off inference doesn&rsquo;t help when the input is 10&times; larger than it needs to be.</p>
+  <p>edr attacks this directly:</p>
+  <ul>
+    <li><strong>Fewer tokens in</strong> &rarr; faster responses. Read a function (1KB) instead of a file (15KB). The model processes 15&times; less input.</li>
+    <li><strong>Fewer round-trips</strong> &rarr; less wall-clock time. Batch three reads into one call instead of three sequential ones. Each round-trip has overhead &mdash; parsing, scheduling, output rendering &mdash; that adds up fast.</li>
+    <li><strong>Deltas eliminate redundancy</strong> &rarr; the context window stops filling with repeated content. Re-read a file after an edit? Only the changed lines come back. Re-run tests? Just the diff.</li>
+  </ul>
+  <p>The benchmarks below show 95% median context reduction. That&rsquo;s not just less text &mdash; it&rsquo;s proportionally faster completions and more headroom before the agent hits its context limit and starts losing track of the task.</p>
+  <p>This matters most on large codebases. When files are long and symbols are scattered across hundreds of modules, raw file tools flood the context window fast. edr keeps the working set small regardless of repo size &mdash; a 3,000-file monorepo feels like a 50-file project.</p>
+</section>
+
 <!-- Example -->
 <section class="example">
   <h2>Example</h2>
