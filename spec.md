@@ -129,6 +129,7 @@ edr edit <path>:<symbol> --move-after <symbol>
 edr edit <path> --insert-at 20 --new-text "..."
 edr edit <path> --old-text "x" --new-text "y" --in <path>:<symbol>
 edr edit <path> --old-text "x" --new-text "y" --fuzzy
+edr edit <path> --old-text "x" --new-text "y" --no-expect-hash
 edr edit ... --dry-run
 ```
 
@@ -141,6 +142,9 @@ Rules:
 - `--move-after` MAY be supported for same-file symbol moves; if supported, it MUST be explicit and MUST NOT guess cross-file intent
 - `--insert-at` is the canonical pure-insertion form for line-oriented edits
 - `--fuzzy` is opt-in only; it MUST NOT become the default matching mode without revisiting the spec's strictness guarantees
+- stale-read protection is on by default: if the session has a prior read for the target file (or a symbol within it), edr MUST reject the edit when the file has changed since that read
+- explicit hash plumbing is compatibility-only: `--expect-hash` MAY still exist, but agents SHOULD NOT need to thread hashes through normal edit workflows
+- edr SHOULD expose an explicit opt-out such as `--no-expect-hash` for intentional blind edits
 
 #### write
 
@@ -429,8 +433,8 @@ That means:
 
 - A `read` header always has `file` and `lines`, whether it returned full content, signatures, skeleton, or a line range
 - A `search` header normally has `n` (match count), including `{"n":0}` for zero matches
-- An `edit` header always has `file` and `status`; `hash` is present on `applied`
-- A `write` header always has `file` and `status`; `hash` is present on `applied`
+- A successful `edit` header always has `file` and `status`; `hash` is present on `applied`
+- A successful `write` header always has `file` and `status`; `hash` is present on `applied`
 
 Fields MAY be omitted when truly inapplicable. Current builds also expose some mode-specific metadata such as `hint`, `session`, or read-time `hash`.
 
@@ -543,6 +547,9 @@ Rules:
 - `edit --insert-at` is an insertion edit, not a write; it SHOULD return the same mutation shape as other edits
 - If `edit --fuzzy` succeeds, the response SHOULD include metadata indicating that matching was fuzzy rather than exact
 - If `edit --move-after` is supported, it SHOULD return a normal edit result rather than inventing a separate mutation type
+- if a session-backed stale-read precondition fails, the edit MUST fail with `ec:"hash_mismatch"`
+- in a batch, reads that occur before edits establish the expected snapshot for those later edits
+- if there is no prior session read for the target, edr MAY apply the edit without an implicit hash precondition
 
 When verify fails after successful edits, exit code is 1 but the mutation headers still show `"status":"applied"`. That distinction is essential.
 
@@ -626,7 +633,7 @@ Recommended codes:
 | `ambiguous_match` | Edit old-text matched multiple locations |
 | `index_failed` | Auto-indexing failed |
 | `outside_repo` | Path is outside repository root |
-| `hash_mismatch` | `expect_hash` precondition failed |
+| `hash_mismatch` | Explicit or implicit stale-read precondition failed |
 | `invalid_mode` | Mutually exclusive flags or impossible mode |
 | `command_error` | Last-resort fallback only |
 
@@ -658,6 +665,8 @@ Additional edit-matching rules:
 - `--fuzzy` MUST still fail on ambiguity
 - `--all` and `--fuzzy` SHOULD NOT combine unless the semantics are made explicit and deterministic
 - If `--move-after` is supported, cross-file moves MUST fail rather than silently degrade into copy/delete behavior
+- when the session shows that the agent previously read the target file or symbol, edit MUST validate that the file has not changed since that read unless the user explicitly opts out
+- the implicit stale-read check is file-level even when the prior read was symbol-scoped
 
 ## Batch / standalone parity
 

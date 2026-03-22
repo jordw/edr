@@ -1,41 +1,23 @@
 # Bugs — All Fixed
 
-All 23 items from the 2026-03-21 backlog have been implemented and shipped.
+All 11 items from the 2026-03-21 backlog have been resolved.
 
-## P1 — Spec correctness (all fixed)
+## Fixed in cb08c61
 
-1. **Failed ops leak success-only fields** — `AddFailedOpResult` now strips `file`, `lines`, `hash`, `sym`, `content` from error ops.
-2. **Auto-index emits stderr in normal mode** — gated on `--verbose` in `openDBStrictRoot`.
-3. **Verify uses non-spec `"timeout"` status** — mapped to `"failed"` with `"timeout after Ns"` error.
-4. **Plain verify output drops command** — `command` now included in all verify header states.
-5. **Plain transport omits `session:"new"`** — both `"new"` and `"unchanged"` preserved in read/search/map/refs.
-6. **Verify failure body breaks header-only contract** — output moved into the header as an `output` field.
-7. **`invalid_mode` error code never used** — `classifyErrorMsg` now detects "mutually exclusive" messages.
-8. **`budget_used` never reported** — threaded through read, search, map results and plain headers.
+3. **Session-deduped `read` drops required header fields** — `lines` and `sym` now preserved in unchanged response.
+4. **Session-deduped `refs` collapses to a non-conforming header** — `sym` and `n` now preserved via session whitelist and plain.go extraction.
+5. **`run` output appends synthetic footers** — All footer lines removed; exit code passed through process exit code only.
+8. **Standalone help documents non-canonical positional forms** — `edit` and `refs` Use: strings updated to `file:symbol` form.
 
-## P2 — Edit surface (all fixed)
+## Fixed in 506ddf8
 
-9. **`--delete` flag for edit** — canonical deletion form for symbol and text-match edits. Consumes trailing newline on symbol delete.
-10. **Edit `--lines` flag** — colon-range shorthand (`--lines 20:30`) parsed in `runSmartEdit`.
-11. **`--insert-at` flag for edit** — zero-width insertion before a line number, normalized to end with `\n`.
-12. **`--fuzzy` flag for edit** — opt-in whitespace/indentation fuzzy matching with uniqueness enforcement. Disallowed with `--all`.
+1. **`cmdspec` missing public commands** — `run`, `session`, `setup` registered with proper flags/categories.
+2. **Validation test enforces old 9-command surface** — Updated to 12 commands.
+6. **README/CLAUDE teach old JSON transport** — Updated to describe plain mode (JSON header + raw-text body).
+7. **README teaches unsupported `setup` flags** — Removed `--claude` from example.
+9. **Text search missing `budget_used`** — Now uses `Symbol.Size` (always populated after budget trimming).
 
-## P3 — Batch/standalone parity (all fixed)
+## Resolved by investigation / spec fix
 
-13. **Batch CLI missing `--no-group` for search** — added to batch CLI parser.
-14. **Batch CLI missing `--lang` for map** — added `Lang` field to `doQuery` and threaded through `queryToMultiCmd`.
-15. **Batch CLI missing `--level` and `--timeout` for verify** — parsed in batch CLI, threaded as a map into verify dispatch.
-16. **`--symbols` in batch but not standalone cmdspec** — registered on the `read` command in cmdspec.
-
-## P4 — Cleanup and policy alignment (all fixed)
-
-17. **Remove legacy `EDR_FORMAT=json` support** — marked as internal-only (retained for test infrastructure), not public API.
-18. **Batch dry-run edit plus read** — warning emitted when post-edit reads follow dry-run edits (shows pre-edit state).
-19. **Cursor target not in spec** — added Cursor as a supported first-class target in the spec.
-20. **Help text teaches non-canonical flag syntax** — batch examples updated to use `--signatures`, `--old-text`, `--new-text`.
-
-## P5 — Optional feature work (all fixed)
-
-21. **`--move-after` for same-file symbol moves** — resolves source and target symbols, cuts and reinserts. Cross-file moves fail clearly.
-22. **`--atomic` for batch edits** — validates all edits via dry-run first; if any fails, all are aborted.
-23. **`rename --dry-run` with full cross-file diff preview** — per-file unified diffs included in dry-run rename output.
+10. **`--no-group` standalone no-op** — False positive. Flag is registered via cmdspec, works correctly at the data layer. Grouped and ungrouped render identically in plain mode (difference is JSON structure only).
+11. **Spec contradiction: edit failure shape** — Reconciled: spec now says "A *successful* edit header always has `file` and `status`", consistent with the failure shape rule.
