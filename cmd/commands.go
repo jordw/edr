@@ -32,6 +32,7 @@ func init() {
 	rootCmd.AddCommand(setupCmd)
 	rootCmd.AddCommand(sessionCmd)
 	rootCmd.AddCommand(nextCmd)
+	rootCmd.AddCommand(checkpointCmd)
 }
 
 // dispatchCmdWithIndex is like dispatchCmd but auto-indexes if needed.
@@ -486,7 +487,144 @@ var nextCmd = &cobra.Command{
 	},
 }
 
+
 func init() { cmdspec.RegisterFlags(nextCmd.Flags(), "next") }
+
+var checkpointCmd = &cobra.Command{
+	Use:   "checkpoint [label]",
+	Short: "Snapshot or restore session state",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		root := getRoot(cmd)
+		edrDir := filepath.Join(root, ".edr")
+		sessDir := filepath.Join(edrDir, "sessions")
+
+		sess, saveSess := session.LoadSession(edrDir)
+		defer saveSess()
+
+		flags := extractFlags(cmd)
+
+		// --list: show all checkpoints
+		if listFlag, _ := flags["list"].(bool); listFlag {
+			infos := session.ListCheckpoints(sessDir)
+			// Convert to []any for plain renderer (can't type-assert across packages)
+			items := make([]any, len(infos))
+			for i, info := range infos {
+				m := map[string]any{
+					"id":         info.ID,
+					"created_at": info.CreatedAt.Format("2006-01-02 15:04"),
+					"op_id":      info.OpID,
+					"file_count": info.FileCount,
+				}
+				if info.Label != "" {
+					m["label"] = info.Label
+				}
+				items[i] = m
+			}
+			result := map[string]any{"checkpoints": items}
+			env := output.NewEnvelope("checkpoint")
+			env.AddOp("c0", "checkpoint", result)
+			env.ComputeOK()
+			output.PrintEnvelope(env)
+			return nil
+		}
+
+		// --restore <id>: restore to checkpoint
+		if restoreID, _ := flags["restore"].(string); restoreID != "" {
+			noSave, _ := flags["no_save"].(bool)
+			dirtyFiles := sess.GetDirtyFiles()
+
+			restored, notRemoved, preRestoreID, err := sess.RestoreCheckpoint(
+				sessDir, root, restoreID, !noSave, dirtyFiles,
+			)
+			if err != nil {
+				return err
+			}
+
+			result := map[string]any{
+				"status":   "restored",
+				"target":   restoreID,
+				"restored": restored,
+			}
+			if preRestoreID != "" {
+				result["pre_restore_checkpoint"] = preRestoreID
+			}
+			if len(notRemoved) > 0 {
+				result["not_removed"] = notRemoved
+			}
+
+			env := output.NewEnvelope("checkpoint")
+			env.AddOp("c0", "checkpoint", result)
+			env.ComputeOK()
+			output.PrintEnvelope(env)
+			return nil
+		}
+
+		// --drop <id>: delete a checkpoint
+		if dropID, _ := flags["drop"].(string); dropID != "" {
+			if err := session.DropCheckpoint(sessDir, dropID); err != nil {
+				return err
+			}
+			result := map[string]any{"status": "dropped", "id": dropID}
+			env := output.NewEnvelope("checkpoint")
+			env.AddOp("c0", "checkpoint", result)
+			env.ComputeOK()
+			output.PrintEnvelope(env)
+			return nil
+		}
+
+		// --diff <id>: show changes since checkpoint
+		if diffID, _ := flags["diff"].(string); diffID != "" {
+			dirtyFiles := sess.GetDirtyFiles()
+			diffs, err := session.DiffCheckpoint(sessDir, root, diffID, dirtyFiles)
+			if err != nil {
+				return err
+			}
+			items := make([]any, len(diffs))
+			for i, d := range diffs {
+				items[i] = map[string]any{"path": d.Path, "status": d.Status}
+			}
+			result := map[string]any{"checkpoint": diffID, "diffs": items}
+			env := output.NewEnvelope("checkpoint")
+			env.AddOp("c0", "checkpoint", result)
+			env.ComputeOK()
+			output.PrintEnvelope(env)
+			return nil
+		}
+
+		// Default: create checkpoint
+		label, _ := flags["label"].(string)
+		if label == "" && len(args) > 0 {
+			label = args[0]
+		}
+		dirtyFiles := sess.GetDirtyFiles()
+
+		cp, err := sess.CreateCheckpoint(sessDir, root, label, dirtyFiles)
+		if err != nil {
+			return err
+		}
+
+		result := map[string]any{
+			"status":     "created",
+			"id":         cp.ID,
+			"file_count": len(cp.Files),
+		}
+		if cp.Label != "" {
+			result["label"] = cp.Label
+		}
+		if cp.OpID != "" {
+			result["op_id"] = cp.OpID
+		}
+
+		env := output.NewEnvelope("checkpoint")
+		env.AddOp("c0", "checkpoint", result)
+		env.ComputeOK()
+		output.PrintEnvelope(env)
+		return nil
+	},
+}
+
+func init() { cmdspec.RegisterFlags(checkpointCmd.Flags(), "checkpoint") }
 
 // buildNextResult constructs the result map for `edr next`.
 func buildNextResult(sess *session.Session, db *index.DB, count int) map[string]any {

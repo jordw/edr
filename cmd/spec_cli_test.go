@@ -251,7 +251,7 @@ func TestSpec_HelpSurface(t *testing.T) {
 		t.Errorf("edr --help wrote to stderr: %q", stderr)
 	}
 
-	expected := []string{"edit", "map", "next", "read", "refs", "reindex", "rename", "run", "search", "session", "setup", "verify", "write"}
+	expected := []string{"checkpoint", "edit", "map", "next", "read", "refs", "reindex", "rename", "run", "search", "session", "setup", "verify", "write"}
 	cmdRe := regexp.MustCompile(`(?m)^\s{2}(\w+)\s`)
 	matches := cmdRe.FindAllStringSubmatch(stdout, -1)
 
@@ -2365,6 +2365,298 @@ func TestSpec_NextStaleAssumption(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "hello") {
 		t.Errorf("expected 'hello' in fix output: %s", stdout)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Checkpoint
+// ---------------------------------------------------------------------------
+
+func TestSpec_CheckpointCreateAndList(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+	sessEnv := []string{"EDR_SESSION=test-cp-create"}
+
+	// Edit a file so there's something to snapshot
+	_, _, _, exit := specRun(t, binary, dir, sessEnv, "edit", "main.go",
+		"--old-text", `println("hi")`, "--new-text", `println("hello")`)
+	if exit != 0 {
+		t.Fatal("edit failed")
+	}
+
+	// Create checkpoint
+	result, _, _, exit := specRun(t, binary, dir, sessEnv, "checkpoint", "--label", "before refactor")
+	if exit != 0 {
+		t.Fatalf("checkpoint create exit %d", exit)
+	}
+	header := result.Ops[0].Header
+	status, _ := header["status"].(string)
+	if status != "created" {
+		t.Errorf("expected status=created, got %q", status)
+	}
+	id, _ := header["id"].(string)
+	if id != "cp_1" {
+		t.Errorf("expected id=cp_1, got %q", id)
+	}
+	files, _ := header["files"].(float64)
+	if files != 1 {
+		t.Errorf("expected files=1, got %v", files)
+	}
+
+	// List checkpoints
+	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "checkpoint", "--list")
+	if exit != 0 {
+		t.Fatalf("checkpoint list exit %d", exit)
+	}
+	if !strings.Contains(stdout, "cp_1") {
+		t.Errorf("expected cp_1 in list output: %s", stdout)
+	}
+	if !strings.Contains(stdout, "before refactor") {
+		t.Errorf("expected label in list output: %s", stdout)
+	}
+}
+
+func TestSpec_CheckpointRestore(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+	sessEnv := []string{"EDR_SESSION=test-cp-restore"}
+
+	// Edit
+	_, _, _, exit := specRun(t, binary, dir, sessEnv, "edit", "main.go",
+		"--old-text", `println("hi")`, "--new-text", `println("v1")`)
+	if exit != 0 {
+		t.Fatal("edit failed")
+	}
+
+	// Checkpoint
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "checkpoint")
+	if exit != 0 {
+		t.Fatal("checkpoint failed")
+	}
+
+	// Edit again (change file further)
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "edit", "main.go",
+		"--old-text", `println("v1")`, "--new-text", `println("v2")`)
+	if exit != 0 {
+		t.Fatal("second edit failed")
+	}
+
+	// Verify file has v2
+	content, _ := os.ReadFile(filepath.Join(dir, "main.go"))
+	if !strings.Contains(string(content), `println("v2")`) {
+		t.Fatalf("expected v2 in file, got: %s", content)
+	}
+
+	// Restore
+	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "checkpoint", "--restore", "cp_1")
+	if exit != 0 {
+		t.Fatalf("restore exit %d", exit)
+	}
+	header := result.Ops[0].Header
+	status, _ := header["status"].(string)
+	if status != "restored" {
+		t.Errorf("expected status=restored, got %q", status)
+	}
+	preRestore, _ := header["pre_restore"].(string)
+	if preRestore == "" {
+		t.Error("expected pre-restore checkpoint ID")
+	}
+	if !strings.Contains(stdout, "main.go") {
+		t.Errorf("expected main.go in restored list: %s", stdout)
+	}
+
+	// Verify file reverted to v1
+	content, _ = os.ReadFile(filepath.Join(dir, "main.go"))
+	if !strings.Contains(string(content), `println("v1")`) {
+		t.Errorf("expected v1 after restore, got: %s", content)
+	}
+}
+
+func TestSpec_CheckpointDiff(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+	sessEnv := []string{"EDR_SESSION=test-cp-diff"}
+
+	// Edit and checkpoint
+	_, _, _, exit := specRun(t, binary, dir, sessEnv, "edit", "main.go",
+		"--old-text", `println("hi")`, "--new-text", `println("v1")`)
+	if exit != 0 {
+		t.Fatal("edit failed")
+	}
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "checkpoint")
+	if exit != 0 {
+		t.Fatal("checkpoint failed")
+	}
+
+	// Diff immediately — should show no changes
+	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "checkpoint", "--diff", "cp_1")
+	if exit != 0 {
+		t.Fatalf("diff exit %d", exit)
+	}
+	if !strings.Contains(stdout, "(no changes)") {
+		t.Errorf("expected no changes right after checkpoint: %s", stdout)
+	}
+
+	// Edit again, then diff
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "edit", "main.go",
+		"--old-text", `println("v1")`, "--new-text", `println("v2")`)
+	if exit != 0 {
+		t.Fatal("second edit failed")
+	}
+	_, stdout, _, exit = specRun(t, binary, dir, sessEnv, "checkpoint", "--diff", "cp_1")
+	if exit != 0 {
+		t.Fatalf("diff exit %d", exit)
+	}
+	if !strings.Contains(stdout, "modified") {
+		t.Errorf("expected 'modified' in diff output: %s", stdout)
+	}
+	if !strings.Contains(stdout, "main.go") {
+		t.Errorf("expected 'main.go' in diff output: %s", stdout)
+	}
+}
+
+func TestSpec_CheckpointDrop(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+	sessEnv := []string{"EDR_SESSION=test-cp-drop"}
+
+	// Edit and checkpoint
+	_, _, _, exit := specRun(t, binary, dir, sessEnv, "edit", "main.go",
+		"--old-text", `println("hi")`, "--new-text", `println("v1")`)
+	if exit != 0 {
+		t.Fatal("edit failed")
+	}
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "checkpoint")
+	if exit != 0 {
+		t.Fatal("checkpoint failed")
+	}
+
+	// Drop
+	result, _, _, exit := specRun(t, binary, dir, sessEnv, "checkpoint", "--drop", "cp_1")
+	if exit != 0 {
+		t.Fatalf("drop exit %d", exit)
+	}
+	header := result.Ops[0].Header
+	status, _ := header["status"].(string)
+	if status != "dropped" {
+		t.Errorf("expected status=dropped, got %q", status)
+	}
+
+	// List should be empty
+	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "checkpoint", "--list")
+	if exit != 0 {
+		t.Fatalf("list exit %d", exit)
+	}
+	if !strings.Contains(stdout, "(no checkpoints)") {
+		t.Errorf("expected empty list after drop: %s", stdout)
+	}
+}
+
+func TestSpec_CheckpointRestorePreRestoreIsRestorable(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+	sessEnv := []string{"EDR_SESSION=test-cp-undo-undo"}
+
+	// Edit to v1, checkpoint
+	_, _, _, exit := specRun(t, binary, dir, sessEnv, "edit", "main.go",
+		"--old-text", `println("hi")`, "--new-text", `println("v1")`)
+	if exit != 0 {
+		t.Fatal("edit failed")
+	}
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "checkpoint")
+	if exit != 0 {
+		t.Fatal("checkpoint failed")
+	}
+
+	// Edit to v2
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "edit", "main.go",
+		"--old-text", `println("v1")`, "--new-text", `println("v2")`)
+	if exit != 0 {
+		t.Fatal("second edit failed")
+	}
+
+	// Restore to cp_1 (saves v2 state as pre-restore)
+	result, _, _, exit := specRun(t, binary, dir, sessEnv, "checkpoint", "--restore", "cp_1")
+	if exit != 0 {
+		t.Fatalf("restore exit %d", exit)
+	}
+	preRestoreID, _ := result.Ops[0].Header["pre_restore"].(string)
+	if preRestoreID == "" {
+		t.Fatal("expected pre-restore checkpoint ID")
+	}
+
+	// Verify at v1
+	content, _ := os.ReadFile(filepath.Join(dir, "main.go"))
+	if !strings.Contains(string(content), `println("v1")`) {
+		t.Fatalf("expected v1, got: %s", content)
+	}
+
+	// Restore the pre-restore to get back to v2
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "checkpoint", "--restore", preRestoreID, "--no-save")
+	if exit != 0 {
+		t.Fatalf("pre-restore restore exit %d", exit)
+	}
+
+	// Verify at v2
+	content, _ = os.ReadFile(filepath.Join(dir, "main.go"))
+	if !strings.Contains(string(content), `println("v2")`) {
+		t.Errorf("expected v2 after restoring pre-restore, got: %s", content)
+	}
+}
+
+func TestSpec_CheckpointSessionStateRestored(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+	sessEnv := []string{"EDR_SESSION=test-cp-session"}
+
+	// Set focus, edit, checkpoint
+	_, _, _, exit := specRun(t, binary, dir, sessEnv, "next", "--focus", "original goal")
+	if exit != 0 {
+		t.Fatal("focus failed")
+	}
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "edit", "main.go",
+		"--old-text", `println("hi")`, "--new-text", `println("v1")`)
+	if exit != 0 {
+		t.Fatal("edit failed")
+	}
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "checkpoint")
+	if exit != 0 {
+		t.Fatal("checkpoint failed")
+	}
+
+	// Change focus and edit more
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "next", "--focus", "new goal")
+	if exit != 0 {
+		t.Fatal("focus change failed")
+	}
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "edit", "main.go",
+		"--old-text", `println("v1")`, "--new-text", `println("v2")`)
+	if exit != 0 {
+		t.Fatal("second edit failed")
+	}
+
+	// Restore
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "checkpoint", "--restore", "cp_1")
+	if exit != 0 {
+		t.Fatal("restore failed")
+	}
+
+	// Check focus was restored
+	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "next")
+	if exit != 0 {
+		t.Fatalf("next exit %d", exit)
+	}
+	if !strings.Contains(stdout, "original goal") {
+		t.Errorf("expected restored focus 'original goal' in next output: %s", stdout)
+	}
+	if strings.Contains(stdout, "new goal") {
+		t.Errorf("'new goal' should not appear after restore: %s", stdout)
 	}
 }
 

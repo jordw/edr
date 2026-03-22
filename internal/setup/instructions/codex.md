@@ -13,6 +13,7 @@ Run `edr next` before starting and after each edit pass — it shows recent ops,
 `edr rename Old New --dry-run` — cross-file, import-aware
 `edr verify` — auto-detects go/npm/cargo/make; auto-runs after edits; `--test` to run tests instead of build
 `edr run -- cmd` — use for ALL command execution (tests, builds, linters); sparse diff vs previous run; `--full` | `--reset`
+`edr checkpoint` — snapshot files + session before risky changes; `edr checkpoint --restore cp_1` to revert; always creates a pre-restore safety checkpoint unless `--no-save`
 
 Batch 2+ ops into one call — fewer roundtrips, less context:
 `edr -r f.go --sig -r g.go:Func -s "pat" -e f.go --old "x" --new "y"`

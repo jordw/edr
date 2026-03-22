@@ -206,6 +206,18 @@ var Registry = []*Spec{
 		},
 	},
 	{
+		Name: "checkpoint", Desc: "Snapshot or restore session state. Subcommands: create, restore, list, diff, drop.",
+		Category: CatMeta, MinArgs: 0, MaxArgs: 1,
+		Flags: []FlagSpec{
+			{Name: "label", Type: FlagString, Default: "", Desc: "Label for the checkpoint"},
+			{Name: "restore", Type: FlagString, Default: "", Desc: "Restore to checkpoint ID"},
+			{Name: "list", Type: FlagBool, Default: false, Desc: "List all checkpoints"},
+			{Name: "diff", Type: FlagString, Default: "", Desc: "Show changes since checkpoint ID"},
+			{Name: "drop", Type: FlagString, Default: "", Desc: "Delete a checkpoint"},
+			{Name: "no_save", Type: FlagBool, Default: false, Desc: "Skip pre-restore safety checkpoint"},
+		},
+	},
+	{
 		Name: "session", Desc: "Manage sessions.",
 		Category: CatMeta, MinArgs: 0, MaxArgs: 0,
 		Flags: []FlagSpec{},

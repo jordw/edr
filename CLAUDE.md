@@ -53,6 +53,7 @@ go run ./bench/cmd/benchjson                    # JSON results for automation
 
 **Batch** (primary): `edr -r file -s pattern -e file --old x --new y`
 **Standalone**: `edr read`, `edr search`, `edr map`, `edr edit`, `edr write`, `edr refs`, `edr rename`, `edr verify`
+**Workflow**: `edr next`, `edr run`, `edr checkpoint`
 **Admin**: `edr reindex`, `edr setup`
 
 Output is plain mode: one JSON header line followed by raw-text body. File paths are relative to repo root. Edit commands return `hash`.

@@ -13,10 +13,11 @@ Run `edr next` before starting and after each edit pass — it shows recent ops,
 `edr rename Old New --dry-run` — cross-file, import-aware
 `edr verify` — auto-detects go/npm/cargo/make; auto-runs after `edr edit`; call manually after non-edr edits; `--test` to run tests
 `edr run -- cmd` — use for ALL command execution (tests, builds, linters); sparse diff vs previous run; `--full` | `--reset`
+`edr checkpoint` before risky changes; `--restore cp_1` to revert; `--list` | `--diff cp_1`
 
 Batch 2+ ops into one call — fewer roundtrips, less context:
 `edr -r f.go --sig -r g.go:Func -s "pat" -e f.go --old "x" --new "y"`
 Multi-edit: `edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"`
 Same-file multi-edit: `edr -e f.go --old "a" --new "b" -e f.go --old "c" --new "d"`
 Chained edit-then-read: `edr -e f.go --old "x" --new "y" -r f.go:200-210`
-Multiline/shell metacharacters ($, backticks, tabs): use `--old-text @/tmp/old.txt --new-text @/tmp/new.txt` to read from file
+Shell metacharacters ($, backticks): `--old-text @/tmp/old.txt --new-text @/tmp/new.txt`

@@ -15,6 +15,7 @@ func TestPublicCommandSurface(t *testing.T) {
 		"edit": true, "write": true, "refs": true,
 		"verify": true, "reindex": true, "rename": true,
 		"run": true, "session": true, "setup": true, "next": true,
+		"checkpoint": true,
 	}
 
 	for _, s := range Registry {
