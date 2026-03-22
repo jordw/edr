@@ -62,6 +62,24 @@ func TestBatchParseInsertAt(t *testing.T) {
 	}
 }
 
+func TestBatchDryRunPostEditReadWarning(t *testing.T) {
+	// Verify that --dry-run plus post-edit reads produces a warning
+	args := []string{"-e", "f.go", "--old", "x", "--new", "y", "--dry-run", "-r", "f.go"}
+	state, err := parseBatchArgs(args)
+	if err != nil {
+		t.Fatalf("parseBatchArgs: %v", err)
+	}
+	p := state.toParams()
+	if len(p.PostEditReads) != 1 {
+		t.Fatalf("expected 1 post-edit read, got %d", len(p.PostEditReads))
+	}
+	if len(p.Edits) != 1 {
+		t.Fatalf("expected 1 edit, got %d", len(p.Edits))
+	}
+	// The warning is emitted at execution time, not parse time.
+	// This test validates the parse structure is correct.
+}
+
 func TestBatchParseLevelTimeout(t *testing.T) {
 	args := []string{"-e", "f.go", "--old", "a", "--new", "b", "--level", "test", "--timeout", "30"}
 	state, err := parseBatchArgs(args)

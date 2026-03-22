@@ -694,6 +694,9 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 
 	// 5b. Post-edit reads (reads that followed edits in CLI order)
 	if !editsFailed && len(p.PostEditReads) > 0 {
+		if isDryRun {
+			env.AddError("warning", "dry-run: post-edit reads show pre-edit state (edits were not applied)")
+		}
 		executePostEditReads(ctx, db, sess, env, &p)
 	}
 
