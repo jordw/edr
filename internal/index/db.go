@@ -1012,18 +1012,24 @@ func (d *DB) SearchSymbols(ctx context.Context, pattern string, limit ...int) ([
 
 // GetSymbol returns a specific symbol by name and file.
 // Returns an error if the symbol is not found or if multiple symbols share the
-// preferDefinition returns the non-impl symbol when results contain exactly
-// one definition and one or more impl blocks (common in Rust).
+// preferDefinition disambiguates when multiple symbols share the same name
+// in a file. Prefers type definitions (struct/type/class/enum/interface) over
+// methods/functions/impl blocks. Common cases:
+//   - Rust: struct Foo + impl Foo
+//   - Go: type Command struct + func (c *Command) Command()
 func preferDefinition(results []SymbolInfo) *SymbolInfo {
-	implTypes := map[string]bool{"impl": true, "impl_item": true}
-	var defs []int
+	typeKinds := map[string]bool{
+		"type": true, "struct": true, "class": true,
+		"enum": true, "interface": true, "module": true,
+	}
+	var types []int
 	for i, s := range results {
-		if !implTypes[s.Type] {
-			defs = append(defs, i)
+		if typeKinds[s.Type] {
+			types = append(types, i)
 		}
 	}
-	if len(defs) == 1 {
-		return &results[defs[0]]
+	if len(types) == 1 {
+		return &results[types[0]]
 	}
 	return nil
 }
