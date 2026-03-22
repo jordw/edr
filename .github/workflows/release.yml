@@ -94,7 +94,6 @@ jobs:
 
   homebrew:
     needs: publish
-    if: "!contains(github.ref_name, '-')"
     runs-on: ubuntu-latest
     steps:
       - name: Generate Homebrew formula
