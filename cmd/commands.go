@@ -505,6 +505,8 @@ func classifyErrorMsg(msg string) string {
 		return "outside_repo"
 	case strings.Contains(msg, "hash mismatch"):
 		return "hash_mismatch"
+	case strings.Contains(msg, "mutually exclusive"):
+		return "invalid_mode"
 	default:
 		return "command_error"
 	}
