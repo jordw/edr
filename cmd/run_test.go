@@ -9,19 +9,16 @@ import (
 
 func TestDiffAgainstPrevious_FirstRun(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "run")
-	out := diffAgainstPrevious(runDir, "echo hello", "hello world\n", 0)
+	out := diffAgainstPrevious(runDir, "echo hello", "hello world\n")
 	if !strings.HasPrefix(out, "hello world\n") {
 		t.Errorf("first run should show full output, got: %q", out)
-	}
-	if !strings.Contains(out, "exit 0") {
-		t.Errorf("first run should include exit code, got: %q", out)
 	}
 }
 
 func TestDiffAgainstPrevious_Identical(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "run")
-	diffAgainstPrevious(runDir, "echo hello", "hello world\n", 0)
-	out := diffAgainstPrevious(runDir, "echo hello", "hello world\n", 0)
+	diffAgainstPrevious(runDir, "echo hello", "hello world\n")
+	out := diffAgainstPrevious(runDir, "echo hello", "hello world\n")
 	if !strings.Contains(out, "no changes") {
 		t.Errorf("identical run should say no changes, got: %q", out)
 	}
@@ -29,8 +26,8 @@ func TestDiffAgainstPrevious_Identical(t *testing.T) {
 
 func TestDiffAgainstPrevious_ShowsInlineDiff(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "run")
-	diffAgainstPrevious(runDir, "test", "aaa\nbbb\nccc\nddd\neee\n", 0)
-	out := diffAgainstPrevious(runDir, "test", "aaa\nBBB\nccc\nddd\neee\n", 0)
+	diffAgainstPrevious(runDir, "test", "aaa\nbbb\nccc\nddd\neee\n")
+	out := diffAgainstPrevious(runDir, "test", "aaa\nBBB\nccc\nddd\neee\n")
 
 	if !strings.Contains(out, "{bbb → BBB}") {
 		t.Errorf("should show inline diff, got: %q", out)
@@ -42,8 +39,8 @@ func TestDiffAgainstPrevious_ShowsInlineDiff(t *testing.T) {
 
 func TestDiffAgainstPrevious_AddedLines(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "run")
-	diffAgainstPrevious(runDir, "test", "aaa\nbbb\n", 0)
-	out := diffAgainstPrevious(runDir, "test", "aaa\nbbb\nccc\n", 0)
+	diffAgainstPrevious(runDir, "test", "aaa\nbbb\n")
+	out := diffAgainstPrevious(runDir, "test", "aaa\nbbb\nccc\n")
 	if !strings.Contains(out, "{+ ccc}") {
 		t.Errorf("should show added line, got: %q", out)
 	}
@@ -51,8 +48,8 @@ func TestDiffAgainstPrevious_AddedLines(t *testing.T) {
 
 func TestDiffAgainstPrevious_RemovedLines(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "run")
-	diffAgainstPrevious(runDir, "test", "aaa\nbbb\nccc\n", 0)
-	out := diffAgainstPrevious(runDir, "test", "aaa\nbbb\n", 0)
+	diffAgainstPrevious(runDir, "test", "aaa\nbbb\nccc\n")
+	out := diffAgainstPrevious(runDir, "test", "aaa\nbbb\n")
 	if !strings.Contains(out, "{- ccc}") {
 		t.Errorf("should show removed line, got: %q", out)
 	}
@@ -60,9 +57,9 @@ func TestDiffAgainstPrevious_RemovedLines(t *testing.T) {
 
 func TestDiffAgainstPrevious_DifferentCommands(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "run")
-	diffAgainstPrevious(runDir, "cmd1", "output1\n", 0)
-	diffAgainstPrevious(runDir, "cmd2", "output2\n", 0)
-	out := diffAgainstPrevious(runDir, "cmd1", "output1\n", 0)
+	diffAgainstPrevious(runDir, "cmd1", "output1\n")
+	diffAgainstPrevious(runDir, "cmd2", "output2\n")
+	out := diffAgainstPrevious(runDir, "cmd1", "output1\n")
 	if !strings.Contains(out, "no changes") {
 		t.Errorf("cmd1 should match its own history, got: %q", out)
 	}
@@ -70,9 +67,9 @@ func TestDiffAgainstPrevious_DifferentCommands(t *testing.T) {
 
 func TestDiffAgainstPrevious_OverwritesPrevious(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "run")
-	diffAgainstPrevious(runDir, "test", "v1\n", 0)
-	diffAgainstPrevious(runDir, "test", "v2\n", 0)
-	out := diffAgainstPrevious(runDir, "test", "v2\n", 0)
+	diffAgainstPrevious(runDir, "test", "v1\n")
+	diffAgainstPrevious(runDir, "test", "v2\n")
+	out := diffAgainstPrevious(runDir, "test", "v2\n")
 	if !strings.Contains(out, "no changes") {
 		t.Errorf("should match v2, got: %q", out)
 	}
@@ -81,32 +78,13 @@ func TestDiffAgainstPrevious_OverwritesPrevious(t *testing.T) {
 func TestDiffAgainstPrevious_TruncatesLargeOutput(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "run")
 	big := strings.Repeat("x", maxRunOutput+1000)
-	diffAgainstPrevious(runDir, "test", big, 0)
+	diffAgainstPrevious(runDir, "test", big)
 	files, _ := os.ReadDir(runDir)
 	for _, f := range files {
 		info, _ := f.Info()
 		if info.Size() > int64(maxRunOutput)+100 {
 			t.Errorf("stored file should be capped at %d, got %d", maxRunOutput, info.Size())
 		}
-	}
-}
-
-func TestDiffAgainstPrevious_ExitCodeInSummary(t *testing.T) {
-	runDir := filepath.Join(t.TempDir(), "run")
-	// First run with exit 1
-	out := diffAgainstPrevious(runDir, "test", "error\n", 1)
-	if !strings.Contains(out, "exit 1") {
-		t.Errorf("should show exit 1, got: %q", out)
-	}
-	// Identical run with exit 0
-	out = diffAgainstPrevious(runDir, "test", "error\n", 0)
-	if !strings.Contains(out, "exit 0") {
-		t.Errorf("no-changes should show exit 0, got: %q", out)
-	}
-	// Changed run with exit 2
-	out = diffAgainstPrevious(runDir, "test", "different\n", 2)
-	if !strings.Contains(out, "exit 2") {
-		t.Errorf("sparse diff should show exit 2, got: %q", out)
 	}
 }
 
