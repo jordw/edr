@@ -1079,6 +1079,83 @@ func TestEditLinesFlag(t *testing.T) {
 	}
 }
 
+func TestEditInsertAt(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	original := "package main\n\nfunc a() {}\n\nfunc b() {}\n"
+	if err := os.WriteFile(goFile, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert before line 3
+	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+		"insert_at": 3,
+		"new_text":  "func inserted() {}\n",
+	})
+	if err != nil {
+		t.Fatalf("edit --insert-at: %v", err)
+	}
+	m, _ := result.(map[string]any)
+	if m["status"] != "applied" {
+		t.Errorf("expected applied, got %v", m["status"])
+	}
+	data, _ := os.ReadFile(goFile)
+	content := string(data)
+	if !strings.Contains(content, "inserted") {
+		t.Error("inserted text not found")
+	}
+	// Verify insertion is before func a
+	insertIdx := strings.Index(content, "inserted")
+	aIdx := strings.Index(content, "func a")
+	if insertIdx >= aIdx {
+		t.Error("inserted text should appear before func a")
+	}
+}
+
+func TestEditInsertAtEOF(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	original := "package main\n\nfunc a() {}\n"
+	if err := os.WriteFile(goFile, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert at EOF (line 4, which is past last content line)
+	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+		"insert_at": 4,
+		"new_text":  "func appended() {}",
+	})
+	if err != nil {
+		t.Fatalf("edit --insert-at EOF: %v", err)
+	}
+	m, _ := result.(map[string]any)
+	if m["status"] != "applied" {
+		t.Errorf("expected applied, got %v", m["status"])
+	}
+	data, _ := os.ReadFile(goFile)
+	if !strings.Contains(string(data), "appended") {
+		t.Error("appended text not found at EOF")
+	}
+}
+
 func TestEditEmptyNewTextRequiresEditMode(t *testing.T) {
 	tmp := t.TempDir()
 	goFile := filepath.Join(tmp, "main.go")

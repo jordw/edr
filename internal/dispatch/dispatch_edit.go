@@ -70,6 +70,18 @@ func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string,
 		return nil, fmt.Errorf("edit requires 'new_text' in flags")
 	}
 
+	// --insert-at N: zero-width insertion before line N
+	if insertAt := flagInt(flags, "insert_at", 0); insertAt > 0 {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("edit with --insert-at requires a file argument")
+		}
+		file, err := db.ResolvePath(args[0])
+		if err != nil {
+			return nil, err
+		}
+		return smartEditInsertAt(ctx, db, file, insertAt, newText, dryRun)
+	}
+
 	if startLine > 0 && endLine > 0 {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("edit with --start_line/--end_line requires a file argument")
@@ -216,6 +228,47 @@ func smartEditSpan(ctx context.Context, db *index.DB, file string, startLine, en
 	}
 	return smartEditByteRange(ctx, db, file, startByte, endByte, replacement, label, dryRun)
 }
+
+
+// smartEditInsertAt performs a zero-width insertion before the given line number.
+func smartEditInsertAt(ctx context.Context, db *index.DB, file string, lineNum int, text string, dryRun bool) (any, error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+
+	// Normalize: inserted text should end with newline for line-oriented use
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+
+	// Find byte offset of the start of the target line
+	line := 1
+	insertByte := uint32(0)
+	found := false
+	for i := 0; i <= len(data); i++ {
+		if line == lineNum {
+			insertByte = uint32(i)
+			found = true
+			break
+		}
+		if i < len(data) && data[i] == '\n' {
+			line++
+		}
+	}
+	// Allow inserting at EOF (one past the last line)
+	if !found {
+		if lineNum == line+1 || lineNum == line {
+			insertByte = uint32(len(data))
+		} else {
+			return nil, fmt.Errorf("insert-at: line %d beyond file (%d lines)", lineNum, line)
+		}
+	}
+
+	label := fmt.Sprintf("insert at line %d", lineNum)
+	return smartEditByteRange(ctx, db, file, insertByte, insertByte, text, label, dryRun)
+}
+
 
 // smartEditMatch applies an edit by finding and replacing text.
 func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacement string, flags map[string]any, dryRun bool) (any, error) {
