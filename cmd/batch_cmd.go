@@ -95,6 +95,8 @@ type batchState struct {
 	verifySet     bool
 	verifyEnabled bool
 	verifyCommand string
+	verifyLevel   string
+	verifyTimeout int
 
 	dryRun        bool
 	readAfterEdit bool
@@ -155,14 +157,35 @@ func (s *batchState) toParams() doParams {
 	// Auto-verify when edits are present, unless explicitly disabled
 	if s.verifySet {
 		if s.verifyEnabled {
-			if s.verifyCommand != "" {
-				p.Verify = s.verifyCommand
+			if s.verifyCommand != "" || s.verifyLevel != "" || s.verifyTimeout > 0 {
+				vm := map[string]any{}
+				if s.verifyCommand != "" {
+					vm["command"] = s.verifyCommand
+				}
+				if s.verifyLevel != "" {
+					vm["level"] = s.verifyLevel
+				}
+				if s.verifyTimeout > 0 {
+					vm["timeout"] = s.verifyTimeout
+				}
+				p.Verify = vm
 			} else {
 				p.Verify = true
 			}
 		}
 	} else if len(s.edits) > 0 {
-		p.Verify = true
+		if s.verifyLevel != "" || s.verifyTimeout > 0 {
+			vm := map[string]any{}
+			if s.verifyLevel != "" {
+				vm["level"] = s.verifyLevel
+			}
+			if s.verifyTimeout > 0 {
+				vm["timeout"] = s.verifyTimeout
+			}
+			p.Verify = vm
+		} else {
+			p.Verify = true
+		}
 	}
 
 	return p
@@ -575,6 +598,20 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			s.verifySet = true
 			s.verifyEnabled = true
 			s.verifyCommand = val
+
+		case "--level":
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.verifyLevel = val
+
+		case "--timeout":
+			n, err := nextInt(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.verifyTimeout = n
 
 		// ── global flags ──
 

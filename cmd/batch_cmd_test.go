@@ -62,6 +62,25 @@ func TestBatchParseInsertAt(t *testing.T) {
 	}
 }
 
+func TestBatchParseLevelTimeout(t *testing.T) {
+	args := []string{"-e", "f.go", "--old", "a", "--new", "b", "--level", "test", "--timeout", "30"}
+	state, err := parseBatchArgs(args)
+	if err != nil {
+		t.Fatalf("parseBatchArgs: %v", err)
+	}
+	p := state.toParams()
+	vm, ok := p.Verify.(map[string]any)
+	if !ok {
+		t.Fatalf("expected verify map, got %T: %v", p.Verify, p.Verify)
+	}
+	if vm["level"] != "test" {
+		t.Errorf("level = %v, want test", vm["level"])
+	}
+	if vm["timeout"] != 30 {
+		t.Errorf("timeout = %v, want 30", vm["timeout"])
+	}
+}
+
 func TestBatchQueryLang(t *testing.T) {
 	// Test that JSON batch with lang field is correctly threaded
 	q := doQuery{
