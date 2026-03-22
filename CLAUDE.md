@@ -53,4 +53,4 @@ go run ./bench/cmd/benchjson                    # JSON results for automation
 **Standalone**: `edr read`, `edr search`, `edr map`, `edr edit`, `edr write`, `edr refs`, `edr rename`, `edr verify`
 **Admin**: `edr reindex`, `edr setup`
 
-All output is structured JSON. File paths are relative to repo root. Edit commands return `hash`.
+Output is plain mode: one JSON header line followed by raw-text body. File paths are relative to repo root. Edit commands return `hash`.

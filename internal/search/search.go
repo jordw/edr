@@ -516,7 +516,7 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 	budgetUsed := 0
 	if isTrunc && budget > 0 {
 		for _, m := range result {
-			budgetUsed += output.TokenEstimate(m.Body)
+			budgetUsed += m.Symbol.Size
 		}
 	}
 	sr := &SearchResult{
@@ -690,7 +690,7 @@ func SearchInSymbol(ctx context.Context, db *index.DB, pattern string, symbolFil
 	budgetUsed := 0
 	if isTrunc && budget > 0 {
 		for _, m := range result {
-			budgetUsed += output.TokenEstimate(m.Body)
+			budgetUsed += m.Symbol.Size
 		}
 	}
 	return &SearchResult{

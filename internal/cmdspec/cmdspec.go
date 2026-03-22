@@ -187,6 +187,33 @@ var Registry = []*Spec{
 			{Name: "timeout", Type: FlagInt, Default: 0, Desc: "Timeout in seconds"},
 		},
 	},
+	{
+		Name: "run", Desc: "Run a command, show only what changed since last run.",
+		Category: CatMeta, MinArgs: 1, MaxArgs: -1,
+		Flags: []FlagSpec{
+			{Name: "full", Type: FlagBool, Default: false, Desc: "Bypass diff, show full output"},
+			{Name: "reset", Type: FlagBool, Default: false, Desc: "Clear baseline before running (treat as first run)"},
+		},
+	},
+	{
+		Name: "session", Desc: "Manage sessions.",
+		Category: CatMeta, MinArgs: 0, MaxArgs: 0,
+		Flags: []FlagSpec{},
+	},
+	{
+		Name: "setup", Desc: "Install edr into a project and inject agent instructions.",
+		Category: CatMeta, MinArgs: 0, MaxArgs: 1,
+		Flags: []FlagSpec{
+			{Name: "global", Type: FlagBool, Default: false, Desc: "Install global instructions without prompting"},
+			{Name: "no_global", Type: FlagBool, Default: false, Desc: "Skip global instruction prompt"},
+			{Name: "generic", Type: FlagBool, Default: false, Desc: "Print instructions to stdout"},
+			{Name: "force", Type: FlagBool, Default: false, Desc: "Replace existing instructions with latest version"},
+			{Name: "skip_index", Type: FlagBool, Default: false, Desc: "Skip indexing (only install instructions)"},
+			{Name: "json", Type: FlagBool, Default: false, Desc: "Output JSON instead of human-readable text"},
+			{Name: "status", Type: FlagBool, Default: false, Desc: "Show installation status without modifying anything"},
+			{Name: "uninstall", Type: FlagBool, Default: false, Desc: "Remove edr instructions from all global configs"},
+		},
+	},
 }
 
 // --- Lookup ---

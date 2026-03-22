@@ -109,10 +109,10 @@ edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "..."
 | `verify` | `edr verify`, `edr verify --level test` |
 | `run` | `edr run -- make test` — diffs against previous run |
 | `session` | `edr session new` |
-| `setup` | `edr setup`, `edr setup --claude --force` |
+| `setup` | `edr setup`, `edr setup --force` |
 | `reindex` | `edr reindex` |
 
-All output is structured JSON.
+Output uses plain mode: one JSON header line followed by raw-text body.
 
 ## Languages
 
