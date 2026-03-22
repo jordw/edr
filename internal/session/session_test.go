@@ -1030,7 +1030,7 @@ func TestCommandMaps_Coverage(t *testing.T) {
 
 func TestBatchThenSingleReadDelta(t *testing.T) {
 	s := New()
-	// Batch read stores symbol content via PostProcessNonObject
+	// Batch read stores symbol content via PostProcess
 	batchText := `[{"content":"func foo() {}","file":"f.go","symbol":"foo","hash":"abc","ok":true}]`
 	s.PostProcessNonObject("read", nil, map[string]any{}, batchText)
 
@@ -1051,7 +1051,7 @@ func TestBatchThenSingleReadDelta(t *testing.T) {
 
 func TestBatchThenSingleReadDelta_FileLevel(t *testing.T) {
 	s := New()
-	// Batch read stores file content via PostProcessNonObject
+	// Batch read stores file content via PostProcess
 	batchText := `[{"content":"package main\n","file":"f.go","hash":"abc","ok":true,"lines":[1,2]}]`
 	s.PostProcessNonObject("read", nil, map[string]any{}, batchText)
 

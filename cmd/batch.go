@@ -26,7 +26,6 @@ type doParams struct {
 	DryRun         *bool      `json:"dry_run"`
 	Verify         any        `json:"verify"`
 	Reindex        *bool      `json:"reindex,omitempty"`
-	Init           *bool      `json:"init,omitempty"` // legacy alias for reindex
 	ReadAfterEdit  *bool      `json:"read_after_edit,omitempty"`
 	Atomic         *bool      `json:"atomic,omitempty"`
 }
@@ -68,7 +67,6 @@ type doQuery struct {
 	Group   *bool   `json:"group,omitempty"`
 	In      *string `json:"in,omitempty"`
 
-	// refs (includes former explore flags)
 	Callers    *bool   `json:"callers,omitempty"`
 	Deps       *bool   `json:"deps,omitempty"`
 	Signatures *bool   `json:"signatures,omitempty"`
@@ -625,7 +623,7 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 		return err
 	}
 
-	hasInit := (p.Init != nil && *p.Init) || (p.Reindex != nil && *p.Reindex)
+	hasInit := p.Reindex != nil && *p.Reindex
 	hasReads := len(p.Reads) > 0
 	hasQueries := len(p.Queries) > 0
 	hasEdits := len(p.Edits) > 0
@@ -659,7 +657,7 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 	}
 
 	if !hasInit && !hasReads && !hasQueries && !hasEdits && !hasWrites && !hasRenames && !hasVerify {
-		env.AddError("empty_request", "request requires at least one of: reads, queries, edits, writes, renames, verify, init")
+		env.AddError("empty_request", "request requires at least one of: reads, queries, edits, writes, renames, verify, reindex")
 		return nil
 	}
 
@@ -879,22 +877,12 @@ func inferQueryCmd(q doQuery) string {
 	return "" // will be caught as error below
 }
 
-// normalizeQueryCmd mutates a doQuery in-place: translates legacy command names
-// (explore→refs/read, find→search), infers Cmd from fields if empty, and applies
+// normalizeQueryCmd mutates a doQuery in-place: infers Cmd from fields if empty, and applies
 // a default budget when Cmd was inferred. Returns whether Cmd was inferred.
 func normalizeQueryCmd(q *doQuery) bool {
 	inferred := false
 
-	// Translate legacy internal command names to public commands
 	switch q.Cmd {
-	case "explore":
-		if (q.Callers != nil && *q.Callers) || (q.Deps != nil && *q.Deps) {
-			q.Cmd = "refs"
-		} else {
-			q.Cmd = "read"
-		}
-	case "find":
-		q.Cmd = "search"
 	case "":
 		q.Cmd = inferQueryCmd(*q)
 		inferred = true
@@ -1093,7 +1081,7 @@ func suggestField(input string, known map[string]bool) string {
 	best := ""
 	bestDist := 3 // only suggest if distance <= 2
 	for key := range known {
-		d := fieldLevenshtein(input, key)
+		d := cmdspec.Levenshtein(input, key)
 		if d < bestDist {
 			bestDist = d
 			best = key
@@ -1102,38 +1090,3 @@ func suggestField(input string, known map[string]bool) string {
 	return best
 }
 
-func fieldLevenshtein(a, b string) int {
-	if len(a) == 0 {
-		return len(b)
-	}
-	if len(b) == 0 {
-		return len(a)
-	}
-	prev := make([]int, len(b)+1)
-	curr := make([]int, len(b)+1)
-	for j := range prev {
-		prev[j] = j
-	}
-	for i := 1; i <= len(a); i++ {
-		curr[0] = i
-		for j := 1; j <= len(b); j++ {
-			cost := 1
-			if a[i-1] == b[j-1] {
-				cost = 0
-			}
-			ins := curr[j-1] + 1
-			del := prev[j] + 1
-			sub := prev[j-1] + cost
-			m := ins
-			if del < m {
-				m = del
-			}
-			if sub < m {
-				m = sub
-			}
-			curr[j] = m
-		}
-		prev, curr = curr, prev
-	}
-	return prev[len(b)]
-}

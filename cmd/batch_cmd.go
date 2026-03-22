@@ -1002,7 +1002,7 @@ func suggestBatchFlag(flag string, currentOp batchOp) error {
 	bestFlag := ""
 	bestDist := 3
 	for known := range batchFlagOps {
-		d := fieldLevenshtein(strings.TrimLeft(known, "-"), clean)
+		d := cmdspec.Levenshtein(strings.TrimLeft(known, "-"), clean)
 		if d < bestDist {
 			bestDist = d
 			bestFlag = known

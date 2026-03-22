@@ -35,16 +35,9 @@ func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string,
 		return smartEditMoveAfter(ctx, db, root, args, moveAfter, dryRun)
 	}
 
-	// new_text is the primary flag name; replacement is accepted as a legacy alias.
 	newText := flagString(flags, "new_text", "")
-	if newText == "" {
-		newText = flagString(flags, "replacement", "")
-	}
 	// Whether new_text was explicitly provided (even as empty string = deletion).
 	_, newTextSet := flags["new_text"]
-	if !newTextSet {
-		_, newTextSet = flags["replacement"]
-	}
 	// --delete is equivalent to --new-text ""
 	if flagBool(flags, "delete", false) {
 		newText = ""
@@ -67,11 +60,7 @@ func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string,
 	}
 	startLine := flagInt(flags, "start_line", 0)
 	endLine := flagInt(flags, "end_line", 0)
-	// old_text is the primary flag name; match is accepted as a legacy alias.
 	oldText := flagString(flags, "old_text", "")
-	if oldText == "" {
-		oldText = flagString(flags, "match", "")
-	}
 
 	// Require new_text if an edit mode is active.
 	if !newTextSet && newText == "" {

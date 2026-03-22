@@ -358,30 +358,6 @@ func TestQueryToMultiCmd_SearchEmptyPattern(t *testing.T) {
 	}
 }
 
-func TestNormalizeQueryCmd_Explore(t *testing.T) {
-	// Legacy "explore" cmd should be translated to "refs" when callers/deps are set
-	sym := "Dispatch"
-	body := true
-	callers := true
-	q := doQuery{
-		Cmd:     "explore",
-		Symbol:  &sym,
-		Body:    &body,
-		Callers: &callers,
-	}
-	normalizeQueryCmd(&q)
-	mc := queryToMultiCmd(q)
-	if mc.Cmd != "refs" {
-		t.Errorf("cmd = %q, want refs (explore with callers translates to refs)", mc.Cmd)
-	}
-	if len(mc.Args) != 1 || mc.Args[0] != "Dispatch" {
-		t.Errorf("args = %v, want [Dispatch]", mc.Args)
-	}
-	if mc.Flags["callers"] != true {
-		t.Error("callers should be true")
-	}
-}
-
 func TestQueryToMultiCmd_Map(t *testing.T) {
 	dir := "internal/"
 	typ := "function"
@@ -533,33 +509,6 @@ func TestQueryToMultiCmd_TextSearchGrouping(t *testing.T) {
 	}
 }
 
-// TestNormalizeQueryCmd_LegacyExploreWithoutCallers verifies that legacy
-// "explore" cmd with no callers/deps translates to "read".
-func TestNormalizeQueryCmd_LegacyExploreWithoutCallers(t *testing.T) {
-	sym := "Dispatch"
-	q := doQuery{
-		Cmd:    "explore",
-		Symbol: &sym,
-	}
-	normalizeQueryCmd(&q)
-	if q.Cmd != "read" {
-		t.Errorf("explore without callers/deps should translate to read, got %q", q.Cmd)
-	}
-}
-
-// TestNormalizeQueryCmd_LegacyFind verifies that legacy "find" cmd translates to "search".
-func TestNormalizeQueryCmd_LegacyFind(t *testing.T) {
-	pattern := "**/*.go"
-	q := doQuery{
-		Cmd:     "find",
-		Pattern: &pattern,
-	}
-	normalizeQueryCmd(&q)
-	if q.Cmd != "search" {
-		t.Errorf("find should translate to search, got %q", q.Cmd)
-	}
-}
-
 // TestNormalizeQueryCmd_EmptyNoInference verifies that normalizeQueryCmd leaves
 // Cmd empty when no fields allow inference, so executeQueries catches the error.
 func TestNormalizeQueryCmd_EmptyNoInference(t *testing.T) {
@@ -592,18 +541,18 @@ func TestNormalizeQueryCmd_Idempotent(t *testing.T) {
 }
 
 // TestInferQueryCmd_OnlyPublicCommands verifies that inferQueryCmd never returns
-// internal command names (explore, find, edit-plan, multi, init).
+// internal command names (edit-plan, multi).
 func TestInferQueryCmd_OnlyPublicCommands(t *testing.T) {
 	internal := map[string]bool{
-		"explore": true, "find": true, "edit-plan": true, "multi": true, "init": true,
+		"edit-plan": true, "multi": true,
 	}
 
 	tests := []doQuery{
-		// Symbol-only (formerly routed to explore)
+		// Symbol-only (read)
 		func() doQuery { s := "Foo"; return doQuery{Symbol: &s} }(),
-		// Callers (formerly routed to explore)
+		// Callers (refs)
 		func() doQuery { s := "Foo"; c := true; return doQuery{Symbol: &s, Callers: &c} }(),
-		// Deps (formerly routed to explore)
+		// Deps (refs)
 		func() doQuery { s := "Foo"; d := true; return doQuery{Symbol: &s, Deps: &d} }(),
 		// Pattern (search)
 		func() doQuery { p := "TODO"; return doQuery{Pattern: &p} }(),
@@ -750,17 +699,6 @@ func TestDoParams_Renames(t *testing.T) {
 	}
 	if r.DryRun == nil || !*r.DryRun {
 		t.Error("dry_run should be true")
-	}
-}
-
-func TestDoParams_Init(t *testing.T) {
-	raw := `{"init": true}`
-	var p doParams
-	if err := json.Unmarshal([]byte(raw), &p); err != nil {
-		t.Fatal(err)
-	}
-	if p.Init == nil || !*p.Init {
-		t.Error("init should be true")
 	}
 }
 
@@ -1122,7 +1060,8 @@ func TestDoStructsMatchCmdspec(t *testing.T) {
 	editFields := map[string]bool{
 		"file": true, "old_text": true, "new_text": true, "symbol": true,
 		"start_line": true, "end_line": true, "all": true, "in": true,
-		"dry_run": true, "expect_hash": true,
+		"dry_run": true, "expect_hash": true, "delete": true,
+		"insert_at": true, "fuzzy": true, "lines": true, "move_after": true,
 	}
 	checkStructFieldsFiltered(t, "doEdit", doEditKnownKeys, editFields)
 
@@ -2366,7 +2305,7 @@ func TestHandleDo_BatchEditErrorParity(t *testing.T) {
 // TestHandleDo_CommandFieldNeverLeaksInternalNames verifies that the envelope
 // "command" field and op "type" fields never contain internal command names.
 func TestHandleDo_CommandFieldNeverLeaksInternalNames(t *testing.T) {
-	internal := []string{"explore", "find", "edit-plan", "multi", "init"}
+	internal := []string{"edit-plan", "multi"}
 
 	tmp := t.TempDir()
 	edrDir := filepath.Join(tmp, ".edr")
