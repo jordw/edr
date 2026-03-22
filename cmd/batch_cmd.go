@@ -100,6 +100,7 @@ type batchState struct {
 
 	dryRun        bool
 	readAfterEdit bool
+	atomic        bool
 	seenMutation  bool // true after first -e or -w
 
 	root      string
@@ -152,6 +153,9 @@ func (s *batchState) toParams() doParams {
 	}
 	if s.readAfterEdit {
 		p.ReadAfterEdit = bp(true)
+	}
+	if s.atomic {
+		p.Atomic = bp(true)
 	}
 
 	// Auto-verify when edits are present, unless explicitly disabled
@@ -617,6 +621,9 @@ func parseBatchArgs(args []string) (*batchState, error) {
 
 		case "--read-after-edit":
 			s.readAfterEdit = true
+
+		case "--atomic":
+			s.atomic = true
 
 		case "--root":
 			val, err := nextArg(arg)

@@ -28,6 +28,7 @@ type doParams struct {
 	Reindex        *bool      `json:"reindex,omitempty"`
 	Init           *bool      `json:"init,omitempty"` // legacy alias for reindex
 	ReadAfterEdit  *bool      `json:"read_after_edit,omitempty"`
+	Atomic         *bool      `json:"atomic,omitempty"`
 }
 
 type doRead struct {
@@ -257,6 +258,15 @@ func executeReads(ctx context.Context, db *index.DB, sess *session.Session, env 
 	addMultiResultOps(env, sess, cmds, results, "r")
 }
 
+// copyFlags creates a shallow copy of a flags map.
+func copyFlags(flags map[string]any) map[string]any {
+	cp := make(map[string]any, len(flags))
+	for k, v := range flags {
+		cp[k] = v
+	}
+	return cp
+}
+
 // executePostEditReads runs reads that were placed after edits in CLI order.
 // These see post-edit file state since edits have already been committed.
 func executePostEditReads(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams) {
@@ -482,6 +492,36 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env 
 			flags["dry_run"] = true
 		}
 		cmds[i] = dispatch.MultiCmd{Cmd: "edit", Args: args, Flags: flags}
+	}
+
+	// Atomic mode: validate all edits first with dry-run, then apply
+	isAtomic := p.Atomic != nil && *p.Atomic && !dryRun
+	if isAtomic {
+		// Phase 1: validate all edits with dry-run
+		dryRunCmds := make([]dispatch.MultiCmd, len(cmds))
+		for i, cmd := range cmds {
+			dryRunCmds[i] = dispatch.MultiCmd{
+				Cmd: cmd.Cmd, Args: cmd.Args,
+				Flags: copyFlags(cmd.Flags),
+			}
+			dryRunCmds[i].Flags["dry_run"] = true
+		}
+		dryResults := dispatch.DispatchMulti(ctx, db, dryRunCmds)
+		for i, r := range dryResults {
+			if !r.OK {
+				// Any validation failure: abort all edits
+				for j := range cmds {
+					opID := fmt.Sprintf("e%d", j)
+					if j == i {
+						env.AddFailedOpWithCode(opID, "edit", classifyErrorMsg(r.Error), r.Error)
+					} else {
+						env.AddSkippedOp(opID, "edit", "atomic batch aborted due to failed edit")
+					}
+				}
+				return true, false
+			}
+		}
+		// Phase 2: all validated — now apply for real
 	}
 
 	results := dispatch.DispatchMulti(ctx, db, cmds)

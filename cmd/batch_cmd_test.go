@@ -62,6 +62,21 @@ func TestBatchParseInsertAt(t *testing.T) {
 	}
 }
 
+func TestBatchParseAtomic(t *testing.T) {
+	args := []string{"-e", "f.go", "--old", "a", "--new", "b", "-e", "g.go", "--old", "c", "--new", "d", "--atomic"}
+	state, err := parseBatchArgs(args)
+	if err != nil {
+		t.Fatalf("parseBatchArgs: %v", err)
+	}
+	p := state.toParams()
+	if p.Atomic == nil || !*p.Atomic {
+		t.Error("--atomic should set Atomic to true")
+	}
+	if len(p.Edits) != 2 {
+		t.Errorf("expected 2 edits, got %d", len(p.Edits))
+	}
+}
+
 func TestBatchDryRunPostEditReadWarning(t *testing.T) {
 	// Verify that --dry-run plus post-edit reads produces a warning
 	args := []string{"-e", "f.go", "--old", "x", "--new", "y", "--dry-run", "-r", "f.go"}
