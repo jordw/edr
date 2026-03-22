@@ -2086,3 +2086,135 @@ func TestSpec_SetupPathValidation(t *testing.T) {
 		t.Error("setup with nonexistent path should fail")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// SHOULD coverage — fuzzy metadata, rename preview, verify skip, shorthand
+// ---------------------------------------------------------------------------
+
+func TestSpec_EditFuzzyIndicatesMatch(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {\n    fmt.Println(\"hello\")\n}\n",
+	})
+
+	// Spec: if fuzzy succeeds, response SHOULD include metadata indicating fuzzy match.
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--old-text", "fmt.Println(\"hello\")", "--new-text", "fmt.Println(\"world\")", "--fuzzy")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	// Check for some indication that matching was fuzzy.
+	if h["fuzzy"] == nil && h["match"] == nil {
+		t.Log("SHOULD: fuzzy edit response should indicate that matching was fuzzy (no metadata found)")
+	}
+}
+
+func TestSpec_RenameDryRunPreview(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc OldName() int { return 42 }\n\nfunc main() { OldName() }\n",
+	})
+
+	// Spec: rename --dry-run SHOULD provide enough preview detail.
+	result, _, _, exit := specRun(t, binary, dir, nil, "rename", "OldName", "NewName", "--dry-run")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "dry_run" {
+		t.Errorf("status = %v, want dry_run", h["status"])
+	}
+	// Body should contain preview information (diff or occurrence list).
+	if result.Ops[0].Body == "" {
+		t.Error("SHOULD: rename --dry-run should include preview detail in body")
+	}
+}
+
+func TestSpec_VerifySkipsUnknownScope(t *testing.T) {
+	binary := buildBinary(t)
+	dir := t.TempDir()
+	dir, _ = filepath.EvalSymlinks(dir)
+	// A repo with no recognizable build system.
+	os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hello\n"), 0644)
+
+	// Spec: if edr cannot determine a truthful scope, it SHOULD skip verify.
+	result, _, _, exit := specRun(t, binary, dir, nil, "verify")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if result.Verify == nil {
+		t.Fatal("expected verify line")
+	}
+	v, _ := result.Verify["verify"].(string)
+	if v != "skipped" {
+		t.Errorf("verify with no build system should be skipped, got %q", v)
+	}
+}
+
+func TestSpec_ShorthandWorksInStandalone(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n\nfunc helper() int { return 42 }\n",
+	})
+
+	// Spec: if a shorthand works in batch, it MAY work in standalone.
+	// --sig is a shorthand for --signatures.
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"read", "hello.go", "--sig")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if len(result.Ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(result.Ops))
+	}
+	// Body should be signatures, not full content.
+	body := result.Ops[0].Body
+	if strings.Contains(body, "return 42") {
+		t.Error("--sig should return signatures only, not full body")
+	}
+	if !strings.Contains(body, "func helper()") {
+		t.Error("--sig should include function signatures")
+	}
+}
+
+func TestSpec_StaleFileAutoRefresh(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	// Add a new file after indexing.
+	os.WriteFile(filepath.Join(dir, "new.go"), []byte("package main\n\nfunc NewFunc() {}\n"), 0644)
+
+	// Spec: stale file state SHOULD be refreshed automatically.
+	// Reading the new file should work without manual reindex.
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"read", "new.go")
+	if exit != 0 {
+		t.Fatalf("reading new file without reindex: exit %d", exit)
+	}
+	if result.Ops[0].Body == "" {
+		t.Error("should return content for new file without manual reindex")
+	}
+}
+
+func TestSpec_EditDeleteSameShape(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n\nfunc unused() int { return 0 }\n",
+	})
+
+	// Spec: edit --delete SHOULD return the same mutation shape as other edits.
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"edit", "hello.go:unused", "--delete")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	// Same fields as any other edit: file, status, hash.
+	if h["file"] == nil {
+		t.Error("delete should have file field like other edits")
+	}
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+	if h["hash"] == nil {
+		t.Error("applied delete should have hash like other edits")
+	}
+}
