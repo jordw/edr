@@ -268,8 +268,8 @@ footer {
     <li><strong>Fewer round-trips</strong> &rarr; less wall-clock time. Batch three reads into one call instead of three sequential ones. Each round-trip has overhead &mdash; parsing, scheduling, output rendering &mdash; that adds up fast.</li>
     <li><strong>Sessions eliminate redundancy</strong> &rarr; edr tracks what the agent has seen. Re-read a file after an edit? Only the changed lines come back. Re-run tests? Just the diff.</li>
   </ul>
-  <p>The benchmarks below show 95% median context reduction. That&rsquo;s not just less text &mdash; it&rsquo;s proportionally faster completions and more headroom before the agent hits its context limit and starts losing track of the task.</p>
-  <p>This matters most on large codebases. When files are long and symbols are scattered across hundreds of modules, raw file tools flood the context window fast. edr keeps the working set small regardless of repo size &mdash; a 3,000-file monorepo feels like a 50-file project.</p>
+  <p><strong>95% median context reduction</strong> across real repos. That translates directly to faster responses &mdash; less prefill, smaller KV cache, fewer round-trips &mdash; and the agent stays coherent longer because it isn&rsquo;t burning context on files it doesn&rsquo;t need.</p>
+  <p>This scales. A 3,000-file monorepo gets the same tight reads and batched edits as a 50-file project.</p>
 </section>
 
 <!-- Example -->
@@ -368,12 +368,13 @@ edr <span class="flag">-w</span> file <span class="flag">--inside</span> Class  
   <p style="color: var(--fg); font-size: 0.9rem; margin-bottom: 0.25rem;"><strong>Symbol indexing</strong></p>
   <ul class="lang-list">
     <li>Go</li><li>Python</li><li>JavaScript</li><li>TypeScript</li><li>Rust</li>
-    <li>Java</li><li>C</li><li>C++</li><li>Ruby</li><li>PHP</li>
+    <li>Java</li><li>C</li><li>C++</li><li>Ruby</li><li>PHP</li><li>Swift</li><li>Scala</li>
     <li>Zig</li><li>Lua</li><li>Bash</li><li>C#</li><li>Kotlin</li>
   </ul>
   <p style="color: var(--fg); font-size: 0.9rem; margin-bottom: 0.25rem;"><strong>Import-aware refs</strong></p>
   <ul class="lang-list">
     <li>Go</li><li>Python</li><li>JavaScript</li><li>TypeScript</li>
+    <li>Java</li><li>Kotlin</li><li>Scala</li><li>C#</li><li>PHP</li><li>Swift</li>
   </ul>
 </section>
 

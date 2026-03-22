@@ -577,6 +577,18 @@ func extractImports(root *tree_sitter.Node, src []byte, path string, lang *LangC
 		extractPythonImports(root, src, path, &imports)
 	case "javascript", "typescript":
 		extractJSImports(root, src, path, &imports)
+	case "java":
+		extractJavaImports(root, src, path, &imports)
+	case "kotlin":
+		extractKotlinImports(root, src, path, &imports)
+	case "csharp":
+		extractCSharpImports(root, src, path, &imports)
+	case "php":
+		extractPHPImports(root, src, path, &imports)
+	case "swift":
+		extractSwiftImports(root, src, path, &imports)
+	case "scala":
+		extractScalaImports(root, src, path, &imports)
 	}
 
 	return imports
@@ -707,6 +719,189 @@ func extractJSImports(node *tree_sitter.Node, src []byte, path string, out *[]Im
 		child := node.Child(uint(i))
 		if child != nil {
 			extractJSImports(child, src, path, out)
+		}
+	}
+}
+
+// extractJavaImports extracts Java import declarations.
+// AST: import_declaration -> scoped_identifier (dotted path), optional asterisk for wildcard.
+func extractJavaImports(node *tree_sitter.Node, src []byte, path string, out *[]ImportInfo) {
+	kind := node.Kind()
+	if kind == "import_declaration" {
+		text := string(src[node.StartByte():node.EndByte()])
+		text = strings.TrimPrefix(text, "import ")
+		text = strings.TrimPrefix(text, "static ")
+		text = strings.TrimSuffix(text, ";")
+		text = strings.TrimSpace(text)
+		if text != "" {
+			alias := ""
+			if strings.HasSuffix(text, ".*") {
+				alias = "*"
+				text = strings.TrimSuffix(text, ".*")
+			}
+			*out = append(*out, ImportInfo{File: path, ImportPath: text, Alias: alias})
+		}
+		return
+	}
+	for i := 0; i < int(node.ChildCount()); i++ {
+		child := node.Child(uint(i))
+		if child != nil {
+			extractJavaImports(child, src, path, out)
+		}
+	}
+}
+
+// extractKotlinImports extracts Kotlin import declarations.
+// AST: import_list -> import_header -> identifier (dotted path).
+func extractKotlinImports(node *tree_sitter.Node, src []byte, path string, out *[]ImportInfo) {
+	kind := node.Kind()
+	if kind == "import_header" {
+		text := string(src[node.StartByte():node.EndByte()])
+		text = strings.TrimPrefix(text, "import ")
+		text = strings.TrimSpace(text)
+		alias := ""
+		if idx := strings.Index(text, " as "); idx >= 0 {
+			alias = text[idx+4:]
+			text = text[:idx]
+		}
+		if strings.HasSuffix(text, ".*") {
+			alias = "*"
+			text = strings.TrimSuffix(text, ".*")
+		}
+		if text != "" {
+			*out = append(*out, ImportInfo{File: path, ImportPath: text, Alias: alias})
+		}
+		return
+	}
+	for i := 0; i < int(node.ChildCount()); i++ {
+		child := node.Child(uint(i))
+		if child != nil {
+			extractKotlinImports(child, src, path, out)
+		}
+	}
+}
+
+// extractCSharpImports extracts C# using directives.
+// AST: using_directive -> identifier or qualified_name.
+func extractCSharpImports(node *tree_sitter.Node, src []byte, path string, out *[]ImportInfo) {
+	kind := node.Kind()
+	if kind == "using_directive" {
+		text := string(src[node.StartByte():node.EndByte()])
+		text = strings.TrimPrefix(text, "using ")
+		text = strings.TrimPrefix(text, "static ")
+		text = strings.TrimSuffix(text, ";")
+		text = strings.TrimSpace(text)
+		alias := ""
+		if idx := strings.Index(text, " = "); idx >= 0 {
+			alias = text[:idx]
+			text = text[idx+3:]
+		}
+		if text != "" {
+			*out = append(*out, ImportInfo{File: path, ImportPath: text, Alias: alias})
+		}
+		return
+	}
+	for i := 0; i < int(node.ChildCount()); i++ {
+		child := node.Child(uint(i))
+		if child != nil {
+			extractCSharpImports(child, src, path, out)
+		}
+	}
+}
+
+// extractPHPImports extracts PHP use declarations.
+// AST: namespace_use_declaration -> namespace_use_clause -> qualified_name (backslash-separated).
+func extractPHPImports(node *tree_sitter.Node, src []byte, path string, out *[]ImportInfo) {
+	kind := node.Kind()
+	if kind == "namespace_use_declaration" {
+		text := string(src[node.StartByte():node.EndByte()])
+		text = strings.TrimPrefix(text, "use ")
+		text = strings.TrimSuffix(text, ";")
+		text = strings.TrimSpace(text)
+		alias := ""
+		if idx := strings.LastIndex(text, " as "); idx >= 0 {
+			alias = text[idx+4:]
+			text = text[:idx]
+		}
+		// Convert backslashes to forward slashes for path matching
+		text = strings.ReplaceAll(text, "\\", "/")
+		if text != "" {
+			*out = append(*out, ImportInfo{File: path, ImportPath: text, Alias: alias})
+		}
+		return
+	}
+	for i := 0; i < int(node.ChildCount()); i++ {
+		child := node.Child(uint(i))
+		if child != nil {
+			extractPHPImports(child, src, path, out)
+		}
+	}
+}
+
+// extractSwiftImports extracts Swift import declarations.
+// AST: import_declaration -> identifier (dot-separated simple_identifiers).
+func extractSwiftImports(node *tree_sitter.Node, src []byte, path string, out *[]ImportInfo) {
+	kind := node.Kind()
+	if kind == "import_declaration" {
+		text := string(src[node.StartByte():node.EndByte()])
+		text = strings.TrimPrefix(text, "import ")
+		for _, prefix := range []string{"class ", "struct ", "enum ", "protocol ", "func ", "var ", "let ", "typealias "} {
+			text = strings.TrimPrefix(text, prefix)
+		}
+		text = strings.TrimSpace(text)
+		if text != "" {
+			*out = append(*out, ImportInfo{File: path, ImportPath: text})
+		}
+		return
+	}
+	for i := 0; i < int(node.ChildCount()); i++ {
+		child := node.Child(uint(i))
+		if child != nil {
+			extractSwiftImports(child, src, path, out)
+		}
+	}
+}
+
+// extractScalaImports extracts Scala import declarations.
+// AST: import_declaration -> identifier children separated by dots, optional namespace_selectors.
+func extractScalaImports(node *tree_sitter.Node, src []byte, path string, out *[]ImportInfo) {
+	kind := node.Kind()
+	if kind == "import_declaration" {
+		text := string(src[node.StartByte():node.EndByte()])
+		text = strings.TrimPrefix(text, "import ")
+		text = strings.TrimSpace(text)
+		// Handle "import java.util.{List, Map}" -> base path is "java.util"
+		if idx := strings.Index(text, ".{"); idx >= 0 {
+			basePath := text[:idx]
+			braces := text[idx+2 : len(text)-1]
+			for _, name := range strings.Split(braces, ",") {
+				name = strings.TrimSpace(name)
+				alias := ""
+				if parts := strings.SplitN(name, " => ", 2); len(parts) == 2 {
+					alias = parts[1]
+					name = parts[0]
+				}
+				if name == "_" {
+					continue
+				}
+				*out = append(*out, ImportInfo{File: path, ImportPath: basePath + "." + name, Alias: alias})
+			}
+			return
+		}
+		alias := ""
+		if strings.HasSuffix(text, "._") {
+			alias = "*"
+			text = strings.TrimSuffix(text, "._")
+		}
+		if text != "" {
+			*out = append(*out, ImportInfo{File: path, ImportPath: text, Alias: alias})
+		}
+		return
+	}
+	for i := 0; i < int(node.ChildCount()); i++ {
+		child := node.Child(uint(i))
+		if child != nil {
+			extractScalaImports(child, src, path, out)
 		}
 	}
 }

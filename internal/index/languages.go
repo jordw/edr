@@ -21,6 +21,8 @@ import (
 	"github.com/jordw/edr/internal/grammars/ruby"
 	"github.com/jordw/edr/internal/grammars/rust"
 	"github.com/jordw/edr/internal/grammars/typescript"
+	"github.com/jordw/edr/internal/grammars/scala"
+	"github.com/jordw/edr/internal/grammars/swift"
 	"github.com/jordw/edr/internal/grammars/zig"
 )
 
@@ -162,6 +164,9 @@ func GetLangConfig(filename string) *LangConfig {
 			LangID:         "java",
 			Container:      ContainerBrace,
 			ContainerClose: "}",
+			Imports: &ImportNodeConfig{
+				TopLevel: []string{"import_declaration"},
+			},
 		}
 	case ".ts":
 		return &LangConfig{
@@ -251,6 +256,9 @@ func GetLangConfig(filename string) *LangConfig {
 			LangID:         "php",
 			Container:      ContainerBrace,
 			ContainerClose: "}",
+			Imports: &ImportNodeConfig{
+				TopLevel: []string{"namespace_use_declaration"},
+			},
 		}
 	case ".zig":
 		return &LangConfig{
@@ -309,6 +317,9 @@ func GetLangConfig(filename string) *LangConfig {
 			LangID:         "csharp",
 			Container:      ContainerBrace,
 			ContainerClose: "}",
+			Imports: &ImportNodeConfig{
+				TopLevel: []string{"using_directive"},
+			},
 		}
 	case ".kt", ".kts":
 		return &LangConfig{
@@ -323,6 +334,52 @@ func GetLangConfig(filename string) *LangConfig {
 			LangID:         "kotlin",
 			Container:      ContainerBrace,
 			ContainerClose: "}",
+			Imports: &ImportNodeConfig{
+				TopLevel: []string{"import_list"},
+			},
+		}
+	case ".swift":
+		return &LangConfig{
+			Language:    tree_sitter.NewLanguage(unsafe.Pointer(swift.Language())),
+			SymbolNodes: []string{
+				"class_declaration",
+				"function_declaration",
+				"protocol_declaration",
+				"property_declaration",
+				"init_declaration",
+				"deinit_declaration",
+				"subscript_declaration",
+				"typealias_declaration",
+				"protocol_function_declaration",
+			},
+			NameField:      "name",
+			LangID:         "swift",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
+			Imports: &ImportNodeConfig{
+				TopLevel: []string{"import_declaration"},
+			},
+		}
+	case ".scala", ".sc":
+		return &LangConfig{
+			Language:    tree_sitter.NewLanguage(unsafe.Pointer(scala.Language())),
+			SymbolNodes: []string{
+				"class_definition",
+				"trait_definition",
+				"object_definition",
+				"function_definition",
+				"function_declaration",
+				"val_definition",
+				"var_definition",
+				"type_definition",
+			},
+			NameField:      "name",
+			LangID:         "scala",
+			Container:      ContainerBrace,
+			ContainerClose: "}",
+			Imports: &ImportNodeConfig{
+				TopLevel: []string{"import_declaration"},
+			},
 		}
 	default:
 		return nil

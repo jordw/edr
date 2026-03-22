@@ -39,6 +39,14 @@ func importReachesFile(imp ImportInfo, targetFile, importingFile, root, langID s
 		return jsImportReaches(imp, targetFile, importingFile, root)
 	case "python":
 		return pythonImportReaches(imp, targetFile, importingFile, root)
+	case "java", "kotlin", "scala":
+		return jvmImportReaches(imp, targetFile, root)
+	case "csharp":
+		return csharpImportReaches(imp, targetFile, root)
+	case "php":
+		return phpImportReaches(imp, targetFile, root)
+	case "swift":
+		return swiftImportReaches(imp, targetFile, root)
 	default:
 		return true // unknown language, be permissive
 	}
@@ -126,6 +134,74 @@ func jsImportReaches(imp ImportInfo, targetFile, importingFile, root string) boo
 	}
 
 	return false
+}
+
+// jvmImportReaches checks if a Java/Kotlin/Scala import could refer to the target file.
+// Import paths use dots (e.g., "java.util.List"). We match by converting to path segments
+// and checking suffix match against the target file path.
+func jvmImportReaches(imp ImportInfo, targetFile, root string) bool {
+	importPath := imp.ImportPath
+
+	// Wildcard import — match any file in the package
+	if imp.Alias == "*" {
+		// importPath is the package, e.g. "java.util.concurrent"
+		parts := strings.Split(importPath, ".")
+		return pathSuffixMatch(parts, targetFile, root)
+	}
+
+	// Specific import — last segment is the class name, preceding segments are the package
+	parts := strings.Split(importPath, ".")
+	if len(parts) < 2 {
+		return false
+	}
+	// Match against directory of the package (all but last segment)
+	return pathSuffixMatch(parts[:len(parts)-1], targetFile, root)
+}
+
+// csharpImportReaches checks if a C# using directive could refer to the target file.
+// Using directives reference namespaces (e.g., "System.Collections.Generic").
+func csharpImportReaches(imp ImportInfo, targetFile, root string) bool {
+	parts := strings.Split(imp.ImportPath, ".")
+	return pathSuffixMatch(parts, targetFile, root)
+}
+
+// phpImportReaches checks if a PHP use declaration could refer to the target file.
+// Import paths use forward slashes (already converted from backslashes).
+func phpImportReaches(imp ImportInfo, targetFile, root string) bool {
+	importPath := imp.ImportPath
+	// Last segment is the class name, preceding segments map to directory
+	parts := strings.Split(importPath, "/")
+	if len(parts) < 2 {
+		return false
+	}
+	return pathSuffixMatch(parts[:len(parts)-1], targetFile, root)
+}
+
+// swiftImportReaches checks if a Swift import could refer to the target file.
+// Swift imports are module-level (e.g., "Foundation", "UIKit.UIView").
+// We match if the first segment matches a directory in the target path.
+func swiftImportReaches(imp ImportInfo, targetFile, root string) bool {
+	parts := strings.Split(imp.ImportPath, ".")
+	return pathSuffixMatch(parts[:1], targetFile, root)
+}
+
+// pathSuffixMatch checks if the given path segments match as a suffix of the target file's directory.
+func pathSuffixMatch(segments []string, targetFile, root string) bool {
+	rel, err := filepath.Rel(root, targetFile)
+	if err != nil {
+		return false
+	}
+	targetParts := strings.Split(filepath.ToSlash(filepath.Dir(rel)), "/")
+
+	if len(segments) > len(targetParts) {
+		return false
+	}
+	for i := 0; i < len(segments); i++ {
+		if !strings.EqualFold(segments[len(segments)-1-i], targetParts[len(targetParts)-1-i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // pythonImportReaches checks if a Python import could refer to the target file.

@@ -23,9 +23,9 @@ edr attacks this directly:
 - **Fewer round-trips** → less wall-clock time. Batch three reads into one call instead of three sequential ones. Each round-trip has overhead — parsing, scheduling, output rendering — that adds up fast.
 - **Deltas eliminate redundancy** → the context window stops filling with repeated content. Re-read a file after an edit? Only the changed lines come back. Re-run tests? Just the diff. The agent stays focused on what actually changed.
 
-The benchmark numbers below show 95% median context reduction. That's not just less text — it's proportionally faster completions and more headroom before the agent hits its context limit and starts losing track of the task.
+**95% median context reduction** across real repos. That translates directly to faster responses — less prefill, smaller KV cache, fewer round-trips — and the agent stays coherent longer because it isn't burning context on files it doesn't need.
 
-This matters most on large codebases. When files are long and symbols are scattered across hundreds of modules, raw file tools flood the context window fast — and the agent starts losing coherence, forgetting earlier reads, or re-reading files it already saw. edr keeps the working set small regardless of repo size. A 3,000-file monorepo doesn't mean 3,000 files of context — it means the same tight reads and batched edits as a 50-file project.
+This scales. A 3,000-file monorepo gets the same tight reads and batched edits as a 50-file project.
 
 ## Example
 
@@ -135,9 +135,9 @@ Output uses plain mode: one JSON header line followed by raw-text body.
 
 edr reads and edits any text file. Symbol-aware features (symbol reads, `--signatures`, `refs`, `map`) require a supported language:
 
-**Symbol indexing:** Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby, PHP, Zig, Lua, Bash/Shell, C#, Kotlin
+**Symbol indexing:** Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby, PHP, Swift, Scala, Zig, Lua, Bash/Shell, C#, Kotlin
 
-**Import-aware refs:** Go, Python, JavaScript, TypeScript (others fall back to text matching)
+**Import-aware refs:** Go, Python, JavaScript, TypeScript, Java, Kotlin, Scala, C#, PHP, Swift (others fall back to text matching)
 
 ## Limitations
 

@@ -24,9 +24,9 @@ For cloud agents: clone this repo, run `./setup.sh /path/to/your/project`, and e
 
 ## Supported languages
 
-**Symbol indexing** (map, read, edit, signatures, inside): Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby, PHP, Zig, Lua, Bash/Shell, C#, Kotlin.
+**Symbol indexing** (map, read, edit, signatures, inside): Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby, PHP, Swift, Scala, Zig, Lua, Bash/Shell, C#, Kotlin.
 
-**Import-aware semantic refs** (refs, rename, --impact, --chain): Go, Python, JavaScript, TypeScript. Other languages fall back to text-based refs.
+**Import-aware semantic refs** (refs, rename, --impact, --chain): Go, Python, JavaScript, TypeScript, Java, Kotlin, Scala, C#, PHP, Swift. Other languages fall back to text-based refs.
 
 ## Key files
 
