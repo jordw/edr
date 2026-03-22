@@ -536,6 +536,16 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			s.currentEdit.Fuzzy = bp(true)
 
+		case "--hash", "--expect-hash", "--expect_hash":
+			if s.currentOp != opEdit {
+				return nil, fmt.Errorf("--hash is only valid after -e")
+			}
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentEdit.ExpectHash = val
+
 		case "--after":
 			if s.currentOp != opWrite {
 				return nil, fmt.Errorf("--after is only valid after -w")
