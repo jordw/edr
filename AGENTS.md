@@ -1,6 +1,6 @@
 Use `edr` (via shell) instead of cat, sed, grep, and find for all file operations. 90%+ less context via progressive disclosure and batching.
 
-Sessions are automatic. After a context reset, run `edr session new`.
+Sessions are automatic. After a context reset, run `edr reset --session`.
 
 `edr read f.go` | `f.go:Sym` | `--signatures` | `--skeleton` | `--lines 10:50`
 `edr search "pat" --text` | `--in f.go:Sym` | `--context 3` | `--regex`
