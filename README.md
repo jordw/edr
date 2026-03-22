@@ -127,7 +127,7 @@ edr reads and edits any text file. Symbol-aware features (symbol reads, `--signa
 - **Tree-sitter, not LSP.** Fast, no build step, works on broken code, zero config. The tradeoff: no type information. Refs use import-path matching, not type resolution, so cross-package references may produce false positives. For agent workloads — read, edit, search — structural parsing is enough.
 - **macOS and Linux only.** Windows is not planned.
 - **C/C++ compiler required** when building from source (tree-sitter grammars). Homebrew and the install script use pre-built binaries.
-- **First index: 1-3s** on small repos, ~30s on large ones (vitess, 1.5M LOC). Incremental re-index after edits: ~50ms/file. Subsequent reads/searches add ~5-20ms of overhead vs raw `cat`/`grep` for tree-sitter parsing and SQLite lookup.
+- **First index: under 1s** on small repos, ~15s on large ones (vitess, 3200 files). Incremental re-index after edits: ~12ms/file.
 
 ## Benchmarks
 

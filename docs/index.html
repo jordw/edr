@@ -378,7 +378,7 @@ edr <span class="flag">-w</span> file <span class="flag">--inside</span> Class  
     <li style="margin-bottom: 0.75rem;"><strong>Tree-sitter, not LSP.</strong> Fast, no build step, works on broken code, zero config. Tradeoff: no type information. Refs may produce false positives across packages.</li>
     <li style="margin-bottom: 0.75rem;"><strong>macOS and Linux only.</strong> Windows is not planned.</li>
     <li style="margin-bottom: 0.75rem;"><strong>C/C++ compiler required</strong> when building from source. Homebrew and the install script use pre-built binaries.</li>
-    <li><strong>First index: 1&ndash;3s</strong> on small repos, ~30s on large ones (vitess, 1.5M LOC). Incremental re-index: ~50ms/file.</li>
+    <li><strong>First index: under 1s</strong> on small repos, ~15s on large ones (vitess, 3200 files). Incremental re-index: ~12ms/file.</li>
   </ul>
 </section>
 
