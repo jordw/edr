@@ -14,7 +14,7 @@ func TestPublicCommandSurface(t *testing.T) {
 		"read": true, "search": true, "map": true,
 		"edit": true, "write": true, "refs": true,
 		"verify": true, "reindex": true, "rename": true,
-		"run": true, "session": true, "setup": true,
+		"run": true, "session": true, "setup": true, "next": true,
 	}
 
 	for _, s := range Registry {

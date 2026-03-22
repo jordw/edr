@@ -176,6 +176,7 @@ func TestOpenerAlignment(t *testing.T) {
 		tested["setupCmd"] = true
 		tested["runCmd"] = true
 		tested["sessionCmd"] = true
+		tested["nextCmd"] = true
 
 		for _, m := range matches {
 			cmdVar := m[1]

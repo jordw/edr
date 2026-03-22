@@ -2055,7 +2055,7 @@ func TestHandleDo_ReadShapeParity(t *testing.T) {
 	standaloneMap, _ := result.(map[string]any)
 
 	// Compare key sets (excluding op_id/type which are added by envelope)
-	skip := map[string]bool{"op_id": true, "type": true, "session": true}
+	skip := map[string]bool{"op_id": true, "type": true, "session": true, "_signature": true}
 	batchKeys := map[string]bool{}
 	for k := range batchOp {
 		if !skip[k] {

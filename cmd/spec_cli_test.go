@@ -251,7 +251,7 @@ func TestSpec_HelpSurface(t *testing.T) {
 		t.Errorf("edr --help wrote to stderr: %q", stderr)
 	}
 
-	expected := []string{"edit", "map", "read", "refs", "reindex", "rename", "run", "search", "session", "setup", "verify", "write"}
+	expected := []string{"edit", "map", "next", "read", "refs", "reindex", "rename", "run", "search", "session", "setup", "verify", "write"}
 	cmdRe := regexp.MustCompile(`(?m)^\s{2}(\w+)\s`)
 	matches := cmdRe.FindAllStringSubmatch(stdout, -1)
 
@@ -2218,3 +2218,153 @@ func TestSpec_EditDeleteSameShape(t *testing.T) {
 		t.Error("applied delete should have hash like other edits")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// edr next — CLI spec tests
+// ---------------------------------------------------------------------------
+
+func TestSpec_NextEmpty(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+	result, _, _, exit := specRun(t, binary, dir, nil, "next")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if len(result.Ops) == 0 {
+		t.Fatal("expected at least one op")
+	}
+	header := result.Ops[0].Header
+	ops, _ := header["ops"].(float64)
+	if ops != 0 {
+		t.Errorf("expected ops=0, got %v", ops)
+	}
+}
+
+func TestSpec_NextWithRecentOps(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+	sessEnv := []string{"EDR_SESSION=test-next"}
+
+	// Read a symbol to create an op
+	_, _, _, exit := specRun(t, binary, dir, sessEnv, "read", "main.go:hello")
+	if exit != 0 {
+		t.Fatal("read failed")
+	}
+
+	// Check next shows the op
+	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "next")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	header := result.Ops[0].Header
+	ops, _ := header["ops"].(float64)
+	if ops != 1 {
+		t.Errorf("expected ops=1, got %v", ops)
+	}
+	if !strings.Contains(stdout, "symbol_read") {
+		t.Errorf("expected 'symbol_read' in output, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "main.go:hello") {
+		t.Errorf("expected 'main.go:hello' in output, got: %s", stdout)
+	}
+}
+
+func TestSpec_NextFocus(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+	sessEnv := []string{"EDR_SESSION=test-focus"}
+
+	// Set focus
+	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "next", "--focus", "rename hello to greet")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if !strings.Contains(stdout, "rename hello to greet") {
+		t.Errorf("focus not in output: %s", stdout)
+	}
+
+	// Focus persists
+	_, stdout, _, exit = specRun(t, binary, dir, sessEnv, "next")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if !strings.Contains(stdout, "rename hello to greet") {
+		t.Errorf("focus not persisted: %s", stdout)
+	}
+
+	// Clear focus
+	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "next", "--focus", "")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	header := result.Ops[0].Header
+	if _, hasFocus := header["focus"]; hasFocus {
+		t.Error("focus should be cleared from header")
+	}
+}
+
+func TestSpec_NextBuildState(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+	sessEnv := []string{"EDR_SESSION=test-build"}
+
+	// Verify
+	_, vStdout, _, exit := specRun(t, binary, dir, sessEnv, "verify")
+	if exit != 0 {
+		t.Fatalf("verify failed: %s", vStdout)
+	}
+
+	// Next should show build: passed or skipped
+	result, nStdout, _, exit := specRun(t, binary, dir, sessEnv, "next")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	header := result.Ops[0].Header
+	build, _ := header["build"].(string)
+	// verify may skip on repos without go.mod — accept both passed and no build state
+	if build != "" && build != "passed" {
+		t.Errorf("expected build=passed or empty, got %q\nverify: %s\nnext: %s", build, vStdout, nStdout)
+	}
+}
+
+func TestSpec_NextStaleAssumption(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+	sessEnv := []string{"EDR_SESSION=test-stale"}
+
+	// Read hello (records assumption)
+	_, _, _, exit := specRun(t, binary, dir, sessEnv, "read", "main.go:hello")
+	if exit != 0 {
+		t.Fatal("read failed")
+	}
+
+	// Edit hello's signature (changes from no params to with params)
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "edit", "main.go",
+		"--old-text", "func hello()", "--new-text", "func hello(name string)")
+	if exit != 0 {
+		t.Fatal("edit failed")
+	}
+
+	// Next should show stale assumption
+	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "next")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	header := result.Ops[0].Header
+	fixCount, _ := header["fix"].(float64)
+	if fixCount < 1 {
+		t.Errorf("expected fix>=1, got %v\nstdout: %s", fixCount, stdout)
+	}
+	if !strings.Contains(stdout, "stale_assumption") {
+		t.Errorf("expected 'stale_assumption' in output: %s", stdout)
+	}
+	if !strings.Contains(stdout, "hello") {
+		t.Errorf("expected 'hello' in fix output: %s", stdout)
+	}
+}
+

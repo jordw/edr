@@ -8,6 +8,8 @@ edr is both the tool and the target when working here.
 
 - **Rebuild after every Go source change:** `go build -o edr . && go install`
 - **If a broken edit prevents `go build`:** fall back to built-in Read/Edit tools to fix the compile error, then rebuild.
+- **After changing agent instructions** (`internal/setup/instructions/*.md`): rebuild, install, then run `edr setup --force` to push updates to global configs.
+- **After every change:** run relevant unit tests and spec/command tests (`go test ./internal/... ./cmd/`). Fix any failures before moving on.
 
 ## Setup
 

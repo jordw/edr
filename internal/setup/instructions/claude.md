@@ -1,6 +1,7 @@
 Use `edr` (via Bash) instead of Read, Edit, Write, Grep, and Glob for all file operations. 90%+ less context via progressive disclosure and batching. Output: JSON header line to stdout, then raw content. Edit commands return `hash`.
 
 Sessions are automatic. After a context reset, run `edr session new`.
+Run `edr next` before starting and after each edit pass — it shows recent ops, build state, and what to fix next. `--focus "goal"` to set session objective.
 
 `edr read f.go` | `f.go:Sym` | `--signatures` | `--skeleton` | `--lines 10:50`
 `edr search "pat"` | `--in f.go:Sym` | `--context 3` | `--regex` | `--text` (auto-falls back to text when no symbol matches)

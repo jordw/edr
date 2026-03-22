@@ -1,6 +1,7 @@
 Use `edr` (via terminal) instead of built-in file tools for all file operations. edr uses 90%+ less context via progressive disclosure and batching.
 
 After a context reset, run `edr session new` to clear stale dedup state. Otherwise sessions are automatic.
+Run `edr next` before starting and after each edit pass — it shows recent ops, build state, and what to fix next. `--focus "goal"` to set session objective.
 
 Workflow — start narrow, widen only as needed:
 1. Orient: `edr map --budget 500` (filter: --dir, --lang, --grep)
