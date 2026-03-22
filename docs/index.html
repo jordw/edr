@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>edr — the editor for agents</title>
+<meta name="description" content="Context-preserving code navigation and editing CLI for coding agents. 95% fewer tokens, symbol-level ops, batching, deltas.">
+<style>
+:root {
+  --bg: #0d1117;
+  --fg: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --red: #f85149;
+  --border: #30363d;
+  --code-bg: #161b22;
+  --card-bg: #161b22;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre {
+  font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, Consolas, monospace;
+  font-size: 0.875rem;
+}
+code {
+  background: var(--code-bg);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+}
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+pre code { background: none; padding: 0; }
+
+.container { max-width: 800px; margin: 0 auto; padding: 0 1.5rem; }
+
+/* Hero */
+.hero {
+  padding: 4rem 0 3rem;
+  text-align: center;
+}
+.hero h1 {
+  font-size: 3.5rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin-bottom: 0.25rem;
+}
+.hero .tagline {
+  font-size: 1.125rem;
+  color: var(--muted);
+  margin-bottom: 2rem;
+}
+.hero .pitch {
+  font-size: 1.05rem;
+  max-width: 600px;
+  margin: 0 auto 2.5rem;
+}
+.hero .pitch strong { color: var(--fg); }
+
+/* Pillars */
+.pillars {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-bottom: 3rem;
+}
+.pillar {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.25rem;
+}
+.pillar h3 {
+  font-size: 0.95rem;
+  margin-bottom: 0.5rem;
+  color: var(--accent);
+}
+.pillar p {
+  font-size: 0.875rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+/* Install bar */
+.install-bar {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 420px;
+  margin: 0 auto 1rem;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+}
+.install-bar .prompt { color: var(--muted); margin-right: 0.5rem; }
+.install-bar .cmd { flex: 1; }
+
+/* Sections */
+section { padding: 2.5rem 0; }
+section h2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  letter-spacing: -0.01em;
+}
+section p, section li {
+  color: var(--muted);
+  margin-bottom: 0.75rem;
+}
+section p strong, section li strong { color: var(--fg); }
+
+/* Example */
+.example pre {
+  margin-bottom: 1rem;
+}
+.comment { color: #8b949e; }
+.flag { color: #d2a8ff; }
+
+/* Table */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  margin: 1rem 0;
+}
+th, td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+td:last-child { text-align: right; }
+th:last-child { text-align: right; }
+.pct { color: var(--green); font-weight: 600; }
+.pct-neg { color: var(--red); font-weight: 600; }
+
+/* Commands table */
+.cmd-table td:first-child {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.cmd-table td:last-child {
+  text-align: left;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* Details */
+details {
+  margin: 1rem 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+
+/* Languages */
+.lang-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0.5rem 0 1rem;
+}
+.lang-list li {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.8rem;
+  color: var(--fg);
+  margin: 0;
+}
+
+/* Footer */
+footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  .hero h1 { font-size: 2.5rem; }
+  .pillars { grid-template-columns: 1fr; }
+  .install-bar { font-size: 0.8rem; }
+  table { font-size: 0.75rem; }
+  th, td { padding: 0.4rem 0.5rem; }
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+
+<!-- Hero -->
+<div class="hero">
+  <h1>edr</h1>
+  <p class="tagline">the editor for agents</p>
+  <p class="pitch">
+    <strong>Coding agents burn context on full-file reads, redundant calls, and output they've already seen.</strong>
+    edr fixes this with symbol-level ops, batching, and deltas. Works with any agent that can run shell commands.
+  </p>
+  <div class="install-bar">
+    <span class="prompt">$</span>
+    <span class="cmd">brew install jordw/tap/edr</span>
+  </div>
+  <div style="font-size: 0.8rem; color: var(--muted);">
+    Then run <code>edr setup</code> in your project.
+    <a href="https://github.com/jordw/edr#install">Other install methods</a>
+  </div>
+</div>
+
+<!-- Pillars -->
+<div class="pillars">
+  <div class="pillar">
+    <h3>Symbol-level ops</h3>
+    <p>Read one function instead of a 400-line file. Get a class API with <code>--signatures</code>. 85% smaller responses.</p>
+  </div>
+  <div class="pillar">
+    <h3>Batching</h3>
+    <p>Read three files and search in one call instead of four. One call to gather, one to mutate.</p>
+  </div>
+  <div class="pillar">
+    <h3>Deltas</h3>
+    <p>Re-read a file, re-run tests? Only what changed comes back. Zero config &mdash; sessions activate automatically.</p>
+  </div>
+</div>
+
+<!-- Example -->
+<section class="example">
+  <h2>Example</h2>
+  <p>Add a <code>retries</code> parameter to a scheduler class. Without edr: 6 calls, ~59KB of context. With edr:</p>
+<pre><code><span class="comment"># 1. Symbol-level: read three signatures + search, one call</span>
+edr <span class="flag">-r</span> src/scheduler.py:Scheduler <span class="flag">--sig</span> \
+    <span class="flag">-r</span> src/config.py:parse_config \
+    <span class="flag">-r</span> src/worker.py:Worker <span class="flag">--sig</span> \
+    <span class="flag">-s</span> "retry"
+
+<span class="comment"># 2. Batched edit: two files, auto-verifies build</span>
+edr <span class="flag">-e</span> src/scheduler.py <span class="flag">--old</span> "def run(self):" <span class="flag">--new</span> "def run(self, retries=3):" \
+    <span class="flag">-e</span> src/config.py <span class="flag">--old</span> '"timeout": 30' <span class="flag">--new</span> '"timeout": 30, "retries": 3'
+
+<span class="comment"># 3. Deltas: run tests, fix a bug, run again &mdash; only the diff comes back</span>
+edr run -- pytest</code></pre>
+  <p>3 calls. Re-reads of files already in context: zero tokens.</p>
+</section>
+
+<!-- Benchmarks -->
+<section>
+  <h2>Benchmarks</h2>
+  <p>9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos. Measuring tool response bytes &mdash; what enters the agent's context window.</p>
+  <table>
+    <thead>
+      <tr><th>Repo</th><th>Lang</th><th>Baseline</th><th>edr</th><th>Reduction</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><a href="https://github.com/urfave/cli">urfave/cli</a></td><td>Go</td><td>192KB / 20 calls</td><td>10KB / 9 calls</td><td class="pct">95%</td></tr>
+      <tr><td><a href="https://github.com/vitessio/vitess">vitess/sqlparser</a></td><td>Go</td><td>314KB / 17 calls</td><td>49KB / 9 calls</td><td class="pct">85%</td></tr>
+      <tr><td><a href="https://github.com/vitessio/vitess">vitess/vtgate</a></td><td>Go</td><td>730KB / 19 calls</td><td>21KB / 9 calls</td><td class="pct">97%</td></tr>
+      <tr><td><a href="https://github.com/pallets/click">pallets/click</a></td><td>Python</td><td>290KB / 20 calls</td><td>13KB / 9 calls</td><td class="pct">96%</td></tr>
+      <tr><td><a href="https://github.com/rails/thor">rails/thor</a></td><td>Ruby</td><td>166KB / 20 calls</td><td>12KB / 9 calls</td><td class="pct">93%</td></tr>
+      <tr><td><a href="https://github.com/reduxjs/redux-toolkit">redux-toolkit</a></td><td>TS</td><td>182KB / 20 calls</td><td>14KB / 9 calls</td><td class="pct">92%</td></tr>
+      <tr><td><a href="https://github.com/django/django">django</a></td><td>Python</td><td>1,296KB / 20 calls</td><td>25KB / 9 calls</td><td class="pct">98%</td></tr>
+    </tbody>
+  </table>
+  <p><strong>Median reduction: 95%</strong> across repos.</p>
+
+  <details>
+    <summary>Per-scenario breakdown (urfave/cli)</summary>
+    <table>
+      <thead>
+        <tr><th>Scenario</th><th>Baseline</th><th>edr</th><th>Reduction</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Understand a class API</td><td>10,072B</td><td>1,486B</td><td class="pct">85%</td></tr>
+        <tr><td>Read a specific function</td><td>15,307B</td><td>1,182B</td><td class="pct">92%</td></tr>
+        <tr><td>Find references</td><td>67,101B / 4 calls</td><td>179B</td><td class="pct">100%</td></tr>
+        <tr><td>Search with context</td><td>614B</td><td>1,027B</td><td class="pct-neg">-67%</td></tr>
+        <tr><td>Orient in codebase</td><td>11,481B / 2 calls</td><td>2,673B</td><td class="pct">77%</td></tr>
+        <tr><td>Edit a function</td><td>10,172B / 2 calls</td><td>394B</td><td class="pct">96%</td></tr>
+        <tr><td>Add method to a class</td><td>10,072B / 2 calls</td><td>249B</td><td class="pct">98%</td></tr>
+        <tr><td>Multi-file read</td><td>30,794B / 3 calls</td><td>3,295B</td><td class="pct">89%</td></tr>
+        <tr><td>Explore a symbol</td><td>41,285B / 4 calls</td><td>72B</td><td class="pct">100%</td></tr>
+      </tbody>
+      <tfoot>
+        <tr><th>Total</th><th>196,898B / 20 calls</th><th>10,557B / 9 calls</th><th class="pct">95%</th></tr>
+      </tfoot>
+    </table>
+  </details>
+</section>
+
+<!-- Commands -->
+<section>
+  <h2>Commands</h2>
+  <p><strong>Batch flags</strong> &mdash; the primary interface:</p>
+<pre><code>edr <span class="flag">-r</span> file[:Symbol]              <span class="comment"># Read file or symbol</span>
+edr <span class="flag">-r</span> file:Class <span class="flag">--sig</span>           <span class="comment"># Signatures only (no bodies)</span>
+edr <span class="flag">-s</span> "pattern"                  <span class="comment"># Search symbols or text (--text)</span>
+edr <span class="flag">-e</span> file <span class="flag">--old</span> "x" <span class="flag">--new</span> "y"   <span class="comment"># Edit with auto re-index + verify</span>
+edr <span class="flag">-w</span> file <span class="flag">--inside</span> Class        <span class="comment"># Add method/field without reading</span></code></pre>
+
+  <table class="cmd-table">
+    <thead><tr><th>Command</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>read</td><td><code>file:Symbol</code>, <code>--signatures</code>, <code>--lines 10:50</code></td></tr>
+      <tr><td>search</td><td><code>"pattern" --text</code>, <code>--in file:Symbol</code>, <code>--regex</code></td></tr>
+      <tr><td>map</td><td>Symbol map. <code>--dir</code>, <code>--type</code>, <code>--lang</code>, <code>--grep</code></td></tr>
+      <tr><td>edit</td><td><code>--old "x" --new "y"</code>, <code>--fuzzy</code>, <code>--in Symbol</code>, <code>--delete</code></td></tr>
+      <tr><td>write</td><td><code>--inside Class</code>, <code>--after Symbol</code>, <code>--append</code></td></tr>
+      <tr><td>refs</td><td><code>Symbol</code>, <code>--impact</code>, <code>--callers</code>, <code>--deps</code>, <code>--chain</code></td></tr>
+      <tr><td>rename</td><td>Cross-file, import-aware. <code>--dry-run</code></td></tr>
+      <tr><td>verify</td><td>Auto-detects go/npm/cargo/make</td></tr>
+      <tr><td>run</td><td><code>run -- make test</code> &mdash; diffs against previous run</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- Languages -->
+<section>
+  <h2>Languages</h2>
+  <p>edr reads and edits any text file. Symbol-aware features require a supported language:</p>
+  <p style="color: var(--fg); font-size: 0.9rem; margin-bottom: 0.25rem;"><strong>Symbol indexing</strong></p>
+  <ul class="lang-list">
+    <li>Go</li><li>Python</li><li>JavaScript</li><li>TypeScript</li><li>Rust</li>
+    <li>Java</li><li>C</li><li>C++</li><li>Ruby</li><li>PHP</li>
+    <li>Zig</li><li>Lua</li><li>Bash</li><li>C#</li><li>Kotlin</li>
+  </ul>
+  <p style="color: var(--fg); font-size: 0.9rem; margin-bottom: 0.25rem;"><strong>Import-aware refs</strong></p>
+  <ul class="lang-list">
+    <li>Go</li><li>Python</li><li>JavaScript</li><li>TypeScript</li>
+  </ul>
+</section>
+
+<!-- How it works -->
+<section>
+  <h2>How it works</h2>
+  <p>edr parses your codebase with <a href="https://tree-sitter.github.io/tree-sitter/">tree-sitter</a> and stores symbols in a SQLite index.</p>
+  <p><strong>Symbol-level operations.</strong> Read one function instead of a 400-line file. Get a class API with <code>--signatures</code> (85% fewer tokens). Scope edits to a symbol with <code>--in Symbol</code>. Use <code>--fuzzy</code> for whitespace-tolerant matching. Edits re-index immediately and auto-verify the build.</p>
+  <p><strong>Batching.</strong> <code>-r</code>, <code>-s</code>, <code>-e</code>, <code>-w</code> combine reads, searches, edits, and writes in one CLI call.</p>
+  <p><strong>Deltas.</strong> edr tracks what the agent has seen. Second read of an unchanged file: 0 tokens. <code>edr run -- make test</code> after a fix: only the diff from the previous run.</p>
+</section>
+
+<!-- Limitations -->
+<section>
+  <h2>Limitations</h2>
+  <ul style="list-style: none; padding: 0;">
+    <li style="margin-bottom: 0.75rem;"><strong>Tree-sitter, not LSP.</strong> Fast, no build step, works on broken code, zero config. Tradeoff: no type information. Refs may produce false positives across packages.</li>
+    <li style="margin-bottom: 0.75rem;"><strong>macOS and Linux only.</strong> Windows is not planned.</li>
+    <li style="margin-bottom: 0.75rem;"><strong>C/C++ compiler required</strong> when building from source. Homebrew and the install script use pre-built binaries.</li>
+    <li><strong>First index: 1&ndash;3s</strong> on small repos, ~30s on large ones (vitess, 1.5M LOC). Incremental re-index: ~50ms/file.</li>
+  </ul>
+</section>
+
+</div>
+
+<footer>
+  <div class="container">
+    <a href="https://github.com/jordw/edr">GitHub</a> &middot;
+    <a href="https://github.com/jordw/edr/issues">Issues</a> &middot;
+    MIT License
+  </div>
+</footer>
+
+</body>
+</html>
