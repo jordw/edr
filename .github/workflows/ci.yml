@@ -145,7 +145,7 @@ jobs:
       - name: Test clean install via setup.sh
         run: |
           mkdir /tmp/target && cd /tmp/target && git init -q
-          ${{ github.workspace }}/setup.sh /tmp/target
+          ${{ github.workspace }}/setup.sh /tmp/target --global
 
       - name: Verify edr works
         run: |
