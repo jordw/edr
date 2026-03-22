@@ -229,7 +229,7 @@ footer {
   <p class="tagline">the editor for agents</p>
   <p class="pitch">
     <strong>Agents are bottlenecked on what context they have and can quickly gather.</strong>
-    Larger context windows and faster inference don't fix the core problem: an agent that reads whole files, makes sequential calls, and re-processes output it's already seen is doing unnecessary work at every step &mdash; and the cost is superlinear. edr gives agents precise tools instead. Works with any agent that can run shell commands.
+    Larger context windows and faster inference don't help when the agent is reading whole files to find one function, making sequential calls that could be batched, and re-processing output it's already seen. edr gives agents the right context instead of all the context. Works with any agent that can run shell commands.
   </p>
   <div class="install-bar">
     <span class="prompt">$</span>
@@ -252,8 +252,8 @@ footer {
     <p>Read three files and search in one call instead of four. One call to gather, one to mutate.</p>
   </div>
   <div class="pillar">
-    <h3>Deltas</h3>
-    <p>Re-read a file, re-run tests? Only what changed comes back. Zero config &mdash; sessions activate automatically.</p>
+    <h3>Sessions</h3>
+    <p>edr tracks what the agent has seen. Re-reads and re-runs return only what changed. Zero config &mdash; sessions activate automatically.</p>
   </div>
 </div>
 
@@ -266,7 +266,7 @@ footer {
   <ul>
     <li><strong>Fewer tokens in</strong> &rarr; faster responses. Read a function (1KB) instead of a file (15KB). The model processes 15&times; less input.</li>
     <li><strong>Fewer round-trips</strong> &rarr; less wall-clock time. Batch three reads into one call instead of three sequential ones. Each round-trip has overhead &mdash; parsing, scheduling, output rendering &mdash; that adds up fast.</li>
-    <li><strong>Deltas eliminate redundancy</strong> &rarr; the context window stops filling with repeated content. Re-read a file after an edit? Only the changed lines come back. Re-run tests? Just the diff.</li>
+    <li><strong>Sessions eliminate redundancy</strong> &rarr; edr tracks what the agent has seen. Re-read a file after an edit? Only the changed lines come back. Re-run tests? Just the diff.</li>
   </ul>
   <p>The benchmarks below show 95% median context reduction. That&rsquo;s not just less text &mdash; it&rsquo;s proportionally faster completions and more headroom before the agent hits its context limit and starts losing track of the task.</p>
   <p>This matters most on large codebases. When files are long and symbols are scattered across hundreds of modules, raw file tools flood the context window fast. edr keeps the working set small regardless of repo size &mdash; a 3,000-file monorepo feels like a 50-file project.</p>

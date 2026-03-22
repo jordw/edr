@@ -2,13 +2,13 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Agents are bottlenecked on what context they have and can quickly gather.** Larger context windows and faster inference don't fix the core problem: an agent that reads whole files, makes sequential calls, and re-processes output it's already seen is doing unnecessary work at every step — and the cost is superlinear.
+**Agents are bottlenecked on what context they have and can quickly gather.** Larger context windows and faster inference don't help when the agent is reading whole files to find one function, making sequential calls that could be batched, and re-processing output it's already seen.
 
-edr gives agents precise tools instead:
+edr gives agents the right context instead of all the context:
 
 - **Symbol-level ops** — read one function, not the whole file.
 - **Batching** — three reads and a search in one call, not four.
-- **Deltas** — re-read a file or re-run tests? Only what changed comes back.
+- **Sessions** — edr tracks what the agent has seen. Re-reads and re-runs return only what changed.
 
 Works with any agent that can run shell commands. Fully local, no telemetry.
 
