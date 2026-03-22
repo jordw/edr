@@ -166,7 +166,9 @@ func openDBStrictRoot(root string) (*index.DB, error) {
 			if currentFiles > 0 {
 				return nil
 			}
-			fmt.Fprintf(os.Stderr, "edr: no index found, indexing repository...\n")
+			if verbose {
+				fmt.Fprintf(os.Stderr, "edr: no index found, indexing repository...\n")
+			}
 			_, _, e := index.IndexRepo(ctx, db)
 			indexed = e == nil
 			return e
@@ -174,7 +176,7 @@ func openDBStrictRoot(root string) (*index.DB, error) {
 			db.Close()
 			return nil, lockErr
 		}
-		if indexed {
+		if indexed && verbose {
 			totalFiles, totalSyms, _ := db.Stats(ctx)
 			fmt.Fprintf(os.Stderr, "edr: index ready (%d files, %d symbols)\n", totalFiles, totalSyms)
 		}

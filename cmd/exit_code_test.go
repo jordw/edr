@@ -145,6 +145,43 @@ func TestAutoIndexOnFirstUse(t *testing.T) {
 	}
 }
 
+// TestAutoIndexStderrSilentWithoutVerbose verifies that auto-indexing does
+// not emit anything to stderr unless --verbose is set.
+func TestAutoIndexStderrSilentWithoutVerbose(t *testing.T) {
+	binary := buildBinary(t)
+	repoDir := t.TempDir()
+	os.WriteFile(filepath.Join(repoDir, "hello.go"), []byte("package main\nfunc main() {}\n"), 0644)
+
+	// Without --verbose: stderr must be empty
+	cmd := exec.Command(binary, "read", "hello.go")
+	cmd.Dir = repoDir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("expected success, got error: %v\nstdout: %s", err, stdout.String())
+	}
+	if stderr.Len() > 0 {
+		t.Errorf("stderr should be empty without --verbose, got: %s", stderr.String())
+	}
+
+	// With --verbose on a fresh repo: stderr should contain index messages
+	repoDir2 := t.TempDir()
+	os.WriteFile(filepath.Join(repoDir2, "hello.go"), []byte("package main\nfunc main() {}\n"), 0644)
+
+	cmd2 := exec.Command(binary, "read", "hello.go", "--verbose")
+	cmd2.Dir = repoDir2
+	var stdout2, stderr2 bytes.Buffer
+	cmd2.Stdout = &stdout2
+	cmd2.Stderr = &stderr2
+	if err := cmd2.Run(); err != nil {
+		t.Fatalf("expected success with --verbose, got error: %v\nstdout: %s", err, stdout2.String())
+	}
+	if stderr2.Len() == 0 {
+		t.Error("stderr should contain index messages with --verbose")
+	}
+}
+
 // TestBatchAutoIndex verifies that batch read-only operations auto-index
 // on an unindexed repo instead of failing.
 func TestBatchAutoIndex(t *testing.T) {
