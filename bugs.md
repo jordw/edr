@@ -2,84 +2,34 @@
 
 ## Critical
 
-### 1. Verify can pass with a real syntax error in the tree
-`edr verify` reported success even while `main.go` still contained invalid Go syntax.
+### 1. ~~Verify can pass with a real syntax error in the tree~~ FIXED
+Standalone verify now uses `goListValidPackages` with `./...` fallback.
+Verify failure output now includes compiler error tail (see #6).
 
-**Repro:**
-```bash
-edr edit main.go --old-text 'func main() {' --new-text 'func main( {'
-edr verify
-edr read main.go --lines 8:13
-```
-
-**Actual:** `edr verify` returned `{"verify":"passed"}` while `main.go` still contained `func main( {`.
-
-**Expected:** Verify should fail and include enough compiler output to show the syntax error.
-
-### 2. Contradictory write placement flags mutate files instead of erroring
-`write` accepted `--inside` and `--after` together and applied a change.
-
-**Repro:**
-```bash
-edr write bench/testdata/web/api.js --inside TaskAPIClient --after TaskAPIClient --content 'x'
-```
-
-**Actual:** The write was applied, then verify failed.
-
-**Expected:** Reject contradictory placement flags before writing anything.
+### 2. ~~Contradictory write placement flags mutate files instead of erroring~~ FIXED
+`--inside X --after X` (same symbol) now rejected before mutation.
 
 ## High
 
-### 3. Symbol search returns empty for indexed symbols
-`search` without `--text` returns `{}` for symbols that exist in the index.
+### 3. ~~Symbol search returns empty for indexed symbols~~ FIXED
+SearchResult JSON tags used short wire names (`"m"`, `"n"`) but `plainSearch`
+expected internal names (`"matches"`, `"total_matches"`). Fixed tags to use
+internal names; wire transform handles shortening for JSON mode.
 
-**Repro:**
-```bash
-edr search LoadSession
-edr search Dispatch
-edr map --grep Dispatch
-```
+### 4. ~~`refs --deps` returns 0 results for non-leaf functions~~ FIXED
+Data was present but `plainRefs` didn't render `deps`/`callers` fields from
+ExpandResult. Added expand result handling to plain output.
 
-**Actual:** `search` returned `{}` while `map --grep` found the symbols.
+### 5. ~~`--chain` returns 0 results for connected symbols~~ FIXED
+Three issues: (1) arg parsing didn't handle 3-arg `[file, symbol, chain_target]`
+form, (2) text-based fallback loaded AllSymbols per BFS node (36s → 36ms),
+(3) BFS now tries both directions since caller/callee order is unknown.
+Added chain result rendering to plain output.
 
-**Expected:** Symbol search should return matching symbol names, files, and locations.
-
-### 4. `refs --deps` returns 0 results for non-leaf functions
-Dependency lookup returned no callees for functions that obviously invoke other functions.
-
-**Repro:**
-```bash
-edr refs internal/session/session.go LoadSession --deps
-```
-
-**Actual:** `{"n":0,"sym":"internal/session/session.go:LoadSession"}`
-
-**Expected:** Direct dependencies such as `ResolveSessionID`, `New`, `filepath.Join`, and `LoadFromFile`.
-
-### 5. `--chain` returns 0 results for connected symbols
-Call-chain lookup returned empty results where a path should exist.
-
-**Repro:**
-```bash
-edr refs internal/dispatch/dispatch.go Dispatch --chain main.go:main
-edr refs internal/session/session.go LoadSession --chain cmd/commands.go:dispatchCmd
-```
-
-**Actual:** `{"n":0}`
-
-**Expected:** A concrete call path, or a clearer explanation of why no path was found.
-
-### 6. Verify failure gives no diagnostic detail
-When verify fails normally, it only returns exit status.
-
-**Repro:**
-```bash
-edr verify --level test
-```
-
-**Actual:** `{"error":"exit status 1","verify":"failed"}`
-
-**Expected:** Include stderr/stdout tail or failing package/test names so agents can act without re-running manually.
+### 6. ~~Verify failure gives no diagnostic detail~~ FIXED
+Verify now includes output tail (up to 40 lines of compiler errors / test
+failures) and `duration_ms` in the result. Plain output renders the tail
+on failure/timeout.
 
 ### 7. ~~`session new` does not affect the current shell session~~ FIXED
 PPID-based session routing now walks up the process tree to find the stable
@@ -347,3 +297,17 @@ edr -e CLAUDE.md --old "old text" --new "new text"
 **Actual:** `{"ec":"outside_repo","error":"path \"CLAUDE.md\" is outside repo root"}`
 
 **Expected:** Repo-root-relative paths like `CLAUDE.md` should resolve correctly.
+
+### 27. `--start-line`/`--end-line` not supported in batch `-e` mode
+Batch edit mode rejects `--start-line` and `--end-line` flags, requiring fallback to the standalone `edr edit` subcommand.
+
+**Severity:** Medium — the error message is helpful ("this flag is available on `edr edit`"), but the inconsistency is surprising and forces agents to switch invocation styles mid-workflow.
+
+**Repro:**
+```bash
+edr -e main.go --start-line 11 --end-line 19 --new "func main() { cmd.Execute() }" --dry-run
+```
+
+**Actual:** `{"ec":"command_error","error":"unknown flag: --start-line (this flag is available on \`edr edit\`, not in batch mode)"}`
+
+**Expected:** Batch `-e` should accept `--start-line`/`--end-line` the same as standalone `edr edit`.
