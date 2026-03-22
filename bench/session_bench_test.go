@@ -116,17 +116,24 @@ func TestSessionMultiLang(t *testing.T) {
 		}
 	})
 
-	// Phase 3: Delta reads — re-read the same symbols, expect deltas/unchanged
+	// Phase 3: Delta reads — re-read the same symbols, expect deltas/unchanged.
+	// Symbol reads keep full content but mark session:"unchanged" (avoids --full round-trip).
+	// File reads return a deduped stub with "unchanged":true.
 	t.Run("read/delta_unchanged", func(t *testing.T) {
 		for _, r := range fullReads {
 			out := handleDoJSON(t, ctx, db, sess, "read", []string{r.spec}, nil)
 			var m map[string]any
 			json.Unmarshal(out, &m)
-			if _, ok := m["unchanged"]; !ok {
-				if _, ok := m["delta"]; !ok {
-					t.Errorf("[%s] %s: expected delta or unchanged, got %d bytes", r.lang, r.spec, len(out))
-				}
+			if _, ok := m["unchanged"]; ok {
+				continue // file-level dedup stub
 			}
+			if _, ok := m["delta"]; ok {
+				continue // delta
+			}
+			if sessVal, _ := m["session"].(string); sessVal == "unchanged" {
+				continue // symbol read with session dedup
+			}
+			t.Errorf("[%s] %s: expected delta, unchanged, or session:unchanged, got %d bytes", r.lang, r.spec, len(out))
 		}
 	})
 
