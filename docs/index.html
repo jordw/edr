@@ -260,7 +260,7 @@ footer {
 <!-- Why less context = faster agents -->
 <section>
   <h2>Why less context = faster agents</h2>
-  <p>Model speed keeps improving &mdash; Claude with extended thinking, Codex in the background &mdash; but agents still bottleneck on the same thing: <strong>how much text they have to process per step</strong>.</p>
+  <p>Model speed keeps improving, but agents still bottleneck on the same thing: <strong>how much text they have to process per step</strong>.</p>
   <p>An agent that <code>cat</code>s a 400-line file to read one function just added 15KB to its context. Multiply by every read, search, and test run in a task. The model has to attend over all of it &mdash; prefill cost is quadratic in context length, and every output token generated is slower because it attends over a larger KV cache. Trimming a few milliseconds off inference doesn&rsquo;t help when the input is 10&times; larger than it needs to be.</p>
   <p>edr attacks this directly:</p>
   <ul>

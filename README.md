@@ -12,7 +12,7 @@ Works with any agent that can run shell commands. Fully local, no telemetry.
 
 ## Why less context = faster agents
 
-Model speed keeps improving — Claude with extended thinking, Codex in the background — but agents still bottleneck on the same thing: **how much text they have to process per step**.
+Model speed keeps improving, but agents still bottleneck on the same thing: **how much text they have to process per step**.
 
 An agent that `cat`s a 400-line file to read one function just added 15KB to its context. Multiply by every read, search, and test run in a task. The model has to attend over all of it — prefill cost is quadratic in context length, and every output token generated is slower because it attends over a larger KV cache. Trimming a few milliseconds off inference doesn't help when the input is 10× larger than it needs to be.
 
