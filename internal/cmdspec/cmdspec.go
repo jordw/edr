@@ -85,6 +85,7 @@ var Registry = []*Spec{
 			{Name: "skeleton", Type: FlagBool, Default: false, Desc: "Skeleton view: blocks collapsed"},
 			{Name: "lines", Type: FlagString, Default: "", Desc: "Line range (e.g. 10:50)"},
 			{Name: "full", Type: FlagBool, Default: false, Desc: "Force full content (skip session delta)"},
+			{Name: "symbols", Type: FlagBool, Default: false, Desc: "Include symbol list in read result"},
 		},
 	},
 	{

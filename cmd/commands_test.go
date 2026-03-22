@@ -1,6 +1,27 @@
 package cmd
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/jordw/edr/internal/cmdspec"
+)
+
+func TestReadSymbolsFlagRegistered(t *testing.T) {
+	spec := cmdspec.ByName("read")
+	if spec == nil {
+		t.Fatal("read command not found in registry")
+	}
+	found := false
+	for _, f := range spec.Flags {
+		if f.Name == "symbols" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("--symbols flag should be registered on the read command")
+	}
+}
 
 func TestClassifyErrorMsg(t *testing.T) {
 	tests := []struct {
