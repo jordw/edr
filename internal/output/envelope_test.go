@@ -242,13 +242,7 @@ func TestAddFailedOpResult_StripsSuccessOnlyFields(t *testing.T) {
 
 func TestAddFailedOpResult_ErrorInterface(t *testing.T) {
 	env := NewEnvelope("edit")
-	// Use a struct that implements error to test the error interface path
-	type errResult struct {
-		File string `json:"file"`
-		Hint string `json:"hint"`
-	}
-	// Since errResult doesn't implement error, test with a plain map
-	// and verify file is stripped
+	// Test with a plain map and verify file is stripped
 	env.AddFailedOpResult("e0", "edit", "not_found", map[string]any{
 		"file": "leaked.go",
 		"hint": "useful diagnostic",

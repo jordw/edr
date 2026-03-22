@@ -552,7 +552,7 @@ func (s *Session) ProcessReadResult(cmd string, result map[string]any, flags map
 		key = file + ":" + symName
 		s.SeenBodies[key] = ContentHash(content)
 	} else {
-		lines, _ := result["lines"]
+		lines := result["lines"]
 		key = fmt.Sprintf("%s:%v", file, lines)
 	}
 	if d, ok := flags["depth"]; ok {
@@ -611,7 +611,7 @@ func (s *Session) StoreReadContent(cmd string, result map[string]any) {
 		s.StoreContent(key, c, true)
 		s.SeenBodies[key] = ContentHash(c)
 	} else {
-		lines, _ := result["lines"]
+		lines := result["lines"]
 		key := fmt.Sprintf("%s:%v", file, lines)
 		s.StoreContent(key, c, false)
 	}
@@ -902,7 +902,7 @@ func (s *Session) postProcessNonObject(cmd string, args []string, flags map[stri
 			isSymbol = true
 			s.SeenBodies[key] = ContentHash(content)
 		} else {
-			lines, _ := entry["lines"]
+			lines := entry["lines"]
 			key = fmt.Sprintf("%s:%v", file, lines)
 		}
 

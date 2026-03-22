@@ -86,30 +86,6 @@ func dispatchError(t testing.TB, ctx context.Context, db *index.DB, cmd string, 
 	return err.Error()
 }
 
-// precisionRecall computes precision and recall given expected and actual string sets.
-// Strings are compared case-sensitively.
-func precisionRecall(expected, actual []string) (precision, recall float64) {
-	if len(actual) == 0 && len(expected) == 0 {
-		return 1.0, 1.0
-	}
-	if len(actual) == 0 {
-		return 0.0, 0.0
-	}
-	exp := make(map[string]bool, len(expected))
-	for _, e := range expected {
-		exp[e] = true
-	}
-	hits := 0
-	for _, a := range actual {
-		if exp[a] {
-			hits++
-		}
-	}
-	precision = float64(hits) / float64(len(actual))
-	recall = float64(hits) / float64(len(expected))
-	return
-}
-
 // symbolFile is a minimal struct for JSON-unmarshaling symbol references.
 type symbolFile struct {
 	File  string `json:"file"`

@@ -18,20 +18,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// parsePlainHeader parses the first line of plain-format output as JSON.
-// Plain format: line 1 is a JSON object, rest is raw body.
-func parsePlainHeader(output []byte) (map[string]any, error) {
-	line := output
-	if i := bytes.IndexByte(output, '\n'); i >= 0 {
-		line = output[:i]
-	}
-	var m map[string]any
-	if err := json.Unmarshal(line, &m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
 // TestStandaloneExitCodes verifies that every standalone command path
 // returns non-zero exit when ok:false.
 func TestStandaloneExitCodes(t *testing.T) {

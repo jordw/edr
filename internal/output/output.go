@@ -94,20 +94,6 @@ func Print(v any) {
 	fmt.Println(string(data))
 }
 
-// PrintList prints a structured list of matches under the given label.
-func PrintList(label string, items []Match) {
-	wrapper := struct {
-		Label   string  `json:"label"`
-		Count   int     `json:"count"`
-		Matches []Match `json:"matches"`
-	}{
-		Label:   label,
-		Count:   len(items),
-		Matches: items,
-	}
-	Print(wrapper)
-}
-
 // TokenEstimate returns an approximate token count for the given code string,
 // using a heuristic of ~4 characters per token.
 func TokenEstimate(code string) int {

@@ -284,28 +284,6 @@ func splitLines(s string) []string {
 	return lines
 }
 
-// byteOffsetToLine returns the 0-indexed line number for the given byte offset.
-func byteOffsetToLine(data []byte, offset uint32) int {
-	line := 0
-	for i := 0; i < int(offset) && i < len(data); i++ {
-		if data[i] == '\n' {
-			line++
-		}
-	}
-	return line
-}
-
-// countLinesInRange counts lines in the byte range [start, end) of data.
-func countLinesInRange(data []byte, start, end uint32) int {
-	lines := 0
-	for i := int(start); i < int(end) && i < len(data); i++ {
-		if data[i] == '\n' {
-			lines++
-		}
-	}
-	return lines
-}
-
 // stripToRelative converts an absolute path to a repo-relative path for diff headers.
 func stripToRelative(path string) string {
 	return output.Rel(path)

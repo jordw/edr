@@ -2,7 +2,6 @@ package trace
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -583,8 +582,3 @@ func BenchSession(db *sql.DB, sessionID string) (*BenchResult, error) {
 	return r, nil
 }
 
-// BenchResultJSON returns the bench result as formatted JSON.
-func BenchResultJSON(r *BenchResult) string {
-	data, _ := json.MarshalIndent(r, "", "  ")
-	return string(data)
-}

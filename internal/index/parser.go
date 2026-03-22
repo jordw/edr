@@ -65,34 +65,6 @@ type SymbolInfo struct {
 	ParentIndex int    // index into symbols slice at parse time; -1 = no parent
 }
 
-// ParseFile extracts symbols from a single file using tree-sitter.
-func ParseFile(path string) ([]SymbolInfo, error) {
-	lang := GetLangConfig(path)
-	if lang == nil {
-		return nil, fmt.Errorf("unsupported language for %s", path)
-	}
-
-	src, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var symbols []SymbolInfo
-	parseWith(lang, src, func(root *tree_sitter.Node) {
-		extractSymbols(root, src, path, lang, &symbols, -1)
-	})
-	return symbols, nil
-}
-
-// ParseSource parses source code from bytes (used during indexing when source is already loaded).
-func ParseSource(path string, src []byte, lang *LangConfig) ([]SymbolInfo, error) {
-	var symbols []SymbolInfo
-	parseWith(lang, src, func(root *tree_sitter.Node) {
-		extractSymbols(root, src, path, lang, &symbols, -1)
-	})
-	return symbols, nil
-}
-
 // ParseResult holds the complete parse output for indexing.
 type ParseResult struct {
 	Symbols []SymbolInfo
@@ -280,24 +252,6 @@ func normalizeType(nodeType string) string {
 	default:
 		return nodeType
 	}
-}
-
-// FindReferences searches for references to a symbol name across files.
-// Uses semantic refs (import-filtered) when available, falls back to text-based.
-func FindReferences(ctx context.Context, db *DB, symbolName string) ([]SymbolInfo, error) {
-	// Try semantic path first: find the symbol's definition file
-	if db.HasRefs(ctx) {
-		sym, err := db.ResolveSymbol(ctx, symbolName)
-		if err == nil {
-			results, err := db.FindSemanticReferences(ctx, symbolName, sym.File)
-			if err == nil && len(results) > 0 {
-				return results, nil
-			}
-			// Fall through to text-based if semantic returned empty
-		}
-	}
-
-	return findReferencesTextBased(ctx, db, symbolName)
 }
 
 // FindIdentifierOccurrences finds all identifier nodes matching symbolName across

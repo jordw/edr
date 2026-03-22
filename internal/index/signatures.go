@@ -7,17 +7,6 @@ import (
 	"strings"
 )
 
-// ExtractSignature returns just the signature of a symbol — the first line(s)
-// up to the opening brace or colon, without the body. This is much cheaper
-// than the full source and provides enough info for understanding APIs.
-func ExtractSignature(sym SymbolInfo) string {
-	data, err := os.ReadFile(sym.File)
-	if err != nil || int(sym.EndByte) > len(data) {
-		return sym.Type + " " + sym.Name
-	}
-	return ExtractSignatureFromSource(sym, data)
-}
-
 // ExtractSignatureCtx is like ExtractSignature but uses the context's source cache.
 func ExtractSignatureCtx(ctx context.Context, sym SymbolInfo) string {
 	data, err := CachedReadFile(ctx, sym.File)
