@@ -85,7 +85,9 @@ rel_path() {
 }
 
 edr_cmd() {
-    "$EDR" --root "$BENCH_ROOT" "$@"
+    # Use a unique session per call so dedup doesn't suppress output.
+    # (EDR_SESSION="" falls through to "default" via PPID resolution.)
+    EDR_SESSION="bench-$$-$RANDOM" "$EDR" --root "$BENCH_ROOT" "$@"
 }
 
 median() {

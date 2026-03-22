@@ -18,8 +18,7 @@ if [ ! -d "$RESULTS_DIR" ]; then
 fi
 
 # Repo metadata: display name, GitHub URL, language, approximate file count.
-# Order matches the README table.
-declare -a REPOS=(
+REPOS=(
     "urfave-cli|[urfave/cli](https://github.com/urfave/cli)|Go|~70"
     "vitess-sqlparser|[vitess/sqlparser](https://github.com/vitessio/vitess)|Go|~70"
     "vitess-vtgate|[vitess/vtgate](https://github.com/vitessio/vitess)|Go|~490"
@@ -30,23 +29,19 @@ declare -a REPOS=(
 )
 
 extract_json() {
-    local file="$1"
-    # The JSON summary is the last JSON object in the file (after "JSON SUMMARY" header).
-    sed -n '/^{$/,/^}$/p' "$file" | tail -n +1
+    # The JSON summary is the last JSON object in the file.
+    sed -n '/^{$/,/^}$/p' "$1" | tail -n +1
 }
 
 fmt_kb() {
-    local bytes="$1"
-    awk -v b="$bytes" 'BEGIN { printf "%dKB", int(b / 1024 + 0.5) }'
+    awk -v b="$1" 'BEGIN { printf "%dKB", int(b / 1024 + 0.5) }'
 }
 
 # --- Summary table ---
 echo "| Repo | Lang | Files | Baseline | edr | Reduction |"
 echo "|---|---|---|---|---|---|"
 
-total_native=0
-total_edr=0
-declare -a pcts=()
+pcts=""
 
 for entry in "${REPOS[@]}"; do
     IFS='|' read -r key display lang files <<< "$entry"
@@ -63,15 +58,13 @@ for entry in "${REPOS[@]}"; do
     edr_calls=$(echo "$json" | jq '.totals.edr_calls')
     pct=$(echo "$json" | jq '.totals.savings_pct')
 
-    total_native=$((total_native + native_bytes))
-    total_edr=$((total_edr + edr_bytes))
-    pcts+=("$pct")
+    pcts="$pcts $pct"
 
     echo "| $display | $lang | $files | $(fmt_kb "$native_bytes") / ${native_calls} calls | $(fmt_kb "$edr_bytes") / ${edr_calls} calls | **${pct}%** |"
 done
 
 # Compute median reduction
-median_pct=$(printf '%s\n' "${pcts[@]}" | sort -n | awk 'NR==1{n=0} {a[n++]=$1} END{print a[int(n/2)]}')
+median_pct=$(echo "$pcts" | tr ' ' '\n' | grep -v '^$' | sort -n | awk 'NR==1{n=0} {a[n++]=$1} END{print a[int(n/2)]}')
 echo ""
 echo "Median reduction: **${median_pct}%** across repos. edr loses on plain text search (structured JSON adds overhead vs raw grep — see breakdown below), but wins everywhere else. Call counts are summed across all 9 scenarios; each edr scenario is 1 call."
 
@@ -85,68 +78,42 @@ urfave_file="$RESULTS_DIR/urfave-cli.out"
 if [ -f "$urfave_file" ]; then
     urfave_json=$(extract_json "$urfave_file")
 
-    declare -A SCENARIO_NAMES=(
-        ["understand_api"]="Understand a class API"
-        ["read_symbol"]="Read a specific function"
-        ["find_refs"]="Find references"
-        ["search_context"]="Search with context"
-        ["orient_map"]="Orient in codebase"
-        ["edit_function"]="Edit a function"
-        ["add_method"]="Add method to a class"
-        ["multi_file_read"]="Multi-file read"
-        ["explore_symbol"]="Explore a symbol"
-    )
-
-    declare -A SCENARIO_NATIVE_NOTES=(
-        ["understand_api"]="whole file"
-        ["read_symbol"]="whole file"
-        ["search_context"]="grep -C3"
-        ["orient_map"]=""
-        ["edit_function"]=""
-        ["add_method"]=""
-        ["multi_file_read"]=""
-        ["explore_symbol"]=""
-    )
-
-    declare -A SCENARIO_EDR_NOTES=(
-        ["understand_api"]="\`--signatures\`"
-        ["read_symbol"]="symbol read"
-        ["find_refs"]="\`refs\`"
-        ["search_context"]="structured"
-        ["orient_map"]="\`map\`"
-        ["edit_function"]="batch"
-        ["add_method"]="\`--inside\`"
-        ["multi_file_read"]="batched"
-        ["explore_symbol"]=""
-    )
-
     echo "| Scenario | Baseline | edr | Reduction |"
     echo "|---|---|---|---|"
 
-    scenario_order=(understand_api read_symbol find_refs search_context orient_map edit_function add_method multi_file_read explore_symbol)
+    # scenario_name|display_name|native_note|edr_note
+    scenarios=(
+        "understand_api|Understand a class API|whole file|\`--signatures\`"
+        "read_symbol|Read a specific function|whole file|symbol read"
+        "find_refs|Find references||\`refs\`"
+        "search_context|Search with context|grep -C3|structured"
+        "orient_map|Orient in codebase||\`map\`"
+        "edit_function|Edit a function||batch"
+        "add_method|Add method to a class||\`--inside\`"
+        "multi_file_read|Multi-file read||batched"
+        "explore_symbol|Explore a symbol||"
+    )
 
-    for scenario in "${scenario_order[@]}"; do
-        name="${SCENARIO_NAMES[$scenario]}"
-        nb=$(echo "$urfave_json" | jq -r ".scenarios[] | select(.name == \"$scenario\") | .native_bytes")
-        nc=$(echo "$urfave_json" | jq -r ".scenarios[] | select(.name == \"$scenario\") | .native_calls")
-        eb=$(echo "$urfave_json" | jq -r ".scenarios[] | select(.name == \"$scenario\") | .edr_bytes")
-        ec=$(echo "$urfave_json" | jq -r ".scenarios[] | select(.name == \"$scenario\") | .edr_calls")
-        pct=$(echo "$urfave_json" | jq -r ".scenarios[] | select(.name == \"$scenario\") | .savings_pct")
+    for s in "${scenarios[@]}"; do
+        IFS='|' read -r sname display native_note edr_note <<< "$s"
+
+        nb=$(echo "$urfave_json" | jq -r ".scenarios[] | select(.name == \"$sname\") | .native_bytes")
+        nc=$(echo "$urfave_json" | jq -r ".scenarios[] | select(.name == \"$sname\") | .native_calls")
+        eb=$(echo "$urfave_json" | jq -r ".scenarios[] | select(.name == \"$sname\") | .edr_bytes")
+        ec=$(echo "$urfave_json" | jq -r ".scenarios[] | select(.name == \"$sname\") | .edr_calls")
+        pct=$(echo "$urfave_json" | jq -r ".scenarios[] | select(.name == \"$sname\") | .savings_pct")
 
         [ -z "$nb" ] || [ "$nb" = "null" ] && continue
 
-        native_note="${SCENARIO_NATIVE_NOTES[$scenario]:-}"
-        edr_note="${SCENARIO_EDR_NOTES[$scenario]:-}"
-
         native_str="${nb}B"
-        [ "$nc" -gt 1 ] && native_str="${nb}B / ${nc} calls"
+        [ "$nc" -gt 1 ] 2>/dev/null && native_str="${nb}B / ${nc} calls"
         [ -n "$native_note" ] && native_str="${native_str} (${native_note})"
 
         edr_str="${eb}B"
-        [ "$ec" -gt 1 ] && edr_str="${eb}B / ${ec} calls"
+        [ "$ec" -gt 1 ] 2>/dev/null && edr_str="${eb}B / ${ec} calls"
         [ -n "$edr_note" ] && edr_str="${edr_str} (${edr_note})"
 
-        echo "| $name | $native_str | $edr_str | **${pct}%** |"
+        echo "| $display | $native_str | $edr_str | **${pct}%** |"
     done
 
     # Totals

@@ -137,35 +137,35 @@ The baseline uses the tools agents actually have: whole-file `cat`, `grep -rn`, 
 
 | Repo | Lang | Files | Baseline | edr | Reduction |
 |---|---|---|---|---|---|
-| [urfave/cli](https://github.com/urfave/cli) | Go | ~70 | 197KB / 20 calls | 16KB / 9 calls | **92%** |
-| [vitess/sqlparser](https://github.com/vitessio/vitess) | Go | ~70 | 322KB / 17 calls | 16KB / 9 calls | **95%** |
-| [vitess/vtgate](https://github.com/vitessio/vitess) | Go | ~490 | 747KB / 19 calls | 33KB / 9 calls | **96%** |
-| [pallets/click](https://github.com/pallets/click) | Python | ~17 | 297KB / 20 calls | 19KB / 9 calls | **93%** |
-| [rails/thor](https://github.com/rails/thor) | Ruby | ~35 | 170KB / 20 calls | 16KB / 9 calls | **91%** |
-| [reduxjs/redux-toolkit](https://github.com/reduxjs/redux-toolkit) | TS | ~190 | 186KB / 20 calls | 23KB / 9 calls | **88%** |
-| [django/django](https://github.com/django/django) | Python | ~880 | 1,328KB / 20 calls | 30KB / 9 calls | **98%** |
+| [urfave/cli](https://github.com/urfave/cli) | Go | ~70 | 192KB / 20 calls | 10KB / 9 calls | **95%** |
+| [vitess/sqlparser](https://github.com/vitessio/vitess) | Go | ~70 | 314KB / 17 calls | 49KB / 9 calls | **85%** |
+| [vitess/vtgate](https://github.com/vitessio/vitess) | Go | ~490 | 730KB / 19 calls | 21KB / 9 calls | **97%** |
+| [pallets/click](https://github.com/pallets/click) | Python | ~17 | 290KB / 20 calls | 13KB / 9 calls | **96%** |
+| [rails/thor](https://github.com/rails/thor) | Ruby | ~35 | 166KB / 20 calls | 12KB / 9 calls | **93%** |
+| [reduxjs/redux-toolkit](https://github.com/reduxjs/redux-toolkit) | TS | ~190 | 182KB / 20 calls | 14KB / 9 calls | **92%** |
+| [django/django](https://github.com/django/django) | Python | ~880 | 1,296KB / 20 calls | 25KB / 9 calls | **98%** |
 
-Median reduction: **93%** across repos. edr loses on plain text search (structured JSON adds overhead vs raw grep — see breakdown below), but wins everywhere else. Call counts are summed across all 9 scenarios; each edr scenario is 1 call.
+Median reduction: **95%** across repos. edr loses on plain text search (structured JSON adds overhead vs raw grep — see breakdown below), but wins everywhere else. Call counts are summed across all 9 scenarios; each edr scenario is 1 call.
 
 <details>
 <summary>Per-scenario breakdown (urfave/cli)</summary>
 
 | Scenario | Baseline | edr | Reduction |
 |---|---|---|---|
-| Understand a class API | 10,072B (whole file) | 1,592B (`--signatures`) | **84%** |
-| Read a specific function | 15,307B (whole file) | 1,463B (symbol read) | **90%** |
-| Find references | 67,101B / 4 calls | 865B / 1 call (`refs`) | **99%** |
-| Search with context | 614B (grep -C3) | 1,812B (structured) | **-195%** |
-| Orient in codebase | 11,481B / 2 calls | 2,235B / 1 call (`map`) | **81%** |
-| Edit a function | 10,172B / 2 calls | 680B / 1 call (batch) | **93%** |
-| Add method to a class | 10,072B / 2 calls | 184B / 1 call (`--inside`) | **98%** |
-| Multi-file read | 30,794B / 3 calls | 2,606B / 1 call (batched) | **92%** |
-| Explore a symbol | 41,285B / 4 calls | 4,562B / 1 call | **89%** |
-| **Total** | **196,898B / 20 calls** | **15,999B / 9 calls** | **92%** |
+| Understand a class API | 10,072B (whole file) | 1,486B (`--signatures`) | **85%** |
+| Read a specific function | 15,307B (whole file) | 1,182B (symbol read) | **92%** |
+| Find references | 67,101B / 4 calls | 179B / 1 call (`refs`) | **100%** |
+| Search with context | 614B (grep -C3) | 1,027B (structured) | **-67%** |
+| Orient in codebase | 11,481B / 2 calls | 2,673B / 1 call (`map`) | **77%** |
+| Edit a function | 10,172B / 2 calls | 394B / 1 call (batch) | **96%** |
+| Add method to a class | 10,072B / 2 calls | 249B / 1 call (`--inside`) | **98%** |
+| Multi-file read | 30,794B / 3 calls | 3,295B / 1 call (batched) | **89%** |
+| Explore a symbol | 41,285B / 4 calls | 72B / 1 call | **100%** |
+| **Total** | **196,898B / 20 calls** | **10,557B / 9 calls** | **95%** |
 
 </details>
 
-Scenarios and methodology in [`bench/scenarios/`](bench/scenarios/). Reproduce: `bash bench/run_real_repo_benchmarks.sh` (~10 min).
+Scenarios and methodology in [`bench/scenarios/`](bench/scenarios/). Reproduce: `bash bench/run_real_repo_benchmarks.sh` (~10 min). Regenerate tables: `bash bench/gen_readme_table.sh`.
 
 ## Contributing
 
