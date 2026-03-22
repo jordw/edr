@@ -159,7 +159,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	}
 
 	shouldInstall := globalExplicit || force
-	if !shouldInstall && !jsonOut {
+	if !shouldInstall {
 		// Check current status to decide whether to prompt.
 		status := setup.GlobalStatus(BuildHash)
 		allCurrent := true
@@ -171,6 +171,12 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		}
 		if allCurrent {
 			// Already up to date — just report and skip.
+			result.Global = status
+			return printSetupOutput(result, jsonOut)
+		}
+
+		if jsonOut {
+			// JSON mode: report status without prompting or installing.
 			result.Global = status
 			return printSetupOutput(result, jsonOut)
 		}
