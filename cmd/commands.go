@@ -265,7 +265,7 @@ var writeCmd = &cobra.Command{
 func init() { cmdspec.RegisterFlags(writeCmd.Flags(), "write") }
 
 var editCmd = &cobra.Command{
-	Use:   "edit <file> [symbol]",
+	Use:   "edit <file[:symbol]>",
 	Short: ToolDesc["edit"],
 	Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) >= 1 && len(args) <= 2 {
@@ -304,7 +304,7 @@ var searchCmd = &cobra.Command{
 func init() { cmdspec.RegisterFlags(searchCmd.Flags(), "search") }
 
 var refsCmd = &cobra.Command{
-	Use:   "refs [file] <symbol>",
+	Use:   "refs <file:symbol|symbol>",
 	Short: ToolDesc["refs"],
 	Args:  cobra.RangeArgs(1, 2),
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "refs", args) },

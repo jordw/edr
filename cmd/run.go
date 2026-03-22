@@ -44,21 +44,12 @@ show inline {old → new} markers. Use --full for raw output.`,
 		c.Dir = root
 		out, execErr := c.CombinedOutput()
 
-		exitCode := 0
-		if execErr != nil {
-			if exitErr, ok := execErr.(*exec.ExitError); ok {
-				exitCode = exitErr.ExitCode()
-			}
-		}
-
 		if full {
 			os.Stdout.Write(out)
-			lines := strings.Count(string(out), "\n")
-			fmt.Fprintf(os.Stderr, "[%d lines, exit %d]\n", lines, exitCode)
 			return exitError(execErr)
 		}
 
-		output := diffAgainstPrevious(runDir, shellCmd, string(out), exitCode)
+		output := diffAgainstPrevious(runDir, shellCmd, string(out))
 		fmt.Print(output)
 
 		return exitError(execErr)
@@ -84,7 +75,7 @@ func exitError(err error) error {
 // diffAgainstPrevious diffs current output against the stored previous run.
 // First run shows full output. Identical output prints "[no changes]".
 // Otherwise shows sparse output with inline diffs.
-func diffAgainstPrevious(runDir, command, current string, exitCode int) string {
+func diffAgainstPrevious(runDir, command, current string) string {
 	key := fmt.Sprintf("%x", sha256.Sum256([]byte(command)))[:12]
 	lastFile := filepath.Join(runDir, key+".last")
 
@@ -100,34 +91,18 @@ func diffAgainstPrevious(runDir, command, current string, exitCode int) string {
 	os.WriteFile(lastFile, []byte(store), 0644)
 
 	if !hasPrev {
-		lines := strings.Count(current, "\n")
-		return current + fmt.Sprintf("[%d lines, first run, exit %d]\n", lines, exitCode)
+		return current
 	}
 
 	prevStr := string(prev)
 	if prevStr == current {
-		lines := strings.Count(current, "\n")
-		return fmt.Sprintf("[no changes, %d lines, exit %d]\n", lines, exitCode)
+		return "[no changes]\n"
 	}
 
 	oldLines := strings.Split(strings.TrimRight(prevStr, "\n"), "\n")
 	newLines := strings.Split(strings.TrimRight(current, "\n"), "\n")
-	diff, stats := sparseDiff(oldLines, newLines)
-	summary := fmt.Sprintf("[%d lines", len(newLines))
-	if stats.changed > 0 {
-		summary += fmt.Sprintf(", %d changed", stats.changed)
-	}
-	if stats.digitChanged > 0 {
-		summary += fmt.Sprintf(", %d with numbers changed", stats.digitChanged)
-	}
-	if stats.added > 0 {
-		summary += fmt.Sprintf(", %d added", stats.added)
-	}
-	if stats.removed > 0 {
-		summary += fmt.Sprintf(", %d removed", stats.removed)
-	}
-	summary += fmt.Sprintf(", exit %d]\n", exitCode)
-	return diff + summary
+	diff, _ := sparseDiff(oldLines, newLines)
+	return diff
 }
 
 // sparseDiff produces a sparse version of the new output where unchanged

@@ -341,7 +341,23 @@ func plainMap(w *os.File, op Op) {
 
 func plainRefs(w *os.File, op Op) {
 	if v, ok := op["session"].(string); ok && v == "unchanged" {
-		writeHeader(w, map[string]any{"session": "unchanged"})
+		uh := map[string]any{"session": "unchanged"}
+		if sym, ok := op["symbol"].(map[string]any); ok {
+			f, _ := sym["file"].(string)
+			name, _ := sym["name"].(string)
+			uh["sym"] = f + ":" + name
+		}
+		if sn, ok := op["symbol"].(string); ok && sn != "" {
+			uh["sym"] = sn
+		}
+		if n := anyInt(op["total_refs"]); n > 0 {
+			uh["n"] = n
+		} else if n := anyInt(op["n"]); n > 0 {
+			uh["n"] = n
+		} else if n := anyInt(op["total"]); n > 0 {
+			uh["n"] = n
+		}
+		writeHeader(w, uh)
 		return
 	}
 	h := map[string]any{}

@@ -581,7 +581,14 @@ func (s *Session) ProcessReadResult(cmd string, result map[string]any, flags map
 	case "unchanged":
 		s.stats.DeltaReads++
 		file, hash := ExtractFileHash(result)
-		return map[string]any{"unchanged": true, "file": file, "hash": hash, "session": "unchanged", "hint": "use --full to force re-read"}
+		deduped := map[string]any{"unchanged": true, "file": file, "hash": hash, "session": "unchanged", "hint": "use --full to force re-read"}
+		if v, ok := result["lines"]; ok {
+			deduped["lines"] = v
+		}
+		if v, ok := result["sym"]; ok {
+			deduped["sym"] = v
+		}
+		return deduped
 	}
 	return nil
 }
@@ -833,7 +840,9 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 			// Preserve scalar metadata fields so agents can still see counts/truncation.
 			// Skip array/object values (like grouped match lists) — those are body content.
 			stub := map[string]any{"session": "unchanged"}
-			for _, key := range []string{"files", "symbols", "truncated", "hint", "total_matches", "total_files", "kind"} {
+			// Metadata keys to preserve (scalars only, except "symbol" which is a small identity object)
+			metaKeys := []string{"files", "symbols", "truncated", "hint", "total_matches", "total_files", "kind", "total_refs", "total", "n"}
+			for _, key := range metaKeys {
 				if v, ok := m[key]; ok {
 					switch v.(type) {
 					case []any, map[string]any:
@@ -842,6 +851,10 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 						stub[key] = v
 					}
 				}
+			}
+			// "symbol" is a small identity object (name/file/type) — always preserve for refs
+			if v, ok := m["symbol"]; ok {
+				stub["symbol"] = v
 			}
 			data, _ := json.Marshal(stub)
 			return string(data)
