@@ -80,6 +80,9 @@ func printPlain(e *Envelope) {
 		status, _ := m["status"].(string)
 		if status != "" {
 			h := map[string]any{"verify": status}
+			if cmd, ok := m["command"].(string); ok && cmd != "" {
+				h["command"] = cmd
+			}
 			if reason, ok := m["reason"].(string); ok {
 				h["reason"] = reason
 			}
