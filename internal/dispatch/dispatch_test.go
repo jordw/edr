@@ -961,6 +961,89 @@ func TestEditEmptyNewTextIsDeletion(t *testing.T) {
 	}
 }
 
+func TestEditDeleteFlag(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	original := "package main\n\nfunc remove() {}\n\nfunc keep() {}\n"
+	if err := os.WriteFile(goFile, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// --delete with old_text should delete the matched text
+	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+		"old_text": "func remove() {}",
+		"delete":   true,
+	})
+	if err != nil {
+		t.Fatalf("edit --delete returned error: %v", err)
+	}
+
+	raw, _ := json.Marshal(result)
+	if !strings.Contains(string(raw), `"status"`) {
+		t.Fatalf("expected status field, got: %s", string(raw))
+	}
+
+	data, _ := os.ReadFile(goFile)
+	if strings.Contains(string(data), "remove") {
+		t.Fatalf("deleted text still present: %s", string(data))
+	}
+	if !strings.Contains(string(data), "func keep()") {
+		t.Fatalf("kept text missing: %s", string(data))
+	}
+}
+
+func TestEditDeleteFlagSymbol(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	original := "package main\n\nfunc remove() {}\n\nfunc keep() {}\n"
+	if err := os.WriteFile(goFile, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if _, _, err := index.IndexRepo(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// --delete with symbol should delete the symbol and trailing newline
+	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go", "remove"}, map[string]any{
+		"delete": true,
+	})
+	if err != nil {
+		t.Fatalf("edit --delete symbol returned error: %v", err)
+	}
+
+	raw, _ := json.Marshal(result)
+	if !strings.Contains(string(raw), `"status"`) {
+		t.Fatalf("expected status field, got: %s", string(raw))
+	}
+
+	data, _ := os.ReadFile(goFile)
+	if strings.Contains(string(data), "remove") {
+		t.Fatalf("deleted symbol still present: %s", string(data))
+	}
+	if !strings.Contains(string(data), "func keep()") {
+		t.Fatalf("kept text missing: %s", string(data))
+	}
+	// Should not have double blank lines from orphaned trailing newline
+	if strings.Contains(string(data), "\n\n\n") {
+		t.Errorf("extra blank line left after symbol deletion: %q", string(data))
+	}
+}
+
 func TestEditEmptyNewTextRequiresEditMode(t *testing.T) {
 	tmp := t.TempDir()
 	goFile := filepath.Join(tmp, "main.go")

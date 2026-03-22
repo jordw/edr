@@ -481,6 +481,12 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			s.currentEdit.All = bp(true)
 
+		case "--delete":
+			if s.currentOp != opEdit {
+				return nil, fmt.Errorf("--delete is only valid after -e")
+			}
+			s.currentEdit.Delete = bp(true)
+
 		case "--after":
 			if s.currentOp != opWrite {
 				return nil, fmt.Errorf("--after is only valid after -w")

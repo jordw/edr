@@ -37,6 +37,11 @@ func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string,
 	if !newTextSet {
 		_, newTextSet = flags["replacement"]
 	}
+	// --delete is equivalent to --new-text ""
+	if flagBool(flags, "delete", false) {
+		newText = ""
+		newTextSet = true
+	}
 
 	// Determine targeting mode:
 	// 1. --start_line/--end_line: line range (requires file as first arg)
@@ -90,7 +95,15 @@ func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string,
 	if err != nil {
 		return nil, err
 	}
-	return smartEditByteRange(ctx, db, sym.File, sym.StartByte, sym.EndByte, newText, sym.Name, dryRun)
+	endByte := sym.EndByte
+	// When deleting a whole symbol, consume one trailing newline to avoid blank line
+	if newText == "" && newTextSet {
+		src, _ := os.ReadFile(sym.File)
+		if src != nil && int(endByte) < len(src) && src[endByte] == '\n' {
+			endByte++
+		}
+	}
+	return smartEditByteRange(ctx, db, sym.File, sym.StartByte, endByte, newText, sym.Name, dryRun)
 }
 
 // smartEditByteRange applies an edit to a byte range and returns a smart-edit result.
