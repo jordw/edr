@@ -70,6 +70,8 @@ func printPlain(e *Envelope) {
 			plainRefs(w, op)
 		case "reindex":
 			plainReindex(w, op)
+		case "next":
+			plainNext(w, op)
 		default:
 			writeHeader(w, op)
 		}
@@ -286,6 +288,21 @@ func plainMap(w *os.File, op Op) {
 		return
 	}
 
+	// Directory summary (severely truncated repos)
+	if dirs, ok := op["dirs"].([]any); ok {
+		for _, d := range dirs {
+			dm, ok := d.(map[string]any)
+			if !ok {
+				continue
+			}
+			dir, _ := dm["dir"].(string)
+			files := anyInt(dm["files"])
+			symbols := anyInt(dm["symbols"])
+			fmt.Fprintf(w, "%-30s %4d files  %5d symbols\n", dir+"/", files, symbols)
+		}
+		return
+	}
+
 	// String content (file-scoped map)
 	if s, ok := op["content"].(string); ok && s != "" {
 		writeBody(w, s)
@@ -421,6 +438,105 @@ func plainReindex(w *os.File, op Op) {
 		h["symbols"] = v
 	}
 	writeHeader(w, h)
+}
+
+func plainNext(w *os.File, op Op) {
+	h := map[string]any{}
+	if v, ok := op["total_ops"]; ok {
+		h["ops"] = v
+	}
+	hStr(h, "focus", op, "focus")
+
+	// Add build status to header
+	if build, ok := op["build"].(map[string]any); ok {
+		if status, ok := build["status"].(string); ok {
+			h["build"] = status
+		}
+	}
+
+	// Add fix count to header
+	if fix, ok := op["fix"].([]any); ok && len(fix) > 0 {
+		h["fix"] = len(fix)
+	}
+
+	writeHeader(w, h)
+
+	// Focus line
+	if focus, ok := op["focus"].(string); ok && focus != "" {
+		fmt.Fprintf(w, "focus: %s\n\n", focus)
+	}
+
+	// Recent ops
+	if recent, ok := op["recent"].([]any); ok && len(recent) > 0 {
+		fmt.Fprintln(w, "recent:")
+		for _, r := range recent {
+			rm, ok := r.(map[string]any)
+			if !ok {
+				continue
+			}
+			opID, _ := rm["op_id"].(string)
+			file, _ := rm["file"].(string)
+			symbol, _ := rm["symbol"].(string)
+			kind, _ := rm["kind"].(string)
+
+			loc := file
+			if symbol != "" {
+				loc = file + ":" + symbol
+			}
+			if loc == "" {
+				loc = "-"
+			}
+
+			fmt.Fprintf(w, "  %s: %s — %s\n", opID, loc, kind)
+		}
+	} else {
+		fmt.Fprintln(w, "(no recent ops)")
+	}
+
+	// Build state
+	if build, ok := op["build"].(map[string]any); ok {
+		status, _ := build["status"].(string)
+		editsSince, _ := build["edits_since"].(bool)
+		fmt.Fprintln(w)
+		if editsSince {
+			fmt.Fprintf(w, "build: %s (edits since last verify)\n", status)
+		} else {
+			fmt.Fprintf(w, "build: %s\n", status)
+		}
+	}
+
+	// Fix items
+	if fix, ok := op["fix"].([]any); ok && len(fix) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "fix:")
+		for _, f := range fix {
+			fm, ok := f.(map[string]any)
+			if !ok {
+				continue
+			}
+			id, _ := fm["id"].(string)
+			typ, _ := fm["type"].(string)
+			confidence, _ := fm["confidence"].(string)
+			file, _ := fm["file"].(string)
+			symbol, _ := fm["symbol"].(string)
+			reason, _ := fm["reason"].(string)
+			assumedAt, _ := fm["assumed_at"].(string)
+			suggest, _ := fm["suggest"].(string)
+
+			fmt.Fprintf(w, "  [%s] %s (%s)\n", id, typ, confidence)
+			detail := fmt.Sprintf("    %s:%s", file, symbol)
+			if reason != "" {
+				detail += " — " + reason
+			}
+			if assumedAt != "" {
+				detail += fmt.Sprintf(" (read at %s)", assumedAt)
+			}
+			fmt.Fprintln(w, detail)
+			if suggest != "" {
+				fmt.Fprintf(w, "    => %s\n", suggest)
+			}
+		}
+	}
 }
 
 // Header helpers — reduce boilerplate in plain* functions.

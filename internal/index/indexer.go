@@ -650,6 +650,16 @@ type RepoMapStats struct {
 	// Files contains the structured symbol data, keyed by relative path.
 	// Populated when the map is generated; consumers can use this for structured output.
 	Files []MapFileEntry
+	// DirSummary is populated when truncation is severe (shown < 20% of total).
+	// Contains top-level directory counts to help agents pick --dir.
+	DirSummary []DirSummaryEntry
+}
+
+// DirSummaryEntry summarizes a top-level directory for map orientation.
+type DirSummaryEntry struct {
+	Dir     string `json:"dir"`
+	Files   int    `json:"files"`
+	Symbols int    `json:"symbols"`
 }
 
 // MapFileEntry is a file with its symbols for structured map output.
@@ -879,6 +889,45 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, RepoMa
 	if truncated {
 		budgetUsed = b.Len() / 4
 	}
+
+	// When truncation is severe (shown < 20% of files), build a directory
+	// summary so the agent can orient and pick --dir for the next call.
+	var dirSummary []DirSummaryEntry
+	if truncated && totalFiles > 0 && filesRendered*5 < totalFiles {
+		dirFiles := map[string]map[string]bool{}
+		dirSyms := map[string]int{}
+		for file, syms := range byFile {
+			if len(syms) == 0 {
+				continue
+			}
+			rel, _ := filepath.Rel(root, file)
+			if rel == "" {
+				continue
+			}
+			dir := strings.SplitN(rel, string(filepath.Separator), 2)[0]
+			if strings.Contains(rel, string(filepath.Separator)) {
+				// Use first path component as the directory
+			} else {
+				dir = "." // root-level files
+			}
+			if dirFiles[dir] == nil {
+				dirFiles[dir] = map[string]bool{}
+			}
+			dirFiles[dir][file] = true
+			dirSyms[dir] += len(syms)
+		}
+		for dir, files := range dirFiles {
+			dirSummary = append(dirSummary, DirSummaryEntry{
+				Dir:     dir,
+				Files:   len(files),
+				Symbols: dirSyms[dir],
+			})
+		}
+		sort.Slice(dirSummary, func(i, j int) bool {
+			return dirSummary[i].Symbols > dirSummary[j].Symbols
+		})
+	}
+
 	return b.String(), RepoMapStats{
 		Truncated:    truncated,
 		BudgetUsed:   budgetUsed,
@@ -887,6 +936,7 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, RepoMa
 		ShownSymbols: shownSymbols,
 		TotalSymbols: totalSymbols,
 		Files:        mapFiles,
+		DirSummary:   dirSummary,
 	}, nil
 }
 

@@ -212,6 +212,18 @@ func symbolReadResult(sym *index.SymbolInfo, content string, hash string, extra 
 	return result
 }
 
+// addSignatureToResult computes and attaches the symbol's signature to a read result.
+// The "_signature" field is internal — stripped before output, consumed by session tracking.
+func addSignatureToResult(sym *index.SymbolInfo, src []byte, result map[string]any) {
+	if sym == nil || len(src) == 0 {
+		return
+	}
+	sig := index.ExtractSignatureFromSource(*sym, src)
+	if sig != "" {
+		result["_signature"] = sig
+	}
+}
+
 func runReadSymbol(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {
 		return nil, fmt.Errorf("read-symbol requires 1-2 arguments: [file] <symbol>")
@@ -230,6 +242,9 @@ func runReadSymbol(ctx context.Context, db *index.DB, root string, args []string
 		hash, _ := edit.FileHash(sym.File)
 		r := symbolReadResult(sym, stub, hash, map[string]any{"signatures": true})
 		r["size"] = len(stub) / 4
+		// Record signature for assumption tracking (agent sees the signature)
+		src, _ := os.ReadFile(sym.File)
+		addSignatureToResult(sym, src, r)
 		return r, nil
 	}
 
@@ -274,6 +289,10 @@ func runReadSymbol(ctx context.Context, db *index.DB, root string, args []string
 	r["size"] = size
 	r["truncated"] = truncated
 	setBudgetUsed(r, size)
+	// Record signature for assumption tracking (only for non-truncated reads)
+	if !truncated {
+		addSignatureToResult(sym, src, r)
+	}
 	return r, nil
 }
 
