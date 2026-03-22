@@ -868,22 +868,40 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 	// Dry-run: show what would change without applying
 	if dryRun {
 		var preview []output.RenameOccurrence
-		for _, r := range refs {
-			src, err := os.ReadFile(r.File)
+		var diffs []output.RenameDiff
+		for file, fileRefs := range grouped {
+			src, err := os.ReadFile(file)
 			if err != nil {
 				continue
 			}
-			lines := strings.SplitAfter(string(src), "\n")
-			lineIdx := int(r.StartLine) - 1
-			lineText := ""
-			if lineIdx >= 0 && lineIdx < len(lines) {
-				lineText = strings.TrimRight(lines[lineIdx], "\n")
+			// Generate per-file diff: apply replacements in reverse order
+			modified := make([]byte, len(src))
+			copy(modified, src)
+			for i := len(fileRefs) - 1; i >= 0; i-- {
+				r := fileRefs[i]
+				modified = append(modified[:r.StartByte], append([]byte(newName), modified[r.EndByte:]...)...)
 			}
-			preview = append(preview, output.RenameOccurrence{
-				File: output.Rel(r.File),
-				Line: int(r.StartLine),
-				Text: lineText,
-			})
+			diff := edit.UnifiedDiff(output.Rel(file), src, modified)
+			if diff != "" {
+				diffs = append(diffs, output.RenameDiff{
+					File: output.Rel(file),
+					Diff: diff,
+				})
+			}
+			// Build preview entries
+			srcLines := strings.SplitAfter(string(src), "\n")
+			for _, r := range fileRefs {
+				lineIdx := int(r.StartLine) - 1
+				lineText := ""
+				if lineIdx >= 0 && lineIdx < len(srcLines) {
+					lineText = strings.TrimRight(srcLines[lineIdx], "\n")
+				}
+				preview = append(preview, output.RenameOccurrence{
+					File: output.Rel(file),
+					Line: int(r.StartLine),
+					Text: lineText,
+				})
+			}
 		}
 		return output.RenameResult{
 			OldName:      oldName,
@@ -893,6 +911,7 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 			Status:       "dry_run",
 			DryRun:       true,
 			Preview:      preview,
+			Diffs:        diffs,
 		}, nil
 	}
 

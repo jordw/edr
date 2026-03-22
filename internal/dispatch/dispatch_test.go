@@ -1407,6 +1407,43 @@ func doStuff() int {
 
 // TestRenameAmbiguousSymbolFailsFast verifies that renaming an ambiguous symbol
 // returns an error instead of silently falling back to repo-wide text scanning.
+func TestRenameDryRunIncludesDiffs(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	os.WriteFile(goFile, []byte("package main\n\nfunc OldName() {}\n\nfunc caller() { OldName() }\n"), 0644)
+	db, _ := index.OpenDB(tmp)
+	defer db.Close()
+	ctx := context.Background()
+	index.IndexRepo(ctx, db)
+	output.SetRoot(db.Root())
+
+	result, err := dispatch.Dispatch(ctx, db, "rename", []string{"OldName", "NewName"}, map[string]any{
+		"dry_run": true,
+	})
+	if err != nil {
+		t.Fatalf("rename dry-run: %v", err)
+	}
+	raw, _ := json.Marshal(result)
+	var rr output.RenameResult
+	json.Unmarshal(raw, &rr)
+
+	if rr.Status != "dry_run" {
+		t.Errorf("expected dry_run, got %s", rr.Status)
+	}
+	if len(rr.Diffs) == 0 {
+		t.Fatal("dry-run rename should include diffs")
+	}
+	if !strings.Contains(rr.Diffs[0].Diff, "OldName") || !strings.Contains(rr.Diffs[0].Diff, "NewName") {
+		t.Errorf("diff should show old and new names:\n%s", rr.Diffs[0].Diff)
+	}
+
+	// Verify file was NOT modified (dry-run)
+	data, _ := os.ReadFile(goFile)
+	if strings.Contains(string(data), "NewName") {
+		t.Error("dry-run should not modify the file")
+	}
+}
+
 func TestRenameAmbiguousSymbolFailsFast(t *testing.T) {
 	tmp := t.TempDir()
 	// Two packages define the same symbol name "Process".

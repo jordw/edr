@@ -73,7 +73,14 @@ type RenameResult struct {
 	Hashes       map[string]string  `json:"hashes,omitempty"`
 	DryRun       bool               `json:"dry_run,omitempty"` // deprecated: use Status
 	Preview      []RenameOccurrence `json:"preview,omitempty"`
+	Diffs        []RenameDiff       `json:"diffs,omitempty"`
 	Warnings     []string           `json:"warnings,omitempty"`
+}
+
+// RenameDiff holds a per-file unified diff for dry-run rename preview.
+type RenameDiff struct {
+	File string `json:"file"`
+	Diff string `json:"diff"`
 }
 
 // RenameOccurrence describes a single reference that would be renamed.

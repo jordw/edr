@@ -265,7 +265,16 @@ func plainRename(w *os.File, op Op) {
 			}
 		}
 	}
-	if changes, ok := op["files_changed"].([]any); ok && len(op) > 0 {
+	if diffs, ok := op["diffs"].([]any); ok {
+		for _, d := range diffs {
+			if dm, ok := d.(map[string]any); ok {
+				diff, _ := dm["diff"].(string)
+				if diff != "" {
+					writeBody(w, diff)
+				}
+			}
+		}
+	} else if changes, ok := op["files_changed"].([]any); ok && len(op) > 0 {
 		for _, c := range changes {
 			if f, ok := c.(string); ok {
 				fmt.Fprintf(w, "  %s\n", f)
