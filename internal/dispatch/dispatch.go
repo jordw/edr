@@ -167,7 +167,7 @@ func runReadUnified(ctx context.Context, db *index.DB, root string, args []strin
 		return runBatchRead(ctx, db, root, args, flags)
 	}
 
-	// Single arg with colon → file:symbol or file:N-M (canonical syntax)
+	// Single arg with colon → file:symbol, file:N-M, or file:N:M (line range shortcuts)
 	arg := args[0]
 	if idx := strings.LastIndex(arg, ":"); idx > 0 && idx < len(arg)-1 {
 		suffix := arg[idx+1:]
@@ -179,6 +179,17 @@ func runReadUnified(ctx context.Context, db *index.DB, root string, args []strin
 				return runReadFile(ctx, db, root, []string{arg[:idx]}, flags)
 			}
 			return runReadSymbol(ctx, db, root, []string{arg[:idx], suffix}, flags)
+		}
+		// Single number after last colon — check for file:N:M pattern (two colons)
+		prefix := arg[:idx]
+		if idx2 := strings.LastIndex(prefix, ":"); idx2 > 0 {
+			startStr := prefix[idx2+1:]
+			if start, err2 := strconv.Atoi(startStr); err2 == nil {
+				end, _ := strconv.Atoi(suffix)
+				flags["start_line"] = start
+				flags["end_line"] = end
+				return runReadFile(ctx, db, root, []string{prefix[:idx2]}, flags)
+			}
 		}
 	}
 

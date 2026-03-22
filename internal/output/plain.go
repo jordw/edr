@@ -106,9 +106,46 @@ func printPlain(e *Envelope) {
 
 // writeHeader writes a compact JSON line.
 func writeHeader(w *os.File, m map[string]any) {
-	data, _ := json.Marshal(m)
-	w.Write(data)
-	w.Write([]byte{'\n'})
+	// Emit keys in a stable, scannable order.
+	// Priority fields first so agents and humans can quickly parse status.
+	priority := []string{"session", "file", "sym", "hash", "lines", "status"}
+	var buf []byte
+	buf = append(buf, '{')
+	first := true
+	wrote := map[string]bool{}
+	for _, k := range priority {
+		v, ok := m[k]
+		if !ok {
+			continue
+		}
+		if !first {
+			buf = append(buf, ',')
+		}
+		kj, _ := json.Marshal(k)
+		vj, _ := json.Marshal(v)
+		buf = append(buf, kj...)
+		buf = append(buf, ':')
+		buf = append(buf, vj...)
+		first = false
+		wrote[k] = true
+	}
+	// Remaining keys in natural order
+	for k, v := range m {
+		if wrote[k] {
+			continue
+		}
+		if !first {
+			buf = append(buf, ',')
+		}
+		kj, _ := json.Marshal(k)
+		vj, _ := json.Marshal(v)
+		buf = append(buf, kj...)
+		buf = append(buf, ':')
+		buf = append(buf, vj...)
+		first = false
+	}
+	buf = append(buf, '}', '\n')
+	w.Write(buf)
 }
 
 // writeBody writes raw text, ensuring it ends with a newline.
