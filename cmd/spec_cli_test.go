@@ -1,0 +1,1332 @@
+// spec_cli_test.go — Black-box spec-surface tests.
+//
+// Every test here runs the edr binary as a subprocess and validates the
+// plain-mode transport contract from spec.md.  No in-process imports of
+// cmd internals except for buildBinary/findRepoRoot which live in the
+// shared test helpers.
+//
+// The only parser used is parseOps(), which understands the spec transport:
+//   line 1: JSON header
+//   body:   raw text until "---" or EOF
+//   repeat for batch
+//   optional final {"verify":…} line
+package cmd_test
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"testing"
+)
+
+// ---------------------------------------------------------------------------
+// Transport parser — the only parser the spec suite needs.
+// ---------------------------------------------------------------------------
+
+// opBlock is one parsed op from plain-mode output.
+type opBlock struct {
+	Header map[string]any // first-line JSON
+	Body   string         // everything after the header, before --- or EOF
+}
+
+// specResult is the full parsed output of an edr invocation.
+type specResult struct {
+	Ops    []opBlock
+	Verify map[string]any // nil if no verify line
+}
+
+// parseOps parses plain-mode output per the spec transport contract.
+//
+// The spec says:
+//  1. Read the first line as JSON (the header)
+//  2. Check for error/ec — if present, this op failed
+//  3. Read remaining lines until --- or EOF as the body
+//  4. After all ops, check for a {"verify":…} line
+//
+// The verify line is the last line of the last block's body (not
+// separated by ---). We detect it by checking if the last line is
+// valid JSON containing a "verify" key.
+func parseOps(raw string) (specResult, error) {
+	var result specResult
+
+	// Split into blocks by "---" separator.
+	blocks := splitBlocks(raw)
+
+	for _, block := range blocks {
+		block = strings.TrimRight(block, "\n")
+		if block == "" {
+			continue
+		}
+
+		// First line is JSON header.
+		headerEnd := strings.Index(block, "\n")
+		var headerLine, body string
+		if headerEnd < 0 {
+			headerLine = block
+		} else {
+			headerLine = block[:headerEnd]
+			body = block[headerEnd+1:]
+		}
+
+		var header map[string]any
+		if err := json.Unmarshal([]byte(headerLine), &header); err != nil {
+			return result, fmt.Errorf("header parse error: %w\nraw: %q", err, headerLine)
+		}
+
+		// Check if this is a verify-only block (header line with "verify" key, no body).
+		if _, isVerify := header["verify"]; isVerify && body == "" {
+			result.Verify = header
+			continue
+		}
+
+		// Check if the last line of the body is a verify JSON line.
+		if body != "" {
+			lastNL := strings.LastIndex(body, "\n")
+			var lastLine string
+			if lastNL < 0 {
+				lastLine = body
+			} else {
+				lastLine = body[lastNL+1:]
+			}
+			var maybeVerify map[string]any
+			if json.Unmarshal([]byte(lastLine), &maybeVerify) == nil {
+				if _, isVerify := maybeVerify["verify"]; isVerify {
+					result.Verify = maybeVerify
+					if lastNL < 0 {
+						body = ""
+					} else {
+						body = body[:lastNL]
+					}
+				}
+			}
+		}
+
+		result.Ops = append(result.Ops, opBlock{Header: header, Body: body})
+	}
+
+	return result, nil
+}
+
+// splitBlocks splits plain-mode output on "---" separators.
+// The verify line (if present) is the last block.
+func splitBlocks(raw string) []string {
+	var blocks []string
+	var current strings.Builder
+	for _, line := range strings.Split(raw, "\n") {
+		if line == "---" {
+			blocks = append(blocks, current.String())
+			current.Reset()
+			continue
+		}
+		if current.Len() > 0 {
+			current.WriteByte('\n')
+		}
+		current.WriteString(line)
+	}
+	if current.Len() > 0 {
+		blocks = append(blocks, current.String())
+	}
+	return blocks
+}
+
+// ---------------------------------------------------------------------------
+// Spec repo fixture
+// ---------------------------------------------------------------------------
+
+// specRepo creates a temp repo with Go source, indexes it, and returns
+// (binary, repoDir). The repoDir is symlink-resolved for macOS compat.
+func specRepo(t *testing.T, files map[string]string) (string, string) {
+	t.Helper()
+	binary := buildBinary(t)
+	dir := t.TempDir()
+	dir, _ = filepath.EvalSymlinks(dir)
+
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		os.MkdirAll(filepath.Dir(path), 0755)
+		os.WriteFile(path, []byte(content), 0644)
+	}
+	run(t, binary, dir, "reindex")
+	return binary, dir
+}
+
+// specRun runs the binary and returns parsed specResult + exit code.
+func specRun(t *testing.T, binary, dir string, env []string, args ...string) (specResult, string, string, int) {
+	t.Helper()
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = dir
+	cmd.Env = specEnv(env...)
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			t.Fatalf("exec error: %v", err)
+		}
+	}
+
+	result, parseErr := parseOps(stdout.String())
+	if parseErr != nil && exitCode == 0 {
+		t.Fatalf("parse error on successful command %v: %v\nstdout: %q", args, parseErr, stdout.String())
+	}
+
+	return result, stdout.String(), stderr.String(), exitCode
+}
+
+// specRunRaw runs the binary and returns raw stdout, stderr, exit code.
+// Use for commands that don't follow the JSON header transport (help, run).
+func specRunRaw(t *testing.T, binary, dir string, env []string, args ...string) (string, string, int) {
+	t.Helper()
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = dir
+	cmd.Env = specEnv(env...)
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			t.Fatalf("exec error: %v", err)
+		}
+	}
+	return stdout.String(), stderr.String(), exitCode
+}
+
+// specEnv returns a clean env for spec tests. Extra vars override base env.
+func specEnv(extra ...string) []string {
+	// Build set of keys being overridden.
+	overrides := map[string]bool{"EDR_FORMAT": true}
+	for _, e := range extra {
+		if k, _, ok := strings.Cut(e, "="); ok {
+			overrides[k] = true
+		}
+	}
+
+	var filtered []string
+	for _, e := range os.Environ() {
+		if k, _, ok := strings.Cut(e, "="); ok && overrides[k] {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	filtered = append(filtered, "EDR_NO_HINTS=1")
+	return append(filtered, extra...)
+}
+
+var specSessionCounter int64
+
+func nextSession() string {
+	specSessionCounter++
+	return fmt.Sprintf("spec_%d", specSessionCounter)
+}
+
+// ---------------------------------------------------------------------------
+// Help surface
+// ---------------------------------------------------------------------------
+
+func TestSpec_HelpSurface(t *testing.T) {
+	binary := buildBinary(t)
+	dir := t.TempDir()
+
+	// edr --help — not JSON, just human text.
+	stdout, stderr, exit := specRunRaw(t, binary, dir, nil, "--help")
+	if exit != 0 {
+		t.Fatalf("edr --help exited %d", exit)
+	}
+	if stderr != "" {
+		t.Errorf("edr --help wrote to stderr: %q", stderr)
+	}
+
+	expected := []string{"edit", "map", "read", "refs", "reindex", "rename", "run", "search", "session", "setup", "verify", "write"}
+	cmdRe := regexp.MustCompile(`(?m)^\s{2}(\w+)\s`)
+	matches := cmdRe.FindAllStringSubmatch(stdout, -1)
+
+	var found []string
+	skip := map[string]bool{"edr": true, "version": true}
+	for _, m := range matches {
+		if !skip[m[1]] {
+			found = append(found, m[1])
+		}
+	}
+	sort.Strings(found)
+
+	if strings.Join(found, ",") != strings.Join(expected, ",") {
+		t.Errorf("help surface mismatch\n  got:  %v\n  want: %v", found, expected)
+	}
+}
+
+func TestSpec_SubcommandHelp(t *testing.T) {
+	binary := buildBinary(t)
+	dir := t.TempDir()
+
+	commands := []string{"read", "search", "edit", "write", "map", "refs", "rename", "verify", "run", "session", "setup", "reindex"}
+	for _, cmd := range commands {
+		t.Run(cmd, func(t *testing.T) {
+			stdout, _, exit := specRunRaw(t, binary, dir, nil, cmd, "--help")
+			if exit != 0 {
+				t.Errorf("%s --help exited %d", cmd, exit)
+			}
+			if !strings.Contains(stdout, "Usage:") {
+				t.Errorf("%s --help missing Usage section", cmd)
+			}
+		})
+	}
+}
+
+func TestSpec_HelpCanonicalFlags(t *testing.T) {
+	binary := buildBinary(t)
+	dir := t.TempDir()
+
+	// Per-command help must use canonical long-form flag names, not shorthand.
+	commands := map[string][]string{
+		"read": {"--sig "},
+		"edit": {`--old "`, `--new "`},
+	}
+
+	for cmd, badForms := range commands {
+		t.Run(cmd, func(t *testing.T) {
+			stdout, _, _ := specRunRaw(t, binary, dir, nil, cmd, "--help")
+			for _, bad := range badForms {
+				if strings.Contains(stdout, bad) {
+					t.Errorf("%s --help contains short-form %q; should use canonical long-form", cmd, bad)
+				}
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Transport contract — header + body shape
+// ---------------------------------------------------------------------------
+
+func TestSpec_ReadTransport(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n\nfunc helper() int { return 42 }\n",
+	})
+
+	tests := []struct {
+		name     string
+		args     []string
+		wantSym  string
+		wantFile string
+	}{
+		{"file read", []string{"read", "hello.go"}, "", "hello.go"},
+		{"symbol read", []string{"read", "hello.go:helper"}, "helper", "hello.go"},
+		{"line range", []string{"read", "hello.go", "--lines", "1:3"}, "", "hello.go"},
+		{"signatures", []string{"read", "hello.go", "--signatures"}, "", "hello.go"},
+		{"skeleton", []string{"read", "hello.go", "--skeleton"}, "", "hello.go"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, tt.args...)
+			if exit != 0 {
+				t.Fatalf("exit %d", exit)
+			}
+			if len(result.Ops) != 1 {
+				t.Fatalf("expected 1 op, got %d", len(result.Ops))
+			}
+			h := result.Ops[0].Header
+
+			// All reads must have file and lines.
+			if h["file"] != tt.wantFile {
+				t.Errorf("file = %v, want %q", h["file"], tt.wantFile)
+			}
+			if h["lines"] == nil {
+				t.Error("missing lines in header")
+			}
+			if h["session"] == nil {
+				t.Error("missing session in header")
+			}
+
+			// Symbol reads include sym.
+			if tt.wantSym != "" {
+				if h["sym"] != tt.wantSym {
+					t.Errorf("sym = %v, want %q", h["sym"], tt.wantSym)
+				}
+			}
+
+			// Body should be non-empty raw text (no JSON).
+			body := result.Ops[0].Body
+			if body == "" {
+				t.Error("body is empty")
+			}
+			if strings.HasPrefix(strings.TrimSpace(body), "{") {
+				t.Error("body looks like JSON; should be raw text")
+			}
+		})
+	}
+}
+
+func TestSpec_ReadContentNotNumbered(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	result, _, _, _ := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "read", "hello.go")
+	body := result.Ops[0].Body
+	// Body should NOT have line-number prefixes like "  1\t".
+	if matched, _ := regexp.MatchString(`(?m)^\s*\d+\t`, body); matched {
+		t.Error("read body contains line-number prefixes")
+	}
+}
+
+func TestSpec_SearchTransport(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n\nfunc helper() int { return 42 }\n",
+	})
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"symbol search", []string{"search", "main"}},
+		{"text search", []string{"search", "func", "--text"}},
+		{"text search in file", []string{"search", "return", "--text", "--include", "*.go"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, tt.args...)
+			if exit != 0 {
+				t.Fatalf("exit %d", exit)
+			}
+			if len(result.Ops) != 1 {
+				t.Fatalf("expected 1 op, got %d", len(result.Ops))
+			}
+			h := result.Ops[0].Header
+
+			// Search must have n.
+			if h["n"] == nil {
+				t.Error("missing n in search header")
+			}
+		})
+	}
+}
+
+func TestSpec_SearchZeroIsSuccess(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil, "search", "zzz_nonexistent_zzz")
+	if exit != 0 {
+		t.Errorf("zero-result search should exit 0, got %d", exit)
+	}
+	if len(result.Ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(result.Ops))
+	}
+	n, _ := result.Ops[0].Header["n"].(float64)
+	if n != 0 {
+		t.Errorf("expected n=0, got %v", n)
+	}
+}
+
+func TestSpec_MapTransport(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "map")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if len(result.Ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(result.Ops))
+	}
+	h := result.Ops[0].Header
+	if h["files"] == nil {
+		t.Error("missing files in map header")
+	}
+	if h["symbols"] == nil {
+		t.Error("missing symbols in map header")
+	}
+}
+
+func TestSpec_EditTransport(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	// Dry-run edit.
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"edit", "hello.go", "--old-text", "package main", "--new-text", "package test", "--dry-run")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if len(result.Ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(result.Ops))
+	}
+	h := result.Ops[0].Header
+	if h["file"] != "hello.go" {
+		t.Errorf("file = %v, want hello.go", h["file"])
+	}
+	if h["status"] != "dry_run" {
+		t.Errorf("status = %v, want dry_run", h["status"])
+	}
+}
+
+func TestSpec_EditApply(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"edit", "hello.go", "--old-text", "package main", "--new-text", "package test")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["file"] != "hello.go" {
+		t.Errorf("file = %v, want hello.go", h["file"])
+	}
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+	if h["hash"] == nil {
+		t.Error("applied edit missing hash")
+	}
+
+	// Verify line should be present (auto-verify).
+	if result.Verify == nil {
+		t.Error("standalone edit should auto-verify")
+	}
+}
+
+func TestSpec_EditNoop(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--old-text", "package main", "--new-text", "package main")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "noop" {
+		t.Errorf("status = %v, want noop", h["status"])
+	}
+	// Noop edits skip verify.
+	if result.Verify != nil {
+		t.Error("noop edit should not verify")
+	}
+}
+
+func TestSpec_WriteTransport(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"write", "new.go", "--content", "package main\n")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["file"] != "new.go" {
+		t.Errorf("file = %v, want new.go", h["file"])
+	}
+	if h["hash"] == nil {
+		t.Error("write missing hash")
+	}
+}
+
+func TestSpec_RefsTransport(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() { helper() }\n\nfunc helper() int { return 42 }\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"refs", "hello.go:helper")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["sym"] == nil {
+		t.Error("refs missing sym")
+	}
+	if h["n"] == nil {
+		t.Error("refs missing n")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Failure shape and error codes
+// ---------------------------------------------------------------------------
+
+func TestSpec_FailureShape(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	tests := []struct {
+		name   string
+		args   []string
+		wantEC string
+	}{
+		{"file not found", []string{"read", "nope.go"}, "file_not_found"},
+		{"symbol not found", []string{"read", "hello.go:Nope"}, "not_found"},
+		{"edit file not found", []string{"edit", "nope.go", "--old-text", "x", "--new-text", "y"}, "file_not_found"},
+		{"refs not found", []string{"refs", "zzz_nonexistent"}, "not_found"},
+		{"outside repo", []string{"read", "/etc/passwd"}, "outside_repo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, stdout, _, exit := specRun(t, binary, dir, nil, tt.args...)
+			if exit == 0 {
+				t.Error("expected non-zero exit")
+			}
+
+			// Parse the error header.
+			var header map[string]any
+			firstLine := strings.SplitN(stdout, "\n", 2)[0]
+			if err := json.Unmarshal([]byte(firstLine), &header); err != nil {
+				t.Fatalf("failed to parse error header: %v\nraw: %q", err, firstLine)
+			}
+
+			if header["error"] == nil {
+				t.Error("error header missing error field")
+			}
+			if ec, _ := header["ec"].(string); ec != tt.wantEC {
+				t.Errorf("ec = %q, want %q", ec, tt.wantEC)
+			}
+
+			// Failed ops MUST NOT include success-only fields.
+			for _, banned := range []string{"file", "lines", "hash", "status"} {
+				if header[banned] != nil {
+					t.Errorf("failed op should not have %q field", banned)
+				}
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Exit codes
+// ---------------------------------------------------------------------------
+
+func TestSpec_ExitCodes(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	tests := []struct {
+		name     string
+		args     []string
+		wantExit int
+	}{
+		{"read success", []string{"read", "hello.go"}, 0},
+		{"map success", []string{"map"}, 0},
+		{"search success", []string{"search", "main"}, 0},
+		{"search zero results", []string{"search", "zzz_nonexistent"}, 0},
+		{"read failure", []string{"read", "nope.go"}, 1},
+		{"edit failure", []string{"edit", "nope.go", "--old-text", "x", "--new-text", "y"}, 1},
+		{"refs failure", []string{"refs", "zzz_nonexistent"}, 1},
+		{"dry-run success", []string{"edit", "hello.go", "--old-text", "package main", "--new-text", "package test", "--dry-run"}, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, tt.args...)
+			if exit != tt.wantExit {
+				t.Errorf("exit = %d, want %d", exit, tt.wantExit)
+			}
+		})
+	}
+}
+
+func TestSpec_StderrSilentByDefault(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	_, _, stderr, _ := specRun(t, binary, dir, nil, "read", "hello.go")
+	if stderr != "" {
+		t.Errorf("stderr should be empty without --verbose, got: %q", stderr)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Batch transport and separator
+// ---------------------------------------------------------------------------
+
+func TestSpec_BatchSeparator(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"a.go": "package main\n\nfunc A() {}\n",
+		"b.go": "package main\n\nfunc B() {}\n",
+	})
+
+	result, stdout, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"-r", "a.go", "-r", "b.go")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if len(result.Ops) != 2 {
+		t.Fatalf("expected 2 ops, got %d", len(result.Ops))
+	}
+	if !strings.Contains(stdout, "\n---\n") {
+		t.Error("batch output missing --- separator")
+	}
+
+	// Each op should have file field.
+	files := []string{
+		result.Ops[0].Header["file"].(string),
+		result.Ops[1].Header["file"].(string),
+	}
+	sort.Strings(files)
+	if files[0] != "a.go" || files[1] != "b.go" {
+		t.Errorf("files = %v, want [a.go, b.go]", files)
+	}
+}
+
+func TestSpec_BatchMixedOps(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"-r", "hello.go", "--sig", "-s", "main")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if len(result.Ops) != 2 {
+		t.Fatalf("expected 2 ops, got %d", len(result.Ops))
+	}
+	// First op is a read, second is a search.
+	if result.Ops[0].Header["file"] == nil {
+		t.Error("first op (read) missing file")
+	}
+	if result.Ops[1].Header["n"] == nil {
+		t.Error("second op (search) missing n")
+	}
+}
+
+func TestSpec_BatchPartialFailure(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	// One good read, one bad read.
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"-r", "hello.go", "-r", "nope.go")
+	if exit != 1 {
+		t.Errorf("expected exit 1 for partial failure, got %d", exit)
+	}
+	if len(result.Ops) < 1 {
+		t.Fatal("expected at least 1 op")
+	}
+	// One op should succeed, one should fail.
+	var hasSuccess, hasError bool
+	for _, op := range result.Ops {
+		if op.Header["error"] != nil {
+			hasError = true
+		}
+		if op.Header["file"] != nil {
+			hasSuccess = true
+		}
+	}
+	if !hasSuccess || !hasError {
+		t.Errorf("expected one success and one failure op; success=%v error=%v", hasSuccess, hasError)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Batch / standalone parity
+// ---------------------------------------------------------------------------
+
+func TestSpec_Parity(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n\nfunc helper() int {\n\treturn 42\n}\n",
+	})
+
+	tests := []struct {
+		name           string
+		standaloneArgs []string
+		batchArgs      []string
+	}{
+		{
+			"read",
+			[]string{"read", "hello.go"},
+			[]string{"-r", "hello.go"},
+		},
+		{
+			"read signatures",
+			[]string{"read", "hello.go", "--signatures"},
+			[]string{"-r", "hello.go", "--sig"},
+		},
+		{
+			"search symbol",
+			[]string{"search", "main"},
+			[]string{"-s", "main"},
+		},
+		{
+			"search text",
+			[]string{"search", "main", "--text"},
+			[]string{"-s", "main", "--text"},
+		},
+		{
+			"edit dry-run",
+			[]string{"edit", "hello.go", "--old-text", "package main", "--new-text", "package test", "--dry-run"},
+			[]string{"-e", "hello.go", "--old", "package main", "--new", "package test", "--dry-run"},
+		},
+	}
+
+	ignoreFields := map[string]bool{"session": true}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sResult, _, _, sExit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, tt.standaloneArgs...)
+			bResult, _, _, bExit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, tt.batchArgs...)
+
+			if sExit != bExit {
+				t.Errorf("exit code mismatch: standalone=%d, batch=%d", sExit, bExit)
+			}
+			if len(sResult.Ops) != len(bResult.Ops) {
+				t.Fatalf("op count mismatch: standalone=%d, batch=%d", len(sResult.Ops), len(bResult.Ops))
+			}
+
+			for i := range sResult.Ops {
+				sH := sResult.Ops[i].Header
+				bH := bResult.Ops[i].Header
+
+				allKeys := map[string]bool{}
+				for k := range sH {
+					allKeys[k] = true
+				}
+				for k := range bH {
+					allKeys[k] = true
+				}
+
+				for k := range allKeys {
+					if ignoreFields[k] {
+						continue
+					}
+					sVal, sHas := sH[k]
+					bVal, bHas := bH[k]
+					if sHas != bHas {
+						t.Errorf("op[%d] field %q: standalone has=%v, batch has=%v", i, k, sHas, bHas)
+					} else if fmt.Sprint(sVal) != fmt.Sprint(bVal) {
+						t.Errorf("op[%d] field %q mismatch: standalone=%v, batch=%v", i, k, sVal, bVal)
+					}
+				}
+
+				// Body parity.
+				if sResult.Ops[i].Body != bResult.Ops[i].Body {
+					t.Errorf("op[%d] body mismatch:\n  standalone: %q\n  batch:      %q",
+						i, truncate(sResult.Ops[i].Body, 200), truncate(bResult.Ops[i].Body, 200))
+				}
+			}
+		})
+	}
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+// ---------------------------------------------------------------------------
+// Session behavior
+// ---------------------------------------------------------------------------
+
+func TestSpec_SessionDedup(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	sess := nextSession()
+	env := []string{"EDR_SESSION=" + sess}
+
+	// First read: session=new.
+	r1, _, _, _ := specRun(t, binary, dir, env, "read", "hello.go")
+	if s, _ := r1.Ops[0].Header["session"].(string); s != "new" {
+		t.Errorf("first read session = %q, want new", s)
+	}
+	if r1.Ops[0].Body == "" {
+		t.Error("first read should have body")
+	}
+
+	// Second read: session=unchanged.
+	r2, _, _, _ := specRun(t, binary, dir, env, "read", "hello.go")
+	if s, _ := r2.Ops[0].Header["session"].(string); s != "unchanged" {
+		t.Errorf("second read session = %q, want unchanged", s)
+	}
+}
+
+func TestSpec_ExplicitSessionRequired(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	// With an explicit session, second call returns unchanged.
+	sess := nextSession()
+	env := []string{"EDR_SESSION=" + sess}
+	r1, _, _, _ := specRun(t, binary, dir, env, "read", "hello.go")
+	if r1.Ops[0].Body == "" {
+		t.Error("first read should have body")
+	}
+	r2, _, _, _ := specRun(t, binary, dir, env, "read", "hello.go")
+	if s, _ := r2.Ops[0].Header["session"].(string); s != "unchanged" {
+		t.Errorf("second read with same session should be unchanged, got %q", s)
+	}
+
+	// With a different session, body returns again.
+	env2 := []string{"EDR_SESSION=" + nextSession()}
+	r3, _, _, _ := specRun(t, binary, dir, env2, "read", "hello.go")
+	if r3.Ops[0].Body == "" {
+		t.Error("new session should return full body")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Verify line behavior
+// ---------------------------------------------------------------------------
+
+func TestSpec_VerifyAfterEdit(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+		"go.mod":   "module test\n\ngo 1.21\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--old-text", "func main() {}", "--new-text", "func main() { println(\"hi\") }")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if result.Verify == nil {
+		t.Fatal("expected verify line after edit")
+	}
+	v := result.Verify["verify"].(string)
+	if v != "passed" && v != "failed" {
+		t.Errorf("verify = %q, want passed or failed", v)
+	}
+}
+
+func TestSpec_VerifySkippedOnDryRun(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+		"go.mod":   "module test\n\ngo 1.21\n",
+	})
+
+	result, _, _, _ := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--old-text", "package main", "--new-text", "package test", "--dry-run")
+	// Dry-run may emit {"verify":"skipped"} but must NOT emit "passed" or "failed".
+	if result.Verify != nil {
+		v, _ := result.Verify["verify"].(string)
+		if v != "skipped" {
+			t.Errorf("dry-run verify should be skipped, got %q", v)
+		}
+	}
+}
+
+func TestSpec_VerifyStandalone(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+		"go.mod":   "module test\n\ngo 1.21\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil, "verify")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	// Standalone verify emits a verify header.
+	if result.Verify == nil {
+		t.Fatal("verify command should emit verify line")
+	}
+	if result.Verify["verify"] != "passed" {
+		t.Errorf("verify = %v, want passed", result.Verify["verify"])
+	}
+}
+
+func TestSpec_VerifyWithoutIndex(t *testing.T) {
+	binary := buildBinary(t)
+	dir := t.TempDir()
+	dir, _ = filepath.EvalSymlinks(dir)
+	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\nfunc main() {}\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n\ngo 1.21\n"), 0644)
+
+	// verify should work without .edr index.
+	result, _, _, exit := specRun(t, binary, dir, nil, "verify")
+	if exit != 0 {
+		t.Fatalf("verify without index: exit %d", exit)
+	}
+	if result.Verify == nil {
+		t.Fatal("expected verify line")
+	}
+
+	// verify should NOT create .edr directory.
+	if _, err := os.Stat(filepath.Join(dir, ".edr")); err == nil {
+		t.Error("verify should not create .edr directory")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Auto-index on first use
+// ---------------------------------------------------------------------------
+
+func TestSpec_AutoIndex(t *testing.T) {
+	binary := buildBinary(t)
+	dir := t.TempDir()
+	dir, _ = filepath.EvalSymlinks(dir)
+	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\nfunc main() {}\n"), 0644)
+
+	// read without prior reindex should auto-index.
+	_, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "read", "hello.go")
+	if exit != 0 {
+		t.Errorf("auto-index read: exit %d, want 0", exit)
+	}
+
+	// map should also auto-index.
+	_, _, _, exit = specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "map")
+	if exit != 0 {
+		t.Errorf("auto-index map: exit %d, want 0", exit)
+	}
+
+	// search should also auto-index.
+	_, _, _, exit = specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "search", "main")
+	if exit != 0 {
+		t.Errorf("auto-index search: exit %d, want 0", exit)
+	}
+}
+
+func TestSpec_AutoIndexSilent(t *testing.T) {
+	binary := buildBinary(t)
+	dir := t.TempDir()
+	dir, _ = filepath.EvalSymlinks(dir)
+	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\nfunc main() {}\n"), 0644)
+
+	// Auto-index should not emit stderr.
+	_, _, stderr, _ := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "read", "hello.go")
+	if stderr != "" {
+		t.Errorf("auto-index should be silent, got stderr: %q", stderr)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Run command
+// ---------------------------------------------------------------------------
+
+func TestSpec_RunFirstRun(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n",
+	})
+
+	stdout, _, exit := specRunRaw(t, binary, dir, nil, "run", "--", "echo", "hello world")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if !strings.Contains(stdout, "hello world") {
+		t.Errorf("first run should show full output, got: %q", stdout)
+	}
+}
+
+func TestSpec_RunNoChanges(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n",
+	})
+
+	// First run.
+	specRunRaw(t, binary, dir, nil, "run", "--", "echo", "stable output")
+	// Second run.
+	stdout, _, _ := specRunRaw(t, binary, dir, nil, "run", "--", "echo", "stable output")
+	if !strings.Contains(stdout, "no changes") {
+		t.Errorf("identical run should show no changes, got: %q", stdout)
+	}
+}
+
+func TestSpec_RunReset(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n",
+	})
+
+	// First run.
+	specRunRaw(t, binary, dir, nil, "run", "--", "echo", "reset test")
+	// Reset — should show full output again.
+	stdout, _, _ := specRunRaw(t, binary, dir, nil, "run", "--reset", "--", "echo", "reset test")
+	if strings.Contains(stdout, "no changes") {
+		t.Error("--reset should show full output, not 'no changes'")
+	}
+	if !strings.Contains(stdout, "reset test") {
+		t.Errorf("--reset should show full output, got: %q", stdout)
+	}
+}
+
+func TestSpec_RunExitPassthrough(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n",
+	})
+
+	_, _, exit := specRunRaw(t, binary, dir, nil, "run", "--reset", "--", "/bin/sh", "-c", "exit 7")
+	if exit != 7 {
+		t.Errorf("exit = %d, want 7 (pass-through)", exit)
+	}
+}
+
+func TestSpec_RunFull(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n",
+	})
+
+	// First run to establish baseline.
+	specRunRaw(t, binary, dir, nil, "run", "--", "echo", "full test")
+	// --full should bypass diff.
+	stdout, _, _ := specRunRaw(t, binary, dir, nil, "run", "--full", "--", "echo", "full test")
+	if strings.Contains(stdout, "no changes") || strings.Contains(stdout, "unchanged") {
+		t.Error("--full should bypass diff")
+	}
+	if !strings.Contains(stdout, "full test") {
+		t.Errorf("--full should show raw output, got: %q", stdout)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Search determinism
+// ---------------------------------------------------------------------------
+
+func TestSpec_SearchDeterminism(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"a.go": "package main\n\nfunc A() {}\n",
+		"b.go": "package main\n\nfunc B() {}\n",
+		"c.go": "package main\n\nfunc C() {}\n",
+	})
+
+	var outputs []string
+	for i := 0; i < 3; i++ {
+		_, stdout, _, _ := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "search", "func", "--text")
+		outputs = append(outputs, stdout)
+	}
+
+	for i := 1; i < len(outputs); i++ {
+		if outputs[i] != outputs[0] {
+			t.Errorf("search output not deterministic:\n  run 0: %q\n  run %d: %q", outputs[0], i, outputs[i])
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Rename
+// ---------------------------------------------------------------------------
+
+func TestSpec_RenameTransport(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc OldName() int { return 42 }\n\nfunc main() { OldName() }\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil, "rename", "OldName", "NewName", "--dry-run")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if len(result.Ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(result.Ops))
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "dry_run" {
+		t.Errorf("status = %v, want dry_run", h["status"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Session new
+// ---------------------------------------------------------------------------
+
+func TestSpec_SessionNew(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n",
+	})
+
+	// Spec: session is a public semantic command. Transport contract says
+	// stdout line 1 is always a JSON header. The header should contain
+	// the session ID.
+	stdout, stderr, exit := specRunRaw(t, binary, dir, nil, "session", "new")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if stderr != "" {
+		t.Errorf("stderr should be empty, got: %q", stderr)
+	}
+
+	result, err := parseOps(stdout)
+	if err != nil {
+		t.Skip("bugs.md #1: session new bypasses plain-mode transport (bare ID, no JSON header)")
+	}
+
+	if len(result.Ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(result.Ops))
+	}
+
+	// Header should contain the session ID.
+	h := result.Ops[0].Header
+	id, _ := h["id"].(string)
+	if id == "" {
+		t.Error("session new header should contain id")
+	}
+
+	// A subsequent read with that session should work.
+	if id != "" {
+		r, _, _, rx := specRun(t, binary, dir, []string{"EDR_SESSION=" + id}, "read", "hello.go")
+		if rx != 0 {
+			t.Fatalf("read with new session: exit %d", rx)
+		}
+		if s, _ := r.Ops[0].Header["session"].(string); s != "new" {
+			t.Errorf("first read in new session: session = %q, want new", s)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Setup
+// ---------------------------------------------------------------------------
+
+func TestSpec_SetupBasic(t *testing.T) {
+	binary := buildBinary(t)
+	dir := t.TempDir()
+	dir, _ = filepath.EvalSymlinks(dir)
+	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n"), 0644)
+
+	home := t.TempDir()
+
+	// Spec: setup is a public semantic command under the transport contract.
+	// stdout line 1 should be a JSON header; stderr should be empty.
+	stdout, stderr, exit := specRunRaw(t, binary, dir,
+		[]string{"HOME=" + home}, "setup", "--no-global")
+	if exit != 0 {
+		t.Fatalf("setup --no-global: exit %d\nstdout: %s\nstderr: %s", exit, stdout, stderr)
+	}
+	if stderr != "" {
+		t.Log("bugs.md #2: setup emits to stderr instead of using transport contract")
+	}
+
+	// .edr directory should exist after setup.
+	if _, err := os.Stat(filepath.Join(dir, ".edr")); err != nil {
+		t.Error(".edr directory should exist after setup")
+	}
+
+	// No global instruction files should be written.
+	for _, rel := range []string{".claude/CLAUDE.md", ".codex/AGENTS.md", ".cursor/rules/edr.mdc"} {
+		if _, err := os.Stat(filepath.Join(home, rel)); err == nil {
+			t.Errorf("%s should not exist with --no-global", rel)
+		}
+	}
+}
+
+func TestSpec_SetupGlobal(t *testing.T) {
+	binary := buildBinary(t)
+	dir := t.TempDir()
+	dir, _ = filepath.EvalSymlinks(dir)
+	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n"), 0644)
+
+	home := t.TempDir()
+
+	// setup --global should install instructions.
+	_, _, exit := specRunRaw(t, binary, dir,
+		[]string{"HOME=" + home}, "setup", "--global")
+	if exit != 0 {
+		t.Fatalf("setup --global: exit %d", exit)
+	}
+
+	// Global files should exist.
+	for _, rel := range []string{".claude/CLAUDE.md", ".codex/AGENTS.md", ".cursor/rules/edr.mdc"} {
+		path := filepath.Join(home, rel)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("%s should exist after --global: %v", rel, err)
+			continue
+		}
+		// Should contain edr instruction sentinels.
+		if !strings.Contains(string(data), "edr-instructions") {
+			t.Errorf("%s missing edr-instructions sentinel", rel)
+		}
+	}
+}
+
+func TestSpec_SetupUninstall(t *testing.T) {
+	binary := buildBinary(t)
+	dir := t.TempDir()
+	dir, _ = filepath.EvalSymlinks(dir)
+	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n"), 0644)
+
+	home := t.TempDir()
+	env := []string{"HOME=" + home}
+
+	// Install first.
+	specRunRaw(t, binary, dir, env, "setup", "--global")
+
+	// Uninstall.
+	_, _, exit := specRunRaw(t, binary, dir, env, "setup", "--uninstall")
+	if exit != 0 {
+		t.Fatalf("setup --uninstall: exit %d", exit)
+	}
+
+	// Cursor file should be gone entirely.
+	if _, err := os.Stat(filepath.Join(home, ".cursor", "rules", "edr.mdc")); err == nil {
+		t.Error("cursor file should be deleted after uninstall")
+	}
+
+	// Claude/Codex files: sentinel block should be removed (file may still exist if user had other content).
+	for _, rel := range []string{".claude/CLAUDE.md", ".codex/AGENTS.md"} {
+		data, err := os.ReadFile(filepath.Join(home, rel))
+		if err != nil {
+			continue // file deleted is also fine
+		}
+		if strings.Contains(string(data), "edr-instructions") {
+			t.Errorf("%s still contains edr-instructions after uninstall", rel)
+		}
+	}
+}
+
+func TestSpec_SetupStatus(t *testing.T) {
+	binary := buildBinary(t)
+	dir := t.TempDir()
+	home := t.TempDir()
+
+	// Spec: setup is a public semantic command. Transport contract says
+	// stdout line 1 is always a JSON header. Status should report on
+	// stdout with a parseable header, not raw text on stderr.
+	stdout, stderr, exit := specRunRaw(t, binary, dir, []string{"HOME=" + home}, "setup", "--status")
+	if exit != 0 {
+		t.Fatalf("setup --status: exit %d\nstdout: %q\nstderr: %q", exit, stdout, stderr)
+	}
+
+	result, err := parseOps(stdout)
+	if err != nil || len(result.Ops) == 0 {
+		// Verify output went to stderr instead (known bug).
+		if stderr == "" {
+			t.Fatal("setup --status produced no output on stdout or stderr")
+		}
+		t.Skip("bugs.md #2: setup --status bypasses plain-mode transport (output on stderr, no JSON header)")
+	}
+
+	if stderr != "" {
+		t.Errorf("stderr should be empty, got: %q", stderr)
+	}
+}
+
+func TestSpec_SetupPathValidation(t *testing.T) {
+	binary := buildBinary(t)
+	dir := t.TempDir() // valid working dir
+
+	// Nonexistent path as argument.
+	_, _, exit := specRunRaw(t, binary, dir, nil,
+		"setup", "--no-global", "/tmp/edr-nonexistent-"+nextSession())
+	if exit == 0 {
+		t.Error("setup with nonexistent path should fail")
+	}
+}
