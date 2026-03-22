@@ -38,55 +38,19 @@ without needing `EDR_SESSION`.
 
 ## Medium
 
-### 8. `--no-group` on text search returns empty results
-The flag is accepted but suppresses normal results.
+### 8. ~~`--no-group` on text search returns empty results~~ FIXED
+Was a symptom of bug #3 (SearchResult JSON tag mismatch). Fixed by #3.
 
-**Repro:**
-```bash
-edr search unchanged --text --no-group
-```
+### 9. ~~`--context N` on text search does not show surrounding lines~~ FIXED
+`writeMatch` now renders the `snippet` field when context is present instead
+of only showing the matched line.
 
-**Actual:** `{}`
+### 10. ~~Search `--limit N` reports total count, not displayed count~~ FIXED
+`TotalMatches` now reflects `len(result)` (displayed count), and `Truncated`
+is set when displayed < total.
 
-**Expected:** The same matches as grouped text search, just without file grouping.
-
-### 9. `--context N` on text search does not show surrounding lines
-Context changes line numbers but not the visible output.
-
-**Repro:**
-```bash
-edr search unchanged --text --context 1
-edr search '^func execute' --text --regex --context 2
-```
-
-**Actual:** Results appear to be the same hits with shifted line numbers, not actual surrounding lines.
-
-**Expected:** Show the requested surrounding lines or reject the flag for unsupported modes.
-
-### 10. Search `--limit N` reports total count, not displayed count
-The header still reports total matches even when results are truncated.
-
-**Repro:**
-```bash
-edr search unchanged --text --limit 5
-```
-
-**Actual:** Header showed `{"n":169}` while only 5 matches were displayed.
-
-**Expected:** Either `{"n":5,"total":169}` or make `n` match the displayed count.
-
-### 11. Line-range reads are not deduplicated across a stable session
-Repeated line-range reads returned full content both times.
-
-**Repro:**
-```bash
-EDR_SESSION=stress-session-1 edr read internal/session/session.go --lines 1:3
-EDR_SESSION=stress-session-1 edr read internal/session/session.go --lines 1:3
-```
-
-**Actual:** Both reads returned the full body.
-
-**Expected:** The second read should return an `unchanged`/delta result like symbol and full-file reads do.
+### 11. ~~Line-range reads are not deduplicated across a stable session~~ FIXED
+Already working — second line-range read returns `{"session":"unchanged"}`.
 
 ### 12. Batch dry-run edit + read does not show post-edit state
 The installed workflow says chained edit-then-read should show the post-edit view, but dry-run chaining does not.
@@ -101,44 +65,15 @@ edr -e internal/session/session.go --old 'return "new", ""' --new 'return "brand
 
 **Expected:** Either the read should reflect the staged dry-run output, or dry-run chaining should be explicitly unsupported.
 
-### 13. `run --full` does not consistently bypass session/baseline behavior
-Full-output mode can still behave like deduped output on repeated runs.
+### 13. ~~`run --full` does not consistently bypass session/baseline behavior~~ FIXED
+Already working — `--full` shows raw output every time.
 
-**Repro:**
-```bash
-edr run --full -- echo "visible?"
-edr run --full -- echo "visible?"
-edr run --reset --full -- echo "visible?"
-```
+### 14. ~~Plain read output does not expose file hash~~ FIXED
+`plainRead` now includes `hash` in the header JSON.
 
-**Actual:** Repeated runs can suppress content until `--reset` is used.
-
-**Expected:** `--full` should always show the raw command output.
-
-### 14. Plain read output does not expose file hash
-Read output lacks the hash needed for easy hash-guarded edits.
-
-**Repro:**
-```bash
-edr read internal/session/session.go --lines 1:3
-```
-
-**Actual:** Output includes file and lines but no hash.
-
-**Expected:** Include a hash in plain-format read output.
-
-### 15. Batch vs standalone flag naming is inconsistent
-Batch and standalone edit modes accept different flag names for the same concept.
-
-**Repro:**
-```bash
-edr -e file.go --new "x"
-edr edit file.go --old "x" --new "y"
-```
-
-**Actual:** One mode expects `--old/--new`, the other expects `--old-text/--new-text`.
-
-**Expected:** Accept both forms everywhere or normalize the interface.
+### 15. ~~Batch vs standalone flag naming is inconsistent~~ FIXED
+Added `--old`/`--new` as hidden aliases for `--old-text`/`--new-text` in
+standalone edit via cmdspec `Alias` field.
 
 ### 16. `run` stderr/stdout handling is unclear
 Shell command execution does not make stream behavior obvious.

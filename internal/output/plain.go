@@ -126,6 +126,9 @@ func plainRead(w *os.File, op Op) {
 	if v, ok := op["lines"]; ok {
 		h["lines"] = v
 	}
+	if v, ok := op["hash"].(string); ok && v != "" {
+		h["hash"] = v
+	}
 	if v, ok := op["truncated"].(bool); ok && v {
 		h["trunc"] = true
 	}
@@ -185,7 +188,13 @@ func writeMatch(w *os.File, file string, m any) {
 	text, _ := mm["text"].(string)
 
 	if file != "" {
-		fmt.Fprintf(w, "%s:%d: %s\n", file, line, text)
+		// Text search match — show snippet if context was requested
+		if snippet, ok := mm["snippet"].(string); ok && snippet != "" {
+			fmt.Fprintf(w, "%s:%d:\n", file, line)
+			writeBody(w, snippet)
+		} else {
+			fmt.Fprintf(w, "%s:%d: %s\n", file, line, text)
+		}
 	} else {
 		// Symbol search
 		if sym, ok := mm["symbol"].(map[string]any); ok {

@@ -504,11 +504,13 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 	if result == nil {
 		result = []output.Match{}
 	}
+	total := int(totalMatches.Load())
+	displayed := len(result)
 	sr := &SearchResult{
 		Kind:         "text",
 		Matches:      result,
-		TotalMatches: int(totalMatches.Load()),
-		Truncated:    truncated,
+		TotalMatches: displayed,
+		Truncated:    truncated || displayed < total,
 	}
 	if !useRegex && sr.TotalMatches == 0 && looksLikeRegex(pattern) {
 		// Normalize BRE syntax (grep default) to ERE (Go regexp):

@@ -91,8 +91,8 @@ var Registry = []*Spec{
 		Flags: []FlagSpec{
 			{Name: "start_line", Type: FlagInt, Default: 0, Desc: "Start line"},
 			{Name: "end_line", Type: FlagInt, Default: 0, Desc: "End line"},
-			{Name: "old_text", Type: FlagString, Default: "", Desc: "Text to find"},
-			{Name: "new_text", Type: FlagString, Default: "", Desc: "Replacement text"},
+			{Name: "old_text", Type: FlagString, Default: "", Desc: "Text to find", Alias: "old"},
+			{Name: "new_text", Type: FlagString, Default: "", Desc: "Replacement text", Alias: "new"},
 			{Name: "all", Type: FlagBool, Default: false, Desc: "Replace all matches"},
 			{Name: "in", Type: FlagString, Default: "", Desc: "Scope text match to within a symbol body (file:Symbol)"},
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
