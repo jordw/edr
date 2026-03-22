@@ -139,7 +139,7 @@ Rules:
 - `<path>:<symbol>` is the canonical symbol-edit form
 - line edits use `--lines`, not separate positional modes
 - `--delete` is the canonical explicit symbol-deletion form
-- `--move-after` MAY be supported for same-file symbol moves; if supported, it MUST be explicit and MUST NOT guess cross-file intent
+- `--move-after` MUST be supported for same-file symbol moves; it MUST be explicit and MUST NOT guess cross-file intent
 - `--insert-at` is the canonical pure-insertion form for line-oriented edits
 - `--fuzzy` is opt-in only; it MUST NOT become the default matching mode without revisiting the spec's strictness guarantees
 - stale-read protection is on by default: if the session has a prior read for the target file (or a symbol within it), edr MUST reject the edit when the file has changed since that read
@@ -291,7 +291,7 @@ Defaults:
 
 - `read`, `search`, `map`, and `refs` have command-specific default budgets
 - In the ideal design, the default is `2000` approximate tokens unless a command documents a narrower default
-- Mutation commands do not use budget for correctness decisions; large diffs MAY still be summarized if the diff contract says so
+- Mutation commands do not use budget for correctness decisions; large diffs SHOULD be summarized if the diff contract says so
 
 Multi-op batch rules:
 
@@ -397,8 +397,8 @@ Batch output order MUST be deterministic.
 
 Rules:
 
-- edr MAY normalize execution order around mutations so that reads before a mutation observe pre-edit state and reads after a mutation observe post-edit state
-- A failed mutation MAY cause later dependent mutations to be emitted as skipped ops
+- edr MUST normalize execution order around mutations so that reads before a mutation observe pre-edit state and reads after a mutation observe post-edit state
+- A failed mutation SHOULD cause later dependent mutations to be emitted as skipped ops
 - Users SHOULD be able to understand output order from the observable semantics alone, without knowing the internal scheduler
 
 ## Field name table
@@ -555,7 +555,7 @@ When verify fails after successful edits, exit code is 1 but the mutation header
 
 ### Atomic batch edits
 
-Batch edit execution MAY support an explicit atomic mode.
+Batch edit execution MUST support an explicit atomic mode.
 
 Rules:
 
