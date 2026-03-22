@@ -37,6 +37,24 @@ func extractFlags(cmd *cobra.Command) map[string]any {
 	return flags
 }
 
+// resolveAtFiles expands @path values in string flags to file contents.
+// This allows shell-safe content passing: --old @/tmp/old.txt avoids shell expansion.
+func resolveAtFiles(flags map[string]any) error {
+	for key, val := range flags {
+		s, ok := val.(string)
+		if !ok || !strings.HasPrefix(s, "@") {
+			continue
+		}
+		path := s[1:]
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("--%s: reading %s: %w", key, path, err)
+		}
+		flags[key] = string(data)
+	}
+	return nil
+}
+
 // readStdinToFlags reads stdin and stores the content under the given flag key.
 // Used by commands that read replacement/content from stdin.
 func readStdinToFlags(flags map[string]any, key string) error {

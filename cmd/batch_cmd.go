@@ -206,6 +206,14 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			return string(data), nil
 		}
+		if strings.HasPrefix(val, "@") {
+			path := val[1:]
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return "", fmt.Errorf("%s: reading %s: %w", flag, path, err)
+			}
+			return string(data), nil
+		}
 		return val, nil
 	}
 

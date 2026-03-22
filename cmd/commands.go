@@ -68,6 +68,9 @@ func dispatchCmdWithIndex(cmd *cobra.Command, cmdName string, args []string) err
 // Loads a file-backed session when EDR_SESSION is set.
 func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	flags := extractFlags(cmd)
+	if err := resolveAtFiles(flags); err != nil {
+		return err
+	}
 
 	db, err := openDBStrict(cmd)
 	if err != nil {
@@ -138,6 +141,9 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 // dispatchCmdWithStdin is like dispatchCmd but reads stdin into a flag first.
 func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, stdinKey string) error {
 	flags := extractFlags(cmd)
+	if err := resolveAtFiles(flags); err != nil {
+		return err
+	}
 
 	// If any content-equivalent flag was provided on CLI, skip stdin.
 	hasContent := false
@@ -398,9 +404,7 @@ var sessionNewCmd = &cobra.Command{
 			return err
 		}
 		// Write PPID mapping so subsequent calls auto-resolve this session
-		ppid := os.Getppid()
-		ppidPath := filepath.Join(edrDir, "sessions", fmt.Sprintf("ppid_%d", ppid))
-		os.WriteFile(ppidPath, []byte(id), 0644)
+		session.WriteSessionMapping(filepath.Join(edrDir, "sessions"), id)
 
 		fmt.Println(id)
 
