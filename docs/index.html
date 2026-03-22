@@ -228,8 +228,8 @@ footer {
   <h1>edr</h1>
   <p class="tagline">the editor for agents</p>
   <p class="pitch">
-    <strong>Coding agents burn context on full-file reads, redundant calls, and output they've already seen.</strong>
-    edr fixes this with symbol-level ops, batching, and deltas. Works with any agent that can run shell commands.
+    <strong>Agents are bottlenecked on what context they have and can quickly gather.</strong>
+    Larger context windows and faster inference don't fix the core problem: an agent that reads whole files, makes sequential calls, and re-processes output it's already seen is doing unnecessary work at every step &mdash; and the cost is superlinear. edr gives agents precise tools instead. Works with any agent that can run shell commands.
   </p>
   <div class="install-bar">
     <span class="prompt">$</span>

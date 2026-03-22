@@ -184,6 +184,7 @@ var Registry = []*Spec{
 		Flags: []FlagSpec{
 			{Name: "command", Type: FlagString, Default: "", Desc: "Custom command (auto-detect if omitted)"},
 			{Name: "level", Type: FlagString, Default: "", Desc: "Verification level: build (default) or test"},
+			{Name: "test", Type: FlagBool, Default: false, Desc: "Shorthand for --level test"},
 			{Name: "timeout", Type: FlagInt, Default: 0, Desc: "Timeout in seconds"},
 		},
 	},

@@ -146,6 +146,12 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 	}
 
 	body := strings.Join(lines[startLine-1:endLine], "")
+
+	// Collapse license headers and import blocks for full-file reads
+	if !full && !hasLineRange {
+		body = collapseBoilerplate(body, file)
+	}
+
 	size := len(body) / 4
 	truncated := false
 	if budget > 0 && size > budget {

@@ -22,6 +22,9 @@ func DispatchVerify(ctx context.Context, root string, args []string, flags map[s
 func runVerify(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
 	command := flagString(flags, "command", "")
 	level := flagString(flags, "level", "build")
+	if flagBool(flags, "test", false) {
+		level = "test"
+	}
 	if command == "" {
 		// Check .edr/config.json for persistent verify command
 		command = loadVerifyConfig(root, level)

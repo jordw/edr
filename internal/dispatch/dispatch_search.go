@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
@@ -53,6 +54,28 @@ func runRepoMap(ctx context.Context, db *index.DB, flags map[string]any) (any, e
 		"symbols":   stats.TotalSymbols,
 		"content":   stats.Files,
 		"truncated": stats.Truncated,
+	}
+	if stats.TotalFiles == 0 && stats.TotalSymbols == 0 {
+		grep := flagString(flags, "grep", "")
+		dir := flagString(flags, "dir", "")
+		lang := flagString(flags, "lang", "")
+		symType := flagString(flags, "type", "")
+		if grep != "" || dir != "" || lang != "" || symType != "" {
+			parts := []string{}
+			if grep != "" {
+				parts = append(parts, "--grep "+grep)
+			}
+			if dir != "" {
+				parts = append(parts, "--dir "+dir)
+			}
+			if lang != "" {
+				parts = append(parts, "--lang "+lang)
+			}
+			if symType != "" {
+				parts = append(parts, "--type "+symType)
+			}
+			result["hint"] = "no symbols matched filters: " + strings.Join(parts, ", ")
+		}
 	}
 	if stats.Truncated {
 		result["shown_files"] = stats.ShownFiles

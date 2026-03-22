@@ -2,11 +2,13 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Coding agents burn context on full-file reads, redundant calls, and output they've already seen.** edr fixes this three ways:
+**Agents are bottlenecked on what context they have and can quickly gather.** Larger context windows and faster inference don't fix the core problem: an agent that reads whole files, makes sequential calls, and re-processes output it's already seen is doing unnecessary work at every step — and the cost is superlinear.
 
-- **Symbol-level ops** — read one function instead of a 400-line file. 85% smaller.
-- **Batching** — read three files and search in one call instead of four.
-- **Deltas** — re-read a file, re-run tests? Only what changed comes back.
+edr gives agents precise tools instead:
+
+- **Symbol-level ops** — read one function, not the whole file.
+- **Batching** — three reads and a search in one call, not four.
+- **Deltas** — re-read a file or re-run tests? Only what changed comes back.
 
 Works with any agent that can run shell commands. Fully local, no telemetry.
 
