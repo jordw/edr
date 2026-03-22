@@ -77,7 +77,7 @@ func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flag
 	case "refs":
 		result, err = runRefsUnified(ctx, db, root, args, flags)
 
-	case "reindex":
+	case "reindex", "reset":
 		result, err = runInit(ctx, db)
 	case "rename":
 		result, err = runRenameSymbol(ctx, db, root, args, flags)

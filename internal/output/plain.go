@@ -68,9 +68,9 @@ func printPlain(e *Envelope) {
 			plainMap(w, op)
 		case "refs":
 			plainRefs(w, op)
-		case "reindex":
+		case "reindex", "reset":
 			plainReindex(w, op)
-		case "next":
+		case "next", "status":
 			plainNext(w, op)
 		case "checkpoint":
 			plainCheckpoint(w, op)

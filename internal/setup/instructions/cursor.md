@@ -1,20 +1,22 @@
 Use `edr` (via terminal) instead of built-in file tools for all file operations. edr uses 90%+ less context via progressive disclosure and batching.
 
-After a context reset, run `edr session new` to clear stale dedup state. Otherwise sessions are automatic.
-Run `edr next` before starting and after each edit pass — it shows recent ops, build state, what to fix, and current signatures of active symbols. `--focus "goal"` to set session objective.
+After a context reset, run `edr reset --session` to clear stale dedup state. Otherwise sessions are automatic.
 
-Workflow — start narrow, widen only as needed:
-1. Orient: `edr map --budget 500` (filter: --dir, --lang, --grep)
-2. Skim: `edr -r file.go --sig` (signatures) or `--skeleton` (structure)
-3. Deep read: `edr -r file.go:FuncName`
-4. Search: `edr -s "pattern"` | scoped: `--in file.go:FuncName` (auto-falls back to text when no symbol matches)
-5. Edit: `edr -e file.go --old "old" --new "new"` | `--in Symbol` | `--all` | `--dry-run`
-6. Write: `edr -w file.go --content "..."` | `--inside Symbol` | `--after Symbol` | `--append`
-7. Refs: `edr refs Symbol --impact` — run before removing/renaming functions
-8. Rename: `edr rename Old New` (cross-file, import-aware, `--dry-run`)
-9. Verify: `edr verify` — auto-detects go/npm/cargo/make. Auto-runs after edits. `--test` for tests.
-10. Run: `edr run -- make test` — use for ALL command execution. Sparse diff vs previous run. `--full` for raw output.
-11. Checkpoint: `edr checkpoint` before risky refactors. `--restore cp_1` to revert. `--list` | `--diff cp_1`.
+Workflow — `edr status` bookends every pass:
+  status --focus "goal" → checkpoint → map/read/search → edit/write → refs/rename → verify/run → status
+
+`edr status` — build state, what to fix, active symbol signatures. `--focus "goal"` to set objective
+`edr checkpoint` before risky changes; `--restore cp_1` | `--list` | `--diff cp_1`
+`edr map --budget 500` (filter: --dir, --lang, --grep)
+`edr read f.go` | `f.go:Sym` | `--signatures` | `--skeleton` | `--lines 10:50`
+`edr search "pat"` | `--in f.go:Sym` | `--context 3` | `--regex` | `--text` (auto text fallback)
+`edr edit f.go --old-text "x" --new-text "y"` | `--lines 20:30` | `--in Sym` | `--all` | `--dry-run`
+`edr edit f.go:Sym --delete` | `--insert-at 20 --new-text "..."`
+`edr write f.go --content "..."` | `--inside Sym` | `--after Sym` | `--append` | `--dry-run`
+`edr refs Sym --impact` — before removing/renaming functions
+`edr rename Old New --dry-run` — cross-file, import-aware
+`edr verify` — auto-detects go/npm/cargo/make; auto-runs after edits; `--test`
+`edr run -- cmd` — for ALL command execution; sparse diff vs previous; `--full` | `--reset`
 
 Batch: `edr -r f.go --sig -s "pat" -e f.go --old "x" --new "y"`
 Multi-edit: `edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"`

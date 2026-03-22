@@ -251,7 +251,7 @@ func TestSpec_HelpSurface(t *testing.T) {
 		t.Errorf("edr --help wrote to stderr: %q", stderr)
 	}
 
-	expected := []string{"checkpoint", "edit", "map", "next", "read", "refs", "reindex", "rename", "run", "search", "session", "setup", "verify", "write"}
+	expected := []string{"checkpoint", "edit", "map", "read", "refs", "rename", "reset", "run", "search", "setup", "status", "verify", "write"}
 	cmdRe := regexp.MustCompile(`(?m)^\s{2}(\w+)\s`)
 	matches := cmdRe.FindAllStringSubmatch(stdout, -1)
 
@@ -273,7 +273,7 @@ func TestSpec_SubcommandHelp(t *testing.T) {
 	binary := buildBinary(t)
 	dir := t.TempDir()
 
-	commands := []string{"read", "search", "edit", "write", "map", "refs", "rename", "verify", "run", "session", "setup", "reindex"}
+	commands := []string{"read", "search", "edit", "write", "map", "refs", "rename", "verify", "run", "setup", "reset", "status", "checkpoint"}
 	for _, cmd := range commands {
 		t.Run(cmd, func(t *testing.T) {
 			stdout, _, exit := specRunRaw(t, binary, dir, nil, cmd, "--help")

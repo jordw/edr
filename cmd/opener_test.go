@@ -98,20 +98,17 @@ func TestOpenerAlignment(t *testing.T) {
 		})
 	}
 
-	// --- initCmd must use dispatchCmdWithIndex ---
-	t.Run("initCmd_uses_dispatchCmdWithIndex", func(t *testing.T) {
-		body := extractRunE("initCmd")
+	// --- resetCmd must use dispatchCmdWithIndex ---
+	t.Run("resetCmd_uses_dispatchCmdWithIndex", func(t *testing.T) {
+		body := extractRunE("resetCmd")
 		if body == "" {
-			t.Fatalf("could not extract RunE body for initCmd")
+			t.Fatalf("could not extract RunE body for resetCmd")
 		}
 		if !strings.Contains(body, "dispatchCmdWithIndex(") {
-			t.Errorf("initCmd should call dispatchCmdWithIndex, but RunE body is: %s", strings.TrimSpace(body))
-		}
-		if strings.Contains(body, "dispatchCmd(") && !strings.Contains(body, "dispatchCmdWithIndex(") {
-			t.Errorf("initCmd should not call plain dispatchCmd")
+			t.Errorf("resetCmd should call dispatchCmdWithIndex, but RunE body is: %s", strings.TrimSpace(body))
 		}
 		if strings.Contains(body, "openDBStrict(") {
-			t.Errorf("initCmd should not call openDBStrict directly")
+			t.Errorf("resetCmd should not call openDBStrict directly")
 		}
 	})
 
@@ -171,12 +168,12 @@ func TestOpenerAlignment(t *testing.T) {
 		for _, tc := range dispatchCmdWithStdinCommands {
 			tested[tc.varName] = true
 		}
-		tested["initCmd"] = true
+		tested["resetCmd"] = true
 		tested["verifyCmd"] = true
 		tested["setupCmd"] = true
 		tested["runCmd"] = true
-		tested["sessionCmd"] = true
-		tested["nextCmd"] = true
+		tested["statusCmd"] = true
+		tested["sessionCmd"] = true // hidden compat command
 		tested["checkpointCmd"] = true
 
 		for _, m := range matches {

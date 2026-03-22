@@ -33,11 +33,11 @@ In order:
 
 ## Semantic surface
 
-edr has **twelve public semantic commands** and **one composition syntax**.
+edr has **twelve public workflow commands**, **one meta command**, and **one composition syntax**.
 
 The semantic API is the standalone verb surface. Batch flags are transport sugar for composing multiple semantic ops in one invocation. Batch MUST NOT define meanings that do not exist in the standalone verbs.
 
-Public semantic commands:
+Public workflow commands:
 
 | Command | Purpose |
 |---------|---------|
@@ -46,12 +46,18 @@ Public semantic commands:
 | `map` | Structural overview |
 | `edit` | Mutate existing content |
 | `write` | Create files or insert into structures |
-| `refs` | Reference traversal |
-| `verify` | Build/test verification |
-| `reindex` | Force re-index |
 | `rename` | Cross-file rename (sugar over refs + edit) |
+| `refs` | Reference traversal and impact analysis |
+| `verify` | Build/test verification |
 | `run` | Execute command with sparse diff against previous run |
-| `session` | Session management (`session new`) |
+| `status` | Session state: recent ops, build state, action items |
+| `checkpoint` | Snapshot or restore session state |
+| `reset` | Clean slate: reindex, clear session, clear checkpoints |
+
+Meta command:
+
+| Command | Purpose |
+|---------|---------|
 | `setup` | Index repo, install global agent instructions |
 
 Batch syntax:
@@ -172,15 +178,72 @@ edr verify --level test
 edr verify --command "make test"
 ```
 
-#### run / session / setup / reindex
+#### run
 
 ```bash
 edr run -- make test
 edr run --full -- make test
 edr run --reset -- make test
-edr session new
+```
+
+#### status
+
+```bash
+edr status
+edr status --focus "implement auth middleware"
+edr status --count 20
+```
+
+Rules:
+
+- `edr status` is the canonical "where am I?" command
+- Returns recent ops, build state, stale assumptions (fix items), and live signatures of active symbols (current items)
+- `--focus` sets or clears a session-scoped focus string that persists across calls
+- `--count` controls how many recent ops to include (default 10)
+- Build state tracks the last verify result and whether edits have occurred since
+- Fix items flag symbols whose signatures have changed since the agent last read them
+- Current items show live signatures of recently modified, stale, or read symbols (capped at 10)
+
+#### checkpoint
+
+```bash
+edr checkpoint
+edr checkpoint "before refactor"
+edr checkpoint --list
+edr checkpoint --restore cp_1
+edr checkpoint --diff cp_1
+edr checkpoint --drop cp_1
+```
+
+Rules:
+
+- Default action (no flags) creates a new checkpoint snapshotting all dirty files in the session
+- Positional arg or `--label` sets a human-readable label
+- `--restore` reverts files to checkpoint state; automatically creates a pre-restore safety checkpoint unless `--no-save` is given
+- `--list` shows all checkpoints with ID, label, timestamp, and file count
+- `--diff` shows which files changed since the given checkpoint
+- `--drop` deletes a checkpoint
+
+#### reset
+
+```bash
+edr reset                # full clean slate: reindex + new session + clear checkpoints
+edr reset --index        # just rebuild index
+edr reset --session      # just clear session state
+```
+
+Rules:
+
+- Default `edr reset` (no flags) reindexes the repo, starts a fresh session, and clears all checkpoints
+- `--index` rebuilds the index only
+- `--session` clears session state only (equivalent to the former `session new`)
+- `reindex` is a hidden alias for `reset --index`
+- `session new` is a hidden alias for `reset --session`
+
+#### setup
+
+```bash
 edr setup [path]
-edr reindex
 ```
 
 ### Canonical spelling rules
@@ -189,13 +252,13 @@ edr reindex
 - Canonical spellings use long standalone flags: `--signatures`, `--old-text`, `--new-text`, `--dry-run`
 - Batch shorthand such as `-r`, `-s`, `-e`, `-w`, `--sig`, `--old`, and `--new` is convenience syntax, not the canonical contract
 - Hidden aliases MAY exist for compatibility, but they MUST NOT be the primary documented form
-- Legacy names such as `explore` and `find` are not part of the public CLI surface
+- Legacy names such as `explore`, `find`, `next`, `reindex`, and `session` are not part of the public CLI surface
 
 Hidden compatibility aliases and internal command names are not part of the public CLI surface. They SHOULD NOT appear in help text, docs, or successful output, and users SHOULD NOT need to know they exist.
 
 `rename` stays as convenience sugar over `refs` + `edit`. It MUST NOT grow independent semantics that drift from those primitives.
 
-`setup` is a full public command.
+`setup` is a meta command — not part of the agent workflow loop, but a full public command.
 
 ## Setup and adoption
 
@@ -321,12 +384,12 @@ An agent should never need to normalize paths or wonder whether a line range is 
 
 ## Index contract
 
-edr auto-indexes on first use. Agents should never see "run edr reindex".
+edr auto-indexes on first use. Agents should never need to manually reindex.
 
 Rules:
 
 - If no index exists (or it contains zero files), edr MUST auto-index the repository before proceeding.
-- `reindex` and `setup` explicitly create or refresh index state.
+- `reset` and `reset --index` explicitly rebuild index state. `setup` also indexes on first install.
 - `verify` MUST work without an index and MUST NOT create one as a side effect.
 - Auto-indexing is the single consistent behavior. There is no "sometimes fail, sometimes auto-index" ambiguity.
 
@@ -706,7 +769,7 @@ Rules:
 
 Sessions are always active. Session routing is automatic across repeated calls from the same calling process lineage. Agents SHOULD get session dedup by default without having to pass a session identifier on normal calls.
 
-`edr session new` creates a fresh session and returns its ID.
+`edr reset --session` creates a fresh session and returns its ID.
 
 Rules:
 
@@ -717,7 +780,7 @@ Rules:
 - `session` is one of:
   - `"new"`: first time this content was seen in the session
   - `"unchanged"`: same content as previously seen; body MAY be omitted
-- After a context reset, agents SHOULD run `edr session new` before continuing work so stale dedup state is not reused
+- After a context reset, agents SHOULD run `edr reset --session` before continuing work so stale dedup state is not reused
 
 Concurrency rules:
 
@@ -740,6 +803,88 @@ Rules:
 - `--full` bypasses diff entirely, shows raw output
 - Exit code passes through from the wrapped command
 - `--` separates edr flags from the wrapped command's flags
+
+## Status contract
+
+`edr status` returns a structured status summary for the current session. It is the canonical entry point for an agent resuming work or deciding what to do.
+
+Output fields (all optional, omitted when empty):
+
+- `focus` — the session focus string, if set
+- `recent` — array of recent ops, most recent first. Each entry has `op_id`, `cmd`, `kind`, and optionally `file`, `symbol`, `ok`
+- `total_ops` — total number of ops in session
+- `build` — object with `status` (`"passed"`, `"failed"`) and optionally `edits_since: true`
+- `fix` — array of stale assumptions. Each has `id`, `type`, `confidence`, `file`, `symbol`, `reason`, `suggest`
+- `current` — array of active symbol signatures. Each has `file`, `symbol`, `reason` (`"modified"`, `"stale"`, `"recent"`), `signature`
+
+Rules:
+
+- `status` MUST work without an index (gracefully omits `fix` and `current`)
+- `status` MUST NOT mutate session state except when `--focus` is explicitly set
+- Fix items compare stored signature hashes against current index state
+- Current items are capped at 10, prioritized: modified > stale > recent
+
+## Checkpoint contract
+
+`edr checkpoint` snapshots the current state of all files the session has touched, allowing rollback.
+
+### Create (default)
+
+Returns: `status: "created"`, `id`, `file_count`, and optionally `label`, `op_id`.
+
+### List (`--list`)
+
+Returns: `checkpoints` array. Each entry has `id`, `created_at`, `op_id`, `file_count`, and optionally `label`.
+
+### Restore (`--restore <id>`)
+
+Returns: `status: "restored"`, `target`, `restored` (list of restored files), optionally `pre_restore_checkpoint` (safety snapshot ID) and `not_removed` (files that could not be removed).
+
+### Diff (`--diff <id>`)
+
+Returns: `checkpoint` (the ID), `diffs` array. Each entry has `path` and `status`.
+
+### Drop (`--drop <id>`)
+
+Returns: `status: "dropped"`, `id`.
+
+Rules:
+
+- Create MUST snapshot all dirty files tracked by the session
+- Restore MUST create a pre-restore safety checkpoint by default; `--no-save` opts out
+- Restore MUST revert file contents on disk, not just session state
+- List MUST return checkpoints in a stable order
+- Drop MUST NOT fail silently if the checkpoint does not exist
+
+## Reset contract
+
+`edr reset` provides a clean-slate operation for recovering from bad state.
+
+### Full reset (default)
+
+Rebuilds the index, starts a fresh session, and clears all checkpoints.
+
+Returns: `status: "reset"`, and optionally `index_files` (number of files indexed), `session` (new session ID).
+
+### Index only (`--index`)
+
+Rebuilds the SQLite index. Equivalent to the former `reindex` command.
+
+Returns: `status: "reset"`, `scope: "index"`, `files` (number of files indexed).
+
+### Session only (`--session`)
+
+Clears session state and starts fresh. Equivalent to the former `session new`.
+
+Returns: `status: "reset"`, `scope: "session"`, `session` (new session ID).
+
+Rules:
+
+- Default `edr reset` is the "something's wrong, fix it" verb — it clears everything
+- `--index` and `--session` are mutually exclusive scoping flags; combining them is equivalent to a full reset
+- Reset MUST NOT require user confirmation — it is a non-destructive rebuild (source files are never modified)
+- `reindex` is a hidden alias for `reset --index`
+- `session new` is a hidden alias for `reset --session`
 
 ## Result consistency
 

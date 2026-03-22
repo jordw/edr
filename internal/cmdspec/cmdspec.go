@@ -175,9 +175,12 @@ var Registry = []*Spec{
 		},
 	},
 	{
-		Name: "reindex", Desc: "Force re-index the repository.",
+		Name: "reset", Desc: "Clean slate: reindex, clear session, clear checkpoints.",
 		Category: CatGlobalMutate, MinArgs: 0, MaxArgs: 0,
-		Flags: []FlagSpec{},
+		Flags: []FlagSpec{
+			{Name: "index", Type: FlagBool, Default: false, Desc: "Rebuild index only"},
+			{Name: "session", Type: FlagBool, Default: false, Desc: "Clear session only"},
+		},
 	},
 	{
 		Name: "verify", Desc: "Run build/typecheck or tests. Auto-detects go/npm/cargo.",
@@ -198,7 +201,7 @@ var Registry = []*Spec{
 		},
 	},
 	{
-		Name: "next", Desc: "Show session status: recent ops, build state, action items.",
+		Name: "status", Desc: "Session state: recent ops, build state, action items.",
 		Category: CatMeta, MinArgs: 0, MaxArgs: 0,
 		Flags: []FlagSpec{
 			{Name: "focus", Type: FlagString, Default: "", Desc: "Set session focus (empty string clears)"},
@@ -220,7 +223,8 @@ var Registry = []*Spec{
 	{
 		Name: "session", Desc: "Manage sessions.",
 		Category: CatMeta, MinArgs: 0, MaxArgs: 0,
-		Flags: []FlagSpec{},
+		Internal: true,
+		Flags:    []FlagSpec{},
 	},
 	{
 		Name: "setup", Desc: "Install edr into a project and inject agent instructions.",
@@ -257,6 +261,9 @@ func init() {
 			}
 		}
 	}
+	// Hidden command aliases: old names → new specs
+	byName["next"] = byName["status"]
+	byName["reindex"] = byName["reset"]
 }
 
 // CanonicalFlagName returns the canonical name for a flag, resolving aliases.
@@ -294,7 +301,7 @@ func IsWrite(name string) bool {
 	return s != nil && s.Category == CatWrite
 }
 
-// IsGlobalMutating returns true for commands that mutate global state (reindex, rename).
+// IsGlobalMutating returns true for commands that mutate global state (reset, rename).
 func IsGlobalMutating(name string) bool {
 	s := byName[name]
 	return s != nil && s.Category == CatGlobalMutate

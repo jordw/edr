@@ -29,10 +29,9 @@ func init() {
 	rootCmd.AddCommand(refsCmd)
 	rootCmd.AddCommand(renameCmd)
 	rootCmd.AddCommand(verifyCmd)
-	rootCmd.AddCommand(initCmd)
+	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(setupCmd)
-	rootCmd.AddCommand(sessionCmd)
-	rootCmd.AddCommand(nextCmd)
+	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(checkpointCmd)
 }
 
@@ -334,15 +333,15 @@ var renameCmd = &cobra.Command{
 func init() { cmdspec.RegisterFlags(renameCmd.Flags(), "rename") }
 
 func init() {
-	cmdspec.RegisterFlags(initCmd.Flags(), "reindex")
-	initCmd.Flags().String("cpuprofile", "", "Write CPU profile to file")
-	initCmd.Flags().MarkHidden("cpuprofile")
+	cmdspec.RegisterFlags(resetCmd.Flags(), "reset")
+	resetCmd.Flags().String("cpuprofile", "", "Write CPU profile to file")
+	resetCmd.Flags().MarkHidden("cpuprofile")
 }
 
-var initCmd = &cobra.Command{
-	Use:     "reindex",
-	Aliases: []string{"init"},
-	Short:   ToolDesc["reindex"],
+var resetCmd = &cobra.Command{
+	Use:     "reset",
+	Aliases: []string{"reindex", "init"},
+	Short:   ToolDesc["reset"],
 	RunE: func(cmd *cobra.Command, args []string) error {
 		profPath, _ := cmd.Flags().GetString("cpuprofile")
 		if profPath != "" {
@@ -356,7 +355,56 @@ var initCmd = &cobra.Command{
 				f.Close()
 			}()
 		}
-		return dispatchCmdWithIndex(cmd, "reindex", args)
+
+		flags := extractFlags(cmd)
+		indexOnly, _ := flags["index"].(bool)
+		sessionOnly, _ := flags["session"].(bool)
+
+		root := getRoot(cmd)
+		edrDir := filepath.Join(root, ".edr")
+		result := map[string]any{"status": "reset"}
+
+		// Session reset
+		if !indexOnly {
+			if err := os.MkdirAll(filepath.Join(edrDir, "sessions"), 0755); err != nil {
+				return err
+			}
+			id := session.GenerateID()
+			sess := session.New()
+			path := filepath.Join(edrDir, "sessions", id+".json")
+			if err := sess.SaveToFile(path); err != nil {
+				return err
+			}
+			session.WriteSessionMapping(filepath.Join(edrDir, "sessions"), id)
+			result["session"] = id
+
+			if !sessionOnly {
+				// Clear checkpoints
+				cpDir := filepath.Join(edrDir, "checkpoints")
+				os.RemoveAll(cpDir)
+			}
+
+			cleanEdrDir(edrDir)
+		}
+
+		// Index reset
+		if !sessionOnly {
+			if err := dispatchCmdWithIndex(cmd, "reindex", args); err != nil {
+				return err
+			}
+			result["scope"] = "full"
+			if indexOnly {
+				result["scope"] = "index"
+			}
+		} else {
+			result["scope"] = "session"
+			env := output.NewEnvelope("reset")
+			env.AddOp("r0", "reset", result)
+			env.ComputeOK()
+			output.PrintEnvelope(env)
+		}
+
+		return nil
 	},
 }
 
@@ -411,47 +459,11 @@ var verifyCmd = &cobra.Command{
 
 func init() { cmdspec.RegisterFlags(verifyCmd.Flags(), "verify") }
 
-var sessionCmd = &cobra.Command{
-	Use:   "session",
-	Short: "Manage sessions",
-}
-
-var sessionNewCmd = &cobra.Command{
-	Use:   "new",
-	Short: "Create a new session and print its ID",
-	Args:  cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		root := getRoot(cmd)
-		edrDir := filepath.Join(root, ".edr")
-		if err := os.MkdirAll(filepath.Join(edrDir, "sessions"), 0755); err != nil {
-			return err
-		}
-		id := session.GenerateID()
-		sess := session.New()
-		path := filepath.Join(edrDir, "sessions", id+".json")
-		if err := sess.SaveToFile(path); err != nil {
-			return err
-		}
-		// Write PPID mapping so subsequent calls auto-resolve this session
-		session.WriteSessionMapping(filepath.Join(edrDir, "sessions"), id)
-
-		// Plain-mode transport: JSON header with session ID.
-		fmt.Printf("{\"id\":%q}\n", id)
-
-		cleanEdrDir(edrDir)
-
-		return nil
-	},
-}
-
-func init() {
-	sessionCmd.AddCommand(sessionNewCmd)
-}
-
-var nextCmd = &cobra.Command{
-	Use:   "next",
-	Short: "Show session status: recent ops, build state, action items",
-	Args:  cobra.NoArgs,
+var statusCmd = &cobra.Command{
+	Use:     "status",
+	Aliases: []string{"next"},
+	Short:   "Session state: recent ops, build state, action items",
+	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := getRoot(cmd)
 		edrDir := filepath.Join(root, ".edr")
@@ -472,7 +484,7 @@ var nextCmd = &cobra.Command{
 			count = v
 		}
 
-		// Open DB for assumption checking (best-effort — next works without it)
+		// Open DB for assumption checking (best-effort — status works without it)
 		var db *index.DB
 		db, _ = openDBStrictRoot(root)
 		if db != nil {
@@ -480,16 +492,51 @@ var nextCmd = &cobra.Command{
 		}
 
 		result := buildNextResult(sess, db, count)
-		env := output.NewEnvelope("next")
-		env.AddOp("n0", "next", result)
+		env := output.NewEnvelope("status")
+		env.AddOp("s0", "status", result)
 		env.ComputeOK()
 		output.PrintEnvelope(env)
 		return nil
 	},
 }
 
+func init() { cmdspec.RegisterFlags(statusCmd.Flags(), "status") }
 
-func init() { cmdspec.RegisterFlags(nextCmd.Flags(), "next") }
+// sessionCmd is a hidden backward-compatibility command.
+// "edr session new" is now "edr reset --session".
+var sessionCmd = &cobra.Command{
+	Use:    "session",
+	Short:  "Manage sessions (use reset --session instead)",
+	Hidden: true,
+}
+
+var sessionNewCmd = &cobra.Command{
+	Use:   "new",
+	Short: "Create a new session (use reset --session instead)",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		root := getRoot(cmd)
+		edrDir := filepath.Join(root, ".edr")
+		if err := os.MkdirAll(filepath.Join(edrDir, "sessions"), 0755); err != nil {
+			return err
+		}
+		id := session.GenerateID()
+		sess := session.New()
+		path := filepath.Join(edrDir, "sessions", id+".json")
+		if err := sess.SaveToFile(path); err != nil {
+			return err
+		}
+		session.WriteSessionMapping(filepath.Join(edrDir, "sessions"), id)
+		fmt.Printf("{\"id\":%q}\n", id)
+		cleanEdrDir(edrDir)
+		return nil
+	},
+}
+
+func init() {
+	sessionCmd.AddCommand(sessionNewCmd)
+	rootCmd.AddCommand(sessionCmd)
+}
 
 var checkpointCmd = &cobra.Command{
 	Use:   "checkpoint [label]",
