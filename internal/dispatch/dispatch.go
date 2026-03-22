@@ -229,16 +229,17 @@ func runWriteUnified(ctx context.Context, db *index.DB, root string, args []stri
 	afterSymbol := flagString(flags, "after", "")
 	appendMode := flagBool(flags, "append", false)
 
-	// Enforce: --after and --append are mutually exclusive top-level modes.
-	// --inside may combine with --after (insert inside container after a child).
+	// Enforce mutually exclusive placement flags.
+	// --inside may combine with --after only when they refer to different symbols
+	// (insert inside container after a child).
 	if afterSymbol != "" && appendMode {
-		return nil, fmt.Errorf("write: --after and --append are mutually exclusive")
-	}
-	if insideSymbol == "" && afterSymbol != "" && appendMode {
 		return nil, fmt.Errorf("write: --after and --append are mutually exclusive")
 	}
 	if appendMode && insideSymbol != "" {
 		return nil, fmt.Errorf("write: --append and --inside are mutually exclusive")
+	}
+	if insideSymbol != "" && afterSymbol != "" && insideSymbol == afterSymbol {
+		return nil, fmt.Errorf("write: --inside and --after cannot refer to the same symbol %q", insideSymbol)
 	}
 
 	switch {

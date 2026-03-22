@@ -87,6 +87,12 @@ func printPlain(e *Envelope) {
 				h["error"] = errMsg
 			}
 			writeHeader(w, h)
+			// Show output tail on failure so agents see compiler errors / failing tests
+			if status == "failed" || status == "timeout" {
+				if out, ok := m["output"].(string); ok && out != "" {
+					writeBody(w, out)
+				}
+			}
 		}
 	}
 }
@@ -314,6 +320,23 @@ func plainRefs(w *os.File, op Op) {
 		}
 		return
 	}
+
+	// Expand results (--callers / --deps)
+	callers, hasCallers := op["callers"].([]any)
+	deps, hasDeps := op["deps"].([]any)
+	if hasCallers || hasDeps {
+		n := len(callers) + len(deps)
+		h["n"] = n
+		writeHeader(w, h)
+		for _, s := range callers {
+			writeSymbolLine(w, s, "caller")
+		}
+		for _, s := range deps {
+			writeSymbolLine(w, s, "dep")
+		}
+		return
+	}
+
 	refs, _ := op["references"].([]any)
 	h["n"] = len(refs)
 	writeHeader(w, h)
@@ -331,6 +354,20 @@ func plainRefs(w *os.File, op Op) {
 		name, _ := rm["name"].(string)
 		fmt.Fprintf(w, "%s:%d: %s\n", file, line, name)
 	}
+}
+
+func writeSymbolLine(w *os.File, s any, label string) {
+	sm, ok := s.(map[string]any)
+	if !ok {
+		return
+	}
+	file, _ := sm["file"].(string)
+	name, _ := sm["name"].(string)
+	line := 0
+	if lines, ok := sm["lines"].([]any); ok && len(lines) > 0 {
+		line = anyInt(lines[0])
+	}
+	fmt.Fprintf(w, "%s:%d: %s\n", file, line, name)
 }
 
 func plainReindex(w *os.File, op Op) {

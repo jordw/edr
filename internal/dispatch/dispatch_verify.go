@@ -51,9 +51,9 @@ func runVerify(ctx context.Context, db *index.DB, root string, args []string, fl
 			command = cmd
 		} else {
 			return map[string]any{
-			"status": "skipped",
-			"reason": "no command specified and could not auto-detect project type",
-		}, nil
+				"status": "skipped",
+				"reason": "no command specified and could not auto-detect project type",
+			}, nil
 		}
 	}
 
@@ -61,30 +61,47 @@ func runVerify(ctx context.Context, db *index.DB, root string, args []string, fl
 	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
+	start := time.Now()
 	cmd := exec.CommandContext(cmdCtx, "sh", "-c", command)
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
+	durationMs := time.Since(start).Milliseconds()
 
 	result := map[string]any{
-		"command": command,
-		"output":  string(out),
+		"command":     command,
+		"duration_ms": durationMs,
 	}
 
 	if err != nil {
 		if cmdCtx.Err() == context.DeadlineExceeded {
 			result["status"] = "timeout"
-			
 			result["error"] = fmt.Sprintf("timeout after %ds (may need longer for cold builds with dependency downloads)", timeout)
 		} else {
 			result["status"] = "failed"
-			
 			result["error"] = err.Error()
 		}
+		// Include output tail so agents can see compiler errors / failing tests
+		result["output"] = verifyOutputTail(string(out), 40)
 	} else {
 		result["status"] = "passed"
-			}
+	}
 
 	return result, nil
+}
+
+// verifyOutputTail returns the last N lines of output, trimmed.
+// On success we omit output entirely; on failure this surfaces diagnostics.
+func verifyOutputTail(output string, maxLines int) string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return ""
+	}
+	lines := strings.Split(output, "\n")
+	if len(lines) <= maxLines {
+		return output
+	}
+	return fmt.Sprintf("... (%d lines truncated)\n%s", len(lines)-maxLines,
+		strings.Join(lines[len(lines)-maxLines:], "\n"))
 }
 
 // detectMakefile checks for a Makefile and probes for test/check targets.
@@ -154,13 +171,14 @@ func makeHasTarget(root, target string) bool {
 func goVerifyScope(root string, flags map[string]any) string {
 	files, _ := flags["files"].([]string)
 	if len(files) == 0 {
-		// No files specified: use go list to get valid packages, excluding
-		// dirs that aren't part of the main module (testdata, scratch, tmp_*, etc).
+		// No files specified (standalone verify): use go list to get valid
+		// packages but exclude known non-production dirs. Falls back to
+		// "./..." if go list fails or returns nothing.
 		scope := goListValidPackages(root)
-		if scope != "" {
-			return scope
+		if scope == "" {
+			scope = "./..."
 		}
-		return "./..."
+		return scope
 	}
 	edited := map[string]bool{}
 	for _, f := range files {

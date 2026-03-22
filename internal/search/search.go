@@ -19,10 +19,10 @@ import (
 
 // SearchResult wraps matches with truncation metadata.
 type SearchResult struct {
-	Kind         string         `json:"kind"` // "symbol" or "text"
-	Matches      []output.Match `json:"m"`
-	TotalMatches int            `json:"n"`
-	Truncated    bool           `json:"trunc"`
+	Kind         string         `json:"kind"`                   // "symbol" or "text"
+	Matches      []output.Match `json:"matches"`
+	TotalMatches int            `json:"total_matches"`
+	Truncated    bool           `json:"truncated"`
 	Hint         string         `json:"hint,omitempty"`
 }
 
