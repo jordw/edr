@@ -76,6 +76,8 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		status := setup.GlobalStatus(BuildHash)
 		result.Global = status
 		if !jsonOut {
+			// Plain-mode transport: JSON header on stdout, body with details.
+			fmt.Printf("{\"current_hash\":%q,\"targets\":%d}\n", BuildHash, len(status))
 			for _, s := range status {
 				state := "not installed"
 				if s.AlreadyCurrent {
@@ -83,8 +85,9 @@ func runSetup(cmd *cobra.Command, args []string) error {
 				} else if s.Outdated {
 					state = fmt.Sprintf("outdated (installed:%s current:%s)", s.InstalledHash, BuildHash)
 				}
-				fmt.Fprintf(os.Stderr, "  %s: %s\n", s.Path, state)
+				fmt.Printf("  %s: %s\n", s.Path, state)
 			}
+			return nil
 		}
 		return printSetupOutput(result, jsonOut)
 	}

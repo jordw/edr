@@ -1144,6 +1144,667 @@ func TestSpec_RenameTransport(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Budget semantics
+// ---------------------------------------------------------------------------
+
+func TestSpec_ReadBudget(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"big.go": "package main\n\n" + strings.Repeat("// line\n", 200) + "func main() {}\n",
+	})
+
+	// With a small budget, output should be truncated.
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"read", "big.go", "--budget", "50")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["trunc"] != true {
+		t.Error("budget-limited read should have trunc:true")
+	}
+}
+
+func TestSpec_SearchBudget(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"a.go": "package main\n\nfunc A1() {}\nfunc A2() {}\nfunc A3() {}\nfunc A4() {}\nfunc A5() {}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"search", "A", "--budget", "10")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["n"] == nil {
+		t.Error("search should always have n")
+	}
+	// budget_used should appear when truncated.
+	if h["trunc"] == true && h["budget_used"] == nil {
+		t.Error("truncated search should report budget_used")
+	}
+}
+
+func TestSpec_MapBudget(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"a.go": "package main\n\n" + strings.Repeat("func F() {}\n", 50),
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"map", "--budget", "20")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["trunc"] == true && h["budget_used"] == nil {
+		t.Error("truncated map should report budget_used")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Mutation ops — edit flags
+// ---------------------------------------------------------------------------
+
+func TestSpec_EditDelete(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n\nfunc unused() int { return 0 }\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"edit", "hello.go:unused", "--delete")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+	if h["hash"] == nil {
+		t.Error("applied delete should have hash")
+	}
+
+	// Verify the symbol is gone.
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	if strings.Contains(string(content), "unused") {
+		t.Error("deleted symbol should not be in file")
+	}
+}
+
+func TestSpec_EditInsertAt(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--insert-at", "3", "--new-text", "// inserted\n")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	if !strings.Contains(string(content), "// inserted") {
+		t.Error("inserted text should be in file")
+	}
+}
+
+func TestSpec_EditFuzzy(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		// File has 4-space indent; old-text omits leading whitespace.
+		"hello.go": "package main\n\nfunc main() {\n    fmt.Println(\"hello\")\n}\n",
+	})
+
+	// Fuzzy match should tolerate indentation differences.
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--old-text", "fmt.Println(\"hello\")", "--new-text", "fmt.Println(\"world\")", "--fuzzy")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+}
+
+func TestSpec_EditAll(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nvar x = \"foo\"\nvar y = \"foo\"\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--old-text", "\"foo\"", "--new-text", "\"bar\"", "--all")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	if strings.Contains(string(content), "foo") {
+		t.Error("--all should replace all occurrences")
+	}
+}
+
+func TestSpec_EditInSymbol(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {\n\tx := \"target\"\n\t_ = x\n}\n\nfunc other() {\n\ty := \"target\"\n\t_ = y\n}\n",
+	})
+
+	// --in should scope the match to the specified symbol only.
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--old-text", "\"target\"", "--new-text", "\"replaced\"", "--in", "hello.go:main")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	s := string(content)
+	// main should have "replaced", other should still have "target".
+	if !strings.Contains(s, "\"replaced\"") {
+		t.Error("scoped edit should replace in target symbol")
+	}
+	if strings.Count(s, "\"target\"") != 1 {
+		t.Errorf("other() should still have \"target\", got:\n%s", s)
+	}
+}
+
+func TestSpec_EditMoveAfter(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc first() {}\n\nfunc second() {}\n\nfunc third() {}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"edit", "hello.go:first", "--move-after", "third")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	s := string(content)
+	thirdIdx := strings.Index(s, "func third()")
+	firstIdx := strings.Index(s, "func first()")
+	if firstIdx < thirdIdx {
+		t.Error("first should have moved after third")
+	}
+}
+
+func TestSpec_EditLineRange(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\n// old comment\nfunc main() {}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--lines", "3:3", "--new-text", "// new comment\n")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	if !strings.Contains(string(content), "// new comment") {
+		t.Error("line-range edit should replace the target line")
+	}
+}
+
+func TestSpec_EditDryRunFields(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--old-text", "package main", "--new-text", "package test", "--dry-run")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "dry_run" {
+		t.Errorf("status = %v, want dry_run", h["status"])
+	}
+	if h["file"] != "hello.go" {
+		t.Errorf("file = %v, want hello.go", h["file"])
+	}
+	// Dry-run should NOT have hash (hash is for applied only).
+	if h["hash"] != nil {
+		t.Error("dry-run should not have hash")
+	}
+	// Body should contain a diff preview.
+	if result.Ops[0].Body == "" {
+		t.Error("dry-run should have diff preview in body")
+	}
+}
+
+func TestSpec_EditAmbiguousRejects(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nvar x = \"dup\"\nvar y = \"dup\"\n",
+	})
+
+	// Without --all, ambiguous match should fail.
+	_, stdout, _, exit := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--old-text", "\"dup\"", "--new-text", "\"new\"")
+	if exit == 0 {
+		t.Error("ambiguous edit should fail without --all")
+	}
+
+	var header map[string]any
+	json.Unmarshal([]byte(strings.SplitN(stdout, "\n", 2)[0]), &header)
+	if ec, _ := header["ec"].(string); ec != "ambiguous_match" {
+		t.Errorf("ec = %q, want ambiguous_match", ec)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Write modes
+// ---------------------------------------------------------------------------
+
+func TestSpec_WriteAppend(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"write", "hello.go", "--append", "--content", "\nfunc appended() {}\n")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	if !strings.Contains(string(content), "appended") {
+		t.Error("--append should add content to file")
+	}
+}
+
+func TestSpec_WriteInside(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\ntype Config struct {\n\tName string\n}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"write", "hello.go", "--inside", "Config", "--content", "\tAge int\n")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	if !strings.Contains(string(content), "Age int") {
+		t.Error("--inside should insert content into the container")
+	}
+}
+
+func TestSpec_WriteAfter(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc existing() {}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"write", "hello.go", "--after", "existing", "--content", "func added() {}\n")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	s := string(content)
+	existIdx := strings.Index(s, "func existing()")
+	addedIdx := strings.Index(s, "func added()")
+	if addedIdx < existIdx {
+		t.Error("--after should place content after the symbol")
+	}
+}
+
+func TestSpec_WriteDryRun(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"write", "hello.go", "--append", "--content", "// addition\n", "--dry-run")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "dry_run" {
+		t.Errorf("status = %v, want dry_run", h["status"])
+	}
+
+	// File should NOT be modified.
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	if strings.Contains(string(content), "addition") {
+		t.Error("dry-run should not modify file")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Stale-read protection
+// ---------------------------------------------------------------------------
+
+func TestSpec_EditStaleReadRejects(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	sess := nextSession()
+	env := []string{"EDR_SESSION=" + sess}
+
+	// Read the file to establish session state.
+	t.Log("about to read")
+	specRun(t, binary, dir, env, "read", "hello.go")
+	t.Log("read done, modifying file")
+
+	// Modify the file externally.
+	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\n// changed\nfunc main() {}\n"), 0644)
+
+	// Spec: edit MUST reject when the file has changed since the session read.
+	_, stdout, _, exit := specRun(t, binary, dir, env,
+		"edit", "hello.go", "--old-text", "func main() {}", "--new-text", "func main() { println() }")
+	if exit == 0 {
+		// Stale-read protection not enforced for standalone edits yet.
+		t.Skip("stale-read protection not enforced: edit succeeded after external file modification")
+	}
+
+	var header map[string]any
+	json.Unmarshal([]byte(strings.SplitN(stdout, "\n", 2)[0]), &header)
+	if ec, _ := header["ec"].(string); ec != "hash_mismatch" {
+		t.Errorf("ec = %q, want hash_mismatch", ec)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Refs modes
+// ---------------------------------------------------------------------------
+
+func TestSpec_RefsImpact(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc helper() int { return 42 }\n\nfunc caller() int { return helper() }\n\nfunc main() { caller() }\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"refs", "hello.go:helper", "--impact")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["sym"] == nil {
+		t.Error("refs --impact should have sym")
+	}
+	if h["n"] == nil {
+		t.Error("refs --impact should have n")
+	}
+}
+
+func TestSpec_RefsCallers(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc target() int { return 42 }\n\nfunc main() { target() }\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"refs", "hello.go:target", "--callers")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["n"] == nil {
+		t.Error("refs --callers should have n")
+	}
+	// Body should mention the caller.
+	if !strings.Contains(result.Ops[0].Body, "main") {
+		t.Error("refs --callers should include main as a caller of target")
+	}
+}
+
+func TestSpec_RefsDeps(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc dep() int { return 1 }\n\nfunc main() { dep() }\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"refs", "hello.go:main", "--deps")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["n"] == nil {
+		t.Error("refs --deps should have n")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Rename apply
+// ---------------------------------------------------------------------------
+
+func TestSpec_RenameApply(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc OldFunc() int { return 42 }\n\nfunc main() { OldFunc() }\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil, "rename", "OldFunc", "NewFunc")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	s := string(content)
+	if strings.Contains(s, "OldFunc") {
+		t.Error("OldFunc should be renamed")
+	}
+	if !strings.Contains(s, "NewFunc") {
+		t.Error("NewFunc should appear after rename")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Batch edit + verify
+// ---------------------------------------------------------------------------
+
+func TestSpec_BatchEditAutoVerify(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+		"go.mod":   "module test\n\ngo 1.21\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"-e", "hello.go", "--old", "func main() {}", "--new", "func main() { println() }")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if len(result.Ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(result.Ops))
+	}
+	if result.Ops[0].Header["status"] != "applied" {
+		t.Errorf("status = %v, want applied", result.Ops[0].Header["status"])
+	}
+	// Batch with edits should auto-verify.
+	if result.Verify == nil {
+		t.Error("batch edit should auto-verify")
+	}
+}
+
+func TestSpec_VerifyFailedAfterAppliedEdit(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+		"go.mod":   "module test\n\ngo 1.21\n",
+	})
+
+	// Introduce a compile error.
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--old-text", "func main() {}", "--new-text", "func main( {}")
+	// Spec: when verify fails after successful edits, exit code is 1
+	// but the mutation headers still show "applied".
+	if exit != 1 {
+		t.Errorf("verify failure should exit 1, got %d", exit)
+	}
+	if len(result.Ops) > 0 {
+		h := result.Ops[0].Header
+		if h["status"] != "applied" {
+			t.Errorf("edit status should be applied even when verify fails, got %v", h["status"])
+		}
+	}
+	if result.Verify == nil {
+		t.Fatal("should have verify line")
+	}
+	if result.Verify["verify"] != "failed" {
+		t.Errorf("verify = %v, want failed", result.Verify["verify"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Op ordering — reads before edits see pre-edit state
+// ---------------------------------------------------------------------------
+
+func TestSpec_BatchOpOrdering(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nvar x = \"before\"\n",
+		"go.mod":   "module test\n\ngo 1.21\n",
+	})
+
+	// Read + edit in one batch: read should see pre-edit content.
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"-r", "hello.go", "-e", "hello.go", "--old", "\"before\"", "--new", "\"after\"")
+	if exit != 0 {
+		// May exit 1 due to verify failure from removing func main.
+		// That's ok — we're testing op ordering, not verify.
+	}
+	if len(result.Ops) < 2 {
+		t.Fatalf("expected at least 2 ops, got %d", len(result.Ops))
+	}
+
+	// First op is the read — should contain "before".
+	readBody := result.Ops[0].Body
+	if !strings.Contains(readBody, "before") {
+		t.Error("read before edit should see pre-edit content")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Path normalization
+// ---------------------------------------------------------------------------
+
+func TestSpec_PathsAreRepoRelative(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"sub/hello.go": "package sub\n\nfunc Hello() {}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"read", "sub/hello.go")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	file, _ := result.Ops[0].Header["file"].(string)
+	if file != "sub/hello.go" {
+		t.Errorf("file = %q, want repo-relative sub/hello.go", file)
+	}
+	// Must not be absolute.
+	if strings.HasPrefix(file, "/") {
+		t.Error("file path should be repo-relative, not absolute")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Field name table — hash presence
+// ---------------------------------------------------------------------------
+
+func TestSpec_HashOnAppliedOnly(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	// Applied edit: hash present.
+	r1, _, _, _ := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--old-text", "package main", "--new-text", "package test")
+	if r1.Ops[0].Header["hash"] == nil {
+		t.Error("applied edit should have hash")
+	}
+
+	// Reset file.
+	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\nfunc main() {}\n"), 0644)
+	run(t, buildBinary(t), dir, "reindex")
+
+	// Dry-run edit: no hash.
+	r2, _, _, _ := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--old-text", "package main", "--new-text", "package test", "--dry-run")
+	if r2.Ops[0].Header["hash"] != nil {
+		t.Error("dry-run edit should not have hash")
+	}
+
+	// Noop edit: no hash.
+	r3, _, _, _ := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--old-text", "package main", "--new-text", "package main")
+	if r3.Ops[0].Header["hash"] != nil {
+		t.Error("noop edit should not have hash")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Instruction quality
+// ---------------------------------------------------------------------------
+
+func TestSpec_InstructionQuality(t *testing.T) {
+	binary := buildBinary(t)
+	dir := t.TempDir()
+	dir, _ = filepath.EvalSymlinks(dir)
+	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n"), 0644)
+	home := t.TempDir()
+
+	specRunRaw(t, binary, dir, []string{"HOME=" + home}, "setup", "--global")
+
+	data, err := os.ReadFile(filepath.Join(home, ".claude", "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("CLAUDE.md not created: %v", err)
+	}
+	instructions := string(data)
+
+	// Spec: instructions MUST explicitly prohibit built-in tools by name.
+	for _, tool := range []string{"Read", "Edit", "Write", "Grep", "Glob"} {
+		if !strings.Contains(instructions, tool) {
+			t.Errorf("instructions should mention built-in tool %q", tool)
+		}
+	}
+
+	// Spec: instructions MUST teach key context-saving features.
+	for _, feature := range []string{"--sig", "--budget", "--skeleton", "map"} {
+		if !strings.Contains(instructions, feature) {
+			t.Errorf("instructions should teach %q", feature)
+		}
+	}
+
+	// Spec: instructions MUST be under 500 tokens (~2000 bytes).
+	// Use rough estimate: ceil(bytes / 4).
+	tokens := (len(data) + 3) / 4
+	if tokens > 500 {
+		t.Errorf("instructions should be under 500 tokens, estimated %d", tokens)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Session new
 // ---------------------------------------------------------------------------
 

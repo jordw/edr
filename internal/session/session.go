@@ -44,7 +44,8 @@ type Session struct {
 	ContentOrder  int                     `json:"content_order"`
 	SeenBodies    map[string]string       `json:"seen_bodies"`
 	Diffs         map[string]string       `json:"diffs"`
-	SeenHints     map[string]bool         `json:"seen_hints,omitempty"`
+	SeenHints  map[string]bool   `json:"seen_hints,omitempty"`
+	FileHashes map[string]string `json:"file_hashes,omitempty"`
 
 	// stats tracks optimization hits per handleDo call (reset between calls).
 	stats PostProcessStats
@@ -74,6 +75,7 @@ func New() *Session {
 		SeenBodies:    make(map[string]string),
 		Diffs:         make(map[string]string),
 		SeenHints:     make(map[string]bool),
+		FileHashes:    make(map[string]string),
 	}
 }
 
@@ -532,6 +534,17 @@ func (s *Session) CheckContent(key string, content string, isSymbol bool) (statu
 // --- Level 2: Process read results ---
 
 func (s *Session) ProcessReadResult(cmd string, result map[string]any, flags map[string]any) map[string]any {
+	// Track file-level hash for stale-read protection on any read.
+	// No lock needed: caller (PostProcess) already holds s.mu.
+	if hash, ok := result["hash"].(string); ok && hash != "" {
+		if file, ok := result["file"].(string); ok && file != "" {
+			if s.FileHashes == nil {
+				s.FileHashes = make(map[string]string)
+			}
+			s.FileHashes[file] = hash
+		}
+	}
+
 	if FlagIsTruthy(flags, "full") {
 		s.StoreReadContent(cmd, result)
 		return nil
@@ -622,6 +635,16 @@ func (s *Session) StoreReadContent(cmd string, result map[string]any) {
 		key := fmt.Sprintf("%s:%v", file, lines)
 		s.StoreContent(key, c, false)
 	}
+}
+
+// CheckFileHash returns the stored hash for a file, or "" if no read has been recorded.
+func (s *Session) CheckFileHash(file string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.FileHashes == nil {
+		return ""
+	}
+	return s.FileHashes[file]
 }
 
 // firstString returns the first non-empty string value found for the given keys.

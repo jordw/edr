@@ -169,6 +169,8 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	sess, saveSess := session.LoadSession(edrDir)
 	defer saveSess()
 
+	injectSessionHash(sess, cmdName, args, flags)
+
 	env := output.NewEnvelope(cmdName)
 	opID := cmdName[:1] + "0"
 
@@ -406,7 +408,8 @@ var sessionNewCmd = &cobra.Command{
 		// Write PPID mapping so subsequent calls auto-resolve this session
 		session.WriteSessionMapping(filepath.Join(edrDir, "sessions"), id)
 
-		fmt.Println(id)
+		// Plain-mode transport: JSON header with session ID.
+		fmt.Printf("{\"id\":%q}\n", id)
 
 		// Clean up session files older than 7 days
 		sessDir := filepath.Join(edrDir, "sessions")
@@ -429,6 +432,31 @@ var sessionNewCmd = &cobra.Command{
 
 func init() {
 	sessionCmd.AddCommand(sessionNewCmd)
+}
+
+// injectSessionHash adds stale-read protection for mutations. If the session
+// has a prior read hash for the target file and no explicit --expect-hash was
+// provided, inject the session hash so the edit layer validates it.
+func injectSessionHash(sess *session.Session, cmdName string, args []string, flags map[string]any) {
+	if sess == nil {
+		return
+	}
+	if cmdName != "edit" && cmdName != "write" {
+		return
+	}
+	if _, has := flags["expect_hash"]; has {
+		return
+	}
+	if len(args) == 0 {
+		return
+	}
+	target := args[0]
+	if idx := strings.Index(target, ":"); idx > 0 {
+		target = target[:idx]
+	}
+	if h := sess.CheckFileHash(target); h != "" {
+		flags["expect_hash"] = h
+	}
 }
 
 // addDispatchFailedOp creates a failed op on the envelope, matching batch behavior.
