@@ -78,8 +78,16 @@ func (e *Envelope) AddFailedOpWithCode(opID, opType, code, errMsg string) {
 	})
 }
 
+// successOnlyFields are fields that belong on successful ops only and must
+// be stripped from failed op results per spec.
+var successOnlyFields = map[string]bool{
+	"file": true, "lines": true, "hash": true,
+	"sym": true, "content": true,
+}
+
 // AddFailedOpResult adds a failed operation with a structured result object.
-// The result is JSON-marshaled into the op, preserving diagnostic fields.
+// The result is JSON-marshaled into the op, preserving diagnostic fields
+// but stripping success-only fields per spec.
 func (e *Envelope) AddFailedOpResult(opID, opType, code string, result any) {
 	e.OK = false
 	data, err := json.Marshal(result)
@@ -91,6 +99,10 @@ func (e *Envelope) AddFailedOpResult(opID, opType, code string, result any) {
 	if json.Unmarshal(data, &flat) != nil {
 		e.AddFailedOpWithCode(opID, opType, code, string(data))
 		return
+	}
+	// Strip success-only fields from failed ops
+	for field := range successOnlyFields {
+		delete(flat, field)
 	}
 	flat["op_id"] = opID
 	flat["type"] = opType

@@ -192,6 +192,76 @@ func TestIsVerifyOnlyFailure(t *testing.T) {
 	}
 }
 
+func TestAddFailedOpResult_StripsSuccessOnlyFields(t *testing.T) {
+	env := NewEnvelope("edit")
+	// Simulate a NotFoundError-like struct with success-only fields leaking
+	result := map[string]any{
+		"error":    "old_text not found in test.go",
+		"file":     "test.go",
+		"hash":     "abc123",
+		"lines":    "1:10",
+		"content":  "some content",
+		"sym":      "FooBar",
+		"old_text": "needle",
+		"hint":     "re-read before editing",
+	}
+	env.AddFailedOpResult("e0", "edit", "not_found", result)
+
+	if len(env.Ops) != 1 {
+		t.Fatalf("ops count = %d, want 1", len(env.Ops))
+	}
+	op := env.Ops[0]
+
+	// Success-only fields must be stripped
+	for _, field := range []string{"file", "hash", "lines", "content", "sym"} {
+		if _, has := op[field]; has {
+			t.Errorf("success-only field %q should be stripped from failed op", field)
+		}
+	}
+
+	// Diagnostic and error fields must be preserved
+	if op["error"] != "old_text not found in test.go" {
+		t.Errorf("error = %v, want old_text not found in test.go", op["error"])
+	}
+	if op["error_code"] != "not_found" {
+		t.Errorf("error_code = %v, want not_found", op["error_code"])
+	}
+	if op["old_text"] != "needle" {
+		t.Errorf("old_text = %v, want needle", op["old_text"])
+	}
+	if op["hint"] != "re-read before editing" {
+		t.Errorf("hint = %v, want re-read before editing", op["hint"])
+	}
+	if op["op_id"] != "e0" {
+		t.Errorf("op_id = %v, want e0", op["op_id"])
+	}
+	if op["type"] != "edit" {
+		t.Errorf("type = %v, want edit", op["type"])
+	}
+}
+
+func TestAddFailedOpResult_ErrorInterface(t *testing.T) {
+	env := NewEnvelope("edit")
+	// Use a struct that implements error to test the error interface path
+	type errResult struct {
+		File string `json:"file"`
+		Hint string `json:"hint"`
+	}
+	// Since errResult doesn't implement error, test with a plain map
+	// and verify file is stripped
+	env.AddFailedOpResult("e0", "edit", "not_found", map[string]any{
+		"file": "leaked.go",
+		"hint": "useful diagnostic",
+	})
+	op := env.Ops[0]
+	if _, has := op["file"]; has {
+		t.Error("file field should be stripped from failed op result")
+	}
+	if op["hint"] != "useful diagnostic" {
+		t.Errorf("hint should be preserved, got %v", op["hint"])
+	}
+}
+
 func TestEnvelopeJSON_FlatOps(t *testing.T) {
 	env := NewEnvelope("read")
 	env.AddOp("r0", "read", map[string]any{"file": "test.go", "content": "hello"})
