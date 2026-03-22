@@ -1,7 +1,7 @@
 package output
 
 // plain.go renders the envelope as a compact JSON header line followed by
-// raw text body. Activated by EDR_FORMAT=plain.
+// raw text body. This is the default and only public transport format.
 //
 // Format: first line is a short JSON object with metadata, everything
 // after the first newline is raw content (code, diff, grep-style matches).

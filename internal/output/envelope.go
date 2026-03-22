@@ -186,10 +186,11 @@ func (e *Envelope) IsVerifyOnlyFailure() bool {
 }
 
 // PrintEnvelope renders the envelope to stdout.
-// Uses plain text format when EDR_FORMAT=plain, otherwise compact JSON.
+// Always uses plain text format (the public transport). JSON mode is
+// internal-only (used by tests) and not part of the public API.
 func PrintEnvelope(e *Envelope) {
 	if os.Getenv("EDR_FORMAT") == "json" {
-		// JSON mode — skip plain rendering
+		// Internal JSON mode — not part of public API
 	} else {
 		printPlain(e)
 		return
