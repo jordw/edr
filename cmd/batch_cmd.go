@@ -41,9 +41,9 @@ When EDR_SESSION is set, session optimizations (delta reads, body dedup)
 persist across calls via .edr/sessions/<id>.json.
 
 Examples:
-  edr -r cmd/root.go --sig -s "handleRequest"
-  edr -e cmd/root.go --old "oldFunc" --new "newFunc"
-  edr -r file.go:Symbol --sig -e file.go --old "x" --new "y" -V`,
+  edr -r cmd/root.go --signatures -s "handleRequest"
+  edr -e cmd/root.go --old-text "oldFunc" --new-text "newFunc"
+  edr -r file.go:Symbol --signatures -e file.go --old-text "x" --new-text "y" -V`,
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Handle --help/-h since DisableFlagParsing swallows it

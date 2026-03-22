@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jordw/edr/internal/cmdspec"
@@ -35,6 +36,20 @@ func TestCursorInGlobalTargets(t *testing.T) {
 	}
 	if !found {
 		t.Error("Cursor should be a supported global target")
+	}
+}
+
+func TestHelpTextUsesCanonicalFlags(t *testing.T) {
+	// Verify batch help text uses canonical long-form flag names
+	help := batchCmd.Long
+	if strings.Contains(help, "--sig ") || strings.Contains(help, `--sig"`) {
+		t.Error("batch help should use --signatures, not --sig")
+	}
+	if strings.Contains(help, `--old "`) {
+		t.Error("batch help should use --old-text, not --old")
+	}
+	if strings.Contains(help, `--new "`) {
+		t.Error("batch help should use --new-text, not --new")
 	}
 }
 
