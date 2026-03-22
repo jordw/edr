@@ -1484,6 +1484,58 @@ func TestRead_DefaultBudgetCap(t *testing.T) {
 	}
 }
 
+
+func TestBudgetUsedReported(t *testing.T) {
+	tmp := t.TempDir()
+	// Create a file larger than 100 tokens (~400 chars)
+	var content strings.Builder
+	content.WriteString("package main\n\n")
+	for i := 0; i < 50; i++ {
+		fmt.Fprintf(&content, "func Function%d() {\n\t// implementation %d\n}\n\n", i, i)
+	}
+	os.WriteFile(filepath.Join(tmp, "big.go"), []byte(content.String()), 0644)
+
+	db, err := index.OpenDB(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	index.IndexRepo(ctx, db)
+	output.SetRoot(db.Root())
+
+	// Read with small budget to force truncation
+	result, err := dispatch.Dispatch(ctx, db, "read", []string{"big.go"}, map[string]any{"budget": 100})
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", result)
+	}
+	if trunc, _ := m["truncated"].(bool); !trunc {
+		t.Error("read with budget=100 on large file should truncate")
+	}
+	bu, hasBU := m["budget_used"]
+	if !hasBU {
+		t.Fatal("truncated read should include budget_used")
+	}
+	if buInt, ok := bu.(int); !ok || buInt <= 0 {
+		t.Errorf("budget_used should be a positive int, got %v (%T)", bu, bu)
+	}
+
+	// Read without truncation should NOT have budget_used
+	result2, err := dispatch.Dispatch(ctx, db, "read", []string{"big.go"}, map[string]any{"full": true})
+	if err != nil {
+		t.Fatalf("read --full: %v", err)
+	}
+	m2 := result2.(map[string]any)
+	if _, has := m2["budget_used"]; has {
+		t.Error("non-truncated read should NOT include budget_used")
+	}
+}
+
+
 // TestInternalCommandsRejected verifies that removed internal command names
 // are no longer accepted by Dispatch.
 func TestInternalCommandsRejected(t *testing.T) {

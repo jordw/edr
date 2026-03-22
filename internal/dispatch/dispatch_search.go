@@ -58,6 +58,9 @@ func runRepoMap(ctx context.Context, db *index.DB, flags map[string]any) (any, e
 		result["shown_files"] = stats.ShownFiles
 		result["shown_symbols"] = stats.ShownSymbols
 		result["hint"] = "use --dir, --type, --lang, or --grep to narrow scope"
+		if stats.BudgetUsed > 0 {
+			result["budget_used"] = stats.BudgetUsed
+		}
 	}
 	return result, nil
 }
@@ -173,23 +176,14 @@ func groupTextResults(result *search.SearchResult) map[string]any {
 		"total_matches": result.TotalMatches,
 		"truncated":     result.Truncated,
 	}
+	if result.BudgetUsed > 0 {
+		out["budget_used"] = result.BudgetUsed
+	}
 	if result.Hint != "" {
 		out["hint"] = result.Hint
 	}
 	return out
 }
-
-func runFindFiles(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
-	if len(args) < 1 {
-		return nil, fmt.Errorf("find-files requires 1 argument: <pattern>")
-	}
-	pattern := args[0]
-	dir := flagString(flags, "dir", "")
-	budget := flagInt(flags, "budget", 0)
-
-	return search.FindFiles(ctx, root, pattern, dir, budget)
-}
-
 func runSearchInSymbol(ctx context.Context, db *index.DB, args []string, flags map[string]any, inSpec string) (any, error) {
 	if len(args) < 1 || args[0] == "" {
 		return nil, fmt.Errorf("search requires a non-empty pattern")

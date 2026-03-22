@@ -57,7 +57,7 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 			}
 			hash, _ := edit.FileHash(file)
 			totalLines := fileLineCount(file)
-			return map[string]any{
+			r := map[string]any{
 				"file":        output.Rel(file),
 				"signatures":  true,
 				"lines":       [2]int{1, totalLines},
@@ -67,7 +67,9 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 				"hash":        hash,
 				"truncated":   truncated,
 				"mtime":       fileMtime(file),
-			}, nil
+			}
+			setBudgetUsed(r, size)
+			return r, nil
 		}
 		// Fall through to normal read for non-code files
 	}
@@ -92,7 +94,7 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 			}
 			hash, _ := edit.FileHash(file)
 			totalLines := fileLineCount(file)
-			return map[string]any{
+			r := map[string]any{
 				"file":        output.Rel(file),
 				"depth":       depth,
 				"lines":       [2]int{1, totalLines},
@@ -102,7 +104,9 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 				"hash":        hash,
 				"truncated":   truncated,
 				"mtime":       fileMtime(file),
-			}, nil
+			}
+			setBudgetUsed(r, size)
+			return r, nil
 		}
 		// Fall through to normal read if outline fails (unsupported language etc.)
 	}
@@ -161,6 +165,7 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 		"truncated":   truncated,
 		"mtime":       fileMtime(file),
 	}
+	setBudgetUsed(result, size)
 
 	if flagBool(flags, "symbols", false) {
 		syms, err := db.GetSymbolsByFile(ctx, file)
@@ -262,6 +267,7 @@ func runReadSymbol(ctx context.Context, db *index.DB, root string, args []string
 	r := symbolReadResult(sym, body, hash, nil)
 	r["size"] = size
 	r["truncated"] = truncated
+	setBudgetUsed(r, size)
 	return r, nil
 }
 
@@ -397,6 +403,12 @@ func runSymbols(ctx context.Context, db *index.DB, root string, args []string, f
 	}, nil
 }
 
+// setBudgetUsed adds budget_used to a result map when truncation occurred.
+func setBudgetUsed(result map[string]any, size int) {
+	if trunc, _ := result["truncated"].(bool); trunc {
+		result["budget_used"] = size
+	}
+}
 
 // fileLineCount returns the number of lines in a file (cheap: reads file, counts newlines).
 func fileLineCount(path string) int {

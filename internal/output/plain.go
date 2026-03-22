@@ -134,6 +134,9 @@ func plainRead(w *os.File, op Op) {
 	}
 	if v, ok := op["truncated"].(bool); ok && v {
 		h["trunc"] = true
+		if bu := anyInt(op["budget_used"]); bu > 0 {
+			h["budget_used"] = bu
+		}
 	}
 	if v, ok := op["session"].(string); ok && (v == "unchanged" || v == "new") {
 		h["session"] = v
@@ -153,6 +156,12 @@ func plainSearch(w *os.File, op Op) {
 		h["session"] = v
 	}
 	h["n"] = anyInt(op["total_matches"])
+	if v, ok := op["truncated"].(bool); ok && v {
+		h["trunc"] = true
+		if bu := anyInt(op["budget_used"]); bu > 0 {
+			h["budget_used"] = bu
+		}
+	}
 	if v, ok := op["hint"].(string); ok && v != "" {
 		h["hint"] = v
 	}
@@ -278,6 +287,9 @@ func plainMap(w *os.File, op Op) {
 	}
 	if v, ok := op["truncated"].(bool); ok && v {
 		h["trunc"] = true
+		if bu := anyInt(op["budget_used"]); bu > 0 {
+			h["budget_used"] = bu
+		}
 	}
 	if v, ok := op["hint"].(string); ok && v != "" {
 		h["hint"] = v

@@ -666,6 +666,7 @@ type RepoMapStats struct {
 	TotalFiles   int
 	ShownSymbols int
 	TotalSymbols int
+	BudgetUsed   int
 	// Files contains the structured symbol data, keyed by relative path.
 	// Populated when the map is generated; consumers can use this for structured output.
 	Files []MapFileEntry
@@ -894,8 +895,13 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, RepoMa
 		mapFiles = append(mapFiles, entry)
 	}
 
+	budgetUsed := 0
+	if truncated {
+		budgetUsed = b.Len() / 4
+	}
 	return b.String(), RepoMapStats{
 		Truncated:    truncated,
+		BudgetUsed:   budgetUsed,
 		ShownFiles:   filesRendered,
 		TotalFiles:   totalFiles,
 		ShownSymbols: shownSymbols,

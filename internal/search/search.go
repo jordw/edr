@@ -23,6 +23,7 @@ type SearchResult struct {
 	Matches      []output.Match `json:"matches"`
 	TotalMatches int            `json:"total_matches"`
 	Truncated    bool           `json:"truncated"`
+	BudgetUsed   int            `json:"budget_used,omitempty"`
 	Hint         string         `json:"hint,omitempty"`
 }
 
@@ -161,11 +162,16 @@ func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int,
 			break
 		}
 	}
+	budgetUsed := 0
+	if truncated {
+		budgetUsed = totalTokens
+	}
 	return &SearchResult{
 		Kind:         "symbol",
 		Matches:      matches,
 		TotalMatches: len(symbols),
 		Truncated:    truncated,
+		BudgetUsed:   budgetUsed,
 	}, nil
 }
 
@@ -506,11 +512,19 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 	}
 	total := int(totalMatches.Load())
 	displayed := len(result)
+	isTrunc := truncated || displayed < total
+	budgetUsed := 0
+	if isTrunc && budget > 0 {
+		for _, m := range result {
+			budgetUsed += output.TokenEstimate(m.Body)
+		}
+	}
 	sr := &SearchResult{
 		Kind:         "text",
 		Matches:      result,
 		TotalMatches: displayed,
-		Truncated:    truncated || displayed < total,
+		Truncated:    isTrunc,
+		BudgetUsed:   budgetUsed,
 	}
 	if !useRegex && sr.TotalMatches == 0 && looksLikeRegex(pattern) {
 		// Normalize BRE syntax (grep default) to ERE (Go regexp):
@@ -672,11 +686,19 @@ func SearchInSymbol(ctx context.Context, db *index.DB, pattern string, symbolFil
 	if result == nil {
 		result = []output.Match{}
 	}
+	isTrunc := truncated || totalCount > maxMatches
+	budgetUsed := 0
+	if isTrunc && budget > 0 {
+		for _, m := range result {
+			budgetUsed += output.TokenEstimate(m.Body)
+		}
+	}
 	return &SearchResult{
 		Kind:         "text",
 		Matches:      result,
 		TotalMatches: totalCount,
-		Truncated:    truncated || totalCount > maxMatches,
+		Truncated:    isTrunc,
+		BudgetUsed:   budgetUsed,
 		Hint:         fmt.Sprintf("scoped to %s:%s (lines %d-%d)", rel, symbolName, sym.StartLine, sym.EndLine),
 	}, nil
 }
