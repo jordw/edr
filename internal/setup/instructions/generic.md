@@ -9,6 +9,7 @@ Workflow — start narrow, widen only as needed:
 4. Search: `edr -s "pattern" --text` | scoped: `--in file.go:FuncName`
 5. Edit: `edr -e file.go --old "old" --new "new"`
    Also: `--start-line N --end-line M`, `--all`, `--dry-run`, `--in Symbol` (scope match to symbol body)
+   Shell metacharacters ($, backticks): use `--old @/tmp/old.txt` to read from file instead of CLI args
 6. Write: `edr -w file.go --content "..."` | `--inside Symbol`, `--after Symbol`, `--append`
 7. Rename: `edr rename Old New` — use instead of `--all` find-replace. Cross-file, import-aware, `--dry-run`.
 8. Verify: `edr verify` — auto-detects go/npm/cargo/make. Auto-runs after edits. If verify shows "skipped", set `.edr/config.json` → `{"verify": "make test"}` early.
