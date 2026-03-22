@@ -96,6 +96,32 @@ func TestGoReverseImporters(t *testing.T) {
 	})
 }
 
+func TestVerifyTimeoutMapsToFailed(t *testing.T) {
+	root := t.TempDir()
+	// Create a go.mod so auto-detect picks Go
+	os.WriteFile(filepath.Join(root, "go.mod"), []byte("module test\ngo 1.21\n"), 0644)
+
+	flags := map[string]any{
+		"command": "sleep 10",
+		"timeout": 1, // 1 second timeout
+	}
+	result, err := DispatchVerify(t.Context(), root, nil, flags)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", result)
+	}
+	if m["status"] != "failed" {
+		t.Errorf("timeout should map to status=failed, got %v", m["status"])
+	}
+	errMsg, _ := m["error"].(string)
+	if !contains(errMsg, "timeout after") {
+		t.Errorf("error should mention timeout, got %q", errMsg)
+	}
+}
+
 // findRepoRoot walks up from the current directory to find go.mod.
 func findRepoRoot(t *testing.T) string {
 	t.Helper()
