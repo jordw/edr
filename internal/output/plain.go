@@ -337,6 +337,24 @@ func plainRefs(w *os.File, op Op) {
 		return
 	}
 
+	// Chain results (--chain)
+	if chain, ok := op["chain"].([]any); ok {
+		h["n"] = len(chain)
+		if found, ok := op["found"].(bool); ok && !found {
+			h["n"] = 0
+			if msg, ok := op["message"].(string); ok {
+				h["message"] = msg
+			}
+		}
+		writeHeader(w, h)
+		for _, name := range chain {
+			if s, ok := name.(string); ok {
+				fmt.Fprintf(w, "%s\n", s)
+			}
+		}
+		return
+	}
+
 	refs, _ := op["references"].([]any)
 	h["n"] = len(refs)
 	writeHeader(w, h)

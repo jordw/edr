@@ -111,14 +111,24 @@ func runImpact(ctx context.Context, db *index.DB, root string, args []string, fl
 }
 
 func runCallChain(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+	// Args come from runRefsUnified as [file, symbol, chain_target] or as
+	// [from_spec, to_spec] when called directly. The last arg is always the
+	// chain target; everything before it identifies the source symbol.
 	if len(args) < 2 {
-		return nil, fmt.Errorf("call-chain requires 2 arguments: <from-symbol> <to-symbol>")
+		return nil, fmt.Errorf("call-chain requires at least 2 arguments: <from-symbol> <to-symbol>")
 	}
-	from := args[0]
-	to := args[1]
+	to := args[len(args)-1]
+	sourceArgs := args[:len(args)-1]
 	maxDepth := flagInt(flags, "depth", 5)
 
-	// Resolve 'to' — supports file:symbol syntax for disambiguation
+	// Resolve source (from) symbol
+	fromSym, err := resolveSymbolArgs(ctx, db, root, sourceArgs)
+	if err != nil {
+		return nil, fmt.Errorf("call-chain: cannot resolve source: %w", err)
+	}
+	from := fromSym.Name
+
+	// Resolve target (to) symbol — supports file:symbol syntax
 	var toSym *index.SymbolInfo
 	if parts := splitFileSymbol(to); parts != nil {
 		file, err := db.ResolvePath(parts[0])
@@ -143,58 +153,43 @@ func runCallChain(ctx context.Context, db *index.DB, root string, args []string,
 		return nil, fmt.Errorf("--chain requires Go, Python, JavaScript, or TypeScript (file: %s)", output.Rel(toSym.File))
 	}
 
-	// BFS from 'to' backwards through callers to find 'from'
 	type pathNode struct {
 		name   string
 		file   string
+		depth  int
 		parent int // index in visited
 	}
 
-	visited := []pathNode{{name: to, file: toSym.File, parent: -1}}
-	seen := map[string]bool{toSym.File + ":" + to: true}
-	found := -1
-
-	for front := 0; front < len(visited) && found < 0; front++ {
-		current := visited[front]
-		depth := 0
-		for p := front; p >= 0; p = visited[p].parent {
-			depth++
-		}
-		if depth > maxDepth {
-			break
-		}
-
-		callers, err := db.FindSemanticCallers(ctx, current.name, current.file)
-		if err != nil || len(callers) == 0 {
-			// Fall back to text-based
-			refs, _ := index.FindReferencesInFile(ctx, db, current.name, current.file)
-			allSyms, _ := db.AllSymbols(ctx)
-			symMap := make(map[string][]index.SymbolInfo)
-			for _, s := range allSyms {
-				symMap[s.File] = append(symMap[s.File], s)
+	// Try BFS backward from both ends — the caller/callee relationship
+	// between from and to is not known in advance.
+	bfs := func(startName, startFile, targetName string) ([]pathNode, int) {
+		visited := []pathNode{{name: startName, file: startFile, depth: 0, parent: -1}}
+		seen := map[string]bool{startFile + ":" + startName: true}
+		for front := 0; front < len(visited); front++ {
+			cur := visited[front]
+			if cur.depth >= maxDepth {
+				continue
 			}
-			for _, ref := range refs {
-				for _, s := range symMap[ref.File] {
-					if ref.StartLine >= s.StartLine && ref.EndLine <= s.EndLine {
-						callers = append(callers, s)
-						break
-					}
+			callers, _ := db.FindSemanticCallers(ctx, cur.name, cur.file)
+			for _, c := range callers {
+				key := c.File + ":" + c.Name
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				idx := len(visited)
+				visited = append(visited, pathNode{name: c.Name, file: c.File, depth: cur.depth + 1, parent: front})
+				if c.Name == targetName {
+					return visited, idx
 				}
 			}
 		}
-		for _, c := range callers {
-			key := c.File + ":" + c.Name
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			idx := len(visited)
-			visited = append(visited, pathNode{name: c.Name, file: c.File, parent: front})
-			if c.Name == from {
-				found = idx
-				break
-			}
-		}
+		return nil, -1
+	}
+
+	visited, found := bfs(to, toSym.File, from)
+	if found < 0 {
+		visited, found = bfs(from, fromSym.File, to)
 	}
 
 	if found < 0 {
@@ -202,7 +197,7 @@ func runCallChain(ctx context.Context, db *index.DB, root string, args []string,
 			"from":    from,
 			"to":      to,
 			"found":   false,
-			"message": fmt.Sprintf("no call chain found from %s to %s within depth %d (traces callers of %s; try swapping arguments if needed)", from, to, maxDepth, to),
+			"message": fmt.Sprintf("no call chain found between %s and %s within depth %d", from, to, maxDepth),
 		}, nil
 	}
 
