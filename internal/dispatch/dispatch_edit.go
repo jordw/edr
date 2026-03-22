@@ -27,6 +27,14 @@ func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string,
 		}
 	}
 
+	// --move-after: move source symbol after target symbol (same file only)
+	if moveAfter := flagString(flags, "move_after", ""); moveAfter != "" {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("edit --move-after requires a source symbol argument")
+		}
+		return smartEditMoveAfter(ctx, db, root, args, moveAfter, dryRun)
+	}
+
 	// new_text is the primary flag name; replacement is accepted as a legacy alias.
 	newText := flagString(flags, "new_text", "")
 	if newText == "" {
@@ -229,6 +237,93 @@ func smartEditSpan(ctx context.Context, db *index.DB, file string, startLine, en
 	return smartEditByteRange(ctx, db, file, startByte, endByte, replacement, label, dryRun)
 }
 
+
+// smartEditMoveAfter moves a source symbol after a target symbol within the same file.
+func smartEditMoveAfter(ctx context.Context, db *index.DB, root string, args []string, targetName string, dryRun bool) (any, error) {
+	// Resolve source symbol
+	srcSym, err := resolveSymbolArgs(ctx, db, root, args)
+	if err != nil {
+		return nil, fmt.Errorf("source symbol: %w", err)
+	}
+
+	// Resolve target symbol in the same file
+	tgtSym, err := db.GetSymbol(ctx, srcSym.File, targetName)
+	if err != nil {
+		return nil, fmt.Errorf("target symbol: %w", err)
+	}
+
+	if srcSym.File != tgtSym.File {
+		return nil, fmt.Errorf("--move-after: source and target must be in the same file (got %s and %s)", output.Rel(srcSym.File), output.Rel(tgtSym.File))
+	}
+
+	data, err := os.ReadFile(srcSym.File)
+	if err != nil {
+		return nil, err
+	}
+
+	srcStart := int(srcSym.StartByte)
+	srcEnd := int(srcSym.EndByte)
+	// Include trailing newline in the cut
+	if srcEnd < len(data) && data[srcEnd] == '\n' {
+		srcEnd++
+	}
+	srcBody := string(data[srcStart:srcEnd])
+
+	tgtEnd := int(tgtSym.EndByte)
+	// Insert after target's trailing newline if present
+	if tgtEnd < len(data) && data[tgtEnd] == '\n' {
+		tgtEnd++
+	}
+
+	// Build the new file content: remove source, insert after target
+	var result strings.Builder
+	if srcStart < tgtEnd {
+		// Source is before target: remove src, then insert after target
+		result.Write(data[:srcStart])
+		result.Write(data[srcEnd:tgtEnd])
+		result.WriteString("\n")
+		result.WriteString(srcBody)
+		result.Write(data[tgtEnd:])
+	} else {
+		// Source is after target: insert after target, then remove src
+		result.Write(data[:tgtEnd])
+		result.WriteString("\n")
+		result.WriteString(srcBody)
+		result.Write(data[tgtEnd:srcStart])
+		result.Write(data[srcEnd:])
+	}
+
+	newContent := result.String()
+	diff := edit.UnifiedDiff(output.Rel(srcSym.File), data, []byte(newContent))
+
+	if dryRun {
+		return map[string]any{
+			"file":   output.Rel(srcSym.File),
+			"status": "dry_run",
+			"diff":   diff,
+			"symbol": srcSym.Name,
+			"after":  tgtSym.Name,
+		}, nil
+	}
+
+	// Write the new content
+	hash, _ := edit.FileHash(srcSym.File)
+	if err := os.WriteFile(srcSym.File, []byte(newContent), 0644); err != nil {
+		return nil, fmt.Errorf("write: %w", err)
+	}
+	newHash, _ := edit.FileHash(srcSym.File)
+	index.EnsureFileFresh(ctx, db, srcSym.File)
+
+	return map[string]any{
+		"file":     output.Rel(srcSym.File),
+		"status":   "applied",
+		"diff":     diff,
+		"hash":     newHash,
+		"old_hash": hash,
+		"symbol":   srcSym.Name,
+		"after":    tgtSym.Name,
+	}, nil
+}
 
 // smartEditInsertAt performs a zero-width insertion before the given line number.
 func smartEditInsertAt(ctx context.Context, db *index.DB, file string, lineNum int, text string, dryRun bool) (any, error) {

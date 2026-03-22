@@ -1240,6 +1240,66 @@ func TestEditFuzzyAndAllMutuallyExclusive(t *testing.T) {
 	}
 }
 
+func TestEditMoveAfter(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	original := "package main\n\nfunc first() {}\n\nfunc second() {}\n\nfunc third() {}\n"
+	os.WriteFile(goFile, []byte(original), 0644)
+	db, _ := index.OpenDB(tmp)
+	defer db.Close()
+	ctx := context.Background()
+	index.IndexRepo(ctx, db)
+	output.SetRoot(db.Root())
+
+	// Move "first" after "third"
+	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go", "first"}, map[string]any{
+		"move_after": "third",
+	})
+	if err != nil {
+		t.Fatalf("move-after: %v", err)
+	}
+	m, _ := result.(map[string]any)
+	if m["status"] != "applied" {
+		t.Errorf("expected applied, got %v", m["status"])
+	}
+
+	data, _ := os.ReadFile(goFile)
+	content := string(data)
+	firstIdx := strings.Index(content, "func first")
+	secondIdx := strings.Index(content, "func second")
+	thirdIdx := strings.Index(content, "func third")
+
+	if firstIdx < 0 || secondIdx < 0 || thirdIdx < 0 {
+		t.Fatalf("missing functions in result:\n%s", content)
+	}
+	if secondIdx >= thirdIdx {
+		t.Error("second should still be before third")
+	}
+	if firstIdx <= thirdIdx {
+		t.Error("first should now be after third")
+	}
+}
+
+func TestEditMoveAfterCrossFileFails(t *testing.T) {
+	tmp := t.TempDir()
+	os.WriteFile(filepath.Join(tmp, "a.go"), []byte("package main\n\nfunc fromA() {}\n"), 0644)
+	os.WriteFile(filepath.Join(tmp, "b.go"), []byte("package main\n\nfunc fromB() {}\n"), 0644)
+	db, _ := index.OpenDB(tmp)
+	defer db.Close()
+	ctx := context.Background()
+	index.IndexRepo(ctx, db)
+	output.SetRoot(db.Root())
+
+	// Cross-file move should fail because target is in a different file
+	_, err := dispatch.Dispatch(ctx, db, "edit", []string{"a.go", "fromA"}, map[string]any{
+		"move_after": "fromB",
+	})
+	// This will fail at target resolution since "fromB" isn't in a.go
+	if err == nil {
+		t.Fatal("cross-file move should fail")
+	}
+}
+
 func TestEditEmptyNewTextRequiresEditMode(t *testing.T) {
 	tmp := t.TempDir()
 	goFile := filepath.Join(tmp, "main.go")

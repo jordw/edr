@@ -117,6 +117,7 @@ var Registry = []*Spec{
 			{Name: "lines", Type: FlagString, Default: "", Desc: "Line range as start:end (shorthand for --start-line/--end-line)"},
 			{Name: "insert_at", Type: FlagInt, Default: 0, Desc: "Insert new text before line N (zero-width insertion)"},
 			{Name: "fuzzy", Type: FlagBool, Default: false, Desc: "Allow whitespace/indentation-only mismatches (cannot combine with --all)"},
+			{Name: "move_after", Type: FlagString, Default: "", Desc: "Move symbol after another symbol (same file only)"},
 		},
 	},
 	{
