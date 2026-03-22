@@ -67,6 +67,36 @@
         "lib/scheduler.py",
         "main.go"
       ]
+    },
+    "edit_fuzzy": {
+      "type": "edit",
+      "file": "lib/scheduler.py",
+      "old_text": "self._running  =  True",
+      "new_text": "self._running = False",
+      "fuzzy": true
+    },
+    "edit_in_symbol": {
+      "type": "edit",
+      "file": "lib/scheduler.py",
+      "old_text": "self._running = True",
+      "new_text": "self._running = False",
+      "in": "Scheduler"
+    },
+    "rename_symbol": {
+      "type": "rename",
+      "old_name": "HandlerFunc",
+      "new_name": "TaskHandlerFunc"
+    },
+    "refs_impact": {
+      "type": "refs",
+      "pattern": "_execute_task",
+      "args": ["_execute_task"],
+      "impact": true
+    },
+    "read_lines": {
+      "type": "read_lines",
+      "file": "lib/scheduler.py",
+      "lines": "1:30"
     }
   }
 }

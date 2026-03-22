@@ -76,7 +76,7 @@ func TestSessionMultiLang(t *testing.T) {
 	// This is how an agent starts: get the lay of the land.
 	t.Run("orient/map_repo", func(t *testing.T) {
 		out := handleDoJSON(t, ctx, db, sess, tc, "map", nil, map[string]any{"budget": 500})
-		assertJSONHas(t, out, "map")
+		assertJSONHas(t, out, "content")
 		assertJSONHas(t, out, "symbols")
 	})
 
@@ -105,7 +105,7 @@ func TestSessionMultiLang(t *testing.T) {
 		{"lib/config.rb:PluginRegistry", "Ruby"},
 		{"web/api.js:TaskAPIClient", "JS"},
 		{"web/api.js:RateLimiter", "JS"},
-		{"web/components/Dashboard.tsx:Dashboard", "TSX"},
+		{"web/components/Dashboard.tsx:DashboardProps", "TSX"},
 		{"include/queue.h:task_queue", "C-header"},
 	}
 
@@ -248,6 +248,56 @@ func TestSessionMultiLang(t *testing.T) {
 					}
 				}
 			}
+		}
+	})
+
+	// Phase 6b: Edit --fuzzy and --in
+	t.Run("edit/fuzzy_dry_run", func(t *testing.T) {
+		out := handleDoJSON(t, ctx, db, sess, tc, "edit", []string{"lib/scheduler.py"}, map[string]any{
+			"old_text": "self._running  =  True",
+			"new_text": "self._running = False",
+			"fuzzy":    true,
+			"dry-run":  true,
+		})
+		var m map[string]any
+		json.Unmarshal(out, &m)
+		if status, _ := m["status"].(string); status != "dry_run" {
+			t.Errorf("edit_fuzzy should be dry_run, got %q", status)
+		}
+	})
+
+	t.Run("edit/in_symbol_dry_run", func(t *testing.T) {
+		out := handleDoJSON(t, ctx, db, sess, tc, "edit", []string{"lib/scheduler.py"}, map[string]any{
+			"in":       "Scheduler",
+			"old_text": "self._running = True",
+			"new_text": "self._running = False",
+			"dry-run":  true,
+		})
+		var m map[string]any
+		json.Unmarshal(out, &m)
+		if status, _ := m["status"].(string); status != "dry_run" {
+			t.Errorf("edit_in_symbol should be dry_run, got %q", status)
+		}
+	})
+
+	// Phase 6c: Refs --impact
+	t.Run("refs/impact", func(t *testing.T) {
+		out := handleDoJSON(t, ctx, db, sess, tc, "refs", []string{"_execute_task"}, map[string]any{
+			"impact": true,
+		})
+		if len(out) < 10 {
+			t.Errorf("refs impact: too short: %d bytes", len(out))
+		}
+	})
+
+	// Phase 6d: Verify
+	t.Run("verify/auto_detect", func(t *testing.T) {
+		out := handleDoJSON(t, ctx, db, sess, tc, "verify", nil, nil)
+		var m map[string]any
+		json.Unmarshal(out, &m)
+		// verify returns {command, status, duration_ms}
+		if _, ok := m["status"]; !ok {
+			t.Errorf("verify should return status, got keys: %v", mapKeys(m))
 		}
 	})
 

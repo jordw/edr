@@ -109,6 +109,15 @@ func BenchmarkReadMultiFile(b *testing.B) {
 }
 
 // ---------------------------------------------------------------------------
+// Read benchmarks (continued) — line ranges
+// ---------------------------------------------------------------------------
+
+func BenchmarkReadLines(b *testing.B) {
+	db, _ := setupRepo(b)
+	benchDispatch(b, db, "read", []string{"lib/scheduler.py"}, map[string]any{"lines": "1:30"})
+}
+
+// ---------------------------------------------------------------------------
 // Search benchmarks
 // ---------------------------------------------------------------------------
 
@@ -125,6 +134,11 @@ func BenchmarkSearchSymbolBody(b *testing.B) {
 func BenchmarkSearchText(b *testing.B) {
 	db, _ := setupRepo(b)
 	benchDispatch(b, db, "search", []string{"retry"}, map[string]any{"text": true, "budget": 300})
+}
+
+func BenchmarkSearchInSymbol(b *testing.B) {
+	db, _ := setupRepo(b)
+	benchDispatch(b, db, "search", []string{"running"}, map[string]any{"text": true, "in": "lib/scheduler.py:Scheduler"})
 }
 
 // ---------------------------------------------------------------------------
@@ -144,6 +158,21 @@ func BenchmarkMapFile(b *testing.B) {
 func BenchmarkMapFileFiltered(b *testing.B) {
 	db, _ := setupRepo(b)
 	benchDispatch(b, db, "map", []string{"lib/scheduler.py"}, map[string]any{"type": "function"})
+}
+
+func BenchmarkMapDir(b *testing.B) {
+	db, _ := setupRepo(b)
+	benchDispatch(b, db, "map", nil, map[string]any{"dir": "lib", "budget": 500})
+}
+
+func BenchmarkMapGrep(b *testing.B) {
+	db, _ := setupRepo(b)
+	benchDispatch(b, db, "map", nil, map[string]any{"grep": "task", "budget": 500})
+}
+
+func BenchmarkMapLang(b *testing.B) {
+	db, _ := setupRepo(b)
+	benchDispatch(b, db, "map", nil, map[string]any{"lang": "python", "budget": 500})
 }
 
 // ---------------------------------------------------------------------------
@@ -169,9 +198,37 @@ func BenchmarkEditMatchDryRun(b *testing.B) {
 
 func BenchmarkEditMoveDryRun(b *testing.B) {
 	db, _ := setupRepo(b)
-	benchDispatch(b, db, "edit", []string{"internal/queue.go"}, map[string]any{
-		"move":    "Close",
-		"after":   "NewTaskQueue",
+	benchDispatch(b, db, "edit", []string{"internal/queue.go", "Close"}, map[string]any{
+		"move_after": "NewTaskQueue",
+		"dry-run":    true,
+	})
+}
+
+func BenchmarkEditFuzzyDryRun(b *testing.B) {
+	db, _ := setupRepo(b)
+	// Fuzzy match: extra whitespace in old_text that doesn't match literally
+	benchDispatch(b, db, "edit", []string{"lib/scheduler.py"}, map[string]any{
+		"old_text": "self._running  =  True",
+		"new_text": "self._running = False",
+		"fuzzy":    true,
+		"dry-run":  true,
+	})
+}
+
+func BenchmarkEditInSymbol(b *testing.B) {
+	db, _ := setupRepo(b)
+	benchDispatch(b, db, "edit", []string{"lib/scheduler.py"}, map[string]any{
+		"in":       "Scheduler",
+		"old_text": "self._running = True",
+		"new_text": "self._running = False",
+		"dry-run":  true,
+	})
+}
+
+func BenchmarkEditDeleteDryRun(b *testing.B) {
+	db, _ := setupRepo(b)
+	benchDispatch(b, db, "edit", []string{"lib/scheduler.py:ScheduleType"}, map[string]any{
+		"delete":  true,
 		"dry-run": true,
 	})
 }
@@ -206,6 +263,11 @@ func BenchmarkRefs(b *testing.B) {
 func BenchmarkRefsChain(b *testing.B) {
 	db, _ := setupRepo(b)
 	benchDispatch(b, db, "refs", []string{"Scheduler"}, map[string]any{"chain": "_execute_task"})
+}
+
+func BenchmarkRefsImpact(b *testing.B) {
+	db, _ := setupRepo(b)
+	benchDispatch(b, db, "refs", []string{"_execute_task"}, map[string]any{"impact": true})
 }
 
 // ---------------------------------------------------------------------------
@@ -255,8 +317,26 @@ func BenchmarkDispatchMulti(b *testing.B) {
 }
 
 // ---------------------------------------------------------------------------
-// Write --inside benchmark
+// Write benchmarks
 // ---------------------------------------------------------------------------
+
+func BenchmarkWriteAfterDryRun(b *testing.B) {
+	db, _ := setupRepo(b)
+	benchDispatch(b, db, "write", []string{"lib/scheduler.py"}, map[string]any{
+		"after":   "_execute_task",
+		"content": "def drain(self): pass",
+		"dry_run": true,
+	})
+}
+
+func BenchmarkWriteAppendDryRun(b *testing.B) {
+	db, _ := setupRepo(b)
+	benchDispatch(b, db, "write", []string{"lib/scheduler.py"}, map[string]any{
+		"append":  true,
+		"content": "# appended line",
+		"dry_run": true,
+	})
+}
 
 func BenchmarkWriteInside(b *testing.B) {
 	db, tmp := setupRepo(b)
@@ -278,6 +358,61 @@ func BenchmarkWriteInside(b *testing.B) {
 			b.Fatal(err)
 		}
 		b.ReportMetric(float64(len(out)), "response_bytes")
+
+		b.StopTimer()
+		os.WriteFile(file, original, 0644)
+		index.IndexFile(ctx, db, file)
+		b.StartTimer()
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Verify benchmark
+// ---------------------------------------------------------------------------
+
+func BenchmarkVerify(b *testing.B) {
+	db, _ := setupRepo(b)
+	benchDispatch(b, db, "verify", nil, nil)
+}
+
+// ---------------------------------------------------------------------------
+// Agent workflow benchmark — multi-step edit cycle without session
+// ---------------------------------------------------------------------------
+
+func BenchmarkAgentEditCycle(b *testing.B) {
+	db, tmp := setupRepo(b)
+	ctx := context.Background()
+	file := filepath.Join(tmp, "lib", "scheduler.py")
+	original, _ := os.ReadFile(file)
+
+	b.ResetTimer()
+	for b.Loop() {
+		totalBytes := 0
+		// 1. Orient: map the repo
+		out, _ := dispatchJSON(ctx, db, "map", nil, map[string]any{"budget": 500})
+		totalBytes += len(out)
+		// 2. Read signatures of target class
+		out, _ = dispatchJSON(ctx, db, "read", []string{"lib/scheduler.py:Scheduler"}, map[string]any{"signatures": true})
+		totalBytes += len(out)
+		// 3. Read specific method
+		out, _ = dispatchJSON(ctx, db, "read", []string{"lib/scheduler.py:_execute_task"}, nil)
+		totalBytes += len(out)
+		// 4. Find refs to understand impact
+		out, _ = dispatchJSON(ctx, db, "refs", []string{"_execute_task"}, map[string]any{"impact": true})
+		totalBytes += len(out)
+		// 5. Edit (dry-run)
+		out, _ = dispatchJSON(ctx, db, "edit", []string{"lib/scheduler.py"}, map[string]any{
+			"in":       "Scheduler",
+			"old_text": "self._running = True",
+			"new_text": "self._running = False",
+			"dry-run":  true,
+		})
+		totalBytes += len(out)
+		// 6. Verify
+		out, _ = dispatchJSON(ctx, db, "verify", nil, nil)
+		totalBytes += len(out)
+
+		b.ReportMetric(float64(totalBytes), "response_bytes")
 
 		b.StopTimer()
 		os.WriteFile(file, original, 0644)

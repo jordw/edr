@@ -375,16 +375,16 @@ func TestCorrectnessEditReindex(t *testing.T) {
 	t.Run("write inside updates index", func(t *testing.T) {
 		// Write a new method inside Config in pkg_b
 		var writeResult struct {
-			OK   bool   `json:"ok"`
-			File string `json:"file"`
-			Hash string `json:"hash"`
+			File   string `json:"file"`
+			Hash   string `json:"hash"`
+			Status string `json:"status"`
 		}
 		dispatchResult(t, ctx, db, "write", []string{"go/pkg_b/config.go"}, map[string]any{
 			"inside":  "Config",
 			"content": "Label string",
 		}, &writeResult)
-		if !writeResult.OK {
-			t.Fatal("write inside should succeed")
+		if writeResult.Status != "applied" {
+			t.Fatalf("write inside should succeed, got status %q", writeResult.Status)
 		}
 
 		// Verify the new field is visible
@@ -646,15 +646,17 @@ func TestCorrectnessMapConsistency(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("map shows all Config definitions", func(t *testing.T) {
-		var result struct {
-			Map     string `json:"map"`
-			Files   int    `json:"files"`
-			Symbols int    `json:"symbols"`
+		out, err := dispatchJSON(ctx, db, "map", nil, nil)
+		if err != nil {
+			t.Fatal(err)
 		}
-		dispatchResult(t, ctx, db, "map", nil, nil, &result)
-
-		// Count how many times "Config" appears in the map
-		count := strings.Count(result.Map, "Config")
+		// Map returns content array with file/symbols entries
+		count := strings.Count(string(out), "Config")
+		var result struct {
+			Files   int `json:"files"`
+			Symbols int `json:"symbols"`
+		}
+		json.Unmarshal(out, &result)
 		if count < 6 {
 			// 6 Config definitions: 2 Go, 2 Python, 2 JS
 			t.Errorf("map should show >=6 Config symbols, found %d mentions", count)

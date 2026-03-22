@@ -1012,6 +1012,22 @@ func (d *DB) SearchSymbols(ctx context.Context, pattern string, limit ...int) ([
 
 // GetSymbol returns a specific symbol by name and file.
 // Returns an error if the symbol is not found or if multiple symbols share the
+// preferDefinition returns the non-impl symbol when results contain exactly
+// one definition and one or more impl blocks (common in Rust).
+func preferDefinition(results []SymbolInfo) *SymbolInfo {
+	implTypes := map[string]bool{"impl": true, "impl_item": true}
+	var defs []int
+	for i, s := range results {
+		if !implTypes[s.Type] {
+			defs = append(defs, i)
+		}
+	}
+	if len(defs) == 1 {
+		return &results[defs[0]]
+	}
+	return nil
+}
+
 // same name in the file (e.g. multiple init functions).
 func (d *DB) GetSymbol(ctx context.Context, file, name string) (*SymbolInfo, error) {
 	rows, err := d.db.QueryContext(ctx, `
@@ -1039,6 +1055,11 @@ func (d *DB) GetSymbol(ctx context.Context, file, name string) (*SymbolInfo, err
 		return nil, d.symbolNotFoundError(ctx, name, file)
 	}
 	if len(results) > 1 {
+		// In Rust (and similar), a struct/enum and its impl block share the same name.
+		// Prefer the definition (struct/enum/type/class) over impl.
+		if preferred := preferDefinition(results); preferred != nil {
+			return preferred, nil
+		}
 		lines := make([]string, len(results))
 		for i, s := range results {
 			lines[i] = fmt.Sprintf("%d", s.StartLine)

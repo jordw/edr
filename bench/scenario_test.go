@@ -68,6 +68,27 @@ type ScenarioEdit struct {
 	File    string `json:"file"`
 	OldText string `json:"old_text"`
 	NewText string `json:"new_text"`
+	Fuzzy   bool   `json:"fuzzy,omitempty"`
+	In      string `json:"in,omitempty"`
+}
+
+type ScenarioRename struct {
+	Type    string `json:"type"`
+	OldName string `json:"old_name"`
+	NewName string `json:"new_name"`
+}
+
+type ScenarioRefsImpact struct {
+	Type    string   `json:"type"`
+	Pattern string   `json:"pattern"`
+	Args    []string `json:"args"`
+	Impact  bool     `json:"impact"`
+}
+
+type ScenarioReadLines struct {
+	Type  string `json:"type"`
+	File  string `json:"file"`
+	Lines string `json:"lines"`
 }
 
 type ScenarioWriteInside struct {
@@ -175,19 +196,17 @@ func TestScenarioDispatch(t *testing.T) {
 		}
 		var result struct {
 			Body   string `json:"content"`
-			Symbol struct {
-				Name string `json:"name"`
-			} `json:"symbol"`
+			Symbol string `json:"symbol"`
 		}
 		json.Unmarshal(out, &result)
 		if result.Body == "" {
 			t.Error("read_symbol should return a body")
 		}
 		parts := strings.SplitN(s.Spec, ":", 2)
-		if len(parts) == 2 && result.Symbol.Name != parts[1] {
-			t.Errorf("expected symbol name %q, got %q", parts[1], result.Symbol.Name)
+		if len(parts) == 2 && result.Symbol != parts[1] {
+			t.Errorf("expected symbol name %q, got %q", parts[1], result.Symbol)
 		}
-		t.Logf("read_symbol: %dB name=%s", len(out), result.Symbol.Name)
+		t.Logf("read_symbol: %dB name=%s", len(out), result.Symbol)
 	})
 
 	t.Run("find_refs", func(t *testing.T) {
@@ -247,16 +266,15 @@ func TestScenarioDispatch(t *testing.T) {
 			t.Fatalf("dispatch: %v", err)
 		}
 		var result struct {
-			Map     string `json:"map"`
-			Files   int    `json:"files"`
-			Symbols int    `json:"symbols"`
+			Files   int `json:"files"`
+			Symbols int `json:"symbols"`
 		}
 		json.Unmarshal(out, &result)
 		if result.Symbols == 0 {
 			t.Error("map should return symbols")
 		}
-		if result.Map == "" {
-			t.Error("map should return a map string")
+		if result.Files == 0 {
+			t.Error("map should return files")
 		}
 		t.Logf("orient_map: %dB files=%d symbols=%d", len(out), result.Files, result.Symbols)
 	})
@@ -275,13 +293,13 @@ func TestScenarioDispatch(t *testing.T) {
 			t.Fatalf("dispatch: %v", err)
 		}
 		var result struct {
-			DryRun bool   `json:"dry_run"`
+			Status string `json:"status"`
 			File   string `json:"file"`
 			Diff   string `json:"diff"`
 		}
 		json.Unmarshal(out, &result)
-		if !result.DryRun {
-			t.Error("edit should be a dry-run")
+		if result.Status != "dry_run" {
+			t.Errorf("edit should be a dry-run, got status %q", result.Status)
 		}
 		if result.File == "" {
 			t.Error("edit should return a file path")
@@ -334,5 +352,125 @@ func TestScenarioDispatch(t *testing.T) {
 			t.Error("explore with --body should return body content")
 		}
 		t.Logf("explore_symbol: %dB symbol=%s body=%dB", len(out), result.Symbol.Name, len(result.Body))
+	})
+
+	t.Run("edit_fuzzy", func(t *testing.T) {
+		var s ScenarioEdit
+		if err := scenario.GetScenario("edit_fuzzy", &s); err != nil {
+			t.Fatal(err)
+		}
+		out, err := dispatchJSON(ctx, db, "edit", []string{s.File}, map[string]any{
+			"old_text": s.OldText,
+			"new_text": s.NewText,
+			"fuzzy":    true,
+			"dry-run":  true,
+		})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		var result struct {
+			Status string `json:"status"`
+			File   string `json:"file"`
+			Diff   string `json:"diff"`
+		}
+		json.Unmarshal(out, &result)
+		if result.Status != "dry_run" {
+			t.Errorf("edit_fuzzy should be dry_run, got %q", result.Status)
+		}
+		t.Logf("edit_fuzzy: %dB file=%s", len(out), result.File)
+	})
+
+	t.Run("edit_in_symbol", func(t *testing.T) {
+		var s ScenarioEdit
+		if err := scenario.GetScenario("edit_in_symbol", &s); err != nil {
+			t.Fatal(err)
+		}
+		out, err := dispatchJSON(ctx, db, "edit", []string{s.File}, map[string]any{
+			"old_text": s.OldText,
+			"new_text": s.NewText,
+			"in":       s.In,
+			"dry-run":  true,
+		})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		var result struct {
+			Status string `json:"status"`
+			File   string `json:"file"`
+		}
+		json.Unmarshal(out, &result)
+		if result.Status != "dry_run" {
+			t.Errorf("edit_in_symbol should be dry_run, got %q", result.Status)
+		}
+		t.Logf("edit_in_symbol: %dB file=%s", len(out), result.File)
+	})
+
+	t.Run("rename_symbol", func(t *testing.T) {
+		var s ScenarioRename
+		if err := scenario.GetScenario("rename_symbol", &s); err != nil {
+			t.Fatal(err)
+		}
+		out, err := dispatchJSON(ctx, db, "rename", []string{s.OldName, s.NewName}, map[string]any{
+			"dry_run": true,
+		})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		var result struct {
+			OldName     string `json:"old_name"`
+			NewName     string `json:"new_name"`
+			Occurrences int    `json:"occurrences"`
+			Status      string `json:"status"`
+		}
+		json.Unmarshal(out, &result)
+		if result.Status != "dry_run" {
+			t.Errorf("rename should be dry_run, got %q", result.Status)
+		}
+		if result.Occurrences == 0 {
+			t.Error("rename should find occurrences")
+		}
+		t.Logf("rename_symbol: %dB %s->%s occurrences=%d", len(out), result.OldName, result.NewName, result.Occurrences)
+	})
+
+	t.Run("refs_impact", func(t *testing.T) {
+		var s ScenarioRefsImpact
+		if err := scenario.GetScenario("refs_impact", &s); err != nil {
+			t.Fatal(err)
+		}
+		out, err := dispatchJSON(ctx, db, "refs", s.Args, map[string]any{
+			"impact": true,
+		})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		if len(out) < 10 {
+			t.Error("refs_impact should return non-trivial output")
+		}
+		t.Logf("refs_impact: %dB", len(out))
+	})
+
+	t.Run("read_lines", func(t *testing.T) {
+		var s ScenarioReadLines
+		if err := scenario.GetScenario("read_lines", &s); err != nil {
+			t.Fatal(err)
+		}
+		out, err := dispatchJSON(ctx, db, "read", []string{s.File}, map[string]any{
+			"lines": s.Lines,
+		})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		var result struct {
+			Content string `json:"content"`
+			Lines   [2]int `json:"lines"`
+		}
+		json.Unmarshal(out, &result)
+		if result.Content == "" {
+			t.Error("read_lines should return content")
+		}
+		if result.Lines[0] != 1 || result.Lines[1] != 30 {
+			t.Errorf("read_lines should return lines [1,30], got %v", result.Lines)
+		}
+		t.Logf("read_lines: %dB lines=%v", len(out), result.Lines)
 	})
 }

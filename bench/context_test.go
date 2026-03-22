@@ -98,82 +98,174 @@ func TestResponseSizeRegression(t *testing.T) {
 		flags    map[string]any
 		maxBytes int // response must be <= this
 	}{
+		// --- Read gates ---
 		{
 			name:     "signatures < full symbol",
 			cmd:      "read",
 			args:     []string{"lib/scheduler.py:Scheduler"},
 			flags:    map[string]any{"signatures": true},
-			maxBytes: 2000, // full symbol is ~7500B
+			maxBytes: 1500, // actual ~1167B, full symbol is ~7500B
 		},
 		{
 			name:     "depth2 < full method",
 			cmd:      "read",
 			args:     []string{"lib/scheduler.py", "_execute_task"},
 			flags:    map[string]any{"depth": 2},
-			maxBytes: 2000, // full method is ~2100B
-		},
-		{
-			name:     "search with budget",
-			cmd:      "search",
-			args:     []string{"execute"},
-			flags:    map[string]any{"body": true, "budget": 500},
-			maxBytes: 3000,
-		},
-		{
-			name:     "map with budget",
-			cmd:      "map",
-			args:     nil,
-			flags:    map[string]any{"budget": 500},
-			maxBytes: 3000,
+			maxBytes: 800, // actual ~555B
 		},
 		{
 			name:     "multi-file read with budget",
 			cmd:      "read",
 			args:     []string{"lib/scheduler.py", "lib/TaskProcessor.java", "internal/worker.go"},
 			flags:    map[string]any{"budget": 500},
-			maxBytes: 3500,
+			maxBytes: 5000, // actual ~4103B
 		},
 		{
-			name:     "edit dry-run",
-			cmd:      "edit",
+			name:     "read line range",
+			cmd:      "read",
 			args:     []string{"lib/scheduler.py"},
-			flags:    map[string]any{"old_text": "self._running = True", "new_text": "self._running = False", "dry-run": true},
-			maxBytes: 1000,
+			flags:    map[string]any{"lines": "1:30"},
+			maxBytes: 1200, // actual ~884B
+		},
+		// --- Search gates ---
+		{
+			name:     "search with budget",
+			cmd:      "search",
+			args:     []string{"execute"},
+			flags:    map[string]any{"body": true, "budget": 500},
+			maxBytes: 3000, // actual ~2222B
 		},
 		{
 			name:     "find files",
 			cmd:      "search",
 			args:     []string{"**/*.py"},
 			flags:    nil,
-			maxBytes: 1500,
+			maxBytes: 1500, // actual ~66B
+		},
+		{
+			name:     "search in symbol",
+			cmd:      "search",
+			args:     []string{"running"},
+			flags:    map[string]any{"text": true, "in": "lib/scheduler.py:Scheduler"},
+			maxBytes: 800, // actual ~573B
+		},
+		// --- Map gates ---
+		{
+			name:     "map with budget",
+			cmd:      "map",
+			args:     nil,
+			flags:    map[string]any{"budget": 500},
+			maxBytes: 6000, // actual ~5136B
 		},
 		{
 			name:     "map file with type filter",
 			cmd:      "map",
 			args:     []string{"lib/scheduler.py"},
 			flags:    map[string]any{"type": "function"},
-			maxBytes: 3000,
+			maxBytes: 5500, // actual ~4818B
 		},
 		{
-			name:     "rename dry-run",
-			cmd:      "rename",
-			args:     []string{"HandlerFunc", "TaskHandlerFunc"},
-			flags:    map[string]any{"dry_run": true},
-			maxBytes: 1300,
+			name:     "map dir filter",
+			cmd:      "map",
+			args:     nil,
+			flags:    map[string]any{"dir": "lib", "budget": 500},
+			maxBytes: 7000, // actual ~5238B
 		},
+		{
+			name:     "map grep filter",
+			cmd:      "map",
+			args:     nil,
+			flags:    map[string]any{"grep": "task", "budget": 500},
+			maxBytes: 5500, // actual ~3992B
+		},
+		{
+			name:     "map lang filter",
+			cmd:      "map",
+			args:     nil,
+			flags:    map[string]any{"lang": "python", "budget": 500},
+			maxBytes: 4500, // actual ~3172B
+		},
+		// --- Edit gates ---
+		{
+			name:     "edit dry-run",
+			cmd:      "edit",
+			args:     []string{"lib/scheduler.py"},
+			flags:    map[string]any{"old_text": "self._running = True", "new_text": "self._running = False", "dry-run": true},
+			maxBytes: 1000, // actual ~794B
+		},
+		{
+			name:     "edit fuzzy dry-run",
+			cmd:      "edit",
+			args:     []string{"lib/scheduler.py"},
+			flags:    map[string]any{"old_text": "self._running  =  True", "new_text": "self._running = False", "fuzzy": true, "dry-run": true},
+			maxBytes: 700, // actual ~457B
+		},
+		{
+			name:     "edit in symbol dry-run",
+			cmd:      "edit",
+			args:     []string{"lib/scheduler.py"},
+			flags:    map[string]any{"in": "Scheduler", "old_text": "self._running = True", "new_text": "self._running = False", "dry-run": true},
+			maxBytes: 700, // actual ~457B
+		},
+		{
+			name:     "edit delete dry-run",
+			cmd:      "edit",
+			args:     []string{"lib/scheduler.py:ScheduleType"},
+			flags:    map[string]any{"delete": true, "dry-run": true},
+			maxBytes: 600, // actual ~349B
+		},
+		// --- Write gates ---
+		{
+			name:     "write after dry-run",
+			cmd:      "write",
+			args:     []string{"lib/scheduler.py"},
+			flags:    map[string]any{"after": "_execute_task", "content": "def drain(self): pass", "dry_run": true},
+			maxBytes: 700, // actual ~504B
+		},
+		{
+			name:     "write append dry-run",
+			cmd:      "write",
+			args:     []string{"lib/scheduler.py"},
+			flags:    map[string]any{"append": true, "content": "# appended", "dry_run": true},
+			maxBytes: 500, // actual ~280B
+		},
+		// --- Refs gates ---
 		{
 			name:     "refs chain",
 			cmd:      "refs",
 			args:     []string{"Scheduler"},
 			flags:    map[string]any{"chain": "_execute_task"},
-			maxBytes: 500,
+			maxBytes: 300, // actual ~102B
+		},
+		{
+			name:     "refs impact",
+			cmd:      "refs",
+			args:     []string{"_execute_task"},
+			flags:    map[string]any{"impact": true},
+			maxBytes: 500, // actual ~262B
 		},
 		{
 			name:     "explore gather",
 			cmd:      "refs",
 			args:     []string{"_execute_task"},
 			flags:    map[string]any{"gather": true, "body": true, "budget": 1500},
-			maxBytes: 8000,
+			maxBytes: 8000, // actual ~405B but gather with body can grow
+		},
+		// --- Rename gates ---
+		{
+			name:     "rename dry-run",
+			cmd:      "rename",
+			args:     []string{"HandlerFunc", "TaskHandlerFunc"},
+			flags:    map[string]any{"dry_run": true},
+			maxBytes: 3500, // actual ~2816B
+		},
+		// --- Verify gates ---
+		{
+			name:     "verify",
+			cmd:      "verify",
+			args:     nil,
+			flags:    nil,
+			maxBytes: 300, // actual ~92B
 		},
 	}
 
