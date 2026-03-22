@@ -301,3 +301,49 @@ edr -s "Dispatch"
 **Actual:** `{}` (empty header, no body lines showing symbol locations)
 
 **Expected:** Show matched symbol names with file and line locations in the body, similar to text search output.
+
+### 24. Session dedup returns empty body for unchanged files with no escape hatch
+When a file is session-cached as "unchanged", the read returns no content at all. There is no way to force a re-read short of `edr session new` or `--full`, and `--full` is not obvious from the `{"session":"unchanged"}` output.
+
+**Severity:** High — agents fall back to built-in Read when this happens, defeating the purpose of edr.
+
+**Repro:**
+```bash
+edr session new
+edr read src/file.c
+# ... file is unchanged ...
+edr read src/file.c
+```
+
+**Actual:** Second read returns `{"file":"src/file.c","session":"unchanged"}` with no body.
+
+**Expected:** Either (a) include a hint like `"use --full to force re-read"`, or (b) make `--full` bypass session dedup so agents have a reliable escape hatch.
+
+### 25. `--all` edit double-applies when new text contains old text
+`edr -e file --old "X" --new "prefix_X" --all` replaces every occurrence of `X` including in the just-written `prefix_X`, causing double-prefixing.
+
+**Severity:** High — silently corrupts code. Agents using `--all` for prefix-style renames will produce `prefix_prefix_X`.
+
+**Repro:**
+```bash
+echo "hz_to_bark(\nhz_to_bark(" > /tmp/test.c
+edr -e /tmp/test.c --old "hz_to_bark(" --new "psy_hz_to_bark(" --all
+```
+
+**Actual:** First occurrence becomes `psy_hz_to_bark(` correctly, but if `hz_to_bark(` appears inside the replacement zone of a prior match, it gets replaced again → `psy_psy_hz_to_bark(`.
+
+**Expected:** `--all` should do a single-pass replacement (like `strings.ReplaceAll`), not iterative. Each original occurrence is replaced exactly once.
+
+### 26. `edr -e` on files at repo root fails with "outside repo root"
+Editing files at the repository top level (e.g., `CLAUDE.md`) can fail with `outside_repo` even though the file is inside the repo.
+
+**Severity:** Medium — forces fallback to built-in Edit for top-level config files.
+
+**Repro:**
+```bash
+edr -e CLAUDE.md --old "old text" --new "new text"
+```
+
+**Actual:** `{"ec":"outside_repo","error":"path \"CLAUDE.md\" is outside repo root"}`
+
+**Expected:** Repo-root-relative paths like `CLAUDE.md` should resolve correctly.
