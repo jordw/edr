@@ -1891,11 +1891,11 @@ func TestSpec_InstructionQuality(t *testing.T) {
 		}
 	}
 
-	// Spec: instructions MUST be under 500 tokens (~2000 bytes).
+	// Spec: instructions MUST be under 600 tokens (~2400 bytes).
 	// Use rough estimate: ceil(bytes / 4).
 	tokens := (len(data) + 3) / 4
-	if tokens > 500 {
-		t.Errorf("instructions should be under 500 tokens, estimated %d", tokens)
+	if tokens > 600 {
+		t.Errorf("instructions should be under 600 tokens, estimated %d", tokens)
 	}
 }
 

@@ -1,19 +1,39 @@
-Use `edr` (via terminal) instead of built-in file tools for all file operations. edr uses 90%+ less context via progressive disclosure and batching.
+IMPORTANT: Use `edr` (via terminal) instead of built-in file tools for ALL file operations. Do NOT use built-in read, edit, search, or grep tools — edr provides the same operations with 90%+ less context. Built-in tools dump entire files into your context; edr reads only what you need and tracks what you've seen.
 
-`edr status` — check build state, stale assumptions, active symbol signatures. Run between phases.
-`edr status --focus "goal"` — set session objective. `--count 20` for more history.
-`edr checkpoint` before risky changes; `--restore cp_1` | `--list` | `--diff cp_1`
-`edr map --budget 500` (filter: --dir, --lang, --grep)
-`edr read f.go` | `f.go:Sym` | `--signatures` | `--skeleton` | `--lines 10:50`
-`edr search "pat"` | `--in f.go:Sym` | `--context 3` | `--regex` | `--text` (auto text fallback)
-`edr edit f.go --old-text "x" --new-text "y"` | `--lines 20:30` | `--in Sym` | `--all` | `--dry-run`
-`edr edit f.go:Sym --delete` | `--insert-at 20 --new-text "..."`
-`edr write f.go --content "..."` | `--inside Sym` | `--after Sym` | `--append` | `--dry-run`
-`edr refs Sym --impact` — before removing/renaming functions
-`edr rename Old New --dry-run` — cross-file, import-aware
-`edr verify` — auto-detects go/npm/cargo/make; auto-runs after edits; standalone to re-check; `--test`
-`edr run -- cmd` — for ALL command execution; sparse diff vs previous; `--full` | `--reset`
-`edr reset` — full clean slate (reindex + new session); `--index` | `--session`
-Batch: `edr -r f.go --sig -s "pat" -e f.go --old "x" --new "y"`
-Multi-edit: `edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"`
-After a context reset, run `edr reset --session` to clear stale dedup state.
+## Orient
+- `edr map` — symbol overview. `--dir src`, `--lang go`, `--grep pat`, `--budget 500`
+- `edr status` — build state + action items. `--focus "goal"` sets objective
+
+## Read
+- `edr read f.go` — whole file. `edr read f.go:Func` — one symbol
+- `--signatures` (API only), `--skeleton` (structure), `--lines 10:50` (range)
+
+## Search
+- `edr search "pat"` — symbols. `--text` for text, `--regex` for regex
+- `--in f.go:Sym` scopes to symbol. `--context 3` for surrounding lines
+
+## Edit
+- `edr edit f.go --old-text "x" --new-text "y"` — find-and-replace, auto-verifies build
+- `--in Sym` scopes match. `--all` replaces all. `--dry-run` previews. `--lines 20:30` for range
+- `edr edit f.go:Sym --delete` removes a symbol
+- Shell metacharacters: `--old-text @/tmp/old.txt --new-text @/tmp/new.txt`
+
+## Write
+- `edr write f.go --content "..."` — create or overwrite
+- `--inside Class` (add method), `--after Sym` (insert after), `--append` (end of file)
+
+## Refactor
+- `edr refs Sym --impact` — find all references before changing a symbol
+- `edr rename Old New --dry-run` — cross-file, import-aware
+
+## Verify and run
+- `edr verify` — auto-detects build system; runs after edits. `--test` for tests
+- `edr run -- cmd` — run anything; re-runs show only diff. `--reset` clears baseline
+
+## Batch (`-r` read, `-s` search, `-e` edit, `-w` write)
+- `edr -r f.go --sig -s "pat"` — gather context in one call
+- `edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"` — multi-file edit
+
+## Session
+Automatic. After context reset: `edr reset --session`
+`edr checkpoint` before risky changes; `--restore cp_1`, `--list`, `--diff cp_1`
