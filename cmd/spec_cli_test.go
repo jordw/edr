@@ -1677,6 +1677,101 @@ func TestSpec_VerifyFailedAfterAppliedEdit(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Atomic batch edits
+// ---------------------------------------------------------------------------
+
+func TestSpec_BatchAtomicRollback(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"a.go": "package main\n\nvar x = \"aaa\"\n",
+		"b.go": "package main\n\nvar y = \"bbb\"\n",
+	})
+
+	// First edit succeeds, second fails (old-text not found). With --atomic,
+	// neither should apply.
+	_, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"-e", "a.go", "--old", "\"aaa\"", "--new", "\"AAA\"",
+		"-e", "b.go", "--old", "\"nonexistent\"", "--new", "\"BBB\"",
+		"--atomic")
+	if exit == 0 {
+		t.Error("atomic batch with failed edit should exit non-zero")
+	}
+
+	// a.go should be unchanged — the successful edit must have been rolled back.
+	content, _ := os.ReadFile(filepath.Join(dir, "a.go"))
+	if !strings.Contains(string(content), "\"aaa\"") {
+		t.Error("atomic batch should roll back all edits when one fails")
+	}
+}
+
+func TestSpec_BatchAtomicSuccess(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"a.go": "package main\n\nvar x = \"aaa\"\n",
+		"b.go": "package main\n\nvar y = \"bbb\"\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"-e", "a.go", "--old", "\"aaa\"", "--new", "\"AAA\"",
+		"-e", "b.go", "--old", "\"bbb\"", "--new", "\"BBB\"",
+		"--atomic")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	// Both edits should be applied.
+	for _, op := range result.Ops {
+		if op.Header["status"] != "applied" {
+			t.Errorf("status = %v, want applied", op.Header["status"])
+		}
+	}
+
+	contentA, _ := os.ReadFile(filepath.Join(dir, "a.go"))
+	contentB, _ := os.ReadFile(filepath.Join(dir, "b.go"))
+	if !strings.Contains(string(contentA), "\"AAA\"") || !strings.Contains(string(contentB), "\"BBB\"") {
+		t.Error("atomic batch should apply all edits on success")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Skipped ops on failed mutation
+// ---------------------------------------------------------------------------
+
+func TestSpec_FailedEditSkipsWrites(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	// Edit that fails (old-text not found) followed by a write.
+	// The write should be skipped because the edit failed.
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"-e", "hello.go", "--old", "\"nonexistent\"", "--new", "\"replaced\"",
+		"-w", "new.go", "--content", "package main\n")
+	if exit == 0 {
+		t.Error("batch with failed edit should exit non-zero")
+	}
+
+	// Should have at least 2 ops: one failed edit, one skipped write.
+	var hasError, hasSkipped bool
+	for _, op := range result.Ops {
+		if op.Header["error"] != nil {
+			hasError = true
+		}
+		if op.Header["status"] == "skipped" {
+			hasSkipped = true
+		}
+	}
+	if !hasError {
+		t.Error("expected a failed edit op")
+	}
+	if !hasSkipped {
+		t.Error("write after failed edit should be skipped")
+	}
+
+	// The write target should not exist.
+	if _, err := os.Stat(filepath.Join(dir, "new.go")); err == nil {
+		t.Error("skipped write should not create file")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Op ordering — reads before edits see pre-edit state
 // ---------------------------------------------------------------------------
 
