@@ -437,6 +437,12 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			s.currentQuery.Regex = bp(true)
 
+		case "--no-group", "--no_group":
+			if s.currentOp != opSearch {
+				return nil, fmt.Errorf("--no-group is only valid after -s")
+			}
+			s.currentQuery.Group = bp(false)
+
 		// ── edit modifiers ──
 
 		case "--old", "--old_text", "--old-text":
