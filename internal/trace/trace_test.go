@@ -14,7 +14,7 @@ func TestCollectorNil(t *testing.T) {
 	cb.AddEditEvent("f.go", 5, "abc", "def", true)
 	cb.AddVerifyEvent("go build", true, 100, 50)
 	cb.AddQueryEvent("search", true, 200)
-	cb.SetSessionStats(1, 2, 3)
+	cb.SetSessionStats(1, 2)
 	cb.Finish(100, false, 0)
 	tc.Close() // should not panic
 }
@@ -59,7 +59,7 @@ func TestCollectorRecordAndBench(t *testing.T) {
 	budget := 500
 	cb.SetRequest(2, 1, 0, 0, 0, false, false, &budget)
 	cb.AddQueryEvent("search", true, 300)
-	cb.SetSessionStats(1, 0, 0)
+	cb.SetSessionStats(1, 0)
 	cb.Finish(800, false, 0)
 
 	// Record a call with edits and verify
@@ -68,7 +68,7 @@ func TestCollectorRecordAndBench(t *testing.T) {
 	cb2.AddEditEvent("main.go", 5, "hash1", "hash2", true)
 	cb2.AddEditEvent("util.go", 3, "hash3", "hash4", true)
 	cb2.AddVerifyEvent("go build ./...", true, 250, 100)
-	cb2.SetSessionStats(0, 0, 1)
+	cb2.SetSessionStats(0, 0)
 	cb2.Finish(400, false, 1)
 
 	// Wait for flush
@@ -104,8 +104,8 @@ func TestCollectorRecordAndBench(t *testing.T) {
 	if result.DeltaReads != 1 {
 		t.Errorf("expected 1 delta read, got %d", result.DeltaReads)
 	}
-	if result.SlimEdits != 1 {
-		t.Errorf("expected 1 slim edit, got %d", result.SlimEdits)
+	if result.SlimEdits != 0 {
+		t.Errorf("expected 0 slim edits, got %d", result.SlimEdits)
 	}
 	if result.EditFiles != 2 {
 		t.Errorf("expected 2 edit files, got %d", result.EditFiles)

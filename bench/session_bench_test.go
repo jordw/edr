@@ -47,8 +47,8 @@ func handleDoJSON(t testing.TB, ctx context.Context, db *index.DB, sess *session
 	text := sess.PostProcess(cmd, args, flags, result, string(data))
 
 	cb.AddQueryEvent(cmd, true, len(text))
-	dr, bd, se := sess.GetStats()
-	cb.SetSessionStats(dr, bd, se)
+	dr, bd := sess.GetStats()
+	cb.SetSessionStats(dr, bd)
 	cb.Finish(len(text), false, 0)
 
 	return []byte(text)

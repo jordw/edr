@@ -60,23 +60,15 @@ func HasStaleFiles(ctx context.Context, db *DB) (bool, error) {
 // For files in changed directories: full check including new/deleted detection.
 // This avoids content-hash reads for files in unchanged directories and
 // reduces the deleted-file scan from O(all indexed files) to O(changed dir files).
-func hasStaleFilesFast(ctx context.Context, db *DB, lastIndexTime int64) (bool, error) {
-	indexedMeta, err := db.GetAllFileMeta(ctx)
-	if err != nil || len(indexedMeta) == 0 {
-		return true, nil
-	}
-	indexedHashes, err := db.GetAllFileHashes(ctx)
-	if err != nil {
-		indexedHashes = make(map[string]string)
-	}
-
-	root := db.Root()
-	gitignore := LoadGitIgnore(root)
-	seen := make(map[string]bool, len(indexedMeta))
-	changedDirs := make(map[string]bool)
-	var stale bool
-
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+// walkSourceFiles walks the repo, skipping ignored dirs and non-source files.
+// onDir (optional) is called for each non-ignored directory.
+// onFile is called for each source file (has lang config, ≤1MB).
+// Both callbacks may return filepath.SkipAll to stop the walk.
+func walkSourceFiles(ctx context.Context, root string, gitignore *GitIgnoreMatcher,
+	onDir func(path string, info fs.FileInfo) error,
+	onFile func(path string, info fs.FileInfo) error,
+) error {
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -84,12 +76,12 @@ func hasStaleFilesFast(ctx context.Context, db *DB, lastIndexTime int64) (bool, 
 			if shouldIgnoreDir(d.Name(), path, root, gitignore) {
 				return filepath.SkipDir
 			}
-			info, err := d.Info()
-			if err != nil {
-				return nil
-			}
-			if info.ModTime().UnixNano() > lastIndexTime {
-				changedDirs[path] = true
+			if onDir != nil {
+				info, err := d.Info()
+				if err != nil {
+					return nil
+				}
+				return onDir(path, info)
 			}
 			return nil
 		}
@@ -106,48 +98,68 @@ func hasStaleFilesFast(ctx context.Context, db *DB, lastIndexTime int64) (bool, 
 		if err != nil || info.Size() > 1<<20 {
 			return nil
 		}
-
-		seen[path] = true
-		dir := filepath.Dir(path)
-		storedMtime, inDB := indexedMeta[path]
-
-		if !inDB {
-			// New file — only expected in changed directories.
-			stale = true
-			return filepath.SkipAll
-		}
-		if info.ModTime().UnixNano() <= storedMtime {
-			return nil
-		}
-
-		// Mtime changed — for files in unchanged directories, we still
-		// need to verify by content hash to catch external modifications.
-		// For files in changed directories, also verify.
-		if !changedDirs[dir] {
-			// File mtime changed in an "unchanged" dir — external modification.
-			// Read file to confirm by hash.
-		}
-		src, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		if fileHash(src) != indexedHashes[path] {
-			stale = true
-			return filepath.SkipAll
-		}
-		return nil
+		return onFile(path, info)
 	})
+}
+
+// isFileStale checks if a file's content has changed by comparing its hash.
+func isFileStale(path string, indexedHashes map[string]string) bool {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return fileHash(src) != indexedHashes[path]
+}
+
+func hasStaleFilesFast(ctx context.Context, db *DB, lastIndexTime int64) (bool, error) {
+	indexedMeta, err := db.GetAllFileMeta(ctx)
+	if err != nil || len(indexedMeta) == 0 {
+		return true, nil
+	}
+	indexedHashes, err := db.GetAllFileHashes(ctx)
+	if err != nil {
+		indexedHashes = make(map[string]string)
+	}
+
+	root := db.Root()
+	gitignore := LoadGitIgnore(root)
+	seen := make(map[string]bool, len(indexedMeta))
+	changedDirs := make(map[string]bool)
+	var stale bool
+
+	walkSourceFiles(ctx, root, gitignore,
+		func(path string, info fs.FileInfo) error {
+			if info.ModTime().UnixNano() > lastIndexTime {
+				changedDirs[path] = true
+			}
+			return nil
+		},
+		func(path string, info fs.FileInfo) error {
+			seen[path] = true
+			storedMtime, inDB := indexedMeta[path]
+			if !inDB {
+				stale = true
+				return filepath.SkipAll
+			}
+			if info.ModTime().UnixNano() <= storedMtime {
+				return nil
+			}
+			if isFileStale(path, indexedHashes) {
+				stale = true
+				return filepath.SkipAll
+			}
+			return nil
+		},
+	)
 
 	if stale {
 		return true, nil
 	}
 
 	// Check for deleted files only in changed directories.
-	// Files in unchanged directories can't have been deleted (dir mtime would change).
 	for path := range indexedMeta {
 		if !seen[path] && GetLangConfig(path) != nil {
-			dir := filepath.Dir(path)
-			if changedDirs[dir] {
+			if changedDirs[filepath.Dir(path)] {
 				return true, nil
 			}
 		}
@@ -173,56 +185,24 @@ func hasStaleFilesFull(ctx context.Context, db *DB) (bool, error) {
 	seen := make(map[string]bool, len(indexedMeta))
 	var stale bool
 
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if d.IsDir() {
-			if shouldIgnoreDir(d.Name(), path, root, gitignore) {
-				return filepath.SkipDir
+	walkSourceFiles(ctx, root, gitignore, nil,
+		func(path string, info fs.FileInfo) error {
+			seen[path] = true
+			storedMtime, inDB := indexedMeta[path]
+			if !inDB {
+				stale = true
+				return filepath.SkipAll
 			}
-			return nil
-		}
-		if gitignore != nil {
-			rel, _ := filepath.Rel(root, path)
-			if gitignore.IsIgnored(rel, false) {
+			if info.ModTime().UnixNano() <= storedMtime {
 				return nil
 			}
-		}
-
-		if GetLangConfig(path) == nil {
+			if isFileStale(path, indexedHashes) {
+				stale = true
+				return filepath.SkipAll
+			}
 			return nil
-		}
-		info, err := d.Info()
-		if err != nil || info.Size() > 1<<20 {
-			return nil
-		}
-
-		seen[path] = true
-		storedMtime, inDB := indexedMeta[path]
-
-		if !inDB {
-			stale = true
-			return filepath.SkipAll
-		}
-		if info.ModTime().UnixNano() <= storedMtime {
-			return nil
-		}
-
-		// Mtime changed — verify by content hash.
-		src, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		if fileHash(src) != indexedHashes[path] {
-			stale = true
-			return filepath.SkipAll
-		}
-		return nil
-	})
+		},
+	)
 
 	if stale {
 		return true, nil

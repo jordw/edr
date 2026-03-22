@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strconv"
 
 	"github.com/jordw/edr/internal/cmdspec"
@@ -13,6 +14,27 @@ import (
 	"github.com/jordw/edr/internal/session"
 	"github.com/jordw/edr/internal/trace"
 )
+
+// setOptBool sets a boolean flag if the pointer is non-nil and true.
+func setOptBool(flags map[string]any, key string, v *bool) {
+	if v != nil && *v {
+		flags[key] = true
+	}
+}
+
+// setOptInt sets an integer flag if the pointer is non-nil.
+func setOptInt(flags map[string]any, key string, v *int) {
+	if v != nil {
+		flags[key] = *v
+	}
+}
+
+// setOptStr sets a string flag if the pointer is non-nil and non-empty.
+func setOptStr(flags map[string]any, key string, v *string) {
+	if v != nil && *v != "" {
+		flags[key] = *v
+	}
+}
 
 // doParams holds the parsed params for batch operations.
 type doParams struct {
@@ -208,45 +230,40 @@ func parseDo(raw json.RawMessage) (doParams, []string, error) {
 }
 
 // executeReads dispatches read operations and adds results as ops on the envelope.
+func buildReadCmd(r doRead, forceFullRead bool) dispatch.MultiCmd {
+	args := []string{r.File}
+	if r.Symbol != "" {
+		args = []string{r.File + ":" + r.Symbol}
+	}
+	if r.StartLine != nil && r.EndLine != nil && r.Symbol == "" {
+		args = []string{r.File, strconv.Itoa(*r.StartLine), strconv.Itoa(*r.EndLine)}
+	}
+	flags := map[string]any{}
+	if forceFullRead {
+		flags["full"] = true
+	}
+	setOptInt(flags, "budget", r.Budget)
+	setOptBool(flags, "signatures", r.Signatures)
+	setOptBool(flags, "skeleton", r.Skeleton)
+	setOptBool(flags, "symbols", r.Symbols)
+	setOptBool(flags, "full", r.Full)
+	setOptInt(flags, "depth", r.Depth)
+	if r.Lines != "" {
+		flags["lines"] = r.Lines
+	}
+	if r.StartLine != nil && r.EndLine == nil {
+		flags["start_line"] = *r.StartLine
+	}
+	if r.EndLine != nil && r.StartLine == nil {
+		flags["end_line"] = *r.EndLine
+	}
+	return dispatch.MultiCmd{Cmd: "read", Args: args, Flags: flags}
+}
+
 func executeReads(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams) {
 	cmds := make([]dispatch.MultiCmd, len(p.Reads))
 	for i, r := range p.Reads {
-		readArgs := []string{r.File}
-		if r.Symbol != "" {
-			readArgs = []string{r.File + ":" + r.Symbol}
-		}
-		if r.StartLine != nil && r.EndLine != nil && r.Symbol == "" {
-			readArgs = []string{r.File, strconv.Itoa(*r.StartLine), strconv.Itoa(*r.EndLine)}
-		}
-		readFlags := map[string]any{}
-		if r.Budget != nil {
-			readFlags["budget"] = *r.Budget
-		}
-		if r.Signatures != nil && *r.Signatures {
-			readFlags["signatures"] = true
-		}
-		if r.Skeleton != nil && *r.Skeleton {
-			readFlags["skeleton"] = true
-		}
-		if r.Lines != "" {
-			readFlags["lines"] = r.Lines
-		}
-		if r.Depth != nil {
-			readFlags["depth"] = *r.Depth
-		}
-		if r.StartLine != nil && r.EndLine == nil {
-			readFlags["start_line"] = *r.StartLine
-		}
-		if r.EndLine != nil && r.StartLine == nil {
-			readFlags["end_line"] = *r.EndLine
-		}
-		if r.Symbols != nil && *r.Symbols {
-			readFlags["symbols"] = true
-		}
-		if r.Full != nil && *r.Full {
-			readFlags["full"] = true
-		}
-		cmds[i] = dispatch.MultiCmd{Cmd: "read", Args: readArgs, Flags: readFlags}
+		cmds[i] = buildReadCmd(r, false)
 	}
 	var budgetOpt []int
 	if p.Budget != nil {
@@ -255,48 +272,12 @@ func executeReads(ctx context.Context, db *index.DB, sess *session.Session, env 
 	results := dispatch.DispatchMulti(ctx, db, cmds, budgetOpt...)
 	addMultiResultOps(env, sess, cmds, results, "r")
 }
-
-// copyFlags creates a shallow copy of a flags map.
-func copyFlags(flags map[string]any) map[string]any {
-	cp := make(map[string]any, len(flags))
-	for k, v := range flags {
-		cp[k] = v
-	}
-	return cp
-}
-
 // executePostEditReads runs reads that were placed after edits in CLI order.
 // These see post-edit file state since edits have already been committed.
 func executePostEditReads(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams) {
 	cmds := make([]dispatch.MultiCmd, len(p.PostEditReads))
 	for i, r := range p.PostEditReads {
-		readArgs := []string{r.File}
-		if r.Symbol != "" {
-			readArgs = []string{r.File + ":" + r.Symbol}
-		}
-		if r.StartLine != nil && r.EndLine != nil && r.Symbol == "" {
-			readArgs = []string{r.File, strconv.Itoa(*r.StartLine), strconv.Itoa(*r.EndLine)}
-		}
-		readFlags := map[string]any{"full": true} // force full read (post-edit, skip session delta)
-		if r.Budget != nil {
-			readFlags["budget"] = *r.Budget
-		}
-		if r.Signatures != nil && *r.Signatures {
-			readFlags["signatures"] = true
-		}
-		if r.Skeleton != nil && *r.Skeleton {
-			readFlags["skeleton"] = true
-		}
-		if r.Lines != "" {
-			readFlags["lines"] = r.Lines
-		}
-		if r.Depth != nil {
-			readFlags["depth"] = *r.Depth
-		}
-		if r.Symbols != nil && *r.Symbols {
-			readFlags["symbols"] = true
-		}
-		cmds[i] = dispatch.MultiCmd{Cmd: "read", Args: readArgs, Flags: readFlags}
+		cmds[i] = buildReadCmd(r, true)
 	}
 	var budgetOpt []int
 	if p.Budget != nil {
@@ -412,18 +393,10 @@ func executeWrites(ctx context.Context, db *index.DB, sess *session.Session, env
 	for i, w := range p.Writes {
 		opID := fmt.Sprintf("w%d", i)
 		flags := map[string]any{"content": w.Content}
-		if w.Mkdir != nil && *w.Mkdir {
-			flags["mkdir"] = true
-		}
-		if w.After != nil && *w.After != "" {
-			flags["after"] = *w.After
-		}
-		if w.Inside != nil && *w.Inside != "" {
-			flags["inside"] = *w.Inside
-		}
-		if w.Append != nil && *w.Append {
-			flags["append"] = true
-		}
+		setOptBool(flags, "mkdir", w.Mkdir)
+		setOptBool(flags, "append", w.Append)
+		setOptStr(flags, "after", w.After)
+		setOptStr(flags, "inside", w.Inside)
 		if dryRun {
 			flags["dry_run"] = true
 		}
@@ -462,29 +435,17 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env 
 		if e.NewText != "" || e.OldText != "" || e.Symbol != "" || (e.StartLine != nil && e.EndLine != nil) {
 			flags["new_text"] = e.NewText
 		}
-		if e.StartLine != nil {
-			flags["start_line"] = *e.StartLine
-		}
-		if e.EndLine != nil {
-			flags["end_line"] = *e.EndLine
-		}
-		if e.All != nil && *e.All {
-			flags["all"] = true
-		}
+		setOptInt(flags, "start_line", e.StartLine)
+		setOptInt(flags, "end_line", e.EndLine)
+		setOptBool(flags, "all", e.All)
+		setOptBool(flags, "delete", e.Delete)
+		setOptBool(flags, "fuzzy", e.Fuzzy)
+		setOptInt(flags, "insert_at", e.InsertAt)
 		if e.In != "" {
 			flags["in"] = e.In
 		}
 		if e.ExpectHash != "" {
 			flags["expect_hash"] = e.ExpectHash
-		}
-		if e.Delete != nil && *e.Delete {
-			flags["delete"] = true
-		}
-		if e.InsertAt != nil {
-			flags["insert_at"] = *e.InsertAt
-		}
-		if e.Fuzzy != nil && *e.Fuzzy {
-			flags["fuzzy"] = true
 		}
 		if dryRun {
 			flags["dry_run"] = true
@@ -500,7 +461,7 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env 
 		for i, cmd := range cmds {
 			dryRunCmds[i] = dispatch.MultiCmd{
 				Cmd: cmd.Cmd, Args: cmd.Args,
-				Flags: copyFlags(cmd.Flags),
+				Flags: maps.Clone(cmd.Flags),
 			}
 			dryRunCmds[i].Flags["dry_run"] = true
 		}
@@ -785,8 +746,8 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, tc *trac
 
 	// Trace: record session stats and finish
 	resultData, _ := json.Marshal(env)
-	dr, bd, se := sess.GetStats()
-	cb.SetSessionStats(dr, bd, se)
+	dr, bd := sess.GetStats()
+	cb.SetSessionStats(dr, bd)
 	cb.Finish(len(resultData), false, len(warnings))
 
 	return nil

@@ -219,44 +219,8 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 	// Languages with MethodsOutside (Go): --inside adds fields, not methods.
 	// Auto-reroute methods to --after.
 	if cfg != nil && cfg.MethodsOutside && (container.Type == "struct" || container.Type == "type") {
-		data, readErr := os.ReadFile(container.File)
-		if readErr == nil {
-			body := string(data[container.StartByte:container.EndByte])
-			if strings.Contains(body, "struct {") || strings.Contains(body, "struct{") {
-				trimmed := strings.TrimSpace(content)
-				if strings.HasPrefix(trimmed, "func ") || strings.HasPrefix(trimmed, "func(") {
-					// If --after is also set, honor it for placement
-					afterChild := flagString(flags, "after", "")
-					insertAfter := container.EndByte
-					insertLabel := container.Name
-					if afterChild != "" {
-						afterSym, afterErr := db.GetSymbol(ctx, container.File, afterChild)
-						if afterErr != nil {
-							return nil, fmt.Errorf("--after symbol %q not found in %s: %w", afterChild, output.Rel(container.File), afterErr)
-						}
-						insertAfter = afterSym.EndByte
-						insertLabel = afterSym.Name
-					}
-					insertion := "\n\n" + content
-					if flagBool(flags, "dry-run", false) {
-						newData := make([]byte, 0, len(data)+len(insertion))
-						newData = append(newData, data[:insertAfter]...)
-						newData = append(newData, []byte(insertion)...)
-						newData = append(newData, data[insertAfter:]...)
-						diff := edit.UnifiedDiff(output.Rel(container.File), data, newData)
-						return map[string]any{"file": output.Rel(container.File), "diff": diff, "status": "dry_run"}, nil
-					}
-					hash := edit.HashBytes(data)
-					cr, err := commitEdits(ctx, db, []resolvedEdit{{
-						File: container.File, StartByte: insertAfter, EndByte: insertAfter,
-						Replacement: insertion, ExpectHash: hash,
-					}})
-					if err != nil {
-						return nil, err
-					}
-					return writeResult(container.File, cr, fmt.Sprintf("inserted after %s (auto-rerouted from --inside: Go struct methods go outside)", insertLabel)), nil
-				}
-			}
+		if result, err := rerouteGoMethod(ctx, db, container, content, flags); result != nil || err != nil {
+			return result, err
 		}
 	}
 
@@ -306,6 +270,54 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 		return nil, err
 	}
 	return writeResult(container.File, cr, fmt.Sprintf("inserted inside %s", container.Name)), nil
+}
+
+// rerouteGoMethod handles Go struct methods: since methods are defined outside
+// the struct, auto-reroute func insertions to after the struct. Returns (nil, nil)
+// if the content is not a function or the container is not a Go struct.
+func rerouteGoMethod(ctx context.Context, db *index.DB, container *index.SymbolInfo, content string, flags map[string]any) (any, error) {
+	data, readErr := os.ReadFile(container.File)
+	if readErr != nil {
+		return nil, nil
+	}
+	body := string(data[container.StartByte:container.EndByte])
+	if !strings.Contains(body, "struct {") && !strings.Contains(body, "struct{") {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(content)
+	if !strings.HasPrefix(trimmed, "func ") && !strings.HasPrefix(trimmed, "func(") {
+		return nil, nil
+	}
+
+	afterChild := flagString(flags, "after", "")
+	insertAfter := container.EndByte
+	insertLabel := container.Name
+	if afterChild != "" {
+		afterSym, afterErr := db.GetSymbol(ctx, container.File, afterChild)
+		if afterErr != nil {
+			return nil, fmt.Errorf("--after symbol %q not found in %s: %w", afterChild, output.Rel(container.File), afterErr)
+		}
+		insertAfter = afterSym.EndByte
+		insertLabel = afterSym.Name
+	}
+	insertion := "\n\n" + content
+	if flagBool(flags, "dry-run", false) {
+		newData := make([]byte, 0, len(data)+len(insertion))
+		newData = append(newData, data[:insertAfter]...)
+		newData = append(newData, []byte(insertion)...)
+		newData = append(newData, data[insertAfter:]...)
+		diff := edit.UnifiedDiff(output.Rel(container.File), data, newData)
+		return map[string]any{"file": output.Rel(container.File), "diff": diff, "status": "dry_run"}, nil
+	}
+	hash := edit.HashBytes(data)
+	cr, err := commitEdits(ctx, db, []resolvedEdit{{
+		File: container.File, StartByte: insertAfter, EndByte: insertAfter,
+		Replacement: insertion, ExpectHash: hash,
+	}})
+	if err != nil {
+		return nil, err
+	}
+	return writeResult(container.File, cr, fmt.Sprintf("inserted after %s (auto-rerouted from --inside: Go struct methods go outside)", insertLabel)), nil
 }
 
 // insertInsideAfterChild inserts content after a specific child symbol within a container.

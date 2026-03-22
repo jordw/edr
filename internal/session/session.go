@@ -41,7 +41,7 @@ type Session struct {
 	mu            sync.Mutex
 	FileContent   map[string]ContentEntry `json:"file_content"`
 	SymbolContent map[string]ContentEntry `json:"symbol_content"`
-	ContentOrder  int                     `json:"content_order"`
+	ContentOrder  int                     `json:"-"`
 	SeenBodies    map[string]string       `json:"seen_bodies"`
 	Diffs         map[string]string       `json:"diffs"`
 	SeenHints  map[string]bool   `json:"seen_hints,omitempty"`
@@ -59,10 +59,10 @@ func (s *Session) ResetStats() {
 }
 
 // GetStats returns current optimization counters.
-func (s *Session) GetStats() (deltaReads, bodyDedup, slimEdits int) {
+func (s *Session) GetStats() (deltaReads, bodyDedup int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.stats.DeltaReads, s.stats.BodyDedup, 0
+	return s.stats.DeltaReads, s.stats.BodyDedup
 }
 
 const MaxContentEntries = 200

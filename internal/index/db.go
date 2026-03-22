@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"sort"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -329,34 +330,12 @@ func (d *DB) migrate() error {
 		return nil
 	}
 
-	if version < 1 {
-		if err := d.migrateV1(); err != nil {
-			return err
-		}
-	}
-	if version < 2 {
-		if err := d.migrateV2(); err != nil {
-			return err
-		}
-	}
-	if version < 3 {
-		if err := d.migrateV3(); err != nil {
-			return err
-		}
-	}
-	if version < 4 {
-		if err := d.migrateV4(); err != nil {
-			return err
-		}
-	}
-	if version < 5 {
-		if err := d.migrateV5(); err != nil {
-			return err
-		}
-	}
-	if version < 6 {
-		if err := d.migrateV6(); err != nil {
-			return err
+	migrations := []func() error{d.migrateV1, d.migrateV2, d.migrateV3, d.migrateV4, d.migrateV5, d.migrateV6}
+	for i, m := range migrations {
+		if version < i+1 {
+			if err := m(); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -541,11 +520,6 @@ func (d *DB) ClearFileData(ctx context.Context, file string) error {
 	}
 	_, err = q.ExecContext(ctx, "DELETE FROM symbols WHERE file = ?", file)
 	return err
-}
-
-// ClearSymbols removes all symbols for a file (legacy compat).
-func (d *DB) ClearSymbols(ctx context.Context, file string) error {
-	return d.ClearFileData(ctx, file)
 }
 
 // InsertSymbol adds a symbol to the index.
@@ -814,15 +788,9 @@ func (d *DB) FindSemanticCallers(ctx context.Context, symbolName, symbolFile str
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var candidates []SymbolInfo
-	for rows.Next() {
-		var s SymbolInfo
-		if err := rows.Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte); err != nil {
-			return nil, err
-		}
-		candidates = append(candidates, s)
+	candidates, err := scanSymbols(rows)
+	if err != nil {
+		return nil, err
 	}
 
 	// Filter by import visibility
@@ -980,6 +948,20 @@ func (d *DB) getImportsForFile(ctx context.Context, file string) []ImportInfo {
 	return imports
 }
 
+// scanSymbols reads SymbolInfo rows from a query result set.
+func scanSymbols(rows *sql.Rows) ([]SymbolInfo, error) {
+	defer rows.Close()
+	var results []SymbolInfo
+	for rows.Next() {
+		var s SymbolInfo
+		if err := rows.Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte); err != nil {
+			return nil, err
+		}
+		results = append(results, s)
+	}
+	return results, rows.Err()
+}
+
 // SearchSymbols finds symbols matching a name pattern.
 func (d *DB) SearchSymbols(ctx context.Context, pattern string, limit ...int) ([]SymbolInfo, error) {
 	if pattern == "" {
@@ -997,17 +979,7 @@ func (d *DB) SearchSymbols(ctx context.Context, pattern string, limit ...int) ([
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var results []SymbolInfo
-	for rows.Next() {
-		var s SymbolInfo
-		if err := rows.Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte); err != nil {
-			return nil, err
-		}
-		results = append(results, s)
-	}
-	return results, nil
+	return scanSymbols(rows)
 }
 
 // GetSymbol returns a specific symbol by name and file.
@@ -1044,17 +1016,8 @@ func (d *DB) GetSymbol(ctx context.Context, file, name string) (*SymbolInfo, err
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var results []SymbolInfo
-	for rows.Next() {
-		var s SymbolInfo
-		if err := rows.Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte); err != nil {
-			return nil, err
-		}
-		results = append(results, s)
-	}
-	if err := rows.Err(); err != nil {
+	results, err := scanSymbols(rows)
+	if err != nil {
 		return nil, err
 	}
 	if len(results) == 0 {
@@ -1091,15 +1054,9 @@ func (d *DB) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo, error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var results []SymbolInfo
-	for rows.Next() {
-		var s SymbolInfo
-		if err := rows.Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte); err != nil {
-			return nil, err
-		}
-		results = append(results, s)
+	results, err := scanSymbols(rows)
+	if err != nil {
+		return nil, err
 	}
 	if len(results) == 0 {
 		// Try case-insensitive fallback
@@ -1109,14 +1066,7 @@ func (d *DB) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo, error
 			ORDER BY file
 		`, name)
 		if err == nil {
-			defer ciRows.Close()
-			for ciRows.Next() {
-				var s SymbolInfo
-				if err := ciRows.Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte); err != nil {
-					break
-				}
-				results = append(results, s)
-			}
+			results, _ = scanSymbols(ciRows)
 		}
 		if len(results) == 0 {
 			return nil, d.symbolNotFoundError(ctx, name, "")
@@ -1143,17 +1093,7 @@ func (d *DB) GetSymbolsByFile(ctx context.Context, file string) ([]SymbolInfo, e
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var results []SymbolInfo
-	for rows.Next() {
-		var s SymbolInfo
-		if err := rows.Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte); err != nil {
-			return nil, err
-		}
-		results = append(results, s)
-	}
-	return results, nil
+	return scanSymbols(rows)
 }
 
 // AllSymbols returns all indexed symbols.
@@ -1165,17 +1105,7 @@ func (d *DB) AllSymbols(ctx context.Context) ([]SymbolInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var results []SymbolInfo
-	for rows.Next() {
-		var s SymbolInfo
-		if err := rows.Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte); err != nil {
-			return nil, err
-		}
-		results = append(results, s)
-	}
-	return results, nil
+	return scanSymbols(rows)
 }
 
 // GetAllFileHashes loads all (path → content hash) pairs in a single query.
@@ -1250,17 +1180,7 @@ func (d *DB) FilteredSymbols(ctx context.Context, dir, symbolType, namePattern s
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var results []SymbolInfo
-	for rows.Next() {
-		var s SymbolInfo
-		if err := rows.Scan(&s.Name, &s.Type, &s.File, &s.StartLine, &s.EndLine, &s.StartByte, &s.EndByte); err != nil {
-			return nil, err
-		}
-		results = append(results, s)
-	}
-	return results, rows.Err()
+	return scanSymbols(rows)
 }
 
 // Stats returns index statistics.
@@ -1401,14 +1321,7 @@ func (d *DB) symbolNotFoundError(ctx context.Context, name, file string) error {
 		}
 	}
 
-	// Sort by score descending
-	for i := 0; i < len(ranked); i++ {
-		for j := i + 1; j < len(ranked); j++ {
-			if ranked[j].score > ranked[i].score {
-				ranked[i], ranked[j] = ranked[j], ranked[i]
-			}
-		}
-	}
+	sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
 
 	var names []string
 	for i, r := range ranked {

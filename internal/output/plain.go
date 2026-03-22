@@ -120,30 +120,15 @@ func writeBody(w *os.File, body string) {
 
 func plainRead(w *os.File, op Op) {
 	h := map[string]any{}
-	if v, ok := op["file"].(string); ok {
-		h["file"] = v
-	}
-	if v, ok := op["symbol"].(string); ok {
-		h["sym"] = v
-	}
+	hStr(h, "file", op, "file")
+	hStr(h, "sym", op, "symbol")
 	if v, ok := op["lines"]; ok {
 		h["lines"] = v
 	}
-	if v, ok := op["hash"].(string); ok && v != "" {
-		h["hash"] = v
-	}
-	if v, ok := op["truncated"].(bool); ok && v {
-		h["trunc"] = true
-		if bu := anyInt(op["budget_used"]); bu > 0 {
-			h["budget_used"] = bu
-		}
-	}
-	if v, ok := op["session"].(string); ok && (v == "unchanged" || v == "new") {
-		h["session"] = v
-	}
-	if v, ok := op["hint"].(string); ok && v != "" {
-		h["hint"] = v
-	}
+	hStr(h, "hash", op, "hash")
+	hTrunc(h, op)
+	hSession(h, op)
+	hStr(h, "hint", op, "hint")
 	writeHeader(w, h)
 
 	content, _ := op["content"].(string)
@@ -152,19 +137,10 @@ func plainRead(w *os.File, op Op) {
 
 func plainSearch(w *os.File, op Op) {
 	h := map[string]any{}
-	if v, ok := op["session"].(string); ok && (v == "unchanged" || v == "new") {
-		h["session"] = v
-	}
+	hSession(h, op)
 	h["n"] = anyInt(op["total_matches"])
-	if v, ok := op["truncated"].(bool); ok && v {
-		h["trunc"] = true
-		if bu := anyInt(op["budget_used"]); bu > 0 {
-			h["budget_used"] = bu
-		}
-	}
-	if v, ok := op["hint"].(string); ok && v != "" {
-		h["hint"] = v
-	}
+	hTrunc(h, op)
+	hStr(h, "hint", op, "hint")
 	writeHeader(w, h)
 
 	// Flat matches
@@ -221,18 +197,10 @@ func writeMatch(w *os.File, file string, m any) {
 
 func plainEdit(w *os.File, op Op) {
 	h := map[string]any{}
-	if v, ok := op["file"].(string); ok {
-		h["file"] = v
-	}
-	if v, ok := op["status"].(string); ok {
-		h["status"] = v
-	}
-	if v, ok := op["hash"].(string); ok {
-		h["hash"] = v
-	}
-	if v, ok := op["message"].(string); ok {
-		h["msg"] = v
-	}
+	hStr(h, "file", op, "file")
+	hStr(h, "status", op, "status")
+	hStr(h, "hash", op, "hash")
+	hStr(h, "msg", op, "message")
 	writeHeader(w, h)
 
 	diff, _ := op["diff"].(string)
@@ -241,15 +209,9 @@ func plainEdit(w *os.File, op Op) {
 
 func plainRename(w *os.File, op Op) {
 	h := map[string]any{}
-	if v, ok := op["status"].(string); ok && v != "" {
-		h["status"] = v
-	}
-	if v, ok := op["old_name"].(string); ok {
-		h["from"] = v
-	}
-	if v, ok := op["new_name"].(string); ok {
-		h["to"] = v
-	}
+	hStr(h, "status", op, "status")
+	hStr(h, "from", op, "old_name")
+	hStr(h, "to", op, "new_name")
 	if v, ok := op["occurrences"].(int); ok && v > 0 {
 		h["n"] = v
 	}
@@ -285,24 +247,15 @@ func plainRename(w *os.File, op Op) {
 
 func plainMap(w *os.File, op Op) {
 	h := map[string]any{}
-	if v, ok := op["session"].(string); ok && (v == "unchanged" || v == "new") {
-		h["session"] = v
-	}
+	hSession(h, op)
 	if v := anyInt(op["files"]); v > 0 {
 		h["files"] = v
 	}
 	if v := anyInt(op["symbols"]); v > 0 {
 		h["symbols"] = v
 	}
-	if v, ok := op["truncated"].(bool); ok && v {
-		h["trunc"] = true
-		if bu := anyInt(op["budget_used"]); bu > 0 {
-			h["budget_used"] = bu
-		}
-	}
-	if v, ok := op["hint"].(string); ok && v != "" {
-		h["hint"] = v
-	}
+	hTrunc(h, op)
+	hStr(h, "hint", op, "hint")
 	writeHeader(w, h)
 
 	// Structured map: list of file entries
@@ -468,6 +421,32 @@ func plainReindex(w *os.File, op Op) {
 		h["symbols"] = v
 	}
 	writeHeader(w, h)
+}
+
+// Header helpers — reduce boilerplate in plain* functions.
+
+// hStr copies a string field from op to header, optionally renaming.
+func hStr(h map[string]any, hKey string, op Op, opKey string) {
+	if v, ok := op[opKey].(string); ok && v != "" {
+		h[hKey] = v
+	}
+}
+
+// hSession copies the session field if it is "unchanged" or "new".
+func hSession(h map[string]any, op Op) {
+	if v, ok := op["session"].(string); ok && (v == "unchanged" || v == "new") {
+		h["session"] = v
+	}
+}
+
+// hTrunc copies truncation info (trunc + budget_used).
+func hTrunc(h map[string]any, op Op) {
+	if v, ok := op["truncated"].(bool); ok && v {
+		h["trunc"] = true
+		if bu := anyInt(op["budget_used"]); bu > 0 {
+			h["budget_used"] = bu
+		}
+	}
 }
 
 // anyInt extracts an int from any (handles float64 from JSON and int from Go).

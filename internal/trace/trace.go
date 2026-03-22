@@ -102,7 +102,6 @@ type callRecord struct {
 	wasTruncated   bool
 	numDeltaReads  int
 	numBodyDedup   int
-	numSlimEdits   int
 }
 
 // EditEvent records one edit within a call.
@@ -246,7 +245,7 @@ func (tc *Collector) flushEvent(ev traceEvent) {
 		c.numReads, c.numQueries, c.numEdits, c.numWrites, c.numRenames,
 		hasVerify, hasInit, budgetVal,
 		c.responseBytes, c.numWarnings, wasTruncated,
-		c.numDeltaReads, c.numBodyDedup, c.numSlimEdits,
+		c.numDeltaReads, c.numBodyDedup, 0,
 	)
 	if err != nil {
 		// Silently drop — stderr noise poisons agent context
@@ -344,13 +343,12 @@ func (cb *CallBuilder) AddQueryEvent(cmd string, ok bool, resultBytes int) {
 }
 
 // SetSessionStats records session optimization hits.
-func (cb *CallBuilder) SetSessionStats(deltaReads, bodyDedup, slimEdits int) {
+func (cb *CallBuilder) SetSessionStats(deltaReads, bodyDedup int) {
 	if cb == nil {
 		return
 	}
 	cb.call.numDeltaReads = deltaReads
 	cb.call.numBodyDedup = bodyDedup
-	cb.call.numSlimEdits = slimEdits
 }
 
 // Finish calculates duration and sends the event to the flush channel.
