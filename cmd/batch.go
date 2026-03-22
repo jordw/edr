@@ -80,6 +80,7 @@ type doQuery struct {
 	Glob   *string `json:"glob,omitempty"`
 	Type   *string `json:"type,omitempty"`
 	Grep   *string `json:"grep,omitempty"`
+	Lang   *string `json:"lang,omitempty"`
 	Locals *bool   `json:"locals,omitempty"`
 }
 
@@ -975,6 +976,9 @@ func queryToMultiCmd(q doQuery) dispatch.MultiCmd {
 		}
 		if q.Grep != nil && *q.Grep != "" {
 			flags["grep"] = *q.Grep
+		}
+		if q.Lang != nil && *q.Lang != "" {
+			flags["lang"] = *q.Lang
 		}
 		if q.Locals != nil && *q.Locals {
 			flags["locals"] = true

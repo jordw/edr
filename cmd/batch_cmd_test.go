@@ -62,6 +62,18 @@ func TestBatchParseInsertAt(t *testing.T) {
 	}
 }
 
+func TestBatchQueryLang(t *testing.T) {
+	// Test that JSON batch with lang field is correctly threaded
+	q := doQuery{
+		Cmd:  "map",
+		Lang: sp("go"),
+	}
+	mc := queryToMultiCmd(q)
+	if mc.Flags["lang"] != "go" {
+		t.Errorf("expected lang=go, got %v", mc.Flags["lang"])
+	}
+}
+
 func TestSilentErrorExitCode(t *testing.T) {
 	tests := []struct {
 		name string
