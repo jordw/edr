@@ -2369,6 +2369,96 @@ func TestSpec_NextStaleAssumption(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Next: current section
+// ---------------------------------------------------------------------------
+
+func TestSpec_NextCurrentModified(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n\nfunc greet(name string) string { return name }\n",
+	})
+	sessEnv := []string{"EDR_SESSION=test-current-mod"}
+
+	// Edit hello (symbol-scoped via --in)
+	_, _, _, exit := specRun(t, binary, dir, sessEnv, "edit", "main.go",
+		"--in", "hello", "--old-text", `println("hi")`, "--new-text", `println("hello world")`)
+	if exit != 0 {
+		t.Fatal("edit failed")
+	}
+
+	// Next should show hello as modified in current
+	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "next")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	header := result.Ops[0].Header
+	currentCount, _ := header["current"].(float64)
+	if currentCount < 1 {
+		t.Errorf("expected current>=1, got %v\nstdout: %s", currentCount, stdout)
+	}
+	if !strings.Contains(stdout, "hello(modified)") {
+		t.Errorf("expected hello(modified) in current: %s", stdout)
+	}
+	if !strings.Contains(stdout, "func hello()") {
+		t.Errorf("expected signature in current: %s", stdout)
+	}
+}
+
+func TestSpec_NextCurrentRecent(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+	sessEnv := []string{"EDR_SESSION=test-current-recent"}
+
+	// Read hello (symbol-scoped — records assumption)
+	_, _, _, exit := specRun(t, binary, dir, sessEnv, "read", "main.go:hello")
+	if exit != 0 {
+		t.Fatal("read failed")
+	}
+
+	// Next should show hello as recent in current
+	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "next")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if !strings.Contains(stdout, "hello(recent)") {
+		t.Errorf("expected hello(recent) in current: %s", stdout)
+	}
+}
+
+func TestSpec_NextCurrentStale(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+	sessEnv := []string{"EDR_SESSION=test-current-stale"}
+
+	// Read hello (records assumption)
+	_, _, _, exit := specRun(t, binary, dir, sessEnv, "read", "main.go:hello")
+	if exit != 0 {
+		t.Fatal("read failed")
+	}
+
+	// Edit hello's signature
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "edit", "main.go",
+		"--old-text", "func hello()", "--new-text", "func hello(name string)")
+	if exit != 0 {
+		t.Fatal("edit failed")
+	}
+
+	// Next should show hello as stale in current (not just recent)
+	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "next")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if !strings.Contains(stdout, "hello(stale)") {
+		t.Errorf("expected hello(stale) in current: %s", stdout)
+	}
+	// Should show the NEW signature (what the code looks like now)
+	if !strings.Contains(stdout, "name string") {
+		t.Errorf("expected new signature with 'name string' in current: %s", stdout)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Checkpoint
 // ---------------------------------------------------------------------------
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/pprof"
+	"sort"
 	"strings"
 
 	"github.com/jordw/edr/internal/cmdspec"
@@ -679,6 +680,11 @@ func buildNextResult(sess *session.Session, db *index.DB, count int) map[string]
 		if len(fix) > 0 {
 			result["fix"] = fix
 		}
+
+		current := computeCurrentItems(sess, db)
+		if len(current) > 0 {
+			result["current"] = current
+		}
 	}
 
 	return result
@@ -746,6 +752,179 @@ func computeFixItems(sess *session.Session, db *index.DB) []any {
 		fix = append(fix, item)
 	}
 	return fix
+}
+
+// MaxCurrentItems is the hard cap on symbols in the current: section.
+const MaxCurrentItems = 10
+
+// currentItem represents one symbol in the current: section of next output.
+type currentItem struct {
+	File   string
+	Symbol string
+	Reason string // "modified", "stale", "recent"
+	Sig    string // current signature from index
+}
+
+// computeCurrentItems builds the current: section — live signatures of active symbols.
+// Sources (in priority order): modified symbols, stale assumptions, recent symbol reads.
+// Deduplicates by file:symbol, caps at MaxCurrentItems.
+func computeCurrentItems(sess *session.Session, db *index.DB) []any {
+	if db == nil {
+		return nil
+	}
+
+	type candidate struct {
+		file, symbol, reason string
+		priority             int // 0 = modified (highest), 1 = stale, 2 = recent
+	}
+
+	seen := make(map[string]bool)
+	var candidates []candidate
+
+	addCandidate := func(file, symbol, reason string, priority int) {
+		if file == "" || symbol == "" {
+			return
+		}
+		key := file + ":" + symbol
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		candidates = append(candidates, candidate{file, symbol, reason, priority})
+	}
+
+	// 1. Modified symbols: walk op log for edit/write ops with a symbol
+	allOps := sess.GetRecentOps(0)
+	for i := len(allOps) - 1; i >= 0; i-- {
+		op := allOps[i]
+		if !op.OK || op.Symbol == "" {
+			continue
+		}
+		switch op.Cmd {
+		case "edit", "write":
+			addCandidate(op.File, op.Symbol, "modified", 0)
+		}
+	}
+
+	// 2. Stale assumptions
+	assumptions := sess.GetAssumptions()
+	// We need current sigs to check staleness — reuse the same logic as computeFixItems
+	ctx := context.Background()
+	currentSigs := make(map[string]string, len(assumptions))
+	for key := range assumptions {
+		idx := strings.IndexByte(key, ':')
+		if idx <= 0 {
+			continue
+		}
+		file, symName := key[:idx], key[idx+1:]
+		absFile, err := db.ResolvePath(file)
+		if err != nil {
+			continue
+		}
+		syms, err := db.GetSymbolsByFile(ctx, absFile)
+		if err != nil {
+			continue
+		}
+		src, err := os.ReadFile(absFile)
+		if err != nil {
+			continue
+		}
+		for _, sym := range syms {
+			if sym.Name == symName {
+				sig := index.ExtractSignatureFromSource(sym, src)
+				currentSigs[key] = session.SigHash(sig)
+				break
+			}
+		}
+	}
+	stale := sess.CheckAssumptions(currentSigs)
+	for _, s := range stale {
+		addCandidate(s.File, s.Symbol, "stale", 1)
+	}
+
+	// 3. Recent symbol-scoped reads (last 20 ops, most recent first)
+	recentLimit := 20
+	if recentLimit > len(allOps) {
+		recentLimit = len(allOps)
+	}
+	for i := len(allOps) - 1; i >= len(allOps)-recentLimit; i-- {
+		if i < 0 {
+			break
+		}
+		op := allOps[i]
+		if op.Cmd == "read" && op.Symbol != "" && op.OK {
+			addCandidate(op.File, op.Symbol, "recent", 2)
+		}
+	}
+
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	// Sort by priority (modified first, then stale, then recent)
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].priority < candidates[j].priority
+	})
+
+	// Cap
+	if len(candidates) > MaxCurrentItems {
+		candidates = candidates[:MaxCurrentItems]
+	}
+
+	// Resolve current signatures from index
+	var items []any
+	for _, c := range candidates {
+		absFile, err := db.ResolvePath(c.file)
+		if err != nil {
+			continue
+		}
+		syms, err := db.GetSymbolsByFile(ctx, absFile)
+		if err != nil {
+			continue
+		}
+		src, err := os.ReadFile(absFile)
+		if err != nil {
+			continue
+		}
+		for _, sym := range syms {
+			if sym.Name == c.symbol {
+				sig := index.ExtractSignatureFromSource(sym, src)
+				sig = trimSignature(sig, c.symbol)
+				items = append(items, map[string]any{
+					"file":      c.file,
+					"symbol":    c.symbol,
+					"reason":    c.reason,
+					"signature": sig,
+				})
+				break
+			}
+		}
+	}
+
+	return items
+}
+
+// trimSignature cleans up multi-line signatures for compact display.
+func trimSignature(sig, symbol string) string {
+	if !strings.Contains(sig, "\n") {
+		return sig
+	}
+	lines := strings.Split(sig, "\n")
+	// Prefer declaration lines (func/type/class/def/etc.) that contain the symbol name
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, symbol) && !strings.HasPrefix(trimmed, "//") && !strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, "*") {
+			return trimmed
+		}
+	}
+	// Fallback: first non-empty, non-comment line
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "//") && !strings.HasPrefix(trimmed, "#") {
+			return trimmed
+		}
+	}
+	return strings.TrimSpace(lines[0])
 }
 
 // injectSessionHash adds stale-read protection for mutations. If the session
@@ -886,6 +1065,12 @@ func extractAndStripSignature(sess *session.Session, cmdName string, args []stri
 // Also handles build state tracking.
 func recordOp(sess *session.Session, cmdName string, args []string, flags map[string]any, result any, ok bool) {
 	file, symbol := extractFileSymbol(args)
+	// Enrich symbol from --in flag if not already set (e.g. edit main.go --in hello)
+	if symbol == "" {
+		if inFlag, ok := flags["in"].(string); ok && inFlag != "" {
+			symbol = inFlag
+		}
+	}
 	action, kind := classifyOp(cmdName, flags, result, ok)
 	sess.RecordOp(cmdName, file, symbol, action, kind, ok)
 

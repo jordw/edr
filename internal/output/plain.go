@@ -461,6 +461,11 @@ func plainNext(w *os.File, op Op) {
 		h["fix"] = len(fix)
 	}
 
+	// Add current count to header
+	if current, ok := op["current"].([]any); ok && len(current) > 0 {
+		h["current"] = len(current)
+	}
+
 	writeHeader(w, h)
 
 	// Focus line
@@ -537,6 +542,23 @@ func plainNext(w *os.File, op Op) {
 			if suggest != "" {
 				fmt.Fprintf(w, "    => %s\n", suggest)
 			}
+		}
+	}
+
+	// Current: live signatures of active symbols
+	if current, ok := op["current"].([]any); ok && len(current) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "current:")
+		for _, c := range current {
+			cm, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			symbol, _ := cm["symbol"].(string)
+			reason, _ := cm["reason"].(string)
+			sig, _ := cm["signature"].(string)
+
+			fmt.Fprintf(w, "  %s(%s): %s\n", symbol, reason, sig)
 		}
 	}
 }
