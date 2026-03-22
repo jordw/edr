@@ -6,7 +6,7 @@ Bug reports and pull requests are welcome on [GitHub](https://github.com/jordw/e
 
 ```bash
 git clone https://github.com/jordw/edr.git && cd edr
-go build -o edr .       # build (requires Go 1.25+ and a C compiler)
+go build -o edr .       # build (requires Go 1.24+ and a C compiler)
 go test ./...            # run all tests
 ```
 

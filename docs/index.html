@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>edr — the editor for agents</title>
 <meta name="description" content="Context-preserving code navigation and editing CLI for coding agents. 95% fewer tokens, symbol-level ops, batching, deltas.">
+<meta property="og:title" content="edr — the editor for agents">
+<meta property="og:description" content="Context-preserving code navigation and editing CLI for coding agents. 95% fewer tokens, symbol-level ops, batching, deltas.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://github.com/jordw/edr">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%3E</text></svg>">
 <style>
 :root {
   --bg: #0d1117;
@@ -238,6 +243,7 @@ footer {
   <div style="font-size: 0.8rem; color: var(--muted);">
     Then run <code>edr setup</code> in your project.
     <a href="https://github.com/jordw/edr#install">Other install methods</a>
+    &middot; <a href="https://github.com/jordw/edr">GitHub</a>
   </div>
 </div>
 
@@ -360,6 +366,7 @@ edr <span class="flag">-w</span> file <span class="flag">--inside</span> Class  
       <tr><td>status</td><td>Session state, build status, action items. <code>--focus</code></td></tr>
       <tr><td>checkpoint</td><td>Snapshot/restore. <code>--restore</code>, <code>--list</code>, <code>--diff</code></td></tr>
       <tr><td>reset</td><td>Clean slate: reindex, clear session. <code>--index</code>, <code>--session</code></td></tr>
+      <tr><td>setup</td><td>Index project, install agent instructions. <code>--force</code></td></tr>
     </tbody>
   </table>
 </section>

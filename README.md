@@ -66,7 +66,7 @@ edr setup
 curl -fsSL https://raw.githubusercontent.com/jordw/edr/main/install.sh | sh
 ```
 
-**From source** (requires Go 1.23+ and a C/C++ compiler for tree-sitter):
+**From source** (requires Go 1.24+ and a C/C++ compiler for tree-sitter):
 
 ```bash
 CGO_ENABLED=1 go install github.com/jordw/edr@latest
