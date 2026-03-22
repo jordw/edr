@@ -760,6 +760,9 @@ func runBatch(args []string) error {
 	sess, saveSess := session.LoadSession(edrDir)
 	defer saveSess()
 
+	// Opportunistic cleanup (rate-limited to once per hour)
+	maybeCleanEdrDir(edrDir)
+
 	cmdName := inferBatchCommand(&params)
 	env := output.NewEnvelope(cmdName)
 	if err := handleDo(context.Background(), db, sess, env, json.RawMessage(paramsJSON)); err != nil {
