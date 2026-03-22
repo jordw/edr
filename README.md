@@ -21,7 +21,7 @@ An agent that `cat`s a 400-line file to read one function just added 15KB to its
 edr attacks this directly:
 - **Fewer tokens in** → faster responses. Read a function (1KB) instead of a file (15KB). The model processes 15× less input.
 - **Fewer round-trips** → less wall-clock time. Batch three reads into one call instead of three sequential ones. Each round-trip has overhead — parsing, scheduling, output rendering — that adds up fast.
-- **Deltas eliminate redundancy** → the context window stops filling with repeated content. Re-read a file after an edit? Only the changed lines come back. Re-run tests? Just the diff. The agent stays focused on what actually changed.
+- **Sessions eliminate redundancy** → edr tracks what the agent has seen. Re-read a file after an edit? Only the changed lines come back. Re-run tests? Just the diff. The agent stays focused on what actually changed.
 
 **95% median context reduction** across real repos. That translates directly to faster responses — less prefill, smaller KV cache, fewer round-trips — and the agent stays coherent longer because it isn't burning context on files it doesn't need.
 
@@ -42,7 +42,7 @@ edr -r src/scheduler.py:Scheduler --sig \
 edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):" \
     -e src/config.py --old '"timeout": 30' --new '"timeout": 30, "retries": 3'
 
-# 3. Deltas: run tests, fix a bug, run again — only the diff comes back
+# 3. Sessions: run tests, fix a bug, run again — only the diff comes back
 edr run -- pytest
 # → [no changes, 80 lines]  or just the diff of what changed
 ```
@@ -66,7 +66,7 @@ edr setup
 curl -fsSL https://raw.githubusercontent.com/jordw/edr/main/install.sh | sh
 ```
 
-**From source** (requires Go 1.25+ and a C/C++ compiler for tree-sitter):
+**From source** (requires Go 1.23+ and a C/C++ compiler for tree-sitter):
 
 ```bash
 CGO_ENABLED=1 go install github.com/jordw/edr@latest
@@ -93,7 +93,7 @@ edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-s
 
 **Batching.** `-r`, `-s`, `-e`, `-w` combine reads, searches, edits, and writes in one CLI call. One call to gather context, one to apply mutations.
 
-**Deltas for everything.** edr tracks what the agent has already seen — files, symbols, search results, command output — and only shows what changed. Second read of an unchanged file: 0 tokens. `edr run -- make test` after a fix: only the diff from the previous run, unchanged lines collapsed. Same principle for builds, linters, any command. Zero config — sessions activate automatically.
+**Sessions.** edr tracks what the agent has already seen — files, symbols, search results, command output — and only shows what changed. Second read of an unchanged file: 0 tokens. `edr run -- make test` after a fix: only the diff from the previous run, unchanged lines collapsed. Same principle for builds, linters, any command. Zero config — sessions activate automatically.
 
 ## Commands
 

@@ -286,7 +286,7 @@ edr <span class="flag">-r</span> src/scheduler.py:Scheduler <span class="flag">-
 edr <span class="flag">-e</span> src/scheduler.py <span class="flag">--old</span> "def run(self):" <span class="flag">--new</span> "def run(self, retries=3):" \
     <span class="flag">-e</span> src/config.py <span class="flag">--old</span> '"timeout": 30' <span class="flag">--new</span> '"timeout": 30, "retries": 3'
 
-<span class="comment"># 3. Deltas: run tests, fix a bug, run again &mdash; only the diff comes back</span>
+<span class="comment"># 3. Sessions: run tests, fix a bug, run again &mdash; only the diff comes back</span>
 edr run -- pytest</code></pre>
   <p>3 calls. Re-reads of files already in context: zero tokens.</p>
 </section>
@@ -384,7 +384,7 @@ edr <span class="flag">-w</span> file <span class="flag">--inside</span> Class  
   <p>edr parses your codebase with <a href="https://tree-sitter.github.io/tree-sitter/">tree-sitter</a> and stores symbols in a SQLite index.</p>
   <p><strong>Symbol-level operations.</strong> Read one function instead of a 400-line file. Get a class API with <code>--signatures</code> (85% fewer tokens). Scope edits to a symbol with <code>--in Symbol</code>. Use <code>--fuzzy</code> for whitespace-tolerant matching. Edits re-index immediately and auto-verify the build.</p>
   <p><strong>Batching.</strong> <code>-r</code>, <code>-s</code>, <code>-e</code>, <code>-w</code> combine reads, searches, edits, and writes in one CLI call.</p>
-  <p><strong>Deltas.</strong> edr tracks what the agent has seen. Second read of an unchanged file: 0 tokens. <code>edr run -- make test</code> after a fix: only the diff from the previous run.</p>
+  <p><strong>Sessions.</strong> edr tracks what the agent has seen. Second read of an unchanged file: 0 tokens. <code>edr run -- make test</code> after a fix: only the diff from the previous run.</p>
 </section>
 
 <!-- Limitations -->
