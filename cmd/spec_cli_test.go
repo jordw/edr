@@ -2220,14 +2220,14 @@ func TestSpec_EditDeleteSameShape(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// edr next — CLI spec tests
+// edr status — CLI spec tests
 // ---------------------------------------------------------------------------
 
-func TestSpec_NextEmpty(t *testing.T) {
+func TestSpec_StatusEmpty(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{
 		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
 	})
-	result, _, _, exit := specRun(t, binary, dir, nil, "next")
+	result, _, _, exit := specRun(t, binary, dir, nil, "status")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2241,7 +2241,7 @@ func TestSpec_NextEmpty(t *testing.T) {
 	}
 }
 
-func TestSpec_NextWithRecentOps(t *testing.T) {
+func TestSpec_StatusWithRecentOps(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{
 		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
 	})
@@ -2254,7 +2254,7 @@ func TestSpec_NextWithRecentOps(t *testing.T) {
 	}
 
 	// Check next shows the op
-	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "next")
+	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2271,14 +2271,14 @@ func TestSpec_NextWithRecentOps(t *testing.T) {
 	}
 }
 
-func TestSpec_NextFocus(t *testing.T) {
+func TestSpec_StatusFocus(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{
 		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
 	})
 	sessEnv := []string{"EDR_SESSION=test-focus"}
 
 	// Set focus
-	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "next", "--focus", "rename hello to greet")
+	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status", "--focus", "rename hello to greet")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2287,7 +2287,7 @@ func TestSpec_NextFocus(t *testing.T) {
 	}
 
 	// Focus persists
-	_, stdout, _, exit = specRun(t, binary, dir, sessEnv, "next")
+	_, stdout, _, exit = specRun(t, binary, dir, sessEnv, "status")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2296,7 +2296,7 @@ func TestSpec_NextFocus(t *testing.T) {
 	}
 
 	// Clear focus
-	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "next", "--focus", "")
+	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status", "--focus", "")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2306,7 +2306,7 @@ func TestSpec_NextFocus(t *testing.T) {
 	}
 }
 
-func TestSpec_NextBuildState(t *testing.T) {
+func TestSpec_StatusBuildState(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{
 		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
 	})
@@ -2319,7 +2319,7 @@ func TestSpec_NextBuildState(t *testing.T) {
 	}
 
 	// Next should show build: passed or skipped
-	result, nStdout, _, exit := specRun(t, binary, dir, sessEnv, "next")
+	result, nStdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2331,7 +2331,7 @@ func TestSpec_NextBuildState(t *testing.T) {
 	}
 }
 
-func TestSpec_NextStaleAssumption(t *testing.T) {
+func TestSpec_StatusStaleAssumption(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{
 		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
 	})
@@ -2351,7 +2351,7 @@ func TestSpec_NextStaleAssumption(t *testing.T) {
 	}
 
 	// Next should show stale assumption
-	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "next")
+	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2369,10 +2369,10 @@ func TestSpec_NextStaleAssumption(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Next: current section
+// Status: current section
 // ---------------------------------------------------------------------------
 
-func TestSpec_NextCurrentModified(t *testing.T) {
+func TestSpec_StatusCurrentModified(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{
 		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n\nfunc greet(name string) string { return name }\n",
 	})
@@ -2386,7 +2386,7 @@ func TestSpec_NextCurrentModified(t *testing.T) {
 	}
 
 	// Next should show hello as modified in current
-	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "next")
+	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2403,7 +2403,7 @@ func TestSpec_NextCurrentModified(t *testing.T) {
 	}
 }
 
-func TestSpec_NextCurrentRecent(t *testing.T) {
+func TestSpec_StatusCurrentRecent(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{
 		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
 	})
@@ -2416,7 +2416,7 @@ func TestSpec_NextCurrentRecent(t *testing.T) {
 	}
 
 	// Next should show hello as recent in current
-	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "next")
+	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2425,7 +2425,7 @@ func TestSpec_NextCurrentRecent(t *testing.T) {
 	}
 }
 
-func TestSpec_NextCurrentStale(t *testing.T) {
+func TestSpec_StatusCurrentStale(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{
 		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
 	})
@@ -2445,7 +2445,7 @@ func TestSpec_NextCurrentStale(t *testing.T) {
 	}
 
 	// Next should show hello as stale in current (not just recent)
-	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "next")
+	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2706,7 +2706,7 @@ func TestSpec_CheckpointSessionStateRestored(t *testing.T) {
 	sessEnv := []string{"EDR_SESSION=test-cp-session"}
 
 	// Set focus, edit, checkpoint
-	_, _, _, exit := specRun(t, binary, dir, sessEnv, "next", "--focus", "original goal")
+	_, _, _, exit := specRun(t, binary, dir, sessEnv, "status", "--focus", "original goal")
 	if exit != 0 {
 		t.Fatal("focus failed")
 	}
@@ -2721,7 +2721,7 @@ func TestSpec_CheckpointSessionStateRestored(t *testing.T) {
 	}
 
 	// Change focus and edit more
-	_, _, _, exit = specRun(t, binary, dir, sessEnv, "next", "--focus", "new goal")
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "status", "--focus", "new goal")
 	if exit != 0 {
 		t.Fatal("focus change failed")
 	}
@@ -2738,15 +2738,110 @@ func TestSpec_CheckpointSessionStateRestored(t *testing.T) {
 	}
 
 	// Check focus was restored
-	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "next")
+	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
 	if exit != 0 {
-		t.Fatalf("next exit %d", exit)
+		t.Fatalf("status exit %d", exit)
 	}
 	if !strings.Contains(stdout, "original goal") {
-		t.Errorf("expected restored focus 'original goal' in next output: %s", stdout)
+		t.Errorf("expected restored focus 'original goal' in status output: %s", stdout)
 	}
 	if strings.Contains(stdout, "new goal") {
 		t.Errorf("'new goal' should not appear after restore: %s", stdout)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// edr reset — CLI spec tests
+// ---------------------------------------------------------------------------
+
+func TestSpec_ResetFull(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+	sessEnv := []string{"EDR_SESSION=test-reset-full"}
+
+	// Create some session state: read a symbol, create a checkpoint
+	_, _, _, exit := specRun(t, binary, dir, sessEnv, "read", "main.go:hello")
+	if exit != 0 {
+		t.Fatal("read failed")
+	}
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "edit", "main.go",
+		"--old-text", `println("hi")`, "--new-text", `println("hello")`)
+	if exit != 0 {
+		t.Fatal("edit failed")
+	}
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "checkpoint")
+	if exit != 0 {
+		t.Fatal("checkpoint failed")
+	}
+
+	// Full reset
+	result, _, _, exit := specRun(t, binary, dir, sessEnv, "reset")
+	if exit != 0 {
+		t.Fatalf("reset exit %d", exit)
+	}
+	// Should have a reindex op
+	foundReindex := false
+	for _, op := range result.Ops {
+		if op.Header["cmd"] == "reindex" || op.Header["files"] != nil {
+			foundReindex = true
+			break
+		}
+	}
+	if !foundReindex {
+		t.Error("expected reindex op in reset output")
+	}
+}
+
+func TestSpec_ResetIndex(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+
+	// reset --index should succeed
+	_, _, _, exit := specRun(t, binary, dir, nil, "reset", "--index")
+	if exit != 0 {
+		t.Fatalf("reset --index exit %d", exit)
+	}
+}
+
+func TestSpec_ResetSession(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+	sessEnv := []string{"EDR_SESSION=test-reset-sess"}
+
+	// Create session state
+	_, _, _, exit := specRun(t, binary, dir, sessEnv, "read", "main.go:hello")
+	if exit != 0 {
+		t.Fatal("read failed")
+	}
+
+	// reset --session
+	result, _, _, exit := specRun(t, binary, dir, sessEnv, "reset", "--session")
+	if exit != 0 {
+		t.Fatalf("reset --session exit %d", exit)
+	}
+	header := result.Ops[0].Header
+	scope, _ := header["scope"].(string)
+	if scope != "session" {
+		t.Errorf("expected scope=session, got %q", scope)
+	}
+	sessID, _ := header["session"].(string)
+	if sessID == "" {
+		t.Error("expected session ID in reset --session output")
+	}
+}
+
+func TestSpec_ResetAliasReindex(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+
+	// "reindex" is alias for "reset --index" behavior (full reset actually)
+	_, _, _, exit := specRun(t, binary, dir, nil, "reindex")
+	if exit != 0 {
+		t.Fatalf("reindex exit %d", exit)
 	}
 }
 

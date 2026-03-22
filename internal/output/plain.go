@@ -476,6 +476,12 @@ func plainReindex(w *os.File, op Op) {
 	if v, ok := op["symbols_changed"]; ok {
 		h["symbols"] = v
 	}
+	if v, ok := op["scope"].(string); ok {
+		h["scope"] = v
+	}
+	if v, ok := op["session"].(string); ok {
+		h["session"] = v
+	}
 	writeHeader(w, h)
 }
 
