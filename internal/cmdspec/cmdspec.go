@@ -148,7 +148,8 @@ var Registry = []*Spec{
 			{Name: "regex", Type: FlagBool, Default: false, Desc: "Use regex matching"},
 			{Name: "body", Type: FlagBool, Default: true, Desc: "Include symbol body in results (use --no-body to suppress)"},
 			{Name: "no_group", Type: FlagBool, Default: false, Desc: "Disable file grouping in text results"},
-			{Name: "in", Type: FlagString, Default: "", Desc: "Search within a symbol body (file:Symbol)"},
+			{Name: "in", Type: FlagString, Default: "", Desc: "Search within a symbol body (file:Symbol) or line range (file:N-M)"},
+			{Name: "lines", Type: FlagString, Default: "", Desc: "Line range (e.g. 4200:4260)"},
 		},
 	},
 	{

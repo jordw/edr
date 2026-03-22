@@ -397,17 +397,6 @@ func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacem
 					return smartEditByteRange(ctx, db, file, uint32(start), uint32(end), replacement, fmt.Sprintf("fuzzy:%s", kind), dryRun)
 				}
 			}
-			// Auto-fuzzy: if whitespace is the only difference, retry automatically
-			if !fuzzy {
-				normContent := normalizeWhitespace(content)
-				normMatch := normalizeWhitespace(matchText)
-				if strings.Index(normContent, normMatch) >= 0 {
-					start, end, kind := fuzzyMatch(content, matchText)
-					if start >= 0 {
-						return smartEditByteRange(ctx, db, file, uint32(start), uint32(end), replacement, fmt.Sprintf("auto-fuzzy:%s", kind), dryRun)
-					}
-				}
-			}
 			return nil, notFoundError(content, output.Rel(file), matchText)
 		}
 		totalMatches := strings.Count(content, matchText)

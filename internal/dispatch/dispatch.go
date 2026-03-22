@@ -286,6 +286,14 @@ func runMapUnified(ctx context.Context, db *index.DB, root string, args []string
 //	search pattern --regex             → text search (auto-detected)
 //	search pattern --include "*.go"    → text search (auto-detected)
 func runSearchUnified(ctx context.Context, db *index.DB, args []string, flags map[string]any) (any, error) {
+	// --lines: parse line range and set start_line/end_line for text search filtering
+	if linesSpec := flagString(flags, "lines", ""); linesSpec != "" {
+		if start, end, err := parseColonRange(linesSpec); err == nil {
+			flags["start_line"] = start
+			flags["end_line"] = end
+		}
+	}
+
 	// --in implies text search scoped to a symbol body
 	if inSpec := flagString(flags, "in", ""); inSpec != "" {
 		return runSearchInSymbol(ctx, db, args, flags, inSpec)
@@ -295,7 +303,8 @@ func runSearchUnified(ctx context.Context, db *index.DB, args []string, flags ma
 		flagBool(flags, "regex", false) ||
 		flagString(flags, "include", "") != "" || len(flagStringSlice(flags, "include")) > 0 ||
 		flagString(flags, "exclude", "") != "" || len(flagStringSlice(flags, "exclude")) > 0 ||
-		flagInt(flags, "context", 0) > 0
+		flagInt(flags, "context", 0) > 0 ||
+		flagInt(flags, "start_line", 0) > 0
 
 	if isText {
 		return runSearchText(ctx, db, args, flags)
