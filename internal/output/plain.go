@@ -135,8 +135,8 @@ func plainRead(w *os.File, op Op) {
 	if v, ok := op["truncated"].(bool); ok && v {
 		h["trunc"] = true
 	}
-	if v, ok := op["session"].(string); ok && v == "unchanged" {
-		h["session"] = "unchanged"
+	if v, ok := op["session"].(string); ok && (v == "unchanged" || v == "new") {
+		h["session"] = v
 	}
 	if v, ok := op["hint"].(string); ok && v != "" {
 		h["hint"] = v
@@ -149,8 +149,8 @@ func plainRead(w *os.File, op Op) {
 
 func plainSearch(w *os.File, op Op) {
 	h := map[string]any{}
-	if v, ok := op["session"].(string); ok && v == "unchanged" {
-		h["session"] = "unchanged"
+	if v, ok := op["session"].(string); ok && (v == "unchanged" || v == "new") {
+		h["session"] = v
 	}
 	h["n"] = anyInt(op["total_matches"])
 	if v, ok := op["hint"].(string); ok && v != "" {
@@ -267,8 +267,8 @@ func plainRename(w *os.File, op Op) {
 
 func plainMap(w *os.File, op Op) {
 	h := map[string]any{}
-	if v, ok := op["session"].(string); ok && v == "unchanged" {
-		h["session"] = "unchanged"
+	if v, ok := op["session"].(string); ok && (v == "unchanged" || v == "new") {
+		h["session"] = v
 	}
 	if v := anyInt(op["files"]); v > 0 {
 		h["files"] = v
@@ -324,6 +324,9 @@ func plainRefs(w *os.File, op Op) {
 		return
 	}
 	h := map[string]any{}
+	if v, ok := op["session"].(string); ok && v == "new" {
+		h["session"] = "new"
+	}
 	if sym, ok := op["symbol"].(map[string]any); ok {
 		f, _ := sym["file"].(string)
 		name, _ := sym["name"].(string)

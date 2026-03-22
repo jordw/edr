@@ -78,6 +78,48 @@ func TestPlainVerifyIncludesCommand(t *testing.T) {
 	}
 }
 
+func TestPlainSessionNewPreserved(t *testing.T) {
+	tests := []struct {
+		name   string
+		opType string
+		op     map[string]any
+	}{
+		{
+			"read",
+			"read",
+			map[string]any{"file": "f.go", "hash": "abc", "content": "hello", "session": "new"},
+		},
+		{
+			"search",
+			"search",
+			map[string]any{"total_matches": 1, "session": "new", "matches": []any{}},
+		},
+		{
+			"map",
+			"map",
+			map[string]any{"files": 1, "symbols": 2, "session": "new", "content": []any{}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := NewEnvelope(tt.opType)
+			env.AddOp("op0", tt.opType, tt.op)
+
+			out := capturePlain(t, env)
+
+			// First line is the header
+			lines := strings.SplitN(out, "\n", 2)
+			var h map[string]any
+			if err := json.Unmarshal([]byte(lines[0]), &h); err != nil {
+				t.Fatalf("failed to parse header %q: %v", lines[0], err)
+			}
+			if h["session"] != "new" {
+				t.Errorf("session = %v, want \"new\"", h["session"])
+			}
+		})
+	}
+}
+
 func TestTokenEstimate(t *testing.T) {
 	tests := []struct {
 		input string
