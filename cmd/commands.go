@@ -147,7 +147,7 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 
 	// If any content-equivalent flag was provided on CLI, skip stdin.
 	hasContent := false
-	for _, key := range []string{stdinKey, "content", "new_text", "body"} {
+	for _, key := range []string{stdinKey, "content", "new_text", "body", "delete", "move_after"} {
 		if _, ok := flags[key]; ok {
 			hasContent = true
 			break
