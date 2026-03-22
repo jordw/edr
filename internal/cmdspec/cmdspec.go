@@ -113,6 +113,7 @@ var Registry = []*Spec{
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
 			{Name: "expect_hash", Type: FlagString, Default: "", Desc: "Reject edit if file hash doesn't match"},
 			{Name: "delete", Type: FlagBool, Default: false, Desc: "Delete matched text or symbol (equivalent to --new-text \"\")"},
+			{Name: "lines", Type: FlagString, Default: "", Desc: "Line range as start:end (shorthand for --start-line/--end-line)"},
 		},
 	},
 	{

@@ -48,6 +48,15 @@ func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string,
 	// 2. --old_text: find and replace text (requires file as first arg)
 	// 3. Default: symbol-based (replace entire symbol body)
 
+	// --lines flag: parse "start:end" into start_line/end_line
+	if linesStr := flagString(flags, "lines", ""); linesStr != "" {
+		start, end, err := parseColonRange(linesStr)
+		if err != nil {
+			return nil, fmt.Errorf("--lines: %w", err)
+		}
+		flags["start_line"] = start
+		flags["end_line"] = end
+	}
 	startLine := flagInt(flags, "start_line", 0)
 	endLine := flagInt(flags, "end_line", 0)
 	// old_text is the primary flag name; match is accepted as a legacy alias.
