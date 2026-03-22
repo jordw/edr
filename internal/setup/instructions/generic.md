@@ -1,22 +1,20 @@
-Use `edr` (via shell) instead of cat, sed, grep, and find for all file operations. edr uses 90%+ less context via progressive disclosure and batching.
+Use `edr` (via shell) instead of cat, sed, grep, and find for all file operations. 90%+ less context via progressive disclosure and batching.
 
-After a context reset, run `edr session new` to clear stale dedup state. Otherwise sessions are automatic.
+Sessions are automatic. After a context reset, run `edr session new`.
 
-Workflow — start narrow, widen only as needed:
-1. Orient: `edr map --budget 500` (filter: --dir, --lang, --grep)
-2. Skim: `edr -r file.go --sig` (signatures) or `--skeleton` (structure)
-3. Deep read: `edr -r file.go:FuncName`
-4. Search: `edr -s "pattern" --text` | scoped: `--in file.go:FuncName`
-5. Edit: `edr -e file.go --old "old" --new "new"`
-   Also: `--start-line N --end-line M`, `--all`, `--dry-run`, `--in Symbol` (scope match to symbol body)
-   Shell metacharacters ($, backticks): use `--old @/tmp/old.txt` to read from file instead of CLI args
-6. Write: `edr -w file.go --content "..."` | `--inside Symbol`, `--after Symbol`, `--append`
-7. Rename: `edr rename Old New` — use instead of `--all` find-replace. Cross-file, import-aware, `--dry-run`.
-8. Verify: `edr verify` — auto-detects go/npm/cargo/make. Auto-runs after edits. If verify shows "skipped", set `.edr/config.json` → `{"verify": "make test"}` early.
-9. Run: `edr run -- make test` — use instead of shell for build/test commands. Shows sparse diff against previous run. `--full` for raw output. `--reset` to clear baseline.
+`edr read f.go` | `f.go:Sym` | `--signatures` | `--skeleton` | `--lines 10:50`
+`edr search "pat" --text` | `--in f.go:Sym` | `--context 3` | `--regex`
+`edr edit f.go --old-text "x" --new-text "y"` | `--lines 20:30` | `--in Sym` | `--all` | `--dry-run`
+`edr edit f.go:Sym --delete` | `--insert-at 20 --new-text "..."`
+`edr write f.go --content "..."` | `--inside Sym` | `--after Sym` | `--append` | `--dry-run`
+`edr map --budget 500` | `--dir src` | `--lang go` | `--grep pat`
+`edr refs Sym --impact` — run before removing/renaming functions
+`edr rename Old New --dry-run` — cross-file, import-aware
+`edr verify` — auto-detects go/npm/cargo/make; auto-runs after edits
+`edr run -- cmd` — sparse diff vs previous run; `--full` | `--reset`
 
-Always batch 2+ operations into one call — fewer roundtrips, less context:
+Batch 2+ ops into one call — fewer roundtrips, less context:
 `edr -r f.go --sig -r g.go:Func -s "pat" -e f.go --old "x" --new "y"`
-Repeat -e for multi-edit: `edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"`
-Chained edit-then-read: `edr -e f.go --old "x" --new "y" -r f.go:200-210` (read sees post-edit state)
-Before removing or renaming any function: `edr refs Symbol --impact`
+Multi-edit: `edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"`
+Chained edit-then-read: `edr -e f.go --old "x" --new "y" -r f.go:200-210`
+Shell metacharacters ($, backticks): use `--old-text @/tmp/old.txt` to read from file
