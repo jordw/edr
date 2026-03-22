@@ -171,6 +171,6 @@ jobs:
           echo '<!-- /edr-instructions -->' >> ~/.claude/CLAUDE.md
           mkdir /tmp/target3 && cd /tmp/target3 && git init -q
           OUTPUT=$(edr setup --json --skip-index --root /tmp/target3)
-          echo "$OUTPUT" | grep -q '"outdated": true' || (echo "failed to detect outdated instructions: $OUTPUT" && exit 1)
-          echo "$OUTPUT" | grep -q '"installed_hash": "fakehash123"' || (echo "failed to report installed hash: $OUTPUT" && exit 1)
+          echo "$OUTPUT" | grep -q '"outdated":true' || (echo "failed to detect outdated instructions: $OUTPUT" && exit 1)
+          echo "$OUTPUT" | grep -q '"installed_hash":"fakehash123"' || (echo "failed to report installed hash: $OUTPUT" && exit 1)
           echo "outdated detection test passed"
