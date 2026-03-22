@@ -89,13 +89,13 @@ func printPlain(e *Envelope) {
 			if errMsg, ok := m["error"].(string); ok {
 				h["error"] = errMsg
 			}
-			writeHeader(w, h)
-			// Show output tail on failure so agents see compiler errors / failing tests
-			if status == "failed" || status == "timeout" {
+			// Include output in the header (not as a body) to preserve header-only contract
+			if status == "failed" {
 				if out, ok := m["output"].(string); ok && out != "" {
-					writeBody(w, out)
+					h["output"] = out
 				}
 			}
+			writeHeader(w, h)
 		}
 	}
 }

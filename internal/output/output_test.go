@@ -78,6 +78,56 @@ func TestPlainVerifyIncludesCommand(t *testing.T) {
 	}
 }
 
+func TestPlainVerifyFailureHeaderOnly(t *testing.T) {
+	env := NewEnvelope("edit")
+	env.AddOp("e0", "edit", map[string]any{"file": "f.go", "status": "applied", "hash": "abc"})
+	env.SetVerify(map[string]any{
+		"status":  "failed",
+		"command": "go build ./...",
+		"error":   "exit status 1",
+		"output":  "main.go:5: undefined: foo\n",
+	})
+
+	out := capturePlain(t, env)
+
+	// Find the verify line
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	var verifyLine string
+	for _, l := range lines {
+		if strings.Contains(l, `"verify"`) {
+			verifyLine = l
+		}
+	}
+	if verifyLine == "" {
+		t.Fatalf("no verify line in output:\n%s", out)
+	}
+
+	var h map[string]any
+	if err := json.Unmarshal([]byte(verifyLine), &h); err != nil {
+		t.Fatalf("parse verify header: %v", err)
+	}
+
+	// Output must be in the header, not as a separate body line
+	if h["output"] == nil {
+		t.Error("output should be included in the verify header")
+	}
+
+	// Verify there's no body after the verify header (header-only contract)
+	verifyIdx := -1
+	for i, l := range lines {
+		if strings.Contains(l, `"verify"`) {
+			verifyIdx = i
+		}
+	}
+	if verifyIdx >= 0 && verifyIdx < len(lines)-1 {
+		// Any lines after verify must not be raw body content
+		remaining := strings.TrimSpace(strings.Join(lines[verifyIdx+1:], "\n"))
+		if remaining != "" {
+			t.Errorf("verify failure should be header-only, but has trailing body: %q", remaining)
+		}
+	}
+}
+
 func TestPlainSessionNewPreserved(t *testing.T) {
 	tests := []struct {
 		name   string
