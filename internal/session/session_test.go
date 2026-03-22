@@ -147,13 +147,19 @@ func TestProcessReadResult_DepthAffectsKey(t *testing.T) {
 		}
 	}
 
-	// Third: re-read with depth=2 and same content → should be unchanged
-	delta = s.ProcessReadResult("read", result2, map[string]any{"depth": 2})
-	if delta == nil {
-		t.Error("re-read at same depth should return delta")
+	// Third: re-read with depth=2 and same content → symbol reads always emit content
+	result3 := map[string]any{
+		"content": "func foo() { ... }",
+		"file":    "f.go",
+		"symbol":  "foo",
+		"hash":    "abc",
 	}
-	if delta["unchanged"] != true {
-		t.Errorf("expected unchanged, got: %v", delta)
+	delta = s.ProcessReadResult("read", result3, map[string]any{"depth": 2})
+	if delta != nil {
+		t.Error("symbol re-read should emit content (no dedup stub)")
+	}
+	if result3["session"] != "unchanged" {
+		t.Errorf("expected session=unchanged, got: %v", result3["session"])
 	}
 }
 
@@ -1034,18 +1040,18 @@ func TestBatchThenSingleReadDelta(t *testing.T) {
 	batchText := `[{"content":"func foo() {}","file":"f.go","symbol":"foo","hash":"abc","ok":true}]`
 	s.PostProcessNonObject("read", nil, map[string]any{}, batchText)
 
-	// Single read of same symbol should return unchanged via ProcessReadResult
+	// Single read of same symbol should emit content (symbols are small, no dedup)
 	singleResult := map[string]any{
 		"file":    "f.go",
 		"symbol":  "foo",
 		"content": "func foo() {}",
 	}
 	delta := s.ProcessReadResult("read", singleResult, map[string]any{})
-	if delta == nil {
-		t.Fatal("single read after batch should return delta, got nil (full content)")
+	if delta != nil {
+		t.Fatal("symbol reads should always emit content (no dedup stub), got delta")
 	}
-	if delta["unchanged"] != true {
-		t.Errorf("expected unchanged, got %v", delta)
+	if singleResult["session"] != "unchanged" {
+		t.Errorf("expected session=unchanged on result, got %v", singleResult["session"])
 	}
 }
 

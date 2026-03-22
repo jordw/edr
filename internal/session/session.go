@@ -593,6 +593,11 @@ func (s *Session) ProcessReadResult(cmd string, result map[string]any, flags map
 
 	case "unchanged":
 		s.stats.DeltaReads++
+		if isSymbol {
+			// Symbol reads are small — always emit content to avoid a --full round-trip.
+			result["session"] = "unchanged"
+			return nil
+		}
 		file, hash := ExtractFileHash(result)
 		deduped := map[string]any{"unchanged": true, "file": file, "hash": hash, "session": "unchanged", "hint": "use --full to force re-read"}
 		if v, ok := result["lines"]; ok {

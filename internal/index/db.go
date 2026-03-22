@@ -1199,6 +1199,11 @@ func (d *DB) ResolvePath(path string) (string, error) {
 	return ResolvePath(d.root, path)
 }
 
+// ResolvePathReadOnly is like ResolvePath but allows absolute paths outside the repo.
+func (d *DB) ResolvePathReadOnly(path string) (string, error) {
+	return ResolvePathReadOnly(d.root, path)
+}
+
 // Prune removes indexed files that are outside the repo root or no longer exist.
 func (d *DB) Prune(ctx context.Context) error {
 	rows, err := d.db.QueryContext(ctx, "SELECT path FROM files")

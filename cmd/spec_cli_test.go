@@ -583,7 +583,7 @@ func TestSpec_FailureShape(t *testing.T) {
 		{"symbol not found", []string{"read", "hello.go:Nope"}, "not_found"},
 		{"edit file not found", []string{"edit", "nope.go", "--old-text", "x", "--new-text", "y"}, "file_not_found"},
 		{"refs not found", []string{"refs", "zzz_nonexistent"}, "not_found"},
-		{"outside repo", []string{"read", "/etc/passwd"}, "outside_repo"},
+		{"outside repo edit", []string{"edit", "/etc/passwd", "--old-text", "x", "--new-text", "y"}, "outside_repo"},
 	}
 
 	for _, tt := range tests {

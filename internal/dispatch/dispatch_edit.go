@@ -397,6 +397,17 @@ func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacem
 					return smartEditByteRange(ctx, db, file, uint32(start), uint32(end), replacement, fmt.Sprintf("fuzzy:%s", kind), dryRun)
 				}
 			}
+			// Auto-fuzzy: if whitespace is the only difference, retry automatically
+			if !fuzzy {
+				normContent := normalizeWhitespace(content)
+				normMatch := normalizeWhitespace(matchText)
+				if strings.Index(normContent, normMatch) >= 0 {
+					start, end, kind := fuzzyMatch(content, matchText)
+					if start >= 0 {
+						return smartEditByteRange(ctx, db, file, uint32(start), uint32(end), replacement, fmt.Sprintf("auto-fuzzy:%s", kind), dryRun)
+					}
+				}
+			}
 			return nil, notFoundError(content, output.Rel(file), matchText)
 		}
 		totalMatches := strings.Count(content, matchText)
@@ -430,13 +441,25 @@ func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacem
 // The --in flag specifies the symbol (file:Symbol or just Symbol); old_text is
 // searched only within that symbol's byte range.
 func smartEditMatchInSymbol(ctx context.Context, db *index.DB, file, matchText, replacement string, flags map[string]any, inSpec string, dryRun bool) (any, error) {
-	// Parse the symbol spec — accept "Symbol" (same file) or "file:Symbol"
+	// Parse the symbol spec — accept "Symbol", "file:Symbol", or line range "N-M" / "N:M"
 	parts := splitFileSymbol(inSpec)
 	var symFile, symName string
 	if parts != nil {
+		// Check if the "symbol" part is actually a line range (e.g., file.go:4200-4260)
+		if start, end, rangeErr := parseColonRange(parts[1]); rangeErr == nil {
+			flags["start_line"] = start
+			flags["end_line"] = end
+			return smartEditMatch(ctx, db, file, matchText, replacement, flags, dryRun)
+		}
 		symFile = parts[0]
 		symName = parts[1]
 	} else {
+		// Check if the bare spec is a line range (e.g., 4200-4260)
+		if start, end, rangeErr := parseColonRange(inSpec); rangeErr == nil {
+			flags["start_line"] = start
+			flags["end_line"] = end
+			return smartEditMatch(ctx, db, file, matchText, replacement, flags, dryRun)
+		}
 		// Plain symbol name, use the file from args
 		symFile = file
 		symName = inSpec
@@ -609,9 +632,9 @@ func notFoundError(content, relFile, matchText string) *NotFoundError {
 	normMatch := normalizeWhitespace(matchText)
 	if idx := strings.Index(normContent, normMatch); idx >= 0 {
 		line := 1 + strings.Count(content[:findOriginalOffset(content, normContent, idx)], "\n")
-		nfe.Hint = "old_text matches after normalizing whitespace — check tabs vs spaces, trailing spaces, or line endings"
+		nfe.Hint = "old_text matches after normalizing whitespace — check tabs vs spaces, trailing spaces, or line endings; or use --old-text @file for exact content"
 		nfe.NearMatch = &nearMatchInfo{Line: line, Kind: "whitespace"}
-		nfe.NextAction = fmt.Sprintf("re-read %s and copy exact whitespace from the output", relFile)
+		nfe.NextAction = fmt.Sprintf("re-read %s and copy exact whitespace, or write old_text to a file and use --old-text @/tmp/old.txt", relFile)
 		return nfe
 	}
 

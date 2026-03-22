@@ -72,13 +72,19 @@ func TestDeltaSettlesToUnchanged_Symbol_ProcessReadResult(t *testing.T) {
 		t.Fatalf("second read should return nil (new, hash-only), got: %v", delta)
 	}
 
-	// Should settle to unchanged
-	delta = s.ProcessReadResult("read", resultB, map[string]any{})
-	if delta == nil {
-		t.Fatal("third read should return unchanged, got nil")
+	// Should settle to unchanged — but symbol reads always emit content
+	resultB2 := map[string]any{
+		"content": "func foo() { v2 }",
+		"file":    "f.go",
+		"symbol":  "foo",
+		"hash":    "def",
 	}
-	if delta["unchanged"] != true {
-		t.Fatalf("expected unchanged=true after storing B, got: %v", delta)
+	delta = s.ProcessReadResult("read", resultB2, map[string]any{})
+	if delta != nil {
+		t.Fatalf("symbol reads should emit content (no dedup stub), got: %v", delta)
+	}
+	if resultB2["session"] != "unchanged" {
+		t.Fatalf("expected session=unchanged, got: %v", resultB2["session"])
 	}
 }
 
@@ -203,13 +209,19 @@ func TestDeltaSkippedWhenOldContentMuchSmaller(t *testing.T) {
 		t.Fatalf("signatures->full body should return nil (new), got: %v", delta)
 	}
 
-	// Step 3: Read same full body again — should be unchanged (content was stored)
-	delta = s.ProcessReadResult("read", resultFull, map[string]any{})
-	if delta == nil {
-		t.Fatal("third read should return unchanged, got nil")
+	// Step 3: Read same full body again — symbol reads always emit content
+	resultFull2 := map[string]any{
+		"content": fullBody,
+		"file":    "cmd/mcp.go",
+		"symbol":  "handleDo",
+		"hash":    "def",
 	}
-	if delta["unchanged"] != true {
-		t.Fatalf("expected unchanged=true, got: %v", delta)
+	delta = s.ProcessReadResult("read", resultFull2, map[string]any{})
+	if delta != nil {
+		t.Fatalf("symbol reads should emit content (no dedup stub), got: %v", delta)
+	}
+	if resultFull2["session"] != "unchanged" {
+		t.Fatalf("expected session=unchanged, got: %v", resultFull2["session"])
 	}
 }
 
@@ -241,13 +253,19 @@ func TestDeltaNewThenUnchanged_SimilarSizedContent(t *testing.T) {
 		t.Fatalf("changed content should return nil (new, hash-only), got: %v", delta)
 	}
 
-	// Re-read same content — should be unchanged
-	delta = s.ProcessReadResult("read", resultB, map[string]any{})
-	if delta == nil {
-		t.Fatal("re-read should return unchanged")
+	// Re-read same content — symbol reads always emit content
+	resultB2 := map[string]any{
+		"content": newBody,
+		"file":    "f.go",
+		"symbol":  "foo",
+		"hash":    "bbb",
 	}
-	if delta["unchanged"] != true {
-		t.Fatalf("expected unchanged=true, got: %v", delta)
+	delta = s.ProcessReadResult("read", resultB2, map[string]any{})
+	if delta != nil {
+		t.Fatal("symbol reads should emit content (no dedup stub)")
+	}
+	if resultB2["session"] != "unchanged" {
+		t.Fatalf("expected session=unchanged, got: %v", resultB2["session"])
 	}
 }
 

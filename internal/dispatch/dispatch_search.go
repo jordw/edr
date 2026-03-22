@@ -84,6 +84,12 @@ func runRepoMap(ctx context.Context, db *index.DB, flags map[string]any) (any, e
 		if stats.BudgetUsed > 0 {
 			result["budget_used"] = stats.BudgetUsed
 		}
+		// When severely truncated, replace file listing with dir summary
+		if len(stats.DirSummary) > 0 {
+			result["content"] = nil
+			result["dirs"] = stats.DirSummary
+			result["hint"] = "repo too large for full map; use --dir <name> to drill into a directory"
+		}
 	}
 	return result, nil
 }
@@ -126,6 +132,19 @@ func runSearchText(ctx context.Context, db *index.DB, args []string, flags map[s
 	result, err := search.SearchText(ctx, db, args[0], budget, useRegex, opts...)
 	if err != nil {
 		return nil, err
+	}
+
+	// Filter by line range if specified (from --in file:N-M)
+	if startLine := flagInt(flags, "start_line", 0); startLine > 0 {
+		endLine := flagInt(flags, "end_line", 0)
+		filtered := make([]output.Match, 0, len(result.Matches))
+		for _, m := range result.Matches {
+			if m.Symbol.Lines[0] >= startLine && (endLine == 0 || m.Symbol.Lines[0] <= endLine) {
+				filtered = append(filtered, m)
+			}
+		}
+		result.Matches = filtered
+		result.TotalMatches = len(filtered)
 	}
 
 	// Group text results by file for compact output (default on, --no-group to disable)
@@ -217,13 +236,26 @@ func runSearchInSymbol(ctx context.Context, db *index.DB, args []string, flags m
 	}
 	useRegex := flagBool(flags, "regex", false)
 
-	// Parse file:Symbol from --in
+	// Parse file:Symbol or file:N-M from --in
 	parts := splitFileSymbol(inSpec)
+
+	// Check if the "symbol" part is actually a line range (e.g., file.go:4200-4260)
+	if parts != nil {
+		if start, end, rangeErr := parseColonRange(parts[1]); rangeErr == nil {
+			resolved, resolveErr := db.ResolvePathReadOnly(parts[0])
+			if resolveErr == nil {
+				flags["include"] = output.Rel(resolved)
+				flags["start_line"] = start
+				flags["end_line"] = end
+				return runSearchText(ctx, db, args, flags)
+			}
+		}
+	}
 
 	// If not file:Symbol, check if it is a bare file or directory path.
 	// Route to text search with --include filter instead of symbol-scoped search.
 	if parts == nil {
-		resolved, resolveErr := db.ResolvePath(inSpec)
+		resolved, resolveErr := db.ResolvePathReadOnly(inSpec)
 		if resolveErr == nil {
 			info, statErr := os.Stat(resolved)
 			if statErr == nil {

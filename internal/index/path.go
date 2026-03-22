@@ -33,10 +33,22 @@ func IsWithinRoot(root, path string) bool {
 
 // ResolvePath converts path to an absolute path and rejects anything outside root.
 func ResolvePath(root, path string) (string, error) {
+	return resolvePathInner(root, path, false)
+}
+
+// ResolvePathReadOnly is like ResolvePath but allows absolute paths outside the
+// repo root. Relative paths that escape the root are still rejected.
+// Agent sandbox security is handled by the agent harness, not edr.
+func ResolvePathReadOnly(root, path string) (string, error) {
+	return resolvePathInner(root, path, true)
+}
+
+func resolvePathInner(root, path string, allowAbsOutside bool) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	if !filepath.IsAbs(path) {
+	isAbs := filepath.IsAbs(path)
+	if !isAbs {
 		path = filepath.Join(root, path)
 	}
 	abs, err := filepath.Abs(path)
@@ -45,6 +57,9 @@ func ResolvePath(root, path string) (string, error) {
 	}
 	abs = filepath.Clean(abs)
 	if !IsWithinRoot(root, abs) {
+		if allowAbsOutside && isAbs {
+			return abs, nil
+		}
 		return "", fmt.Errorf("path %q is outside repo root %s", abs, root)
 	}
 	return abs, nil

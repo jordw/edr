@@ -719,7 +719,7 @@ func hasUpperCase(s string) bool {
 func looksLikeRegex(pattern string) bool {
 	// Match patterns like .*, .+, \w, \d, [abc], (a|b), ^...$
 	// Single dots are common in filenames, so we only flag "strong" indicators.
-	indicators := []string{".*", ".+", "\\w", "\\d", "\\s", "\\b", "[", "(", "^", "$", "|", "{"}
+	indicators := []string{".*", ".+", "\\w", "\\d", "\\s", "\\b", "\\.", "[", "(", "^", "$", "|", "{"}
 	for _, ind := range indicators {
 		if strings.Contains(pattern, ind) {
 			return true

@@ -28,7 +28,7 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 	}
 
 	file := args[0]
-	file, err := db.ResolvePath(file)
+	file, err := db.ResolvePathReadOnly(file)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +310,7 @@ func runSymbols(ctx context.Context, db *index.DB, root string, args []string, f
 	if len(args) < 1 {
 		return nil, fmt.Errorf("symbols requires 1 argument: <file>")
 	}
-	file, err := db.ResolvePath(args[0])
+	file, err := db.ResolvePathReadOnly(args[0])
 	if err != nil {
 		return nil, err
 	}
