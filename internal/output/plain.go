@@ -135,6 +135,9 @@ func plainRead(w *os.File, op Op) {
 	if v, ok := op["session"].(string); ok && v == "unchanged" {
 		h["session"] = "unchanged"
 	}
+	if v, ok := op["hint"].(string); ok && v != "" {
+		h["hint"] = v
+	}
 	writeHeader(w, h)
 
 	content, _ := op["content"].(string)
@@ -142,14 +145,11 @@ func plainRead(w *os.File, op Op) {
 }
 
 func plainSearch(w *os.File, op Op) {
-	if v, ok := op["session"].(string); ok && v == "unchanged" {
-		writeHeader(w, map[string]any{"session": "unchanged"})
-		return
-	}
 	h := map[string]any{}
-	if v := anyInt(op["total_matches"]); v > 0 {
-		h["n"] = v
+	if v, ok := op["session"].(string); ok && v == "unchanged" {
+		h["session"] = "unchanged"
 	}
+	h["n"] = anyInt(op["total_matches"])
 	if v, ok := op["hint"].(string); ok && v != "" {
 		h["hint"] = v
 	}
@@ -263,7 +263,23 @@ func plainRename(w *os.File, op Op) {
 }
 
 func plainMap(w *os.File, op Op) {
-	writeHeader(w, map[string]any{})
+	h := map[string]any{}
+	if v, ok := op["session"].(string); ok && v == "unchanged" {
+		h["session"] = "unchanged"
+	}
+	if v := anyInt(op["files"]); v > 0 {
+		h["files"] = v
+	}
+	if v := anyInt(op["symbols"]); v > 0 {
+		h["symbols"] = v
+	}
+	if v, ok := op["truncated"].(bool); ok && v {
+		h["trunc"] = true
+	}
+	if v, ok := op["hint"].(string); ok && v != "" {
+		h["hint"] = v
+	}
+	writeHeader(w, h)
 
 	// Structured map: list of file entries
 	if content, ok := op["content"].([]any); ok {

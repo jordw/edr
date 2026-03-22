@@ -26,10 +26,13 @@ show inline {old → new} markers. Use --full for raw output.`,
 		full, _ := cmd.Flags().GetBool("full")
 		reset, _ := cmd.Flags().GetBool("reset")
 
-		shellCmd := strings.Join(args, " ")
-
+		// Use args directly to preserve argument boundaries.
+		// strings.Join + sh -c would double-wrap and break quoting.
 		root := getRoot(cmd)
 		runDir := filepath.Join(root, ".edr", "run")
+
+		// Cache key uses joined args (stable across runs)
+		shellCmd := strings.Join(args, " ")
 
 		// --reset: clear the stored baseline so this run is treated as first run
 		if reset {
@@ -37,7 +40,7 @@ show inline {old → new} markers. Use --full for raw output.`,
 			os.Remove(filepath.Join(runDir, key+".last"))
 		}
 
-		c := exec.Command("sh", "-c", shellCmd)
+		c := exec.Command(args[0], args[1:]...)
 		c.Dir = root
 		out, execErr := c.CombinedOutput()
 

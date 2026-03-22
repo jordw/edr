@@ -11,6 +11,21 @@ import (
 	"github.com/spf13/pflag"
 )
 
+// boolNegValue is a pflag.Value that sets its target to the opposite boolean.
+// Used for --no-<flag> hidden aliases.
+type boolNegValue struct {
+	target pflag.Value
+}
+
+func (v *boolNegValue) String() string { return "false" }
+func (v *boolNegValue) Set(s string) error {
+	if s == "true" || s == "" {
+		return v.target.Set("false")
+	}
+	return v.target.Set("true")
+}
+func (v *boolNegValue) Type() string { return "bool" }
+
 // Category classifies a command for session and dispatch behavior.
 type Category string
 
@@ -383,6 +398,24 @@ func RegisterFlags(flags *pflag.FlagSet, name string) {
 					NoOptDefVal: canonical.NoOptDefVal,
 					Hidden:      true,
 				})
+			}
+		}
+		// Register --no-<flag> as hidden negation for bool flags that default to true
+		if f.Type == FlagBool {
+			def, _ := f.Default.(bool)
+			if def {
+				negName := "no-" + cliName
+				canonical := flags.Lookup(cliName)
+				if canonical != nil {
+					flags.AddFlag(&pflag.Flag{
+						Name:        negName,
+						Usage:       "Disable " + cliName,
+						Value:       &boolNegValue{target: canonical.Value},
+						DefValue:    "false",
+						NoOptDefVal: "true",
+						Hidden:      true,
+					})
+				}
 			}
 		}
 	}

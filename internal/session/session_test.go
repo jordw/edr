@@ -19,9 +19,10 @@ func TestResolveSessionID_EnvUnset(t *testing.T) {
 	t.Setenv("EDR_SESSION", "")
 	os.Unsetenv("EDR_SESSION")
 	id := ResolveSessionID()
-	// Without EDR_SESSION, no session — agents must opt in explicitly
-	if id != "" {
-		t.Errorf("expected empty session ID without EDR_SESSION, got %q", id)
+	// Without EDR_SESSION, PPID-based routing kicks in.
+	// In test context there is no ppid mapping, so it falls back to "default".
+	if id != "default" {
+		t.Errorf("expected \"default\" session ID without EDR_SESSION, got %q", id)
 	}
 }
 

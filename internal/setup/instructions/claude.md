@@ -6,7 +6,7 @@ Workflow — start narrow, widen only as needed:
 1. Orient: `edr map --budget 500` (filter: --dir, --lang, --grep)
 2. Skim: `edr -r file.go --sig` (signatures) or `--skeleton` (structure)
 3. Deep read: `edr -r file.go:FuncName`
-4. Search: `edr -s "pattern" --text` | scoped: `--in file.go:FuncName`
+4. Search: `edr -s "pattern" --text` | scoped: `--in file.go`, `--in dir/`, or `--in file.go:Symbol`
 5. Edit: `edr -e file.go --old "old" --new "new"`
    Also: `--start-line N --end-line M`, `--all`, `--dry-run`, `--in Symbol` (scope match to symbol body)
    Shell metacharacters ($, backticks): use `--old @/tmp/old.txt` to read from file instead of CLI args

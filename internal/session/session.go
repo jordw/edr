@@ -15,6 +15,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"strconv"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -166,14 +168,79 @@ func ResolveSessionID() string {
 	return resolveByPPID()
 }
 
-// resolveByPPID reads the session ID from .edr/sessions/ppid_<ppid>.
+// stableAncestorPID finds the stable process that launched edr. It walks up
+// the process tree from edr's parent looking for a shell (zsh, bash, sh,
+// fish). If found, the shell's parent is the agent/terminal — which is
+// stable across tool calls. If no shell is found (agent invokes edr directly),
+// the direct parent is already the stable process.
+func stableAncestorPID() int {
+	pid := os.Getppid()
+	name := processName(pid)
+	if isShell(name) {
+		if parent := parentPID(pid); parent > 1 {
+			return parent
+		}
+	}
+	return pid
+}
+
+var shells = map[string]bool{
+	"zsh": true, "bash": true, "sh": true, "fish": true,
+	"dash": true, "ksh": true, "csh": true, "tcsh": true,
+	"-zsh": true, "-bash": true, "-sh": true, "-fish": true,
+}
+
+func isShell(name string) bool {
+	return shells[name] || shells[filepath.Base(name)]
+}
+
+// processName returns the command name for a PID, or "" on error.
+func processName(pid int) string {
+	// Linux: /proc/<pid>/comm
+	if data, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid)); err == nil {
+		return strings.TrimSpace(string(data))
+	}
+	// macOS: ps -o comm= -p <pid>
+	out, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return ""
+	}
+	return filepath.Base(strings.TrimSpace(string(out)))
+}
+
+// parentPID returns the parent PID of a process, or 0 on error.
+func parentPID(pid int) int {
+	// Linux: /proc/<pid>/stat
+	if data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)); err == nil {
+		s := string(data)
+		if i := strings.LastIndex(s, ") "); i >= 0 {
+			fields := strings.Fields(s[i+2:])
+			if len(fields) >= 2 {
+				if n, err := strconv.Atoi(fields[1]); err == nil {
+					return n
+				}
+			}
+		}
+		return 0
+	}
+	// macOS: ps -o ppid= -p <pid>
+	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return 0
+	}
+	if n, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil {
+		return n
+	}
+	return 0
+}
+
 func resolveByPPID() string {
-	ppid := os.Getppid()
 	root, err := findRepoRoot()
 	if err != nil {
 		return "default"
 	}
-	path := filepath.Join(root, ".edr", "sessions", fmt.Sprintf("ppid_%d", ppid))
+	pid := stableAncestorPID()
+	path := filepath.Join(root, ".edr", "sessions", fmt.Sprintf("ppid_%d", pid))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "default"
@@ -183,6 +250,13 @@ func resolveByPPID() string {
 		return "default"
 	}
 	return id
+}
+
+// WriteSessionMapping writes a PPID mapping file for the stable ancestor.
+func WriteSessionMapping(sessDir, id string) {
+	pid := stableAncestorPID()
+	path := filepath.Join(sessDir, fmt.Sprintf("ppid_%d", pid))
+	os.WriteFile(path, []byte(id), 0644)
 }
 
 // findRepoRoot walks up from cwd to find .edr directory.
@@ -507,7 +581,7 @@ func (s *Session) ProcessReadResult(cmd string, result map[string]any, flags map
 	case "unchanged":
 		s.stats.DeltaReads++
 		file, hash := ExtractFileHash(result)
-		return map[string]any{"unchanged": true, "file": file, "hash": hash, "session": "unchanged"}
+		return map[string]any{"unchanged": true, "file": file, "hash": hash, "session": "unchanged", "hint": "use --full to force re-read"}
 	}
 	return nil
 }
@@ -756,7 +830,21 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 		status, _ := s.CheckContent(cacheKey, text, false)
 		if status == "unchanged" {
 			s.stats.DeltaReads++
-			return `{"session":"unchanged"}`
+			// Preserve scalar metadata fields so agents can still see counts/truncation.
+			// Skip array/object values (like grouped match lists) — those are body content.
+			stub := map[string]any{"session": "unchanged"}
+			for _, key := range []string{"files", "symbols", "truncated", "hint", "total_matches", "total_files", "kind"} {
+				if v, ok := m[key]; ok {
+					switch v.(type) {
+					case []any, map[string]any:
+						// Skip complex types — these are body content, not metadata
+					default:
+						stub[key] = v
+					}
+				}
+			}
+			data, _ := json.Marshal(stub)
+			return string(data)
 		}
 		s.StoreContent(cacheKey, text, false)
 		m["session"] = "new"

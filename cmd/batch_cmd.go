@@ -214,7 +214,7 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			return string(data), nil
 		}
-		return val, nil
+		return interpretEscapes(val), nil
 	}
 
 	for i < len(args) {
@@ -525,7 +525,7 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			s.currentWrite.Inside = sp(val)
 
-		case "--mkdir":
+		case "--mkdir", "--create-parents":
 			if s.currentOp != opWrite {
 				return nil, fmt.Errorf("--mkdir is only valid after -w")
 			}
@@ -559,6 +559,30 @@ func parseBatchArgs(args []string) (*batchState, error) {
 				return nil, err
 			}
 			s.root = val
+
+		case "--start-line", "--start_line":
+			n, err := nextInt(arg)
+			if err != nil {
+				return nil, err
+			}
+			switch s.currentOp {
+			case opEdit:
+				s.currentEdit.StartLine = ip(n)
+			default:
+				return nil, fmt.Errorf("%s is only valid after -e", arg)
+			}
+
+		case "--end-line", "--end_line":
+			n, err := nextInt(arg)
+			if err != nil {
+				return nil, err
+			}
+			switch s.currentOp {
+			case opEdit:
+				s.currentEdit.EndLine = ip(n)
+			default:
+				return nil, fmt.Errorf("%s is only valid after -e", arg)
+			}
 
 		case "--verbose":
 			verbose = true
@@ -879,6 +903,8 @@ var batchFlagOps = map[string][]string{
 	"--mkdir":          {"-w"},
 	"--append":         {"-w"},
 	"--dry-run":        {"-e"},
+	"--start-line":     {"-e"},
+	"--end-line":       {"-e"},
 	"--command":        {"--verify"},
 	"--read-after-edit": {"global"},
 	"--root":           {"global"},
@@ -918,3 +944,27 @@ func suggestBatchFlag(flag string, currentOp batchOp) error {
 	return fmt.Errorf("unknown flag: %s", flag)
 }
 
+func interpretEscapes(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			switch s[i+1] {
+			case 'n':
+				b.WriteByte('\n')
+				i++
+				continue
+			case 't':
+				b.WriteByte('\t')
+				i++
+				continue
+			case '\\':
+				b.WriteByte('\\')
+				i++
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}

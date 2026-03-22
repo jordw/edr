@@ -3,8 +3,10 @@ package dispatch
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/jordw/edr/internal/index"
+	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/search"
 )
 
@@ -200,8 +202,27 @@ func runSearchInSymbol(ctx context.Context, db *index.DB, args []string, flags m
 
 	// Parse file:Symbol from --in
 	parts := splitFileSymbol(inSpec)
+
+	// If not file:Symbol, check if it is a bare file or directory path.
+	// Route to text search with --include filter instead of symbol-scoped search.
 	if parts == nil {
-		return nil, fmt.Errorf("--in requires file:Symbol format, got %q", inSpec)
+		resolved, resolveErr := db.ResolvePath(inSpec)
+		if resolveErr == nil {
+			info, statErr := os.Stat(resolved)
+			if statErr == nil {
+				if info.IsDir() {
+					// Directory: add include glob for all files under it
+					rel := output.Rel(resolved)
+					flags["include"] = rel + "/**"
+				} else {
+					// File: add include filter for this specific file
+					rel := output.Rel(resolved)
+					flags["include"] = rel
+				}
+				return runSearchText(ctx, db, args, flags)
+			}
+		}
+		return nil, fmt.Errorf("--in requires file:Symbol, file path, or directory path; got %q", inSpec)
 	}
 
 	var opts []search.SearchTextOption

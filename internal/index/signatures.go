@@ -420,7 +420,7 @@ func GoFileSignatures(file string, syms []SymbolInfo) string {
 				if te, ok := types[recv]; ok {
 					te.methods = append(te.methods, sig)
 				} else {
-					types[recv] = &typeEntry{sig: "// type " + recv, methods: []string{sig}, line: s.StartLine}
+					types[recv] = &typeEntry{sig: recv + " (external type)", methods: []string{sig}, line: s.StartLine}
 					typeOrder = append(typeOrder, recv)
 				}
 			} else {
