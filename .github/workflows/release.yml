@@ -142,6 +142,14 @@ jobs:
               bin.install "edr"
             end
 
+            def caveats
+              <<~EOS
+                Run edr setup in your project to index it and install agent instructions:
+                  cd /path/to/your/project
+                  edr setup
+              EOS
+            end
+
             test do
               system "#{bin}/edr", "--version"
             end
