@@ -56,12 +56,14 @@ var rootCmd = &cobra.Command{
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		// Silent errors (e.g. batch with failed operations) already printed
-		// their structured output — just exit non-zero.
+		// Silent errors from run (subprocess exit code) and setup —
+		// these are the only commands that use non-zero exit codes.
 		if se, ok := err.(silentError); ok {
 			os.Exit(se.ExitCode())
 		}
-		// Detect command name from os.Args for structured error output.
+		// All other errors: emit structured JSON so the agent can parse it.
+		// Exit 0 because the agent reads ok:false from the output;
+		// non-zero exit codes just alarm the human watching the terminal.
 		cmdName := detectCommandName()
 		if ie, ok := err.(*IndexError); ok {
 			output.ErrorEnvelope(cmdName, ie.Code, ie.Message)
@@ -73,7 +75,6 @@ func Execute() {
 				output.ErrorEnvelope(cmdName, "command_error", msg)
 			}
 		}
-		os.Exit(1)
 	}
 }
 

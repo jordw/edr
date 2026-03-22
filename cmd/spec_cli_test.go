@@ -589,8 +589,8 @@ func TestSpec_FailureShape(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, stdout, _, exit := specRun(t, binary, dir, nil, tt.args...)
-			if exit == 0 {
-				t.Error("expected non-zero exit")
+			if exit != 0 {
+				t.Errorf("expected exit 0 (errors in JSON output), got %d", exit)
 			}
 
 			// Parse the error header.
@@ -635,9 +635,9 @@ func TestSpec_ExitCodes(t *testing.T) {
 		{"map success", []string{"map"}, 0},
 		{"search success", []string{"search", "main"}, 0},
 		{"search zero results", []string{"search", "zzz_nonexistent"}, 0},
-		{"read failure", []string{"read", "nope.go"}, 1},
-		{"edit failure", []string{"edit", "nope.go", "--old-text", "x", "--new-text", "y"}, 1},
-		{"refs failure", []string{"refs", "zzz_nonexistent"}, 1},
+		{"read failure", []string{"read", "nope.go"}, 0},
+		{"edit failure", []string{"edit", "nope.go", "--old-text", "x", "--new-text", "y"}, 0},
+		{"refs failure", []string{"refs", "zzz_nonexistent"}, 0},
 		{"dry-run success", []string{"edit", "hello.go", "--old-text", "package main", "--new-text", "package test", "--dry-run"}, 0},
 	}
 
@@ -725,8 +725,8 @@ func TestSpec_BatchPartialFailure(t *testing.T) {
 	// One good read, one bad read.
 	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
 		"-r", "hello.go", "-r", "nope.go")
-	if exit != 1 {
-		t.Errorf("expected exit 1 for partial failure, got %d", exit)
+	if exit != 0 {
+		t.Errorf("expected exit 0 (errors are in JSON output), got %d", exit)
 	}
 	if len(result.Ops) < 1 {
 		t.Fatal("expected at least 1 op")
@@ -1396,8 +1396,8 @@ func TestSpec_EditAmbiguousRejects(t *testing.T) {
 	// Without --all, ambiguous match should fail.
 	_, stdout, _, exit := specRun(t, binary, dir, nil,
 		"edit", "hello.go", "--old-text", "\"dup\"", "--new-text", "\"new\"")
-	if exit == 0 {
-		t.Error("ambiguous edit should fail without --all")
+	if exit != 0 {
+		t.Errorf("expected exit 0 (errors in JSON output), got %d", exit)
 	}
 
 	var header map[string]any
@@ -1522,13 +1522,13 @@ func TestSpec_EditStaleReadRejects(t *testing.T) {
 	// Spec: edit MUST reject when the file has changed since the session read.
 	_, stdout, _, exit := specRun(t, binary, dir, env,
 		"edit", "hello.go", "--old-text", "func main() {}", "--new-text", "func main() { println() }")
-	if exit == 0 {
+	_ = exit
+	var header map[string]any
+	json.Unmarshal([]byte(strings.SplitN(stdout, "\n", 2)[0]), &header)
+	if header["ec"] == nil || header["ec"] != "hash_mismatch" {
 		// Stale-read protection not enforced for standalone edits yet.
 		t.Skip("stale-read protection not enforced: edit succeeded after external file modification")
 	}
-
-	var header map[string]any
-	json.Unmarshal([]byte(strings.SplitN(stdout, "\n", 2)[0]), &header)
 	if ec, _ := header["ec"].(string); ec != "hash_mismatch" {
 		t.Errorf("ec = %q, want hash_mismatch", ec)
 	}
@@ -1657,10 +1657,10 @@ func TestSpec_VerifyFailedAfterAppliedEdit(t *testing.T) {
 	// Introduce a compile error.
 	result, _, _, exit := specRun(t, binary, dir, nil,
 		"edit", "hello.go", "--old-text", "func main() {}", "--new-text", "func main( {}")
-	// Spec: when verify fails after successful edits, exit code is 1
-	// but the mutation headers still show "applied".
-	if exit != 1 {
-		t.Errorf("verify failure should exit 1, got %d", exit)
+	// Verify failure is reported in JSON output, not via exit code.
+	// Exit 0 so the human's terminal doesn't look alarming.
+	if exit != 0 {
+		t.Errorf("verify failure should exit 0 (errors in JSON output), got %d", exit)
 	}
 	if len(result.Ops) > 0 {
 		h := result.Ops[0].Header
@@ -1692,8 +1692,8 @@ func TestSpec_BatchAtomicRollback(t *testing.T) {
 		"-e", "a.go", "--old", "\"aaa\"", "--new", "\"AAA\"",
 		"-e", "b.go", "--old", "\"nonexistent\"", "--new", "\"BBB\"",
 		"--atomic")
-	if exit == 0 {
-		t.Error("atomic batch with failed edit should exit non-zero")
+	if exit != 0 {
+		t.Errorf("expected exit 0 (errors in JSON output), got %d", exit)
 	}
 
 	// a.go should be unchanged — the successful edit must have been rolled back.
@@ -1744,8 +1744,8 @@ func TestSpec_FailedEditSkipsWrites(t *testing.T) {
 	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
 		"-e", "hello.go", "--old", "\"nonexistent\"", "--new", "\"replaced\"",
 		"-w", "new.go", "--content", "package main\n")
-	if exit == 0 {
-		t.Error("batch with failed edit should exit non-zero")
+	if exit != 0 {
+		t.Errorf("expected exit 0 (errors in JSON output), got %d", exit)
 	}
 
 	// Should have at least 2 ops: one failed edit, one skipped write.

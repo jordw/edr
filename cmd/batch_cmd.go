@@ -773,10 +773,6 @@ func runBatch(args []string) error {
 	emitBatchHints(sess, &params, env)
 
 	output.PrintEnvelope(env)
-
-	if !env.OK {
-		return silentError{code: 1}
-	}
 	return nil
 }
 // inferBatchCommand returns the command name for the envelope.
@@ -826,9 +822,9 @@ func appendStringSlice(existing any, val string) []string {
 	}
 }
 
-// silentError signals non-zero exit without printing an additional error message
-// (the structured JSON response was already printed).
-// Exit code is always 1 when ok:false (per spec: only exit codes 0 and 1).
+// silentError signals non-zero exit without printing an additional error message.
+// Only used by `run` (subprocess exit code passthrough) and `setup`.
+// Agent-facing commands always exit 0; errors are in the JSON output.
 type silentError struct{ code int }
 
 func (e silentError) Error() string { return "" }

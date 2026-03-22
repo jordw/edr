@@ -50,16 +50,11 @@ func dispatchCmdWithIndex(cmd *cobra.Command, cmdName string, args []string) err
 	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
 	if err != nil {
 		addDispatchFailedOp(env, opID, cmdName, err)
-		output.PrintEnvelope(env)
-		return silentError{code: 1}
+	} else {
+		env.AddOp(opID, cmdName, result)
 	}
-
-	env.AddOp(opID, cmdName, result)
 	env.ComputeOK()
 	output.PrintEnvelope(env)
-	if !env.OK {
-		return silentError{code: 1}
-	}
 	return nil
 }
 
@@ -87,8 +82,10 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
 	if err != nil {
 		addDispatchFailedOp(env, opID, cmdName, err)
+		env.ComputeOK()
+		emitStandaloneHints(sess, cmdName, flags, env)
 		output.PrintEnvelope(env)
-		return silentError{code: 1}
+		return nil
 	}
 
 	// Multi-result: expand into individual ops (e.g. multi-file read)
@@ -131,9 +128,6 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	emitStandaloneHints(sess, cmdName, flags, env)
 
 	output.PrintEnvelope(env)
-	if !env.OK {
-		return silentError{code: 1}
-	}
 	return nil
 }
 
@@ -176,8 +170,9 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
 	if err != nil {
 		addDispatchFailedOp(env, opID, cmdName, err)
+		env.ComputeOK()
 		output.PrintEnvelope(env)
-		return silentError{code: 1}
+		return nil
 	}
 
 	// Apply session post-processing
@@ -213,9 +208,6 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 
 	env.ComputeOK()
 	output.PrintEnvelope(env)
-	if !env.OK {
-		return silentError{code: 1}
-	}
 	return nil
 }
 
@@ -374,9 +366,6 @@ var verifyCmd = &cobra.Command{
 		}
 		env.ComputeOK()
 		output.PrintEnvelope(env)
-		if !env.OK {
-			return silentError{code: 1}
-		}
 		return nil
 	},
 }

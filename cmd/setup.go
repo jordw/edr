@@ -255,7 +255,8 @@ func printSetupOutput(r setupResult, jsonOut bool) error {
 		fmt.Print(r.Instructions)
 	}
 	if r.Error != "" {
-		return fmt.Errorf("%s", r.Error)
+		fmt.Fprintf(os.Stderr, "edr: %s\n", r.Error)
+		return silentError{code: 1}
 	}
 	return nil
 }
