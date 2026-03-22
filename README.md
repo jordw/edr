@@ -10,6 +10,21 @@
 
 Works with any agent that can run shell commands. Fully local, no telemetry.
 
+## Why less context = faster agents
+
+Model speed keeps improving — Claude with extended thinking, Codex in the background — but agents still bottleneck on the same thing: **how much text they have to process per step**.
+
+An agent that `cat`s a 400-line file to read one function just added 15KB to its context. Multiply by every read, search, and test run in a task. The model has to attend over all of it — prefill cost is quadratic in context length, and every output token generated is slower because it attends over a larger KV cache. Trimming a few milliseconds off inference doesn't help when the input is 10× larger than it needs to be.
+
+edr attacks this directly:
+- **Fewer tokens in** → faster responses. Read a function (1KB) instead of a file (15KB). The model processes 15× less input.
+- **Fewer round-trips** → less wall-clock time. Batch three reads into one call instead of three sequential ones. Each round-trip has overhead — parsing, scheduling, output rendering — that adds up fast.
+- **Deltas eliminate redundancy** → the context window stops filling with repeated content. Re-read a file after an edit? Only the changed lines come back. Re-run tests? Just the diff. The agent stays focused on what actually changed.
+
+The benchmark numbers below show 95% median context reduction. That's not just less text — it's proportionally faster completions and more headroom before the agent hits its context limit and starts losing track of the task.
+
+This matters most on large codebases. When files are long and symbols are scattered across hundreds of modules, raw file tools flood the context window fast — and the agent starts losing coherence, forgetting earlier reads, or re-reading files it already saw. edr keeps the working set small regardless of repo size. A 3,000-file monorepo doesn't mean 3,000 files of context — it means the same tight reads and batched edits as a 50-file project.
+
 ## Example
 
 Add a `retries` parameter to a scheduler class. Without edr: 6 calls, ~59KB of context. With edr:
