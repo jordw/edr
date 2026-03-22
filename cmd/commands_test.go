@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/jordw/edr/internal/cmdspec"
+	"github.com/jordw/edr/internal/setup"
 )
 
 func TestReadSymbolsFlagRegistered(t *testing.T) {
@@ -20,6 +21,20 @@ func TestReadSymbolsFlagRegistered(t *testing.T) {
 	}
 	if !found {
 		t.Error("--symbols flag should be registered on the read command")
+	}
+}
+
+func TestCursorInGlobalTargets(t *testing.T) {
+	targets := setup.GlobalTargets()
+	found := false
+	for _, tgt := range targets {
+		if tgt == setup.TargetCursor {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Cursor should be a supported global target")
 	}
 }
 

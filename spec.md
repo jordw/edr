@@ -1,6 +1,6 @@
-# Ideal edr
+# edr spec
 
-The target state for edr. This is not a migration plan. It is the product contract for a machine-first code tool that agents can trust.
+The current public contract for edr, with near-term direction where the product shape is already clear. This is an outside-in spec: it describes what commands exist, what forms they accept, what they return, and what stability guarantees the user can rely on. It is not a migration plan, and it is not an implementation design.
 
 Words in this document are normative:
 
@@ -33,7 +33,9 @@ In order:
 
 ## Semantic surface
 
-edr has **twelve semantic commands** and **one batch syntax**.
+edr has **twelve public semantic commands** and **one composition syntax**.
+
+The semantic API is the standalone verb surface. Batch flags are transport sugar for composing multiple semantic ops in one invocation. Batch MUST NOT define meanings that do not exist in the standalone verbs.
 
 Public semantic commands:
 
@@ -56,16 +58,136 @@ Batch syntax:
 
 - `edr -r ... -s ... -e ... -w ...`
 - Batch is an invocation form, not a separate semantic command.
-- In batch mode, the header+body block order reflects the operation types.
+- Batch is the preferred workflow for agents when they need multiple ops in one turn.
+- Standalone verbs are the canonical semantic contract and the primary documentation surface.
+- In batch mode, output order is deterministic.
 
-Internal names such as `explore`, `find`, `edit-plan`, `multi`, and `init` are implementation details. They MUST NOT:
+### Canonical command forms
 
-- appear in `--help`
-- be documented as supported commands
-- appear in output headers for successful dispatch
-- be accepted as stable public inputs
+These are the public forms edr SHOULD teach in docs, help text, setup instructions, and examples.
 
-If a user invokes an internal command name directly, edr MUST reject it with a structured error. Hiding it from help is not enough.
+#### read
+
+```bash
+edr read <path>
+edr read <path>:<symbol>
+edr read <path> --lines 10:40
+edr read <path>:<symbol> --signatures
+edr read <path> --skeleton
+```
+
+Rules:
+
+- `file:symbol` is the canonical symbol-targeting form
+- `--lines start:end` is the canonical line-range form
+- positional ambiguity such as `edr read file symbol` is compatibility-only and MUST NOT be the documented contract
+
+#### search
+
+```bash
+edr search <pattern>
+edr search <pattern> --text
+edr search <pattern> --text --regex
+edr search <pattern> --text --include "*.go" --context 3
+edr search <pattern> --text --in <path>:<symbol>
+```
+
+Rules:
+
+- plain `search` means symbol search
+- `--text` is required for text search
+- current builds also infer text search from flags like `--regex`, `--include`, `--exclude`, `--context`, and `--in`
+- docs SHOULD still teach `--text` as the canonical way to request text search
+
+#### map
+
+```bash
+edr map
+edr map <path>
+edr map --dir src --type function --lang go
+```
+
+#### refs
+
+```bash
+edr refs <symbol>
+edr refs <path>:<symbol>
+edr refs <symbol> --impact
+edr refs <symbol> --chain <target>
+edr refs <symbol> --callers
+edr refs <symbol> --deps
+```
+
+#### edit
+
+```bash
+edr edit <path> --old-text "x" --new-text "y"
+edr edit <path> --lines 20:30 --new-text "..."
+edr edit <path>:<symbol> --new-text "..."
+edr edit <path>:<symbol> --delete
+edr edit <path>:<symbol> --move-after <symbol>
+edr edit <path> --insert-at 20 --new-text "..."
+edr edit <path> --old-text "x" --new-text "y" --in <path>:<symbol>
+edr edit <path> --old-text "x" --new-text "y" --fuzzy
+edr edit ... --dry-run
+```
+
+Rules:
+
+- `--old-text` / `--new-text` are the canonical text-replacement flags
+- `<path>:<symbol>` is the canonical symbol-edit form
+- line edits use `--lines`, not separate positional modes
+- `--delete` is the canonical explicit symbol-deletion form
+- `--move-after` MAY be supported for same-file symbol moves; if supported, it MUST be explicit and MUST NOT guess cross-file intent
+- `--insert-at` is the canonical pure-insertion form for line-oriented edits
+- `--fuzzy` is opt-in only; it MUST NOT become the default matching mode without revisiting the spec's strictness guarantees
+
+#### write
+
+```bash
+edr write <path> --content "..."
+edr write <path> --append --content "..."
+edr write <path> --inside <symbol> --content "..."
+edr write <path> --after <symbol> --content "..."
+edr write ... --dry-run
+```
+
+#### rename
+
+```bash
+edr rename <old> <new>
+edr rename <old> <new> --dry-run
+```
+
+#### verify
+
+```bash
+edr verify
+edr verify --level build
+edr verify --level test
+edr verify --command "make test"
+```
+
+#### run / session / setup / reindex
+
+```bash
+edr run -- make test
+edr run --full -- make test
+edr run --reset -- make test
+edr session new
+edr setup [path]
+edr reindex
+```
+
+### Canonical spelling rules
+
+- Docs MUST teach one spelling per concept
+- Canonical spellings use long standalone flags: `--signatures`, `--old-text`, `--new-text`, `--dry-run`
+- Batch shorthand such as `-r`, `-s`, `-e`, `-w`, `--sig`, `--old`, and `--new` is convenience syntax, not the canonical contract
+- Hidden aliases MAY exist for compatibility, but they MUST NOT be the primary documented form
+- Legacy names such as `explore` and `find` are not part of the public CLI surface
+
+Hidden compatibility aliases and internal command names are not part of the public CLI surface. They SHOULD NOT appear in help text, docs, or successful output, and users SHOULD NOT need to know they exist.
 
 `rename` stays as convenience sugar over `refs` + `edit`. It MUST NOT grow independent semantics that drift from those primitives.
 
@@ -87,6 +209,7 @@ Global instructions are written to agent-specific config files:
 
 - `~/.claude/CLAUDE.md` for Claude Code
 - `~/.codex/AGENTS.md` for Codex
+- `~/.cursor/rules/edr.mdc` for Cursor
 
 The instruction block is wrapped in sentinel comments for surgical updates:
 
@@ -106,18 +229,14 @@ Rules:
 
 ### Auto-update
 
-After the user opts in via `edr setup`, a sentinel file (`~/.edr/global_hash`) records the build hash. On every subsequent edr invocation:
-
-- No sentinel → skip (user never opted in, do not auto-install)
-- Same hash → skip (already current)
-- Different hash → silently force-update all global instructions and update sentinel
+After the user opts in via `edr setup`, edr may update global instructions automatically on later invocations when the installed instructions are out of date.
 
 Rules:
 
 - Auto-update MUST be silent. No stderr output, no delay.
-- Auto-update MUST NOT run if the build hash is empty or "unknown".
+- Auto-update MUST only happen after explicit user opt-in.
 - Auto-update is best-effort. Errors are swallowed — a failed update MUST NOT break the actual command.
-- The sentinel check is a single file read + string compare. It MUST add negligible latency.
+- Auto-update MUST add negligible latency.
 
 ### Instruction quality
 
@@ -129,16 +248,12 @@ Rules:
 - Instructions MUST explicitly prohibit the built-in tools they replace, by name.
 - Instructions MUST include a direct mapping: built-in tool → edr equivalent.
 - Instructions MUST teach key context-saving features: `--sig`, `--budget`, `--skeleton`, `map`, batching.
-- Instructions MUST be under 250 tokens. Every token spent here is spent on every conversation.
-- Different agent platforms get platform-specific instructions (Claude tools vs Codex shell commands).
-
-### Dev builds
-
-`BuildHash` falls back to `git rev-parse --short HEAD` when not set via ldflags. Dev builds MUST NOT use "unknown" as a hash — that would prevent auto-update from working.
+- Instructions MUST be under 500 tokens. Every token spent here is spent on every conversation.
+- Different agent platforms get platform-specific instructions where needed.
 
 ## Transport contract
 
-Each invocation emits a **header line** (compact JSON metadata) followed by a **body** (raw text: code, diffs, grep-style matches). The header is always exactly one line. The body may be empty.
+The intended public transport is **plain mode**: a **header line** (compact JSON metadata) followed by a **body** (raw text: code, diffs, grep-style matches). The header is always exactly one line. The body may be empty.
 
 ```
 {"file":"f.go","sym":"Foo","lines":[10,20]}\n
@@ -206,19 +321,14 @@ edr auto-indexes on first use. Agents should never see "run edr reindex".
 
 Rules:
 
-- If no index exists (or it contains zero files), edr MUST auto-index the repository before proceeding. This happens under the writer lock with a stderr progress message.
+- If no index exists (or it contains zero files), edr MUST auto-index the repository before proceeding.
 - `reindex` and `setup` explicitly create or refresh index state.
 - `verify` MUST work without an index and MUST NOT create one as a side effect.
 - Auto-indexing is the single consistent behavior. There is no "sometimes fail, sometimes auto-index" ambiguity.
 
 ### Per-file freshness
 
-Individual files may become stale between full reindexes (e.g., after an external edit). edr checks per-file freshness on access:
-
-- When resolving a symbol, edr compares the file's on-disk mtime against its indexed mtime.
-- If stale (~20µs check), the single file is reindexed under the writer lock (~2ms) before proceeding.
-- If fresh, no work is done.
-- This MUST be invisible to the agent — no output shape changes, no extra fields.
+Individual files may become stale between full reindexes (e.g., after an external edit). edr SHOULD refresh stale file state automatically when needed. This MUST be invisible to the agent — no output shape changes, no extra fields.
 
 ## Output format
 
@@ -279,16 +389,13 @@ In a batch, each op is independent. A failed read does not prevent other reads f
 
 ## Op ordering
 
-Batch ops MUST preserve request order in output.
+Batch output order MUST be deterministic.
 
-Examples:
+Rules:
 
-- `edr -r a.go -s foo -e b.go ...` => output order is read, search, edit
-- `edr -e a.go ... -e b.go ... -w c.go ...` => output order is edit, edit, write
-
-This is mandatory even if implementation internally parallelizes read-only work. Deterministic output order matters more than execution order.
-
-Op IDs are used internally but are not part of the plain output format. The output order itself is the correlation mechanism.
+- edr MAY normalize execution order around mutations so that reads before a mutation observe pre-edit state and reads after a mutation observe post-edit state
+- A failed mutation MAY cause later dependent mutations to be emitted as skipped ops
+- Users SHOULD be able to understand output order from the observable semantics alone, without knowing the internal scheduler
 
 ## Field name table
 
@@ -299,7 +406,7 @@ Field names are short for token efficiency. This is the canonical mapping:
 | `file` | Repository-relative file path |
 | `sym` | Targeted or matched symbol name |
 | `lines` | `[start, end]` 1-based inclusive range |
-| `hash` | Opaque full-file content hash (mutations only) |
+| `hash` | Opaque full-file content hash (always present on applied mutations; may also appear on some plain read results) |
 | `n` | Total match count (search, refs) |
 | `trunc` | `true` when content was budget-limited |
 | `ec` | Error code (see failure codes table) |
@@ -310,22 +417,22 @@ Field names are short for token efficiency. This is the canonical mapping:
 Rules:
 
 - All header fields live at the top level — no nesting
-- `hash` is only present on mutation ops (edit, write); read ops omit it
+- `hash` is always present on applied mutation ops; read ops MAY include it in plain mode
 - Hash format is opaque but stable
 - Fields are omitted when not applicable, never set to null or empty defaults
 
 ## One command, one result shape
 
-Each command has exactly one header+body shape. Flags change the body content, not the header structure.
+Each command has one primary header+body shape. Flags mostly change the body content, but some modes add or remove optional metadata fields.
 
 That means:
 
 - A `read` header always has `file` and `lines`, whether it returned full content, signatures, skeleton, or a line range
-- A `search` header always has `n` (match count) when there are matches, or `{}` for zero matches
+- A `search` header normally has `n` (match count), including `{"n":0}` for zero matches
 - An `edit` header always has `file` and `status`; `hash` is present on `applied`
 - A `write` header always has `file` and `status`; `hash` is present on `applied`
 
-Fields MAY be omitted when truly inapplicable. They MUST NOT appear under different wrappers depending on flags.
+Fields MAY be omitted when truly inapplicable. Current builds also expose some mode-specific metadata such as `hint`, `session`, or read-time `hash`.
 
 ## Read ops
 
@@ -337,6 +444,7 @@ A successful read header contains:
 Optional header fields:
 
 - `sym` — symbol name (when reading a symbol)
+- `hash` — file content hash (currently present in plain mode on some reads)
 - `trunc` — `true` when budget-limited
 - `session` — `"unchanged"` when content was seen before (body omitted)
 
@@ -344,13 +452,14 @@ The body is the raw file/symbol content. `--signatures` and `--skeleton` change 
 
 ## Search ops
 
-Search mode MUST be explicit and deterministic.
+Search mode is symbol-first, with some current inference rules for text-search flags.
 
 Rules:
 
 - `--text` means text search
 - if `--text` is absent, the default mode is symbol search
-- edr MUST NOT silently fall back from symbol search to text search
+- current builds also treat `--regex`, `--include`, `--exclude`, `--context`, and `--in` as text-search selectors
+- docs SHOULD still teach `--text` as the canonical way to request text search
 
 A successful search header contains:
 
@@ -362,11 +471,11 @@ Optional:
 
 The body is grep-style lines: `file:line: text` (one per match, grouped by file).
 
-Zero matches is a valid success (`{"n":0}` or `{}`), not an error.
+Zero matches is a valid success (`{"n":0}`), not an error.
 
 ## Map ops
 
-The map header is `{}` (metadata is omitted in plain mode).
+The map header may include summary metadata such as `files`, `symbols`, `trunc`, `hint`, or `session`.
 
 The body is `file:line-endline: kind name` lines (one per symbol).
 
@@ -378,6 +487,23 @@ A successful refs header contains:
 - `n` — total reference count
 
 The body is `file:line: name` lines (one per reference).
+
+## Rename ops
+
+A successful `rename` header contains:
+
+- `status` — one of `applied`, `dry_run`, `noop`, `failed`
+
+Optional header fields:
+
+- `from` — old symbol name
+- `to` — new symbol name
+- `n` — number of affected occurrences
+
+Rules:
+
+- `rename --dry-run` SHOULD provide enough preview detail for an agent to judge the change without applying it
+- richer dry-run preview MAY include per-file diffs or per-occurrence previews, but it MUST stay within the normal rename contract rather than inventing a separate command
 
 ## Mutation ops
 
@@ -413,8 +539,23 @@ Rules:
 - Dry-run ops never trigger verify
 - Noop ops skip verify
 - The only difference between preview and commit is `status` (`dry_run` vs `applied`)
+- `edit --delete` is equivalent to an explicit deletion request; it SHOULD return the same mutation shape as other edits
+- `edit --insert-at` is an insertion edit, not a write; it SHOULD return the same mutation shape as other edits
+- If `edit --fuzzy` succeeds, the response SHOULD include metadata indicating that matching was fuzzy rather than exact
+- If `edit --move-after` is supported, it SHOULD return a normal edit result rather than inventing a separate mutation type
 
 When verify fails after successful edits, exit code is 1 but the mutation headers still show `"status":"applied"`. That distinction is essential.
+
+### Atomic batch edits
+
+Batch edit execution MAY support an explicit atomic mode.
+
+Rules:
+
+- `--atomic` applies to a batch of edits, not to standalone single-edit invocations
+- In atomic mode, either all targeted edits apply or none do
+- If any edit in an atomic batch fails validation or matching, the batch MUST leave files unchanged
+- Atomic mode MUST NOT weaken existing error reporting; failures still surface as normal op-level errors
 
 ## Verify
 
@@ -441,7 +582,10 @@ Optional fields:
 Rules:
 
 - When verify is not attempted, no verify line is emitted
-- `verify` MUST NOT use `ok: true/false`
+- `verify` uses `status`, not `ok: true/false`
+- Standalone `edit` and `write` currently auto-verify after a successful non-dry-run apply
+- Batch mode currently auto-verifies when edits are present unless explicitly disabled
+- Writes-only batch flows require explicit verify (`-V`, `--verify`, or JSON batch verify config)
 - Auto-detection chain: `go.mod` → `package.json` → `Cargo.toml` → `Makefile` → skip
 
 ## Verify scope
@@ -468,7 +612,7 @@ Every failed op emits a header-only block (no body):
 
 Rules:
 
-- `error` and `ec` appear together or not at all
+- `ec` SHOULD be present when a specific error code is known
 - Failed ops MUST NOT also include success-only fields (`file`, `lines`, `hash`, etc.)
 - Failed ops have no body
 
@@ -486,7 +630,7 @@ Recommended codes:
 | `invalid_mode` | Mutually exclusive flags or impossible mode |
 | `command_error` | Last-resort fallback only |
 
-Every failed op MUST have an `ec`. If a path can only produce `error` without a code, that path is underspecified.
+Not every current failed op carries an `ec`, but that is the desired direction for the public surface.
 
 ## Validation
 
@@ -508,9 +652,16 @@ Validation rules:
 - Paths outside repo are errors
 - Empty success is only valid for commands where "zero results" is semantically real, such as search with `n: 0`
 
+Additional edit-matching rules:
+
+- `--fuzzy` MUST remain stricter than semantic search; it is for formatting-tolerant matching, not approximate intent guessing
+- `--fuzzy` MUST still fail on ambiguity
+- `--all` and `--fuzzy` SHOULD NOT combine unless the semantics are made explicit and deterministic
+- If `--move-after` is supported, cross-file moves MUST fail rather than silently degrade into copy/delete behavior
+
 ## Batch / standalone parity
 
-For any standalone invocation, there is an equivalent batch invocation that produces identical output.
+For any standalone invocation, there is an equivalent batch invocation that produces identical output. Batch composes the standalone semantic commands; it does not replace them.
 
 ```bash
 edr read src/config.go --signatures
@@ -523,62 +674,60 @@ edr -e src/config.go --old "foo" --new "bar"
 ```
 
 ```bash
+edr edit src/config.go:Handler --delete
+edr -e src/config.go:Handler --delete
+```
+
+```bash
 edr search "handleRequest" --text
 edr -s "handleRequest" --text
 ```
 
 Rules:
 
+- Standalone verbs are the canonical semantics
+- Batch is composition syntax over those semantics
 - Shorthand flags are aliases, not separate semantics
-- If a shorthand works in batch, it SHOULD also work in standalone
+- If a shorthand works in batch, it MAY work in standalone, but docs SHOULD teach the canonical long-form spelling
 - Batch MUST call the same semantic dispatch functions as standalone
 - If a batch combination cannot be expressed as a public standalone invocation, it is invalid
-
-There is no batch-only routing layer in the ideal design. No `inferQueryCmd`, no `doQueryToMultiCmd`, no `edit-plan` detour.
+- `--atomic` is a batch-only modifier and does not require a standalone equivalent
 
 ## Session contract
 
-Sessions are always active. Resolution order:
+Sessions are always active. Session routing is automatic across repeated calls from the same calling process lineage. Agents SHOULD get session dedup by default without having to pass a session identifier on normal calls.
 
-1. `EDR_SESSION` env var (explicit ID)
-2. PPID-based lookup (`.edr/sessions/ppid_<ppid>` maps to a session ID)
-3. Fallback to `"default"` session
-
-`edr session new` generates a unique session ID, creates the session file, and writes a PPID mapping so subsequent calls from the same parent process auto-resolve to that session. Old session files are cleaned up after 7 days.
+`edr session new` creates a fresh session and returns its ID.
 
 Rules:
 
+- Repeated calls from the same calling process lineage SHOULD reuse the same session automatically
+- Automatic routing is based on the process that is making successive edr calls, not on the shell process used to launch those calls
+- If explicit session selection is exposed, it overrides automatic routing
 - Content-returning ops include `session`
 - `session` is one of:
   - `"new"`: first time this content was seen in the session
   - `"unchanged"`: same content as previously seen; body MAY be omitted
-- After a context reset, agents SHOULD run `edr session new` to clear stale dedup state
+- After a context reset, agents SHOULD run `edr session new` before continuing work so stale dedup state is not reused
 
 Concurrency rules:
 
-- Session files are per session, not per process
-- Concurrent writers with the same session MUST NOT corrupt session state
-- Atomic rename is sufficient
-- Last-write-wins is acceptable if the only consequence is a missed dedup
-- Multiple agents get separate sessions via different PPIDs
-
-Session state MUST be bounded in size. A cap plus eviction is required.
+- Concurrent use of the same session MUST NOT corrupt session state
+- Separate agents SHOULD normally get separate sessions unless they intentionally share one
 
 ## Run contract
 
-`edr run <command>` executes a shell command and diffs output against the previous run of the same command.
+`edr run -- <command> [args...]` executes argv directly and diffs output against the previous run of the same command line.
 
-First run shows full output. Subsequent runs show a sparse diff: unchanged regions collapse, changed lines show inline markers. Uses LCS alignment for accurate diffing.
+First run shows full output. Subsequent runs show a sparse diff: unchanged regions collapse and changed lines show inline markers.
 
 Rules:
 
-- Output is compared line-by-line against the stored previous run using LCS alignment
+- Output is compared against the previous run of the same command line
 - Identical output prints `[no changes, N lines]`
 - Changed lines show inline `{old → new}` markers highlighting only the changed segments
 - Unchanged regions collapse to `[N unchanged lines]`
 - Digit-only changes (e.g. timing values, counters) are collapsed along with unchanged lines — no flag needed
-- The command string is part of the storage key (different commands don't interfere)
-- Previous output is stored in `.edr/run/` keyed by command hash, capped at 1MB
 - `--full` bypasses diff entirely, shows raw output
 - Exit code passes through from the wrapped command
 - `--` separates edr flags from the wrapped command's flags
