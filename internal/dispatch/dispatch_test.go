@@ -1156,6 +1156,90 @@ func TestEditInsertAtEOF(t *testing.T) {
 	}
 }
 
+func TestEditFuzzyWhitespace(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	// File has tabs, but old_text will use spaces
+	original := "package main\n\nfunc hello() {\n\tfmt.Println(\"hi\")\n}\n"
+	os.WriteFile(goFile, []byte(original), 0644)
+	db, _ := index.OpenDB(tmp)
+	defer db.Close()
+	ctx := context.Background()
+	index.IndexRepo(ctx, db)
+
+	// Without --fuzzy: should fail (spaces vs tabs mismatch)
+	_, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+		"old_text": "func hello() {\n  fmt.Println(\"hi\")\n}",
+		"new_text": "func hello() {\n\tfmt.Println(\"hello\")\n}",
+	})
+	if err == nil {
+		t.Fatal("expected not_found error without --fuzzy")
+	}
+
+	// With --fuzzy: should succeed
+	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+		"old_text": "func hello() {\n  fmt.Println(\"hi\")\n}",
+		"new_text": "func hello() {\n\tfmt.Println(\"hello\")\n}",
+		"fuzzy":    true,
+	})
+	if err != nil {
+		t.Fatalf("--fuzzy edit failed: %v", err)
+	}
+	m, _ := result.(map[string]any)
+	if m["status"] != "applied" {
+		t.Errorf("expected applied, got %v", m["status"])
+	}
+	data, _ := os.ReadFile(goFile)
+	if !strings.Contains(string(data), "hello") {
+		t.Error("fuzzy edit did not apply replacement")
+	}
+}
+
+func TestEditFuzzyAmbiguousRejects(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	// Two functions with same whitespace-normalized body
+	original := "package main\n\nfunc a() {\n\tx := 1\n}\n\nfunc b() {\n\tx := 1\n}\n"
+	os.WriteFile(goFile, []byte(original), 0644)
+	db, _ := index.OpenDB(tmp)
+	defer db.Close()
+	ctx := context.Background()
+	index.IndexRepo(ctx, db)
+
+	// Fuzzy match should reject ambiguous (multiple matches)
+	_, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+		"old_text": "x := 1",
+		"new_text": "x := 2",
+		"fuzzy":    true,
+	})
+	if err == nil {
+		t.Fatal("expected error for ambiguous fuzzy match")
+	}
+}
+
+func TestEditFuzzyAndAllMutuallyExclusive(t *testing.T) {
+	tmp := t.TempDir()
+	goFile := filepath.Join(tmp, "main.go")
+	os.WriteFile(goFile, []byte("package main\n"), 0644)
+	db, _ := index.OpenDB(tmp)
+	defer db.Close()
+	ctx := context.Background()
+	index.IndexRepo(ctx, db)
+
+	_, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+		"old_text": "x",
+		"new_text": "y",
+		"fuzzy":    true,
+		"all":      true,
+	})
+	if err == nil {
+		t.Fatal("expected error for --fuzzy + --all")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("expected mutually exclusive error, got: %v", err)
+	}
+}
+
 func TestEditEmptyNewTextRequiresEditMode(t *testing.T) {
 	tmp := t.TempDir()
 	goFile := filepath.Join(tmp, "main.go")

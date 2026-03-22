@@ -497,6 +497,12 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			s.currentEdit.InsertAt = ip(n)
 
+		case "--fuzzy":
+			if s.currentOp != opEdit {
+				return nil, fmt.Errorf("--fuzzy is only valid after -e")
+			}
+			s.currentEdit.Fuzzy = bp(true)
+
 		case "--after":
 			if s.currentOp != opWrite {
 				return nil, fmt.Errorf("--after is only valid after -w")

@@ -96,6 +96,7 @@ type doEdit struct {
 	ExpectHash string `json:"expect_hash,omitempty"`
 	Delete     *bool  `json:"delete,omitempty"`
 	InsertAt   *int   `json:"insert_at,omitempty"`
+	Fuzzy      *bool  `json:"fuzzy,omitempty"`
 }
 
 type doWrite struct {
@@ -472,6 +473,9 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env 
 		}
 		if e.InsertAt != nil {
 			flags["insert_at"] = *e.InsertAt
+		}
+		if e.Fuzzy != nil && *e.Fuzzy {
+			flags["fuzzy"] = true
 		}
 		if dryRun {
 			flags["dry_run"] = true

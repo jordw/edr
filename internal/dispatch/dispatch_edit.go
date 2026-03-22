@@ -296,12 +296,23 @@ func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacem
 	}
 
 	replaceAll := flagBool(flags, "all", false)
+	fuzzy := flagBool(flags, "fuzzy", false)
+
+	if fuzzy && replaceAll {
+		return nil, fmt.Errorf("--fuzzy and --all are mutually exclusive")
+	}
 
 	// Find first match and validate
 	var startByte, endByte int
 	{
 		idx := strings.Index(content, matchText)
 		if idx < 0 {
+			if fuzzy {
+				start, end, kind := fuzzyMatch(content, matchText)
+				if start >= 0 {
+					return smartEditByteRange(ctx, db, file, uint32(start), uint32(end), replacement, fmt.Sprintf("fuzzy:%s", kind), dryRun)
+				}
+			}
 			return nil, notFoundError(content, output.Rel(file), matchText)
 		}
 		totalMatches := strings.Count(content, matchText)
@@ -562,6 +573,90 @@ func notFoundError(content, relFile, matchText string) *NotFoundError {
 }
 
 // normalizeWhitespace collapses runs of whitespace to single spaces.
+// fuzzyMatch tries whitespace/indentation-normalized matching and returns
+// the original byte range if exactly one match is found. Returns (-1,-1,"")
+// if no match or ambiguous.
+func fuzzyMatch(content, matchText string) (int, int, string) {
+	// Try 1: whitespace-normalized match
+	normContent := normalizeWhitespace(content)
+	normMatch := normalizeWhitespace(matchText)
+	if idx := strings.Index(normContent, normMatch); idx >= 0 {
+		// Check uniqueness in normalized space
+		if strings.Count(normContent, normMatch) > 1 {
+			return -1, -1, ""
+		}
+		start := mapNormOffset(content, normContent, idx)
+		end := mapNormOffset(content, normContent, idx+len(normMatch))
+		return start, end, "whitespace"
+	}
+
+	// Try 2: indentation-trimmed match
+	trimContent := trimLines(content)
+	trimMatch := trimLines(matchText)
+	if idx := strings.Index(trimContent, trimMatch); idx >= 0 {
+		if strings.Count(trimContent, trimMatch) > 1 {
+			return -1, -1, ""
+		}
+		start := mapTrimOffset(content, idx)
+		end := mapTrimOffset(content, idx+len(trimMatch))
+		return start, end, "indentation"
+	}
+
+	return -1, -1, ""
+}
+
+// mapNormOffset maps a position in whitespace-normalized text back to the original.
+func mapNormOffset(original, normalized string, normPos int) int {
+	ni := 0
+	for oi := 0; oi < len(original); oi++ {
+		if ni >= normPos {
+			return oi
+		}
+		oc := original[oi]
+		if oc == ' ' || oc == '\t' {
+			// In normalized, consecutive whitespace collapses to one space
+			if ni < len(normalized) && normalized[ni] == ' ' {
+				ni++
+			}
+			// Skip remaining original whitespace
+			for oi+1 < len(original) && (original[oi+1] == ' ' || original[oi+1] == '\t') {
+				oi++
+			}
+		} else {
+			ni++
+		}
+	}
+	return len(original)
+}
+
+// mapTrimOffset maps a position in trim-lines text back to the original.
+func mapTrimOffset(original string, trimPos int) int {
+	origLines := strings.Split(original, "\n")
+	trimLines := strings.Split(trimLines(original), "\n")
+
+	ti := 0 // position in trimmed text
+	for lineIdx, tl := range trimLines {
+		if lineIdx >= len(origLines) {
+			break
+		}
+		ol := origLines[lineIdx]
+		leadingWS := len(ol) - len(strings.TrimLeft(ol, " \t"))
+
+		if ti+len(tl) >= trimPos {
+			// Target is in this line
+			offsetInTrimLine := trimPos - ti
+			// Find cumulative original offset for this line
+			origLineStart := 0
+			for i := 0; i < lineIdx; i++ {
+				origLineStart += len(origLines[i]) + 1 // +1 for \n
+			}
+			return origLineStart + leadingWS + offsetInTrimLine
+		}
+		ti += len(tl) + 1 // +1 for \n
+	}
+	return len(original)
+}
+
 func normalizeWhitespace(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
