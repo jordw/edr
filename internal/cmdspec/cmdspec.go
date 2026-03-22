@@ -198,6 +198,14 @@ var Registry = []*Spec{
 		},
 	},
 	{
+		Name: "next", Desc: "Show session status: recent ops, build state, action items.",
+		Category: CatMeta, MinArgs: 0, MaxArgs: 0,
+		Flags: []FlagSpec{
+			{Name: "focus", Type: FlagString, Default: "", Desc: "Set session focus (empty string clears)"},
+			{Name: "count", Type: FlagInt, Default: 10, Desc: "Number of recent ops to show"},
+		},
+	},
+	{
 		Name: "session", Desc: "Manage sessions.",
 		Category: CatMeta, MinArgs: 0, MaxArgs: 0,
 		Flags: []FlagSpec{},

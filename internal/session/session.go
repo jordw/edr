@@ -37,6 +37,27 @@ type PostProcessStats struct {
 	BodyDedup  int
 }
 
+// OpEntry records a single operation in the session op log.
+// Used by `edr next` to show recent activity for re-orientation.
+type OpEntry struct {
+	OpID   string `json:"op_id"`   // "e7", "r3", "s1"
+	Cmd    string `json:"cmd"`     // "edit", "read", "search"
+	File   string `json:"file"`    // relative path
+	Symbol string `json:"symbol"`  // symbol name, if any
+	Action string `json:"action"`  // raw operation: "replace_text", "delete", "insert_at", "read_symbol"
+	Kind   string `json:"kind"`    // display label: "signature_changed", "text_replaced", "symbol_read"
+	OK     bool   `json:"ok"`      // success/failure
+}
+
+// MaxOpLogEntries is the sliding window size for the op log.
+const MaxOpLogEntries = 100
+
+// AssumptionEntry tracks a signature snapshot for a symbol the agent has read.
+type AssumptionEntry struct {
+	SigHash string `json:"sig_hash"` // SHA256 prefix of the signature string
+	OpID    string `json:"op_id"`    // op ID when the assumption was recorded (e.g., "r3")
+}
+
 type Session struct {
 	mu            sync.Mutex
 	FileContent   map[string]ContentEntry `json:"file_content"`
@@ -46,6 +67,20 @@ type Session struct {
 	Diffs         map[string]string       `json:"diffs"`
 	SeenHints  map[string]bool   `json:"seen_hints,omitempty"`
 	FileHashes map[string]string `json:"file_hashes,omitempty"`
+
+	// Op log: sliding window of recent operations for `edr next`.
+	OpLog   []OpEntry `json:"op_log,omitempty"`
+	opCount int       // running counter for op ID generation (not persisted)
+
+	// Focus is an optional one-line session objective shown by `edr next`.
+	Focus string `json:"focus,omitempty"`
+
+	// Assumptions tracks signature hashes for symbols the agent has read.
+	Assumptions map[string]AssumptionEntry `json:"assumptions,omitempty"`
+
+	// Build state: tracks verify results and edit activity.
+	LastVerifyStatus string `json:"last_verify_status,omitempty"`
+	EditsSinceVerify bool   `json:"edits_since_verify,omitempty"`
 
 	// stats tracks optimization hits per handleDo call (reset between calls).
 	stats PostProcessStats
@@ -63,6 +98,142 @@ func (s *Session) GetStats() (deltaReads, bodyDedup int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.stats.DeltaReads, s.stats.BodyDedup
+}
+
+// --- Op log ---
+
+func (s *Session) RecordOp(cmd, file, symbol, action, kind string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prefix := "x"
+	if len(cmd) > 0 {
+		prefix = string(cmd[0])
+	}
+	s.opCount++
+	opID := fmt.Sprintf("%s%d", prefix, s.opCount)
+	s.OpLog = append(s.OpLog, OpEntry{OpID: opID, Cmd: cmd, File: file, Symbol: symbol, Action: action, Kind: kind, OK: ok})
+	if len(s.OpLog) > MaxOpLogEntries {
+		s.OpLog = s.OpLog[len(s.OpLog)-MaxOpLogEntries:]
+	}
+}
+
+func (s *Session) GetRecentOps(n int) []OpEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n <= 0 || n > len(s.OpLog) {
+		out := make([]OpEntry, len(s.OpLog))
+		copy(out, s.OpLog)
+		return out
+	}
+	start := len(s.OpLog) - n
+	out := make([]OpEntry, n)
+	copy(out, s.OpLog[start:])
+	return out
+}
+
+func (s *Session) GetFocus() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Focus
+}
+
+func (s *Session) SetFocus(focus string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Focus = focus
+}
+
+// --- Assumption tracking ---
+
+func SigHash(sig string) string { return ContentHash(sig) }
+
+func (s *Session) RecordAssumption(key, sig, opID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Assumptions == nil {
+		s.Assumptions = make(map[string]AssumptionEntry)
+	}
+	s.Assumptions[key] = AssumptionEntry{SigHash: SigHash(sig), OpID: opID}
+}
+
+// UpdateAssumptionOpID updates just the op ID for an existing assumption.
+func (s *Session) UpdateAssumptionOpID(key, opID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if entry, ok := s.Assumptions[key]; ok {
+		entry.OpID = opID
+		s.Assumptions[key] = entry
+	}
+}
+
+type StaleAssumption struct {
+	Key, File, Symbol, AssumedAt, Current string
+}
+
+func (s *Session) CheckAssumptions(currentSigs map[string]string) []StaleAssumption {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var stale []StaleAssumption
+	for key, entry := range s.Assumptions {
+		cur, ok := currentSigs[key]
+		if !ok {
+			stale = append(stale, StaleAssumption{Key: key, AssumedAt: entry.OpID})
+			continue
+		}
+		if cur != entry.SigHash {
+			stale = append(stale, StaleAssumption{Key: key, AssumedAt: entry.OpID, Current: cur})
+		}
+	}
+	for i := range stale {
+		if idx := strings.IndexByte(stale[i].Key, ':'); idx > 0 {
+			stale[i].File = stale[i].Key[:idx]
+			stale[i].Symbol = stale[i].Key[idx+1:]
+		}
+	}
+	return stale
+}
+
+func (s *Session) GetAssumptions() map[string]AssumptionEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]AssumptionEntry, len(s.Assumptions))
+	for k, v := range s.Assumptions {
+		out[k] = v
+	}
+	return out
+}
+
+func (s *Session) ClearAssumption(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.Assumptions, key)
+}
+
+// --- Build state ---
+
+func (s *Session) RecordVerify(status string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.LastVerifyStatus = status
+	s.EditsSinceVerify = false
+}
+
+func (s *Session) RecordEdit() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.EditsSinceVerify = true
+}
+
+func (s *Session) BuildState() (status string, editsSince bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.LastVerifyStatus == "" {
+		return "", false
+	}
+	if s.EditsSinceVerify {
+		return "unknown", true
+	}
+	return s.LastVerifyStatus, false
 }
 
 const MaxContentEntries = 200
@@ -133,6 +304,15 @@ func LoadFromFile(path string) *Session {
 	}
 	if s.SeenHints == nil {
 		s.SeenHints = make(map[string]bool)
+	}
+	// Restore opCount from existing log so new IDs don't collide
+	if len(s.OpLog) > 0 {
+		last := s.OpLog[len(s.OpLog)-1]
+		if len(last.OpID) > 1 {
+			if n, err := strconv.Atoi(last.OpID[1:]); err == nil {
+				s.opCount = n
+			}
+		}
 	}
 	return s
 }

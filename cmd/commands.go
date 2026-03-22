@@ -31,6 +31,7 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(setupCmd)
 	rootCmd.AddCommand(sessionCmd)
+	rootCmd.AddCommand(nextCmd)
 }
 
 // dispatchCmdWithIndex is like dispatchCmd but auto-indexes if needed.
@@ -109,6 +110,9 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 			env.AddOp(mOpID, cmdName, r.Result)
 		}
 	} else {
+		// Extract and strip internal signature field before any serialization
+		extractAndStripSignature(sess, cmdName, args, result)
+
 		// Apply session post-processing (delta reads, body dedup)
 		data, marshalErr := json.Marshal(result)
 		if marshalErr == nil {
@@ -123,6 +127,9 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 		env.AddOp(opID, cmdName, result)
 	}
 	env.ComputeOK()
+
+	// Record op in session log
+	recordOp(sess, cmdName, args, flags, result, err == nil)
 
 	// Emit contextual hints to stderr
 	emitStandaloneHints(sess, cmdName, flags, env)
@@ -204,9 +211,19 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 		} else if dryRun {
 			env.SetVerify(map[string]any{"status": "skipped", "reason": "dry run"})
 		}
+		// Record auto-verify build state
+		if vm, ok := env.Verify.(map[string]any); ok {
+			if vs, ok := vm["status"].(string); ok && vs != "skipped" {
+				sess.RecordVerify(vs)
+			}
+		}
 	}
 
 	env.ComputeOK()
+
+	// Record op in session log
+	recordOp(sess, cmdName, args, flags, result, err == nil)
+
 	output.PrintEnvelope(env)
 	return nil
 }
@@ -356,6 +373,15 @@ var verifyCmd = &cobra.Command{
 		}
 		output.SetRoot(absRoot)
 
+		// Load session for build state tracking (only if .edr exists — verify shouldn't create it)
+		edrDir := filepath.Join(absRoot, ".edr")
+		var sess *session.Session
+		var saveSess func()
+		if _, statErr := os.Stat(edrDir); statErr == nil {
+			sess, saveSess = session.LoadSession(edrDir)
+			defer saveSess()
+		}
+
 		env := output.NewEnvelope("verify")
 
 		result, dispErr := dispatch.DispatchVerify(context.Background(), absRoot, args, flags)
@@ -364,6 +390,17 @@ var verifyCmd = &cobra.Command{
 		} else {
 			env.SetVerify(result)
 		}
+
+		// Record verify in session
+		if sess != nil {
+			if vm, ok := env.Verify.(map[string]any); ok {
+				if status, ok := vm["status"].(string); ok && status != "skipped" {
+					sess.RecordVerify(status)
+					recordOp(sess, "verify", args, flags, vm, true)
+				}
+			}
+		}
+
 		env.ComputeOK()
 		output.PrintEnvelope(env)
 		return nil
@@ -407,6 +444,170 @@ var sessionNewCmd = &cobra.Command{
 
 func init() {
 	sessionCmd.AddCommand(sessionNewCmd)
+}
+
+var nextCmd = &cobra.Command{
+	Use:   "next",
+	Short: "Show session status: recent ops, build state, action items",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		root := getRoot(cmd)
+		edrDir := filepath.Join(root, ".edr")
+
+		sess, saveSess := session.LoadSession(edrDir)
+		defer saveSess()
+
+		flags := extractFlags(cmd)
+
+		// Handle --focus: set/clear focus string
+		if cmd.Flags().Changed("focus") {
+			focusVal, _ := flags["focus"].(string)
+			sess.SetFocus(focusVal)
+		}
+
+		count := 10
+		if v, ok := flags["count"].(int); ok && v > 0 {
+			count = v
+		}
+
+		// Open DB for assumption checking (best-effort — next works without it)
+		var db *index.DB
+		db, _ = openDBStrictRoot(root)
+		if db != nil {
+			defer db.Close()
+		}
+
+		result := buildNextResult(sess, db, count)
+		env := output.NewEnvelope("next")
+		env.AddOp("n0", "next", result)
+		env.ComputeOK()
+		output.PrintEnvelope(env)
+		return nil
+	},
+}
+
+func init() { cmdspec.RegisterFlags(nextCmd.Flags(), "next") }
+
+// buildNextResult constructs the result map for `edr next`.
+func buildNextResult(sess *session.Session, db *index.DB, count int) map[string]any {
+	result := map[string]any{}
+
+	// Focus
+	if focus := sess.GetFocus(); focus != "" {
+		result["focus"] = focus
+	}
+
+	// Recent ops (reverse order — most recent first)
+	ops := sess.GetRecentOps(count)
+	if len(ops) > 0 {
+		recent := make([]any, len(ops))
+		for i, op := range ops {
+			entry := map[string]any{
+				"op_id": op.OpID,
+				"cmd":   op.Cmd,
+				"kind":  op.Kind,
+			}
+			if op.File != "" {
+				entry["file"] = op.File
+			}
+			if op.Symbol != "" {
+				entry["symbol"] = op.Symbol
+			}
+			if !op.OK {
+				entry["ok"] = false
+			}
+			recent[i] = entry
+		}
+		result["recent"] = recent
+	}
+
+	// Total op count
+	allOps := sess.GetRecentOps(0)
+	result["total_ops"] = len(allOps)
+
+	// Build state
+	buildStatus, editsSince := sess.BuildState()
+	if buildStatus != "" {
+		build := map[string]any{"status": buildStatus}
+		if editsSince {
+			build["edits_since"] = true
+		}
+		result["build"] = build
+	}
+
+	// Stale assumptions (fix items)
+	if db != nil {
+		fix := computeFixItems(sess, db)
+		if len(fix) > 0 {
+			result["fix"] = fix
+		}
+	}
+
+	return result
+}
+
+// computeFixItems checks all tracked assumptions against current signatures.
+func computeFixItems(sess *session.Session, db *index.DB) []any {
+	assumptions := sess.GetAssumptions()
+	if len(assumptions) == 0 {
+		return nil
+	}
+
+	// Compute current signatures for all tracked symbols
+	currentSigs := make(map[string]string, len(assumptions))
+	ctx := context.Background()
+	for key := range assumptions {
+		idx := strings.IndexByte(key, ':')
+		if idx <= 0 {
+			continue
+		}
+		file, symName := key[:idx], key[idx+1:]
+
+		absFile, err := db.ResolvePath(file)
+		if err != nil {
+			continue
+		}
+		syms, err := db.GetSymbolsByFile(ctx, absFile)
+		if err != nil {
+			continue
+		}
+		src, err := os.ReadFile(absFile)
+		if err != nil {
+			continue
+		}
+		for _, sym := range syms {
+			if sym.Name == symName {
+				sig := index.ExtractSignatureFromSource(sym, src)
+				currentSigs[key] = session.SigHash(sig)
+				break
+			}
+		}
+	}
+
+	stale := sess.CheckAssumptions(currentSigs)
+	if len(stale) == 0 {
+		return nil
+	}
+
+	var fix []any
+	for i, s := range stale {
+		item := map[string]any{
+			"id":         fmt.Sprintf("stale_%d", i+1),
+			"type":       "stale_assumption",
+			"confidence": "exact",
+			"file":       s.File,
+			"symbol":     s.Symbol,
+			"assumed_at": s.AssumedAt,
+			"suggest":    fmt.Sprintf("read %s:%s", s.File, s.Symbol),
+		}
+		if s.Current == "" {
+			item["reason"] = "symbol no longer exists"
+		} else {
+			item["reason"] = "signature changed since read"
+		}
+		fix = append(fix, item)
+	}
+	return fix
 }
 
 // injectSessionHash adds stale-read protection for mutations. If the session
@@ -515,6 +716,129 @@ func classifyErrorMsg(msg string) string {
 	}
 }
 
+
+// extractAndStripSignature extracts _signature from a dispatch result, records
+// the assumption in the session, and removes the internal field before any
+// serialization can leak it.
+func extractAndStripSignature(sess *session.Session, cmdName string, args []string, result any) {
+	if cmdName != "read" {
+		return
+	}
+	m, ok := result.(map[string]any)
+	if !ok {
+		return
+	}
+	sig, hasSig := m["_signature"].(string)
+	delete(m, "_signature") // always strip, even if empty
+	if !hasSig || sig == "" {
+		return
+	}
+	_, symbol := extractFileSymbol(args)
+	if symbol == "" {
+		return
+	}
+	file, _ := extractFileSymbol(args)
+	key := file + ":" + symbol
+	// Use a placeholder op ID — recordOp hasn't run yet.
+	// We'll use "r?" and it gets overwritten on the next read anyway.
+	sess.RecordAssumption(key, sig, "r?")
+}
+
+// recordOp extracts file/symbol from args and records an op in the session log.
+// Also handles build state tracking.
+func recordOp(sess *session.Session, cmdName string, args []string, flags map[string]any, result any, ok bool) {
+	file, symbol := extractFileSymbol(args)
+	action, kind := classifyOp(cmdName, flags, result, ok)
+	sess.RecordOp(cmdName, file, symbol, action, kind, ok)
+
+	if !ok {
+		return
+	}
+
+	m, isMap := result.(map[string]any)
+	if !isMap {
+		return
+	}
+
+	// Update assumption op ID now that we have the real one
+	if cmdName == "read" && symbol != "" {
+		key := file + ":" + symbol
+		ops := sess.GetRecentOps(1)
+		if len(ops) > 0 {
+			sess.UpdateAssumptionOpID(key, ops[0].OpID)
+		}
+	}
+
+	// Track build state
+	switch cmdName {
+	case "edit", "write":
+		status, _ := m["status"].(string)
+		if status == "applied" || status == "applied_index_stale" {
+			sess.RecordEdit()
+		}
+	case "verify":
+		if status, sOk := m["status"].(string); sOk {
+			sess.RecordVerify(status)
+		}
+	}
+}
+
+// extractFileSymbol parses file and optional symbol from command args.
+func extractFileSymbol(args []string) (file, symbol string) {
+	if len(args) == 0 {
+		return "", ""
+	}
+	arg := args[0]
+	if idx := strings.IndexByte(arg, ':'); idx > 0 {
+		return arg[:idx], arg[idx+1:]
+	}
+	return arg, ""
+}
+
+// classifyOp determines the action and display kind for an operation.
+func classifyOp(cmd string, flags map[string]any, result any, ok bool) (action, kind string) {
+	if !ok {
+		return cmd + "_failed", cmd + "_failed"
+	}
+	switch cmd {
+	case "read":
+		if _, hasSig := flags["signatures"]; hasSig {
+			return "read_signatures", "signatures_read"
+		}
+		if _, hasSkel := flags["skeleton"]; hasSkel {
+			return "read_skeleton", "skeleton_read"
+		}
+		return "read_symbol", "symbol_read"
+	case "edit":
+		if _, hasDel := flags["delete"]; hasDel {
+			return "delete", "symbol_deleted"
+		}
+		return "replace_text", "text_replaced"
+	case "write":
+		return "write_file", "file_written"
+	case "search":
+		return "search", "search"
+	case "verify":
+		// Check verify result status
+		if m, mOk := result.(map[string]any); mOk {
+			if status, sOk := m["status"].(string); sOk && status == "passed" {
+				return "verify", "verify_passed"
+			}
+		}
+		return "verify", "verify_failed"
+	case "refs":
+		if _, hasImpact := flags["impact"]; hasImpact {
+			return "refs_impact", "impact_checked"
+		}
+		return "refs", "refs_checked"
+	case "rename":
+		return "rename", "renamed"
+	case "map":
+		return "map", "map_viewed"
+	default:
+		return cmd, cmd
+	}
+}
 
 // emitStandaloneHints emits contextual hints for standalone (non-batch) commands.
 func emitStandaloneHints(sess *session.Session, cmdName string, flags map[string]any, env *output.Envelope) {

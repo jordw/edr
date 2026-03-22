@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jordw/edr/internal/session"
 	"github.com/spf13/cobra"
 )
 
@@ -29,7 +30,16 @@ show inline {old → new} markers. Use --full for raw output.`,
 		// Use args directly to preserve argument boundaries.
 		// strings.Join + sh -c would double-wrap and break quoting.
 		root := getRoot(cmd)
-		runDir := filepath.Join(root, ".edr", "run")
+		edrDir := filepath.Join(root, ".edr")
+		runDir := filepath.Join(edrDir, "run")
+
+		// Load session for op recording (best-effort)
+		var sess *session.Session
+		var saveSess func()
+		if _, statErr := os.Stat(edrDir); statErr == nil {
+			sess, saveSess = session.LoadSession(edrDir)
+			defer saveSess()
+		}
 
 		// Cache key uses joined args (stable across runs)
 		shellCmd := strings.Join(args, " ")
@@ -46,12 +56,18 @@ show inline {old → new} markers. Use --full for raw output.`,
 
 		if full {
 			os.Stdout.Write(out)
+			if sess != nil {
+				sess.RecordOp("run", shellCmd, "", "run", "command_run", execErr == nil)
+			}
 			return exitError(execErr)
 		}
 
 		output := diffAgainstPrevious(runDir, shellCmd, string(out))
 		fmt.Print(output)
 
+		if sess != nil {
+			sess.RecordOp("run", shellCmd, "", "run", "command_run", execErr == nil)
+		}
 		return exitError(execErr)
 	},
 }

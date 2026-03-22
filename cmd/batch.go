@@ -714,6 +714,15 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, env *out
 		executeVerify(ctx, db, env, &p)
 	}
 
+	// Record verify result in session build state
+	if hasVerify {
+		if vm, ok := env.Verify.(map[string]any); ok {
+			if status, ok := vm["status"].(string); ok && status != "skipped" {
+				sess.RecordVerify(status)
+			}
+		}
+	}
+
 	// Add warnings as envelope errors
 	for _, w := range warnings {
 		env.Errors = append(env.Errors, output.OpError{Code: "warning", Message: w})
@@ -913,17 +922,23 @@ func addMultiResultOps(env *output.Envelope, sess *session.Session, cmds []dispa
 
 		if !r.OK {
 			env.AddFailedOpWithCode(opID, cmdName, classifyErrorMsg(r.Error), r.Error)
+			recordOp(sess, cmdName, cmds[i].Args, cmds[i].Flags, nil, false)
 			continue
 		}
 		if r.Result == nil {
 			env.AddOp(opID, cmdName, map[string]any{})
+			recordOp(sess, cmdName, cmds[i].Args, cmds[i].Flags, nil, true)
 			continue
 		}
+
+		// Extract and strip internal signature before serialization
+		extractAndStripSignature(sess, cmdName, cmds[i].Args, r.Result)
 
 		// Apply session post-processing
 		data, err := json.Marshal(r.Result)
 		if err != nil {
 			env.AddOp(opID, cmdName, r.Result)
+			recordOp(sess, cmdName, cmds[i].Args, cmds[i].Flags, r.Result, true)
 			continue
 		}
 		cmd := cmds[i].Cmd
@@ -945,6 +960,7 @@ func addMultiResultOps(env *output.Envelope, sess *session.Session, cmds []dispa
 		}
 
 		env.AddOp(opID, cmdName, result)
+		recordOp(sess, cmdName, cArgs, flags, result, true)
 	}
 }
 
