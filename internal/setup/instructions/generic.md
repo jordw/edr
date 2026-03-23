@@ -32,7 +32,8 @@ Run shell commands via `edr delta -- cmd`. Run `edr status` between tasks or aft
 
 ### Edit modifiers (after `-e`)
 `--old "x" --new "y"`, `--where Sym` (resolves file), `--in Sym` (scope)
-`--all`, `--delete`, `--dry-run`, `--fuzzy`, `--read-back`, `@file` for metacharacters
+`--all`, `--delete`, `--dry-run`, `--fuzzy`, `--read-back`
+Quoting: use heredocs for quotes/backslashes: `--old "$(cat <<'EOF'`...`EOF`)"`
 
 ### Write modifiers (after `-w`)
 `--content "..."`, `--inside Class`, `--after Sym`, `--append`, `--mkdir`
