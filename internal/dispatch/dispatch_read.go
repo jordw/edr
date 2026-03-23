@@ -123,6 +123,39 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 		// Fall through to normal read if outline fails (unsupported language etc.)
 	}
 
+	// Auto-skeleton: large files (>200 lines) without explicit --full or line range
+	// get skeleton view automatically. This prevents the most common context waste
+	// pattern — reading a 500-line file to find one function.
+	if !full && !hasLineRange && depth == 0 {
+		if lc := fileLineCount(file); lc > 200 {
+			body, outlineErr := index.OutlineFile(file, 2)
+			if outlineErr == nil {
+				size := len(body) / 4
+				truncated := false
+				if budget > 0 && size > budget {
+					chars := budget * 4
+					body, truncated = output.TruncateAtLine(body, chars)
+					size = budget
+				}
+				hash, _ := edit.FileHash(file)
+				r := map[string]any{
+					"file":        output.Rel(file),
+					"depth":       2,
+					"lines":       [2]int{1, lc},
+					"total_lines": lc,
+					"size":        size,
+					"content":     body,
+					"hash":        hash,
+					"truncated":   truncated,
+					"mtime":       fileMtime(file),
+					"auto":        "skeleton",
+				}
+				setBudgetUsed(r, size)
+				return r, nil
+			}
+		}
+	}
+
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
@@ -305,6 +338,11 @@ func runReadSymbol(ctx context.Context, db *index.DB, root string, args []string
 	if !truncated {
 		addSignatureToResult(sym, src, r)
 	}
+
+	// --expand: include related symbol signatures inline
+	if expandMode := flagString(flags, "expand", ""); expandMode != "" {
+		attachExpand(ctx, db, sym, expandMode, r)
+	}
 	return r, nil
 }
 
@@ -463,5 +501,229 @@ func fileMtime(path string) string {
 		return ""
 	}
 	return fi.ModTime().Format(time.RFC3339)
+}
+
+// runPrepare assembles pre-edit context for a symbol in one call:
+// body, callers, deps, test locations, and file hash.
+func runPrepare(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("prepare requires 1-2 arguments: [file] <symbol>")
+	}
+	budget := flagInt(flags, "budget", 0)
+
+	sym, err := resolveSymbolArgs(ctx, db, root, args)
+	if err != nil {
+		return nil, err
+	}
+
+	src, err := os.ReadFile(sym.File)
+	if err != nil {
+		return nil, err
+	}
+	body := string(src[sym.StartByte:sym.EndByte])
+	hash, _ := edit.FileHash(sym.File)
+
+	result := map[string]any{
+		"file":   output.Rel(sym.File),
+		"symbol": sym.Name,
+		"type":   sym.Type,
+		"lines":  [2]int{int(sym.StartLine), int(sym.EndLine)},
+		"hash":   hash,
+		"content": body,
+		"size":   len(body) / 4,
+	}
+
+	// Budget: allocate 60% to body, 40% to related context
+	bodyBudget := budget
+	if budget > 0 {
+		bodyBudget = budget * 60 / 100
+		size := len(body) / 4
+		if size > bodyBudget {
+			chars := bodyBudget * 4
+			body, _ = output.TruncateAtLine(body, chars)
+			result["content"] = body
+			result["truncated"] = true
+		}
+	}
+
+	// Deps signatures
+	deps, err := index.FindDeps(ctx, db, sym)
+	if err == nil && len(deps) > 0 {
+		type relSym struct {
+			File      string `json:"file"`
+			Name      string `json:"name"`
+			Type      string `json:"type"`
+			Signature string `json:"signature"`
+		}
+		var items []relSym
+		for _, d := range deps {
+			sig := index.ExtractSignatureCtx(ctx, d)
+			if sig != "" {
+				items = append(items, relSym{File: output.Rel(d.File), Name: d.Name, Type: d.Type, Signature: sig})
+			}
+		}
+		if len(items) > 0 {
+			result["deps"] = items
+		}
+	}
+
+	// Callers signatures
+	callers, err := db.FindSemanticCallers(ctx, sym.Name, sym.File)
+	if err != nil || len(callers) == 0 {
+		refs, _ := index.FindReferencesInFile(ctx, db, sym.Name, sym.File)
+		allSyms, _ := db.AllSymbols(ctx)
+		symMap := make(map[string][]index.SymbolInfo)
+		for _, s := range allSyms {
+			symMap[s.File] = append(symMap[s.File], s)
+		}
+		seen := make(map[string]bool)
+		for _, ref := range refs {
+			if ref.File == sym.File && ref.StartLine >= sym.StartLine && ref.EndLine <= sym.EndLine {
+				continue
+			}
+			for _, s := range symMap[ref.File] {
+				if ref.StartLine >= s.StartLine && ref.EndLine <= s.EndLine {
+					key := s.File + ":" + s.Name
+					if !seen[key] {
+						seen[key] = true
+						callers = append(callers, s)
+					}
+				}
+			}
+		}
+	}
+	if len(callers) > 0 {
+		type relSym struct {
+			File      string `json:"file"`
+			Name      string `json:"name"`
+			Type      string `json:"type"`
+			Signature string `json:"signature"`
+		}
+		var items []relSym
+		for _, c := range callers {
+			sig := index.ExtractSignatureCtx(ctx, c)
+			if sig != "" {
+				items = append(items, relSym{File: output.Rel(c.File), Name: c.Name, Type: c.Type, Signature: sig})
+			}
+		}
+		if len(items) > 0 {
+			result["callers"] = items
+		}
+	}
+
+	// Test search: look for test functions matching the symbol name
+	testPattern := "Test" + sym.Name
+	testResults, _ := db.SearchSymbols(ctx, testPattern)
+	if len(testResults) > 0 {
+		type testLoc struct {
+			File string `json:"file"`
+			Name string `json:"name"`
+			Line int    `json:"line"`
+		}
+		var tests []testLoc
+		for _, t := range testResults {
+			if strings.Contains(t.Name, "Test") {
+				tests = append(tests, testLoc{File: output.Rel(t.File), Name: t.Name, Line: int(t.StartLine)})
+			}
+		}
+		if len(tests) > 0 {
+			result["tests"] = tests
+		}
+	}
+
+	return result, nil
+}
+
+// attachExpand adds related symbol signatures to a read result.
+// expandMode: "deps" (default if empty/truthy), "callers", or "both".
+func attachExpand(ctx context.Context, db *index.DB, sym *index.SymbolInfo, expandMode string, result map[string]any) {
+	showDeps := true
+	showCallers := false
+	switch expandMode {
+	case "callers":
+		showDeps = false
+		showCallers = true
+	case "both":
+		showCallers = true
+	case "deps", "true", "1":
+		// default: deps only
+	default:
+		// treat unrecognized as deps
+	}
+
+	type relatedSym struct {
+		File      string `json:"file"`
+		Name      string `json:"name"`
+		Type      string `json:"type"`
+		Signature string `json:"signature"`
+	}
+
+	if showDeps {
+		deps, err := index.FindDeps(ctx, db, sym)
+		if err == nil && len(deps) > 0 {
+			var items []relatedSym
+			for _, d := range deps {
+				sig := index.ExtractSignatureCtx(ctx, d)
+				if sig == "" {
+					continue
+				}
+				items = append(items, relatedSym{
+					File:      output.Rel(d.File),
+					Name:      d.Name,
+					Type:      d.Type,
+					Signature: sig,
+				})
+			}
+			if len(items) > 0 {
+				result["deps"] = items
+			}
+		}
+	}
+
+	if showCallers {
+		callers, err := db.FindSemanticCallers(ctx, sym.Name, sym.File)
+		if err != nil || len(callers) == 0 {
+			// Fallback to text-based refs
+			refs, _ := index.FindReferencesInFile(ctx, db, sym.Name, sym.File)
+			allSyms, _ := db.AllSymbols(ctx)
+			symMap := make(map[string][]index.SymbolInfo)
+			for _, s := range allSyms {
+				symMap[s.File] = append(symMap[s.File], s)
+			}
+			seen := make(map[string]bool)
+			for _, ref := range refs {
+				if ref.File == sym.File && ref.StartLine >= sym.StartLine && ref.EndLine <= sym.EndLine {
+					continue
+				}
+				for _, s := range symMap[ref.File] {
+					if ref.StartLine >= s.StartLine && ref.EndLine <= s.EndLine {
+						key := s.File + ":" + s.Name
+						if !seen[key] {
+							seen[key] = true
+							callers = append(callers, s)
+						}
+					}
+				}
+			}
+		}
+		if len(callers) > 0 {
+			var items []relatedSym
+			for _, c := range callers {
+				sig := index.ExtractSignatureCtx(ctx, c)
+				if sig == "" {
+					continue
+				}
+				items = append(items, relatedSym{
+					File:      output.Rel(c.File),
+					Name:      c.Name,
+					Type:      c.Type,
+					Signature: sig,
+				})
+			}
+			if len(items) > 0 {
+				result["callers"] = items
+			}
+		}
+	}
 }
 

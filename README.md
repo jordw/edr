@@ -85,7 +85,7 @@ edr delta -- pytest
 
 edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and stores symbols in a SQLite index. This gives agents three capabilities they don't have with raw file tools:
 
-**Symbol-level operations.** Read one function instead of a 400-line file. Get a class API with `--signatures` (85% fewer tokens). Add a method with `--inside ClassName` without reading the file. Scope edits to a symbol with `--in Symbol` to avoid false matches. Use `--fuzzy` for whitespace-tolerant matching. Edits re-index immediately and auto-verify the build (Go, Node, Rust, Make).
+**Symbol-level operations.** Read one function instead of a 400-line file. Large files (>200 lines) auto-skeleton on first read, showing structure instead of content. Get a class API with `--signatures` (85% fewer tokens). `--expand` includes dep signatures inline. Add a method with `--inside ClassName` without reading the file. Scope edits to a symbol with `--in Symbol`. Use `--read-back` to get updated context in the edit response. `edr prepare Symbol` returns body, callers, deps, tests, and hash in one call. Edits re-index immediately and auto-verify the build (Go, Node, Rust, Make).
 
 **Batching.** `-r`, `-s`, `-e`, `-w` combine reads, searches, edits, and writes in one CLI call. One call to gather context, one to apply mutations.
 
@@ -112,13 +112,14 @@ edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "..."
 
 | Command | Example |
 |---|---|
-| `read` | `edr read file:Symbol`, `--signatures`, `--lines 10:50` |
+| `read` | `edr read file:Symbol`, `--signatures`, `--lines 10:50`, `--expand` (deps), `--expand=callers` |
 | `search` | `edr search "pattern" --text`, `--in file:Symbol`, `--regex` |
 | `map` | `edr map`, `edr map --dir src/ --type function --lang go --grep pat` |
-| `edit` | `edr edit file --old "x" --new "y"`, `--where Symbol`, `--fuzzy`, `--in Symbol`, `--delete` |
+| `edit` | `edr edit file --old "x" --new "y"`, `--where Symbol`, `--fuzzy`, `--in Symbol`, `--delete`, `--read-back` |
 | `write` | `edr write file --inside Class --content "..."`, `--after Symbol`, `--append` |
 | `refs` | `edr refs Symbol`, `--impact`, `--callers`, `--deps`, `--chain target` |
 | `rename` | `edr rename old new --dry-run` |
+| `prepare` | `edr prepare Symbol` — body, callers, deps, tests, hash in one call |
 | `verify` | `edr verify`, `edr verify --level test` |
 | `delta` | `edr delta -- make test` shows only what changed |
 | `status` | `edr status`, `edr status --focus "goal"` |

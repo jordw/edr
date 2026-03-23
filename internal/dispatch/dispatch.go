@@ -76,6 +76,8 @@ func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flag
 		result, err = runSearchUnified(ctx, db, args, flags)
 	case "refs":
 		result, err = runRefsUnified(ctx, db, root, args, flags)
+	case "prepare":
+		result, err = runPrepare(ctx, db, root, args, flags)
 
 	case "reindex", "reset":
 		result, err = runInit(ctx, db)

@@ -3077,3 +3077,205 @@ func TestSpec_EditWhereBatch(t *testing.T) {
 	}
 }
 
+
+// ---------------------------------------------------------------------------
+// Auto-skeleton for large files
+// ---------------------------------------------------------------------------
+
+func TestSpec_AutoSkeleton(t *testing.T) {
+	// Generate a Go file with >200 lines
+	var sb strings.Builder
+	sb.WriteString("package main\n\nimport \"fmt\"\n\n")
+	for i := 0; i < 30; i++ {
+		fmt.Fprintf(&sb, "func fn%d() {\n\tif true {\n\t\tfmt.Println(%d)\n\t\tfmt.Println(%d)\n\t\tfmt.Println(%d)\n\t}\n\tfmt.Println(%d)\n}\n\n", i, i, i+1, i+2, i)
+	}
+	binary, dir := specRepo(t, map[string]string{"big.go": sb.String()})
+
+	t.Run("large file gets auto-skeleton", func(t *testing.T) {
+		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "read", "big.go")
+		if exit != 0 {
+			t.Fatalf("exit %d", exit)
+		}
+		h := r.Ops[0].Header
+		if h["auto"] != "skeleton" {
+			t.Errorf("expected auto=skeleton, got %v", h["auto"])
+		}
+		// Body should be non-empty
+		if r.Ops[0].Body == "" {
+			t.Error("auto-skeleton body should not be empty")
+		}
+	})
+
+	t.Run("--full bypasses auto-skeleton", func(t *testing.T) {
+		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "read", "big.go", "--full")
+		if exit != 0 {
+			t.Fatalf("exit %d", exit)
+		}
+		h := r.Ops[0].Header
+		if h["auto"] != nil {
+			t.Errorf("--full should not have auto field, got %v", h["auto"])
+		}
+	})
+
+	t.Run("small file is not skeletonized", func(t *testing.T) {
+		small, dir2 := specRepo(t, map[string]string{"small.go": "package main\n\nfunc main() {}\n"})
+		r, _, _, exit := specRun(t, small, dir2, []string{"EDR_SESSION=" + nextSession()}, "read", "small.go")
+		if exit != 0 {
+			t.Fatalf("exit %d", exit)
+		}
+		h := r.Ops[0].Header
+		if h["auto"] != nil {
+			t.Errorf("small file should not have auto field, got %v", h["auto"])
+		}
+	})
+
+	t.Run("line range bypasses auto-skeleton", func(t *testing.T) {
+		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "read", "big.go", "--lines", "1:10")
+		if exit != 0 {
+			t.Fatalf("exit %d", exit)
+		}
+		h := r.Ops[0].Header
+		if h["auto"] != nil {
+			t.Errorf("line range should not trigger auto-skeleton, got auto=%v", h["auto"])
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// edit --read-back
+// ---------------------------------------------------------------------------
+
+func TestSpec_EditReadBack(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nimport \"fmt\"\n\nfunc greet() {\n\tfmt.Println(\"hello\")\n}\n\nfunc main() {\n\tgreet()\n}\n",
+	})
+
+	t.Run("text edit with read-back", func(t *testing.T) {
+		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+			"edit", "hello.go", "--old-text", "hello", "--new-text", "hi", "--read-back")
+		if exit != 0 {
+			t.Fatalf("exit %d", exit)
+		}
+		h := r.Ops[0].Header
+		if h["status"] != "applied" {
+			t.Fatalf("expected applied, got %v", h["status"])
+		}
+		// read_back should be in header with lines
+		rb, ok := h["read_back"].(map[string]any)
+		if !ok {
+			t.Fatal("expected read_back in header")
+		}
+		if rb["lines"] == nil {
+			t.Error("read_back should have lines")
+		}
+		// Body should contain both the diff and the read-back content
+		body := r.Ops[0].Body
+		if !strings.Contains(body, "hi") {
+			t.Error("read-back body should contain updated text")
+		}
+	})
+
+	t.Run("without read-back no extra content", func(t *testing.T) {
+		// Reset file
+		os.WriteFile(filepath.Join(dir, "hello.go"),
+			[]byte("package main\n\nimport \"fmt\"\n\nfunc greet() {\n\tfmt.Println(\"hello\")\n}\n\nfunc main() {\n\tgreet()\n}\n"), 0644)
+		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+			"edit", "hello.go", "--old-text", "hello", "--new-text", "hi")
+		if exit != 0 {
+			t.Fatalf("exit %d", exit)
+		}
+		h := r.Ops[0].Header
+		if h["read_back"] != nil {
+			t.Error("should not have read_back without --read-back flag")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// read --expand
+// ---------------------------------------------------------------------------
+
+func TestSpec_ReadExpand(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"lib.go": "package main\n\nfunc add(a, b int) int { return a + b }\n\nfunc mul(a, b int) int { return a * b }\n",
+		"main.go": "package main\n\nimport \"fmt\"\n\nfunc compute() int {\n\tx := add(1, 2)\n\ty := mul(3, 4)\n\tfmt.Println(x, y)\n\treturn x + y\n}\n",
+	})
+
+	t.Run("expand deps", func(t *testing.T) {
+		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+			"read", "main.go:compute", "--expand")
+		if exit != 0 {
+			t.Fatalf("exit %d", exit)
+		}
+		body := r.Ops[0].Body
+		// Should contain the function body
+		if !strings.Contains(body, "add(1, 2)") {
+			t.Error("body should contain compute function")
+		}
+		// Should contain deps section
+		if !strings.Contains(body, "--- deps ---") {
+			t.Error("should have deps section")
+		}
+	})
+
+	t.Run("expand callers", func(t *testing.T) {
+		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+			"read", "lib.go:add", "--expand=callers")
+		if exit != 0 {
+			t.Fatalf("exit %d", exit)
+		}
+		body := r.Ops[0].Body
+		if !strings.Contains(body, "--- callers ---") {
+			t.Error("should have callers section")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// prepare command
+// ---------------------------------------------------------------------------
+
+func TestSpec_Prepare(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"lib.go":      "package main\n\nfunc helper() int { return 42 }\n",
+		"main.go":     "package main\n\nfunc run() int {\n\treturn helper()\n}\n",
+		"lib_test.go": "package main\n\nimport \"testing\"\n\nfunc TestHelper(t *testing.T) {\n\tif helper() != 42 { t.Fatal() }\n}\n",
+	})
+
+	r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "prepare", "helper")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if len(r.Ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(r.Ops))
+	}
+
+	h := r.Ops[0].Header
+	if h["file"] != "lib.go" {
+		t.Errorf("file = %v, want lib.go", h["file"])
+	}
+	if h["sym"] != "helper" {
+		t.Errorf("sym = %v, want helper", h["sym"])
+	}
+	if h["hash"] == nil {
+		t.Error("missing hash — needed for --expect-hash on subsequent edit")
+	}
+
+	body := r.Ops[0].Body
+	// Should have the function body
+	if !strings.Contains(body, "return 42") {
+		t.Error("body should contain helper function")
+	}
+	// Should have callers section with run()
+	if !strings.Contains(body, "--- callers ---") {
+		t.Error("should have callers section")
+	}
+	// Should have tests section
+	if !strings.Contains(body, "--- tests ---") {
+		t.Error("should have tests section")
+	}
+	if !strings.Contains(body, "TestHelper") {
+		t.Error("tests section should include TestHelper")
+	}
+}
+

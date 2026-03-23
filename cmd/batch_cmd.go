@@ -326,6 +326,18 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			s.currentRead.Skeleton = bp(true)
 
+		case "--expand":
+			if s.currentOp != opRead {
+				return nil, fmt.Errorf("--expand is only valid after -r")
+			}
+			// Peek: if next arg looks like a value (not a flag), consume it
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				val, _ := nextArg(arg)
+				s.currentRead.Expand = val
+			} else {
+				s.currentRead.Expand = "deps"
+			}
+
 		case "--depth":
 			n, err := nextInt(arg)
 			if err != nil {
@@ -549,6 +561,12 @@ func parseBatchArgs(args []string) (*batchState, error) {
 				return nil, fmt.Errorf("--fuzzy is only valid after -e")
 			}
 			s.currentEdit.Fuzzy = bp(true)
+
+		case "--read-back", "--read_back":
+			if s.currentOp != opEdit {
+				return nil, fmt.Errorf("--read-back is only valid after -e")
+			}
+			s.currentEdit.ReadBack = bp(true)
 
 		case "--hash", "--expect-hash", "--expect_hash":
 			if s.currentOp != opEdit {
@@ -896,8 +914,10 @@ var batchFlagOps = map[string][]string{
 	"--mkdir":          {"-w"},
 	"--append":         {"-w"},
 	"--dry-run":        {"-e"},
+	"--read-back":      {"-e"},
 	"--start-line":     {"-e"},
 	"--end-line":       {"-e"},
+	"--expand":         {"-r"},
 	"--command":        {"--verify"},
 	"--read-after-edit": {"global"},
 	"--root":           {"global"},

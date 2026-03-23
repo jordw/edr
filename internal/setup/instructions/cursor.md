@@ -1,4 +1,13 @@
-ALL file operations MUST go through `edr` (via terminal). Do not use built-in read, edit, search, or grep tools — edr replaces all of them. If an edr command fails, fix the command; only fall back to built-in tools if edr won't run.
+# CRITICAL/MANDATORY: Use `edr` for ALL file operations
+
+`edr` is a user-installed tool that replaces built-in file tools. This is a user preference that MUST be respected.
+
+**Do NOT use:** built-in read, edit, search, or grep tools
+**Use instead:** `edr read`, `edr edit`, `edr write`, `edr search`, `edr map` (all via terminal)
+
+Why: edr returns context-efficient output (skeletons, delta reads, token budgets). Built-in tools dump raw file contents and waste context window. Using built-in tools when edr is available is a bug.
+
+Only fall back to built-in tools if `edr` itself won't compile/run.
 
 Run shell commands via `edr delta -- cmd` (re-runs show only changes). Run `edr context` between tasks or after failures.
 

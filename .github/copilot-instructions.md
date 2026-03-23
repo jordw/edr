@@ -37,7 +37,7 @@ CLI args → cmd/ (Cobra) → cmdspec (flag validation) → dispatch (routing) �
 
 **internal/session/**: File-backed sessions (`.edr/sessions/<id>.json`). Delta reads (hash-based), body dedup, op log, assumption tracking, build state, checkpoint/restore. `PostProcess()` handles response optimization.
 
-**internal/setup/**: `edr setup` installer. Injects agent instructions into global configs (~/.claude, .cursorrules, etc.). Instructions are in `instructions/*.md`, token-capped at 500.
+**internal/setup/**: `edr setup` installer. Injects agent instructions into global configs (~/.claude, .cursorrules, etc.). Instructions are in `instructions/*.md`, token-capped at 600.
 
 ## Adding a new command
 

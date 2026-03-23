@@ -14,6 +14,17 @@ import (
 
 func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
 	dryRun := flagBool(flags, "dry-run", false)
+	readBack := flagBool(flags, "read_back", false)
+
+	// Delegate to inner logic, then optionally attach read-back context.
+	result, err := runSmartEditInner(ctx, db, root, args, flags, dryRun)
+	if err != nil || !readBack {
+		return result, err
+	}
+	return attachReadBack(ctx, db, result)
+}
+
+func runSmartEditInner(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any, dryRun bool) (any, error) {
 
 	// Pre-check: if --expect-hash is set, validate file hash before any edit
 	if expectHash := flagString(flags, "expect_hash", ""); expectHash != "" && len(args) >= 1 {
@@ -226,6 +237,105 @@ func smartEditByteRange(ctx context.Context, db *index.DB, file string, startByt
 		result["index_error"] = cr.IndexErrors[output.Rel(file)]
 	}
 	return result, nil
+}
+
+// attachReadBack reads context around the edit point and attaches it to the result.
+// If the edit targeted a symbol, reads the full updated symbol body.
+// Otherwise, reads ~10 lines above/below the diff location.
+func attachReadBack(ctx context.Context, db *index.DB, result any) (any, error) {
+	m, ok := result.(map[string]any)
+	if !ok {
+		return result, nil
+	}
+	status, _ := m["status"].(string)
+	if status != "applied" {
+		return result, nil
+	}
+
+	relFile, _ := m["file"].(string)
+	if relFile == "" {
+		return result, nil
+	}
+	file, err := db.ResolvePath(relFile)
+	if err != nil {
+		return result, nil // best-effort
+	}
+
+	// If edited a symbol, read the updated symbol body
+	if symName, ok := m["symbol"].(string); ok && symName != "" {
+		sym, err := db.GetSymbol(ctx, file, symName)
+		if err == nil {
+			data, _ := os.ReadFile(file)
+			if data != nil && int(sym.EndByte) <= len(data) {
+				body := string(data[sym.StartByte:sym.EndByte])
+				m["read_back"] = map[string]any{
+					"symbol": symName,
+					"lines":  [2]int{int(sym.StartLine), int(sym.EndLine)},
+					"content": body,
+				}
+			}
+		}
+		return result, nil
+	}
+
+	// No symbol — extract edit location from diff and read surrounding lines
+	diff, _ := m["diff"].(string)
+	if diff == "" {
+		return result, nil
+	}
+	editLine := diffStartLine(diff)
+	if editLine <= 0 {
+		return result, nil
+	}
+
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return result, nil
+	}
+	lines := strings.SplitAfter(string(data), "\n")
+	totalLines := len(lines)
+
+	start := editLine - 10
+	if start < 1 {
+		start = 1
+	}
+	end := editLine + 10
+	if end > totalLines {
+		end = totalLines
+	}
+	body := strings.Join(lines[start-1:end], "")
+	m["read_back"] = map[string]any{
+		"lines":   [2]int{start, end},
+		"content": body,
+	}
+	return result, nil
+}
+
+// diffStartLine extracts the new-file start line from a unified diff header.
+// Parses the @@ -a,b +c,d @@ line and returns c.
+func diffStartLine(diff string) int {
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "@@") {
+			// Find +N in the @@ header
+			idx := strings.Index(line, "+")
+			if idx < 0 {
+				continue
+			}
+			rest := line[idx+1:]
+			n := 0
+			for _, ch := range rest {
+				if ch >= '0' && ch <= '9' {
+					n = n*10 + int(ch-'0')
+				} else {
+					break
+				}
+			}
+			if n > 0 {
+				return n
+			}
+		}
+	}
+	return 0
 }
 
 // smartEditSpan applies an edit to a line range.

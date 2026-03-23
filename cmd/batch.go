@@ -61,7 +61,8 @@ type doRead struct {
 	Depth      *int   `json:"depth,omitempty"`
 	StartLine  *int   `json:"start_line,omitempty"`
 	EndLine    *int   `json:"end_line,omitempty"`
-	Symbols    *bool  `json:"symbols,omitempty"`
+	Symbols    *bool   `json:"symbols,omitempty"`
+	Expand     string  `json:"expand,omitempty"`
 	Full       *bool  `json:"full,omitempty"`
 }
 
@@ -119,6 +120,7 @@ type doEdit struct {
 	Delete     *bool  `json:"delete,omitempty"`
 	InsertAt   *int   `json:"insert_at,omitempty"`
 	Fuzzy      *bool  `json:"fuzzy,omitempty"`
+	ReadBack   *bool  `json:"read_back,omitempty"`
 }
 
 type doWrite struct {
@@ -247,6 +249,9 @@ func buildReadCmd(r doRead, forceFullRead bool) dispatch.MultiCmd {
 	setOptBool(flags, "skeleton", r.Skeleton)
 	setOptBool(flags, "symbols", r.Symbols)
 	setOptBool(flags, "full", r.Full)
+	if r.Expand != "" {
+		flags["expand"] = r.Expand
+	}
 	setOptInt(flags, "depth", r.Depth)
 	if r.Lines != "" {
 		flags["lines"] = r.Lines
@@ -438,6 +443,7 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env 
 		setOptBool(flags, "all", e.All)
 		setOptBool(flags, "delete", e.Delete)
 		setOptBool(flags, "fuzzy", e.Fuzzy)
+		setOptBool(flags, "read_back", e.ReadBack)
 		setOptInt(flags, "insert_at", e.InsertAt)
 		if e.In != "" {
 			flags["in"] = e.In

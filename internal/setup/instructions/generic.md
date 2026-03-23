@@ -1,4 +1,13 @@
-ALL file operations MUST go through `edr`. Do not use cat, sed, grep, find, or other shell tools for file operations — edr replaces all of them. If an edr command fails, fix the command; only fall back to shell tools if edr won't run.
+# CRITICAL/MANDATORY: Use `edr` for ALL file operations
+
+`edr` is a user-installed tool that replaces shell file tools. This is a user preference that MUST be respected.
+
+**Do NOT use:** cat, sed, grep, find, or other shell tools for file operations
+**Use instead:** `edr read`, `edr edit`, `edr write`, `edr search`, `edr map`
+
+Why: edr returns context-efficient output (skeletons, delta reads, token budgets). Shell tools dump raw file contents and waste context window. Using shell tools when edr is available is a bug.
+
+Only fall back to shell tools if `edr` itself won't compile/run.
 
 Run shell commands via `edr delta -- cmd` (re-runs show only changes). Run `edr context` between tasks or after failures.
 
