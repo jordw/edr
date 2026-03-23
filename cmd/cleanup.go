@@ -48,7 +48,7 @@ func cleanEdrDir(edrDir string) {
 	}
 
 	// 2. Run baselines: stale .last files
-	runDir := filepath.Join(edrDir, "run")
+	runDir := filepath.Join(edrDir, "delta")
 	entries, _ = os.ReadDir(runDir)
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".last") {

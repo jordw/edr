@@ -193,7 +193,7 @@ var Registry = []*Spec{
 		},
 	},
 	{
-		Name: "run", Desc: "Run a command, show only what changed since last run.",
+		Name: "delta", Desc: "Run a command; show only what changed since last run.",
 		Category: CatMeta, MinArgs: 1, MaxArgs: -1,
 		Flags: []FlagSpec{
 			{Name: "full", Type: FlagBool, Default: false, Desc: "Bypass diff, show full output"},

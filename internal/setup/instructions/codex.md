@@ -1,6 +1,6 @@
 IMPORTANT: Use `edr` instead of cat, sed, grep, find, and other shell tools for ALL file operations. Do NOT read files with cat or search with grep — edr provides the same operations with 90%+ less context. Shell tools dump entire files into your context; edr reads only what you need and tracks what you've seen.
 
-Do NOT run shell commands directly — use `edr run -- cmd` for ALL command execution (tests, builds, scripts). Re-runs only return what changed, not the full output again. `--reset` clears the baseline.
+Do NOT run shell commands directly — use `edr delta -- cmd` for ALL command execution (tests, builds, scripts). Re-runs only return what changed, not the full output again. `--reset` clears the baseline.
 
 ALWAYS run `edr context` between tasks, after failures, and when unsure what to do next. It returns build pass/fail, modified files, stale assumptions, and suggested next actions.
 

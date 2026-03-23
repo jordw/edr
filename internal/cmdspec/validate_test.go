@@ -14,7 +14,7 @@ func TestPublicCommandSurface(t *testing.T) {
 		"read": true, "search": true, "map": true,
 		"edit": true, "write": true, "refs": true,
 		"verify": true, "reset": true, "rename": true,
-		"run": true, "setup": true, "context": true,
+		"delta": true, "setup": true, "context": true,
 		"checkpoint": true,
 	}
 

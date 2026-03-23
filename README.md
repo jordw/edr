@@ -43,7 +43,7 @@ edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):"
     -e src/config.py --old '"timeout": 30' --new '"timeout": 30, "retries": 3'
 
 # 3. Sessions: run tests, fix a bug, run again — only the diff comes back
-edr run -- pytest
+edr delta -- pytest
 # → [no changes, 80 lines]  or just the diff of what changed
 ```
 3 calls. Re-reads of files already in context: zero tokens.
@@ -93,7 +93,7 @@ edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-s
 
 **Batching.** `-r`, `-s`, `-e`, `-w` combine reads, searches, edits, and writes in one CLI call. One call to gather context, one to apply mutations.
 
-**Sessions.** edr tracks what the agent has already seen — files, symbols, search results, command output — and only shows what changed. Second read of an unchanged file: 0 tokens. `edr run -- make test` after a fix: only the diff from the previous run, unchanged lines collapsed. Same principle for builds, linters, any command. Zero config — sessions activate automatically.
+**Sessions.** edr tracks what the agent has already seen — files, symbols, search results, command output — and only shows what changed. Second read of an unchanged file: 0 tokens. `edr delta -- make test` after a fix: only the diff from the previous run, unchanged lines collapsed. Same principle for builds, linters, any command. Zero config — sessions activate automatically.
 
 ## Commands
 
@@ -124,7 +124,7 @@ edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "..."
 | `refs` | `edr refs Symbol`, `--impact`, `--callers`, `--deps`, `--chain target` |
 | `rename` | `edr rename old new --dry-run` |
 | `verify` | `edr verify`, `edr verify --level test` |
-| `run` | `edr run -- make test` — diffs against previous run |
+| `delta` | `edr delta -- make test` — shows only what changed |
 | `context` | `edr context`, `edr context --focus "goal"` |
 | `checkpoint` | `edr checkpoint`, `--restore cp_1`, `--list`, `--diff cp_1` |
 | `reset` | `edr reset`, `--index`, `--session` |

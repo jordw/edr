@@ -14,9 +14,9 @@ import (
 
 const maxRunOutput = 1 << 20 // 1MB cap for stored output
 
-var runCmd = &cobra.Command{
-	Use:   "run <command...>",
-	Short: "Run a command, show only what changed since last run",
+var deltaCmd = &cobra.Command{
+	Use:   "delta <command...>",
+	Short: "Run a command; show only what changed since last run",
 	Long: `Execute a shell command and diff output against the previous run.
 First run shows full output. Subsequent runs show a sparse view:
 unchanged regions collapse to [N unchanged lines], changed lines
@@ -31,7 +31,7 @@ show inline {old → new} markers. Use --full for raw output.`,
 		// strings.Join + sh -c would double-wrap and break quoting.
 		root := getRoot(cmd)
 		edrDir := filepath.Join(root, ".edr")
-		runDir := filepath.Join(edrDir, "run")
+		runDir := filepath.Join(edrDir, "delta")
 
 		// Load session for op recording (best-effort)
 		var sess *session.Session
@@ -48,34 +48,56 @@ show inline {old → new} markers. Use --full for raw output.`,
 		if reset {
 			key := fmt.Sprintf("%x", sha256.Sum256([]byte(shellCmd)))[:12]
 			os.Remove(filepath.Join(runDir, key+".last"))
+			if sess != nil {
+				sess.ClearRunOutput(shellCmd)
+			}
 		}
 
 		c := exec.Command(args[0], args[1:]...)
 		c.Dir = root
 		out, execErr := c.CombinedOutput()
 
+		exitCode := 0
+		if execErr != nil {
+			if exitErr, ok := execErr.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			}
+		}
+
 		if full {
 			os.Stdout.Write(out)
 			if sess != nil {
-				sess.RecordOp("run", shellCmd, "", "run", "command_run", execErr == nil)
+				sess.StoreRunOutput(shellCmd, string(out))
+				sess.RecordOp("delta", shellCmd, "", "delta", "command_run", execErr == nil)
 			}
 			return exitError(execErr)
 		}
 
-		output := diffAgainstPrevious(runDir, shellCmd, string(out))
+		// Session-aware dedup: if output matches previous hash, emit compact JSON.
+		outStr := string(out)
+		if sess != nil && sess.CheckRunOutput(shellCmd, outStr) == "unchanged" {
+			fmt.Fprintf(os.Stdout, "{\"status\":\"unchanged\",\"exit_code\":%d}\n", exitCode)
+			sess.RecordOp("delta", shellCmd, "", "delta", "command_unchanged", execErr == nil)
+			// Still update the file-based baseline so --reset works correctly.
+			diffAgainstPrevious(runDir, shellCmd, outStr)
+			return exitError(execErr)
+		}
+
+		output := diffAgainstPrevious(runDir, shellCmd, outStr)
 		fmt.Print(output)
 
 		if sess != nil {
-			sess.RecordOp("run", shellCmd, "", "run", "command_run", execErr == nil)
+			sess.StoreRunOutput(shellCmd, outStr)
+			sess.RecordOp("delta", shellCmd, "", "delta", "command_run", execErr == nil)
 		}
 		return exitError(execErr)
 	},
 }
 
 func init() {
-	runCmd.Flags().Bool("full", false, "Bypass diff, show full output")
-	runCmd.Flags().Bool("reset", false, "Clear baseline before running (treat as first run)")
-	rootCmd.AddCommand(runCmd)
+	deltaCmd.Flags().Bool("full", false, "Bypass diff, show full output")
+	deltaCmd.Flags().Bool("reset", false, "Clear baseline before running (treat as first run)")
+	rootCmd.AddCommand(deltaCmd)
 }
 
 func exitError(err error) error {

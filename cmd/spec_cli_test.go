@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -223,7 +224,6 @@ func specEnv(extra ...string) []string {
 		}
 		filtered = append(filtered, e)
 	}
-	filtered = append(filtered, "EDR_NO_HINTS=1")
 	return append(filtered, extra...)
 }
 
@@ -251,7 +251,7 @@ func TestSpec_HelpSurface(t *testing.T) {
 		t.Errorf("edr --help wrote to stderr: %q", stderr)
 	}
 
-	expected := []string{"checkpoint", "context", "edit", "map", "read", "refs", "rename", "reset", "run", "search", "setup", "verify", "write"}
+	expected := []string{"checkpoint", "context", "delta", "edit", "map", "read", "refs", "rename", "reset", "search", "setup", "verify", "write"}
 	cmdRe := regexp.MustCompile(`(?m)^\s{2}(\w+)\s`)
 	matches := cmdRe.FindAllStringSubmatch(stdout, -1)
 
@@ -273,7 +273,7 @@ func TestSpec_SubcommandHelp(t *testing.T) {
 	binary := buildBinary(t)
 	dir := t.TempDir()
 
-	commands := []string{"read", "search", "edit", "write", "map", "refs", "rename", "verify", "run", "setup", "reset", "context", "checkpoint"}
+	commands := []string{"read", "search", "edit", "write", "map", "refs", "rename", "verify", "delta", "setup", "reset", "context", "checkpoint"}
 	for _, cmd := range commands {
 		t.Run(cmd, func(t *testing.T) {
 			stdout, _, exit := specRunRaw(t, binary, dir, nil, cmd, "--help")
@@ -663,6 +663,66 @@ func TestSpec_StderrSilentByDefault(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Context: external change detection
+// ---------------------------------------------------------------------------
+
+func TestSpec_ContextExternalChanges(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	sessID := nextSession()
+	sessEnv := []string{"EDR_SESSION=" + sessID}
+
+	// 1. Read a file to record mtime in session
+	_, _, _, exit1 := specRun(t, binary, dir, sessEnv, "read", "hello.go")
+	if exit1 != 0 {
+		t.Fatalf("first read exit %d", exit1)
+	}
+
+	// 2. Modify file externally
+	time.Sleep(50 * time.Millisecond) // ensure mtime changes
+	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\nfunc main() { fmt.Println(\"changed\") }\n"), 0644)
+
+	// 3. edr context should report the external change
+	result, _, _, exit2 := specRun(t, binary, dir, sessEnv, "context")
+	if exit2 != 0 {
+		t.Fatalf("context exit %d", exit2)
+	}
+	if len(result.Ops) == 0 {
+		t.Fatal("expected context result")
+	}
+	header := result.Ops[0].Header
+
+	// Check header has external_changes count
+	extCount, ok := header["external_changes"]
+	if !ok {
+		t.Fatalf("expected external_changes in context header, got keys: %v", mapKeys(header))
+	}
+	if extCount != float64(1) {
+		t.Errorf("expected external_changes=1, got %v", extCount)
+	}
+
+	// Check body mentions the file
+	body := result.Ops[0].Body
+	if !strings.Contains(body, "hello.go") {
+		t.Errorf("expected body to mention hello.go, got: %q", body)
+	}
+	if !strings.Contains(body, "modified") {
+		t.Errorf("expected body to mention modified, got: %q", body)
+	}
+}
+
+func mapKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// ---------------------------------------------------------------------------
 // Batch transport and separator
 // ---------------------------------------------------------------------------
 
@@ -1029,7 +1089,7 @@ func TestSpec_RunFirstRun(t *testing.T) {
 		"hello.go": "package main\n",
 	})
 
-	stdout, _, exit := specRunRaw(t, binary, dir, nil, "run", "--", "echo", "hello world")
+	stdout, _, exit := specRunRaw(t, binary, dir, nil, "delta", "--", "echo", "hello world")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -1044,11 +1104,11 @@ func TestSpec_RunNoChanges(t *testing.T) {
 	})
 
 	// First run.
-	specRunRaw(t, binary, dir, nil, "run", "--", "echo", "stable output")
-	// Second run.
-	stdout, _, _ := specRunRaw(t, binary, dir, nil, "run", "--", "echo", "stable output")
-	if !strings.Contains(stdout, "no changes") {
-		t.Errorf("identical run should show no changes, got: %q", stdout)
+	specRunRaw(t, binary, dir, nil, "delta", "--", "echo", "stable output")
+	// Second run — with session active, returns JSON; without, returns text.
+	stdout, _, _ := specRunRaw(t, binary, dir, nil, "delta", "--", "echo", "stable output")
+	if !strings.Contains(stdout, "no changes") && !strings.Contains(stdout, "\"unchanged\"") {
+		t.Errorf("identical run should show no changes or unchanged, got: %q", stdout)
 	}
 }
 
@@ -1058,9 +1118,9 @@ func TestSpec_RunReset(t *testing.T) {
 	})
 
 	// First run.
-	specRunRaw(t, binary, dir, nil, "run", "--", "echo", "reset test")
+	specRunRaw(t, binary, dir, nil, "delta", "--", "echo", "reset test")
 	// Reset — should show full output again.
-	stdout, _, _ := specRunRaw(t, binary, dir, nil, "run", "--reset", "--", "echo", "reset test")
+	stdout, _, _ := specRunRaw(t, binary, dir, nil, "delta", "--reset", "--", "echo", "reset test")
 	if strings.Contains(stdout, "no changes") {
 		t.Error("--reset should show full output, not 'no changes'")
 	}
@@ -1074,7 +1134,7 @@ func TestSpec_RunExitPassthrough(t *testing.T) {
 		"hello.go": "package main\n",
 	})
 
-	_, _, exit := specRunRaw(t, binary, dir, nil, "run", "--reset", "--", "/bin/sh", "-c", "exit 7")
+	_, _, exit := specRunRaw(t, binary, dir, nil, "delta", "--reset", "--", "/bin/sh", "-c", "exit 7")
 	if exit != 7 {
 		t.Errorf("exit = %d, want 7 (pass-through)", exit)
 	}
@@ -1086,14 +1146,73 @@ func TestSpec_RunFull(t *testing.T) {
 	})
 
 	// First run to establish baseline.
-	specRunRaw(t, binary, dir, nil, "run", "--", "echo", "full test")
+	specRunRaw(t, binary, dir, nil, "delta", "--", "echo", "full test")
 	// --full should bypass diff.
-	stdout, _, _ := specRunRaw(t, binary, dir, nil, "run", "--full", "--", "echo", "full test")
+	stdout, _, _ := specRunRaw(t, binary, dir, nil, "delta", "--full", "--", "echo", "full test")
 	if strings.Contains(stdout, "no changes") || strings.Contains(stdout, "unchanged") {
 		t.Error("--full should bypass diff")
 	}
 	if !strings.Contains(stdout, "full test") {
 		t.Errorf("--full should show raw output, got: %q", stdout)
+	}
+}
+
+func TestSpec_RunSessionDedup(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n",
+	})
+
+	sessID := fmt.Sprintf("test-run-dedup-%d", time.Now().UnixNano())
+	env := []string{"EDR_SESSION=" + sessID}
+
+	// First run: full output.
+	stdout, _, exit := specRunRaw(t, binary, dir, env, "delta", "--", "echo", "dedup test")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if !strings.Contains(stdout, "dedup test") {
+		t.Errorf("first run should show full output, got: %q", stdout)
+	}
+
+	// Second run: session detects unchanged, returns JSON.
+	stdout, _, exit = specRunRaw(t, binary, dir, env, "delta", "--", "echo", "dedup test")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if !strings.Contains(stdout, "\"unchanged\"") {
+		t.Errorf("second run with session should return unchanged JSON, got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "\"exit_code\":0") {
+		t.Errorf("unchanged response should include exit_code, got: %q", stdout)
+	}
+
+	// --reset clears session hash, shows full output again.
+	stdout, _, _ = specRunRaw(t, binary, dir, env, "delta", "--reset", "--", "echo", "dedup test")
+	if strings.Contains(stdout, "unchanged") {
+		t.Error("--reset should clear session hash")
+	}
+	if !strings.Contains(stdout, "dedup test") {
+		t.Errorf("--reset should show full output, got: %q", stdout)
+	}
+}
+
+func TestSpec_RunSessionDedupExitCode(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n",
+	})
+
+	sessID := fmt.Sprintf("test-run-exit-%d", time.Now().UnixNano())
+	env := []string{"EDR_SESSION=" + sessID}
+
+	// First run with non-zero exit.
+	specRunRaw(t, binary, dir, env, "delta", "--", "/bin/sh", "-c", "echo fail; exit 3")
+	// Second run: unchanged output, exit code preserved.
+	stdout, _, exit := specRunRaw(t, binary, dir, env, "delta", "--", "/bin/sh", "-c", "echo fail; exit 3")
+	if exit != 3 {
+		t.Errorf("exit = %d, want 3", exit)
+	}
+	if !strings.Contains(stdout, "\"exit_code\":3") {
+		t.Errorf("unchanged response should show exit_code:3, got: %q", stdout)
 	}
 }
 
