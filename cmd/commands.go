@@ -818,24 +818,8 @@ func analyzePatterns(sess *session.Session) []string {
 			fullReads))
 	}
 
-	// 2. Sequential single-file reads that could be batched
-	maxRun := 0
-	currentRun := 0
-	for _, op := range ops {
-		if op.Cmd == "read" && op.OK {
-			currentRun++
-			if currentRun > maxRun {
-				maxRun = currentRun
-			}
-		} else {
-			currentRun = 0
-		}
-	}
-	if maxRun >= 3 {
-		suggestions = append(suggestions, fmt.Sprintf(
-			"%d sequential reads — batch with edr -r file1.go -r file2.go",
-			maxRun))
-	}
+	// 2. Sequential reads that could be batched — emit the actual command
+	suggestions = append(suggestions, suggestBatchReads(ops)...)
 
 	// 3. Edits without a prior refs check on the same symbol
 	refsChecked := make(map[string]bool)
@@ -861,6 +845,64 @@ func analyzePatterns(sess *session.Session) []string {
 			editsWithoutRefs))
 	}
 
+	// 4. Edit immediately followed by read of the same file
+	suggestions = append(suggestions, suggestReadBack(ops)...)
+
+	return suggestions
+}
+
+// suggestBatchReads finds runs of 3+ sequential reads and emits
+// the concrete batch command the agent should have used.
+func suggestBatchReads(ops []session.OpEntry) []string {
+	var suggestions []string
+	var run []session.OpEntry
+
+	flushRun := func() {
+		if len(run) < 3 {
+			run = run[:0]
+			return
+		}
+		var parts []string
+		for _, op := range run {
+			target := op.File
+			if op.Symbol != "" {
+				target += ":" + op.Symbol
+			}
+			parts = append(parts, "-r "+target)
+		}
+		suggestions = append(suggestions, fmt.Sprintf(
+			"%d sequential reads — next time: edr %s",
+			len(run), strings.Join(parts, " ")))
+		run = run[:0]
+	}
+
+	for _, op := range ops {
+		if op.Cmd == "read" && op.OK {
+			run = append(run, op)
+		} else {
+			flushRun()
+		}
+	}
+	flushRun()
+	return suggestions
+}
+
+// suggestReadBack detects edit→read on the same file and suggests --read-back.
+func suggestReadBack(ops []session.OpEntry) []string {
+	var suggestions []string
+	count := 0
+	for i := 1; i < len(ops); i++ {
+		prev := ops[i-1]
+		cur := ops[i]
+		if prev.Cmd == "edit" && prev.OK && cur.Cmd == "read" && cur.OK && cur.File == prev.File {
+			count++
+		}
+	}
+	if count >= 2 {
+		suggestions = append(suggestions, fmt.Sprintf(
+			"%d edits followed by reads of the same file — use --read-back on the edit instead",
+			count))
+	}
 	return suggestions
 }
 
