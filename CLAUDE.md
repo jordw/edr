@@ -4,7 +4,7 @@ edr is a CLI tool that replaces built-in agent file operations with context-effi
 
 ## Self-hosting warning
 
-edr is both the tool and the target. If you break the build, you lose your tools. Use `edr checkpoint` before risky changes. If a broken edit prevents `go build`, fall back to built-in Read/Edit tools to fix the compile error, then rebuild.
+edr is both the tool and the target. If you break the build, you lose your tools. Every edit/write is auto-checkpointed; use `edr undo` to revert. If a broken edit prevents `go build`, fall back to built-in Read/Edit tools to fix the compile error, then rebuild.
 
 ## Build cycle
 
