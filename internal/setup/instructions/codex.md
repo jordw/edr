@@ -1,28 +1,29 @@
-IMPORTANT: Use `edr` instead of cat, sed, grep, find, and other shell tools for ALL file operations. Do NOT read files with cat or search with grep — edr provides the same operations with 90%+ less context. Shell tools dump entire files into your context; edr reads only what you need and tracks what you've seen.
+ALL file operations MUST go through `edr`. Do not use cat, sed, grep, find, or other shell tools for file operations — edr replaces all of them. If an edr command fails, fix the command and retry; only fall back to shell tools if edr itself won't run.
 
-Do NOT run shell commands directly — use `edr delta -- cmd` for ALL command execution (tests, builds, scripts). Re-runs only return what changed, not the full output again. `--reset` clears the baseline.
+Run shell commands through `edr delta -- cmd` (re-runs return only what changed). `--reset` clears the baseline.
 
-ALWAYS run `edr context` between tasks, after failures, and when unsure what to do next. It returns build pass/fail, modified files, stale assumptions, and suggested next actions.
+Run `edr context` between tasks, after failures, and when unsure what to do next.
 
 ## Orient
 - `edr map` — symbol overview. `--dir src`, `--lang go`, `--grep pat`, `--budget 500`
 - `edr context --focus "goal"` — set session objective
 
-## Read
+## Read (replaces: cat, head, tail)
 - `edr read f.go` — whole file. `edr read f.go:Func` — one symbol
 - `--signatures` (API only), `--skeleton` (structure), `--lines 10:50` (range)
 
-## Search
+## Search (replaces: grep, find, rg)
 - `edr search "pat"` — symbols. `--text` for text, `--regex` for regex
 - `--in f.go:Sym` scopes to symbol. `--context 3` for surrounding lines
 
-## Edit
-- `edr edit f.go --old-text "x" --new-text "y"` — find-and-replace, auto-verifies build
-- `--in Sym` scopes match. `--all` replaces all. `--dry-run` previews. `--lines 20:30` for range
+## Edit (replaces: sed, awk)
+- `edr edit f.go --old-text "x" --new-text "y"` — find-and-replace, auto-verifies
+- `--where Sym` resolves file+scope from index. `--in Sym` scopes within a file
+- `--all` replaces all. `--dry-run` previews. `--lines 20:30` for range
 - `edr edit f.go:Sym --delete` removes a symbol
-- Shell metacharacters: `--old-text @/tmp/old.txt --new-text @/tmp/new.txt`
+- Shell metacharacters: use `@file` indirection
 
-## Write
+## Write (replaces: echo/cat redirect)
 - `edr write f.go --content "..."` — create or overwrite
 - `--inside Class` (add method), `--after Sym` (insert after), `--append` (end of file)
 
@@ -31,7 +32,7 @@ ALWAYS run `edr context` between tasks, after failures, and when unsure what to 
 - `edr rename Old New --dry-run` — cross-file, import-aware
 
 ## Verify
-- `edr verify` — auto-detects build system; runs after edits. `--test` for tests
+- `edr verify` — auto-detects build system. `--test` for tests
 
 ## Batch (`-r` read, `-s` search, `-e` edit, `-w` write)
 - `edr -r f.go --sig -r g.go:Func -s "pat"` — gather context in one call
