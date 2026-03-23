@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>edr — less context, faster agents</title>
+<title>edr - less context, faster agents</title>
 <meta name="description" content="Code tools for coding agents. Smaller reads, fewer calls, changed-only output. 83% median context reduction in benchmarks.">
-<meta property="og:title" content="edr — less context, faster agents">
+<meta property="og:title" content="edr - less context, faster agents">
 <meta property="og:description" content="Code tools for coding agents. Smaller reads, fewer calls, changed-only output. 83% median context reduction in benchmarks.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://github.com/jordw/edr">
@@ -243,7 +243,7 @@ footer {
   <p class="tagline">less context, faster agents</p>
   <p class="pitch">
     <strong>Agents are bottlenecked on context, not inference speed.</strong>
-    edr gives them the right context instead of all the context &mdash; smaller reads, fewer round-trips, and no repeated output. Works with any agent that can run shell commands.
+    edr gives them the right context instead of all the context: smaller reads, fewer round-trips, and no repeated output. Works with any agent that can run shell commands.
   </p>
   <div class="install-bar">
     <span class="prompt">$</span>
@@ -261,7 +261,7 @@ footer {
 <div class="pillars">
   <div class="pillar">
     <h3>Smaller reads</h3>
-    <p>Read one function instead of the file around it. Or get just a class API &mdash; signatures without implementation.</p>
+    <p>Read one function instead of the file around it. Or get just a class API: signatures without implementation.</p>
   </div>
   <div class="pillar">
     <h3>Fewer calls</h3>
@@ -276,8 +276,8 @@ footer {
 <!-- Why -->
 <section>
   <h2>Why it matters</h2>
-  <p>Every byte the agent reads is a byte the model has to attend over. An agent that reads a 400-line file to find one function just added 15KB to its context &mdash; multiply that by every read, search, and test run in a task.</p>
-  <p>edr attacks this directly: <strong>fewer tokens in</strong> (read a function, not a file), <strong>fewer round-trips</strong> (batch three reads into one call), and <strong>no redundancy</strong> (re-reads return only what changed). This scales &mdash; a 3,000-file monorepo gets the same tight reads as a 50-file project.</p>
+  <p>Every byte the agent reads is a byte the model has to attend over. An agent that reads a 400-line file to find one function just added 15KB to its context. Multiply that by every read, search, and test run in a task.</p>
+  <p>edr attacks this directly: <strong>fewer tokens in</strong> (read a function, not a file), <strong>fewer round-trips</strong> (batch three reads into one call), and <strong>no redundancy</strong> (re-reads return only what changed). This scales. A 3,000-file monorepo gets the same tight reads as a 50-file project.</p>
 </section>
 
 <!-- Example -->
@@ -295,7 +295,7 @@ edr edit src/scheduler.py \
     <span class="flag">--new</span> "def run(self, retries=3):"      <span class="comment"># auto re-indexes, verifies build</span></code></pre>
   <p>3 calls, ~3KB of context.</p>
 
-  <p style="margin-top: 1.5rem;"><strong>Batched</strong> &mdash; gather everything in one call, mutate in one call:</p>
+  <p style="margin-top: 1.5rem;"><strong>Batched:</strong> gather everything in one call, mutate in one call:</p>
 <pre><code><span class="comment"># 1. Read three APIs + search, one call</span>
 edr <span class="flag">-r</span> src/scheduler.py:Scheduler <span class="flag">--sig</span> \
     <span class="flag">-r</span> src/config.py:parse_config \
@@ -306,14 +306,14 @@ edr <span class="flag">-r</span> src/scheduler.py:Scheduler <span class="flag">-
 edr <span class="flag">-e</span> src/scheduler.py <span class="flag">--old</span> "def run(self):" <span class="flag">--new</span> "def run(self, retries=3):" \
     <span class="flag">-e</span> src/config.py <span class="flag">--old</span> '"timeout": 30' <span class="flag">--new</span> '"timeout": 30, "retries": 3'
 
-<span class="comment"># 3. Re-run tests &mdash; only the diff comes back</span>
+<span class="comment"># 3. Re-run tests - only the diff comes back</span>
 edr delta -- pytest</code></pre>
 </section>
 
 <!-- Benchmarks -->
 <section>
   <h2>Benchmarks</h2>
-  <p>We run 9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos and measure tool response bytes &mdash; the raw amount of text that enters the agent's context window.</p>
+  <p>We run 9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos and measure tool response bytes, the raw amount of text that enters the agent's context window.</p>
   <div class="table-wrap">
   <table>
     <thead>
@@ -330,7 +330,7 @@ edr delta -- pytest</code></pre>
     </tbody>
   </table>
   </div>
-  <p><strong>Median reduction: 83%</strong> across repos. edr loses on plain text search (structured JSON adds overhead vs raw grep &mdash; see breakdown below), but wins everywhere else. The biggest wins are on structured operations (refs, map, signatures); multi-file reads show modest savings since both sides return full content. Call counts are summed across all 9 scenarios; each edr scenario is 1 call.</p>
+  <p><strong>Median reduction: 83%</strong> across repos. edr loses on plain text search (structured JSON adds overhead vs raw grep; see breakdown below), but wins everywhere else. The biggest wins are on structured operations (refs, map, signatures); multi-file reads show modest savings since both sides return full content. Call counts are summed across all 9 scenarios; each edr scenario is 1 call.</p>
 
   <details>
     <summary>Per-scenario breakdown (urfave/cli)</summary>
@@ -361,7 +361,7 @@ edr delta -- pytest</code></pre>
 <!-- Commands -->
 <section>
   <h2>Commands</h2>
-  <p><strong>Batch flags</strong> &mdash; the primary interface:</p>
+  <p><strong>Batch flags,</strong> the primary interface:</p>
 <pre><code>edr <span class="flag">-r</span> file[:Symbol]              <span class="comment"># Read file or symbol</span>
 edr <span class="flag">-r</span> file:Class <span class="flag">--sig</span>           <span class="comment"># Signatures only (no bodies)</span>
 edr <span class="flag">-s</span> "pattern"                  <span class="comment"># Search symbols or text (--text)</span>
@@ -380,7 +380,7 @@ edr <span class="flag">-w</span> file <span class="flag">--inside</span> Class  
       <tr><td>refs</td><td><code>Symbol</code>, <code>--impact</code>, <code>--callers</code>, <code>--deps</code>, <code>--chain</code></td></tr>
       <tr><td>rename</td><td>Cross-file, import-aware. <code>--dry-run</code></td></tr>
       <tr><td>verify</td><td>Auto-detects go/npm/cargo/make</td></tr>
-      <tr><td>delta</td><td><code>delta -- make test</code> &mdash; diffs against previous run</td></tr>
+      <tr><td>delta</td><td><code>delta -- make test</code> diffs against previous run</td></tr>
       <tr><td>context</td><td>Session context, build state, action items. <code>--focus</code></td></tr>
       <tr><td>checkpoint</td><td>Snapshot/restore. <code>--restore</code>, <code>--list</code>, <code>--diff</code></td></tr>
       <tr><td>reset</td><td>Clean slate: reindex, clear session. <code>--index</code>, <code>--session</code></td></tr>
@@ -411,7 +411,7 @@ edr <span class="flag">-w</span> file <span class="flag">--inside</span> Class  
 <section>
   <h2>How it works</h2>
   <p>edr parses your codebase with <a href="https://tree-sitter.github.io/tree-sitter/">tree-sitter</a> and stores symbols in a SQLite index.</p>
-  <p><strong>Symbol-level operations.</strong> Read one function instead of a 400-line file. Get a class API with <code>--signatures</code> (85% fewer tokens). Edit by symbol name with <code>--where Symbol</code> &mdash; edr resolves the file and scopes automatically. Or scope within a known file with <code>--in Symbol</code>. Use <code>--fuzzy</code> for whitespace-tolerant matching. Edits re-index immediately and auto-verify the build.</p>
+  <p><strong>Symbol-level operations.</strong> Read one function instead of a 400-line file. Get a class API with <code>--signatures</code> (85% fewer tokens). Edit by symbol name with <code>--where Symbol</code>. edr resolves the file and scopes automatically. Or scope within a known file with <code>--in Symbol</code>. Use <code>--fuzzy</code> for whitespace-tolerant matching. Edits re-index immediately and auto-verify the build.</p>
   <p><strong>Batching.</strong> <code>-r</code>, <code>-s</code>, <code>-e</code>, <code>-w</code> combine reads, searches, edits, and writes in one CLI call.</p>
   <p><strong>Sessions.</strong> edr tracks what the agent has seen. Second read of an unchanged file: 0 tokens. <code>edr delta -- make test</code> after a fix: only the diff from the previous run.</p>
 </section>

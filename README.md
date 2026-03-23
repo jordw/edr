@@ -1,12 +1,12 @@
-# edr — less context, faster agents
+# edr - less context, faster agents
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **Agents are bottlenecked on context, not inference speed.** edr gives them the right context instead of all the context:
 
-- **Smaller reads** — read one function instead of the file around it. Or get just a class API — signatures without implementation.
-- **Fewer calls** — batch reads, searches, edits, and writes into one round-trip.
-- **Only changed output** — re-reads and re-runs return diffs, not repeated output. Zero config.
+- **Smaller reads.** Read one function instead of the file around it. Or get just a class API: signatures without implementation.
+- **Fewer calls.** Batch reads, searches, edits, and writes into one round-trip.
+- **Only changed output.** Re-reads and re-runs return diffs, not repeated output. Zero config.
 
 Works with any agent that can run shell commands. Fully local, no telemetry.
 
@@ -35,7 +35,7 @@ CGO_ENABLED=1 go install github.com/jordw/edr@latest
 edr setup
 ```
 
-> `CGO_ENABLED=1` is required — tree-sitter grammars are C libraries. You need `gcc` and `g++` installed.
+> `CGO_ENABLED=1` is required. Tree-sitter grammars are C libraries. You need `gcc` and `g++` installed.
 
 **Cloud agents and CI** (installs Go/gcc if needed, builds, indexes):
 
@@ -64,7 +64,7 @@ edr edit src/scheduler.py \
 ```
 3 calls, ~3KB of context.
 
-**Batched** — gather everything in one call, mutate in one call:
+**Batched:** gather everything in one call, mutate in one call:
 
 ```bash
 # 1. Read three APIs + search, one call
@@ -77,7 +77,7 @@ edr -r src/scheduler.py:Scheduler --sig \
 edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):" \
     -e src/config.py --old '"timeout": 30' --new '"timeout": 30, "retries": 3'
 
-# 3. Re-run tests — only the diff comes back
+# 3. Re-run tests - only the diff comes back
 edr delta -- pytest
 ```
 
@@ -89,11 +89,11 @@ edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-s
 
 **Batching.** `-r`, `-s`, `-e`, `-w` combine reads, searches, edits, and writes in one CLI call. One call to gather context, one to apply mutations.
 
-**Sessions.** edr tracks what the agent has already seen — files, symbols, search results, command output — and only shows what changed. Second read of an unchanged file: 0 tokens. `edr delta -- make test` after a fix: only the diff from the previous run, unchanged lines collapsed. Same principle for builds, linters, any command. Zero config — sessions activate automatically.
+**Sessions.** edr tracks what the agent has already seen (files, symbols, search results, command output) and only shows what changed. Second read of an unchanged file: 0 tokens. `edr delta -- make test` after a fix: only the diff from the previous run, unchanged lines collapsed. Same principle for builds, linters, any command. Zero config. Sessions activate automatically.
 
 ## Commands
 
-**Batch flags** — the primary interface:
+**Batch flags,** the primary interface:
 ```bash
 edr -r file[:Symbol]              # Read file or symbol
 edr -r file:Class --sig           # Signatures only (no bodies)
@@ -102,7 +102,7 @@ edr -e file --old "x" --new "y"   # Edit with auto re-index + verify
 edr -w file --inside Class        # Add method/field without reading
 ```
 
-Combine freely — one call to gather, one to mutate:
+Combine freely. One call to gather, one to mutate:
 ```bash
 edr -r src/config.go:parseConfig --sig -r src/main.go:Server -s "handleRequest"
 edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "..."
@@ -120,7 +120,7 @@ edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "..."
 | `refs` | `edr refs Symbol`, `--impact`, `--callers`, `--deps`, `--chain target` |
 | `rename` | `edr rename old new --dry-run` |
 | `verify` | `edr verify`, `edr verify --level test` |
-| `delta` | `edr delta -- make test` — shows only what changed |
+| `delta` | `edr delta -- make test` shows only what changed |
 | `context` | `edr context`, `edr context --focus "goal"` |
 | `checkpoint` | `edr checkpoint`, `--restore cp_1`, `--list`, `--diff cp_1` |
 | `reset` | `edr reset`, `--index`, `--session` |
@@ -138,14 +138,14 @@ edr reads and edits any text file. Symbol-aware features (symbol reads, `--signa
 
 ## Limitations
 
-- **Tree-sitter, not LSP.** Fast, no build step, works on broken code, zero config. The tradeoff: no type information. Refs use import-path matching, not type resolution, so cross-package references may produce false positives. For agent workloads — read, edit, search — structural parsing is enough.
+- **Tree-sitter, not LSP.** Fast, no build step, works on broken code, zero config. The tradeoff: no type information. Refs use import-path matching, not type resolution, so cross-package references may produce false positives. For agent workloads (read, edit, search) structural parsing is enough.
 - **macOS and Linux only.** Windows is not planned.
 - **C/C++ compiler required** when building from source (tree-sitter grammars). Homebrew and the install script use pre-built binaries.
 - **First index: under 1s** on small repos, ~15s on large ones (vitess, 3200 files). Incremental re-index after edits: ~12ms/file.
 
 ## Benchmarks
 
-9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos. We measure tool response bytes — the raw text entering the agent's context window.
+9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos. We measure tool response bytes, the raw text entering the agent's context window.
 
 The baseline models a skilled agent using Claude Code's built-in tools: `Grep` to find symbols before reading, `Read` with line ranges around grep matches (not whole files), `Edit`/`Write` confirmations. Orient and multi-file read use whole-file reads (there's no shortcut for understanding a module or reading a file). edr uses symbol reads, `--signatures`, `refs`, `map`, and batch flags.
 
