@@ -5,11 +5,11 @@ The user installed `edr` specifically to replace built-in file tools. Using edr 
 **Do NOT use:** built-in read, edit, search, or grep tools — or shell equivalents (cat, head, tail, sed, awk, grep, rg, find)
 **Use instead:** `edr read`, `edr edit`, `edr write`, `edr search`, `edr map` (all via terminal)
 
-Why: edr returns context-efficient output (skeletons, delta reads, token budgets) instead of dumping raw file contents.
+Why: context-efficient output (skeletons, deltas, token budgets) vs dumping raw file contents.
 
 Only fall back to built-in tools if `edr` itself won't compile/run.
 
-Run shell commands via `edr delta -- cmd` (re-runs show only changes). Run `edr status` between tasks or after failures.
+Run shell commands via `edr delta -- cmd`. Run `edr status` between tasks or after failures.
 
 ## Batch — tool calls are expensive, plan and combine
 
@@ -21,20 +21,23 @@ Run shell commands via `edr delta -- cmd` (re-runs show only changes). Run `edr 
 `edr -w f.go --content "..." --mkdir` | `-V` verify (auto after edits)
 
 ### Read modifiers (after `-r`)
-`--sig`, `--skeleton`, `--full`, `--expand[=callers]`, `--lines 10:50`, `--budget N`
+`--sig` (file/container only), `--skeleton`, `--full`, `--expand[=deps]`, `--symbols`, `--lines 10:50`, `--budget N`
 
 ### Search modifiers (after `-s`)
 `--text`, `--regex`, `--context N`, `--in f.go:Sym`, `--include "*.go"`, `--limit N`
 
 ### Edit modifiers (after `-e`)
 `--old "x" --new "y"`, `--where Sym` (resolves file), `--in Sym` (scope)
-`--all`, `--delete`, `--dry-run`, `--fuzzy`, `--read-back`, `@file` for shell metacharacters
+`--all`, `--delete`, `--dry-run`, `--fuzzy`, `--read-back`, `@file` for metacharacters
 
 ### Write modifiers (after `-w`)
 `--content "..."`, `--inside Class`, `--after Sym`, `--append`, `--mkdir`
 
 ## Standalone commands
-- `edr map` — symbol overview. `--dir`, `--lang`, `--grep`, `--budget`
-- `edr refs Sym --impact` — callers. `edr rename Old New --dry-run`
-- `edr rename --text "old" "new"` — literal cross-file replace. `--word`, `--include`
-- `edr status` | `edr delta -- cmd` | `edr undo` | `edr reset --session`
+- `edr map` — symbol overview. `--dir`, `--lang`, `--grep`, `--budget` (`map --dir` for directories; read is file-only)
+- `edr prepare file:Sym` — pre-edit context: body, callers, deps
+- `edr refs Sym --impact` | `edr rename Old New --dry-run`
+- `edr rename --text "old" "new"` — literal replace. `--word`, `--include`
+- `edr verify` | `edr verify --test` | `edr verify --command "cmd"`
+- `edr delta -- cmd` — diff vs last run. `--reset`, `--full`
+- `edr status` | `edr undo` | `edr reset --session`
