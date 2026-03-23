@@ -72,7 +72,7 @@ jobs:
       - name: Package archive
         run: |
           ARCHIVE="edr_0.0.0-test_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz"
-          tar -czf "$ARCHIVE" edr LICENSE README.md
+          tar -czf "$ARCHIVE" edr LICENSE README.md internal/grammars/NOTICE
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Verify archive contents
@@ -83,6 +83,7 @@ jobs:
           grep -q "^edr$" contents.txt || (echo "missing edr binary" && exit 1)
           grep -q "^LICENSE$" contents.txt || (echo "missing LICENSE" && exit 1)
           grep -q "^README.md$" contents.txt || (echo "missing README.md" && exit 1)
+          grep -q "^internal/grammars/NOTICE$" contents.txt || (echo "missing third-party notice" && exit 1)
 
       - name: Test install.sh against local archive
         run: |

@@ -60,7 +60,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           ARCHIVE="edr_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz"
-          tar -czf "$ARCHIVE" edr LICENSE README.md
+          tar -czf "$ARCHIVE" edr LICENSE README.md internal/grammars/NOTICE
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Upload artifact
