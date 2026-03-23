@@ -361,30 +361,43 @@ edr delta -- pytest</code></pre>
 <!-- Commands -->
 <section>
   <h2>Commands</h2>
-  <p><strong>Batch flags,</strong> the primary interface:</p>
+  <p><strong>Batch flags</strong> — the primary interface. <code>-r</code> read, <code>-s</code> search, <code>-m</code> map, <code>-e</code> edit, <code>-w</code> write. Modifier flags follow each op. Plan what you need, then combine into one call:</p>
 <pre><code>edr <span class="flag">-r</span> file[:Symbol]              <span class="comment"># Read file or symbol</span>
 edr <span class="flag">-r</span> file:Class <span class="flag">--sig</span>           <span class="comment"># Signatures only (no bodies)</span>
 edr <span class="flag">-s</span> "pattern"                  <span class="comment"># Search symbols or text (--text)</span>
+edr <span class="flag">-m</span> <span class="flag">--dir</span> src/                 <span class="comment"># Symbol map of a directory</span>
 edr <span class="flag">-e</span> file <span class="flag">--old</span> "x" <span class="flag">--new</span> "y"   <span class="comment"># Edit with auto re-index + verify</span>
 edr <span class="flag">-w</span> file <span class="flag">--inside</span> Class        <span class="comment"># Add method/field without reading</span></code></pre>
 
+  <p>Combine freely. One call to gather context, one to mutate:</p>
+<pre><code>edr <span class="flag">-r</span> f.go <span class="flag">--sig</span> <span class="flag">-r</span> g.go:Func <span class="flag">--expand</span> <span class="flag">-s</span> "pattern" <span class="flag">--text</span> <span class="flag">-m</span> <span class="flag">--dir</span> cmd/
+edr <span class="flag">-r</span> f.go:Sym <span class="flag">-e</span> f.go <span class="flag">--old</span> "x" <span class="flag">--new</span> "y" <span class="flag">-r</span> f.go:Sym   <span class="comment"># post-edit read</span>
+edr <span class="flag">-e</span> f.go <span class="flag">--old</span> "a" <span class="flag">--new</span> "b" <span class="flag">-e</span> g.go <span class="flag">--old</span> "c" <span class="flag">--new</span> "d"
+edr <span class="flag">-w</span> f.go <span class="flag">--content</span> "..." <span class="flag">--mkdir</span></code></pre>
+
+  <h3 style="margin-top: 1.5rem; font-size: 1.1rem;">Batch modifiers</h3>
+  <p><strong>Read</strong> (after <code>-r</code>): <code>--sig</code>, <code>--skeleton</code>, <code>--full</code>, <code>--expand[=deps]</code>, <code>--symbols</code>, <code>--lines 10:50</code>, <code>--budget N</code></p>
+  <p><strong>Search</strong> (after <code>-s</code>): <code>--text</code>, <code>--regex</code>, <code>--context N</code>, <code>--in f.go:Sym</code>, <code>--include "*.go"</code>, <code>--limit N</code></p>
+  <p><strong>Map</strong> (after <code>-m</code>): <code>--dir</code>, <code>--lang</code>, <code>--grep</code>, <code>--glob</code>, <code>--type</code>, <code>--budget N</code></p>
+  <p><strong>Edit</strong> (after <code>-e</code>): <code>--old "x" --new "y"</code>, <code>--where Sym</code> (resolves file), <code>--in Sym</code> (scope), <code>--all</code>, <code>--delete</code>, <code>--dry-run</code>, <code>--fuzzy</code>, <code>--read-back</code>, <code>@file</code> for metacharacters</p>
+  <p><strong>Write</strong> (after <code>-w</code>): <code>--content "..."</code>, <code>--inside Class</code>, <code>--after Sym</code>, <code>--append</code>, <code>--mkdir</code></p>
+  <p><strong>Verify</strong>: <code>-V</code> (auto after edits). <code>--command "cmd"</code>, <code>--level test</code></p>
+
+  <h3 style="margin-top: 1.5rem; font-size: 1.1rem;">Standalone commands</h3>
   <div class="table-wrap">
   <table class="cmd-table">
     <thead><tr><th>Command</th><th>Description</th></tr></thead>
     <tbody>
-      <tr><td>read</td><td><code>file:Symbol</code>, <code>--signatures</code>, <code>--lines 10:50</code></td></tr>
-      <tr><td>search</td><td><code>"pattern" --text</code>, <code>--in file:Symbol</code>, <code>--regex</code></td></tr>
-      <tr><td>map</td><td>Symbol map. <code>--dir</code>, <code>--type</code>, <code>--lang</code>, <code>--grep</code></td></tr>
-      <tr><td>edit</td><td><code>--old "x" --new "y"</code>, <code>--where Symbol</code>, <code>--fuzzy</code>, <code>--in Symbol</code>, <code>--delete</code></td></tr>
-      <tr><td>write</td><td><code>--inside Class</code>, <code>--after Symbol</code>, <code>--append</code></td></tr>
-      <tr><td>refs</td><td><code>Symbol</code>, <code>--impact</code>, <code>--callers</code>, <code>--deps</code>, <code>--chain</code></td></tr>
-      <tr><td>rename</td><td>Cross-file, import-aware. <code>--dry-run</code></td></tr>
-      <tr><td>verify</td><td>Auto-detects go/npm/cargo/make</td></tr>
-      <tr><td>delta</td><td><code>delta -- make test</code> diffs against previous run</td></tr>
-      <tr><td>status</td><td>Session status, build state, action items. <code>--focus</code></td></tr>
+      <tr><td>map</td><td><code>edr map</code>, <code>edr map --dir src/ --type function --lang go --grep pat</code></td></tr>
+      <tr><td>prepare</td><td><code>edr prepare Symbol</code> — body, callers, deps, tests, hash in one call</td></tr>
+      <tr><td>refs</td><td><code>edr refs Symbol</code>, <code>--impact</code>, <code>--callers</code>, <code>--deps</code>, <code>--chain target</code></td></tr>
+      <tr><td>rename</td><td><code>edr rename Old New --dry-run</code>, <code>edr rename --text "old" "new" --word</code></td></tr>
+      <tr><td>verify</td><td><code>edr verify</code>, <code>edr verify --test</code>, <code>edr verify --command "cmd"</code></td></tr>
+      <tr><td>delta</td><td><code>edr delta -- make test</code> — shows only what changed. <code>--reset</code>, <code>--full</code></td></tr>
+      <tr><td>status</td><td><code>edr status</code>, <code>edr status --focus "goal"</code></td></tr>
       <tr><td>undo</td><td>Revert last edit/write. Every mutation is auto-checkpointed.</td></tr>
-      <tr><td>reset</td><td>Clean slate: reindex, clear session. <code>--index</code>, <code>--session</code></td></tr>
-      <tr><td>setup</td><td>Index project, install agent instructions. <code>--force</code></td></tr>
+      <tr><td>reset</td><td><code>edr reset</code>, <code>--index</code>, <code>--session</code></td></tr>
+      <tr><td>setup</td><td><code>edr setup</code>, <code>edr setup --force</code></td></tr>
     </tbody>
   </table>
   </div>
@@ -412,7 +425,7 @@ edr <span class="flag">-w</span> file <span class="flag">--inside</span> Class  
   <h2>How it works</h2>
   <p>edr parses your codebase with <a href="https://tree-sitter.github.io/tree-sitter/">tree-sitter</a> and stores symbols in a SQLite index.</p>
   <p><strong>Symbol-level operations.</strong> Read one function instead of a 400-line file. Get a class API with <code>--signatures</code> (85% fewer tokens). Edit by symbol name with <code>--where Symbol</code>. edr resolves the file and scopes automatically. Or scope within a known file with <code>--in Symbol</code>. Use <code>--fuzzy</code> for whitespace-tolerant matching. Edits re-index immediately and auto-verify the build.</p>
-  <p><strong>Batching.</strong> <code>-r</code>, <code>-s</code>, <code>-e</code>, <code>-w</code> combine reads, searches, edits, and writes in one CLI call.</p>
+  <p><strong>Batching.</strong> <code>-r</code>, <code>-s</code>, <code>-m</code>, <code>-e</code>, <code>-w</code> combine reads, searches, maps, edits, and writes in one CLI call.</p>
   <p><strong>Sessions.</strong> edr tracks what the agent has seen. Second read of an unchanged file: 0 tokens. <code>edr delta -- make test</code> after a fix: only the diff from the previous run.</p>
 </section>
 

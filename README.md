@@ -87,41 +87,56 @@ edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-s
 
 **Symbol-level operations.** Read one function instead of a 400-line file. Large files (>200 lines) auto-skeleton on first read, showing structure instead of content. Get a class API with `--signatures` (85% fewer tokens). `--expand` includes dep signatures inline. Add a method with `--inside ClassName` without reading the file. Scope edits to a symbol with `--in Symbol`. Use `--read-back` to get updated context in the edit response. `edr prepare Symbol` returns body, callers, deps, tests, and hash in one call. Edits re-index immediately and auto-verify the build (Go, Node, Rust, Make).
 
-**Batching.** `-r`, `-s`, `-e`, `-w` combine reads, searches, edits, and writes in one CLI call. One call to gather context, one to apply mutations.
+**Batching.** `-r`, `-s`, `-m`, `-e`, `-w` combine reads, searches, maps, edits, and writes in one CLI call. One call to gather context, one to apply mutations.
 
 **Sessions.** edr tracks what the agent has already seen (files, symbols, search results, command output) and only shows what changed. Second read of an unchanged file: 0 tokens. `edr delta -- make test` after a fix: only the diff from the previous run, unchanged lines collapsed. Same principle for builds, linters, any command. Zero config. Sessions activate automatically.
 
 ## Commands
 
-**Batch flags,** the primary interface:
+**Batch flags** — the primary interface. `-r` read, `-s` search, `-m` map, `-e` edit, `-w` write. Modifier flags follow each op. Plan what you need, then combine into one call:
+
 ```bash
 edr -r file[:Symbol]              # Read file or symbol
 edr -r file:Class --sig           # Signatures only (no bodies)
 edr -s "pattern"                  # Search symbols or text (--text)
+edr -m --dir src/                 # Symbol map of a directory
 edr -e file --old "x" --new "y"   # Edit with auto re-index + verify
 edr -w file --inside Class        # Add method/field without reading
 ```
 
-Combine freely. One call to gather, one to mutate:
+Combine freely. One call to gather context, one to mutate:
+
 ```bash
-edr -r src/config.go:parseConfig --sig -r src/main.go:Server -s "handleRequest"
-edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "..."
+edr -r f.go --sig -r g.go:Func --expand -s "pattern" --text -m --dir cmd/
+edr -r f.go:Sym -e f.go --old "x" --new "y" -r f.go:Sym   # post-edit read
+edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"
+edr -w f.go --content "..." --mkdir
 ```
 
-**Standalone commands:**
+### Batch modifiers
+
+**Read** (after `-r`): `--sig`, `--skeleton`, `--full`, `--expand[=deps]`, `--symbols`, `--lines 10:50`, `--budget N`
+
+**Search** (after `-s`): `--text`, `--regex`, `--context N`, `--in f.go:Sym`, `--include "*.go"`, `--limit N`
+
+**Map** (after `-m`): `--dir`, `--lang`, `--grep`, `--glob`, `--type`, `--budget N`
+
+**Edit** (after `-e`): `--old "x" --new "y"`, `--where Sym` (resolves file), `--in Sym` (scope), `--all`, `--delete`, `--dry-run`, `--fuzzy`, `--read-back`, `@file` for metacharacters
+
+**Write** (after `-w`): `--content "..."`, `--inside Class`, `--after Sym`, `--append`, `--mkdir`
+
+**Verify**: `-V` (auto after edits). `--command "cmd"`, `--level test`
+
+### Standalone commands
 
 | Command | Example |
 |---|---|
-| `read` | `edr read file:Symbol`, `--signatures`, `--lines 10:50`, `--expand` (deps), `--expand=callers` |
-| `search` | `edr search "pattern" --text`, `--in file:Symbol`, `--regex` |
 | `map` | `edr map`, `edr map --dir src/ --type function --lang go --grep pat` |
-| `edit` | `edr edit file --old "x" --new "y"`, `--where Symbol`, `--fuzzy`, `--in Symbol`, `--delete`, `--read-back` |
-| `write` | `edr write file --inside Class --content "..."`, `--after Symbol`, `--append` |
-| `refs` | `edr refs Symbol`, `--impact`, `--callers`, `--deps`, `--chain target` |
-| `rename` | `edr rename old new --dry-run` |
 | `prepare` | `edr prepare Symbol` — body, callers, deps, tests, hash in one call |
-| `verify` | `edr verify`, `edr verify --level test` |
-| `delta` | `edr delta -- make test` shows only what changed |
+| `refs` | `edr refs Symbol`, `--impact`, `--callers`, `--deps`, `--chain target` |
+| `rename` | `edr rename Old New --dry-run`, `edr rename --text "old" "new" --word --include "*.go"` |
+| `verify` | `edr verify`, `edr verify --test`, `edr verify --command "cmd"` |
+| `delta` | `edr delta -- make test` — shows only what changed. `--reset`, `--full` |
 | `status` | `edr status`, `edr status --focus "goal"` |
 | `undo` | `edr undo` — revert the last edit/write (auto-checkpointed) |
 | `reset` | `edr reset`, `--index`, `--session` |
