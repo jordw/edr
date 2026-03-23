@@ -172,7 +172,7 @@ func TestOpenerAlignment(t *testing.T) {
 		tested["verifyCmd"] = true
 		tested["setupCmd"] = true
 		tested["runCmd"] = true
-		tested["statusCmd"] = true
+		tested["contextCmd"] = true
 		tested["sessionCmd"] = true // hidden compat command
 		tested["checkpointCmd"] = true
 

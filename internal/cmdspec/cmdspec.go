@@ -201,7 +201,7 @@ var Registry = []*Spec{
 		},
 	},
 	{
-		Name: "status", Desc: "Session state: recent ops, build state, action items.",
+		Name: "context", Desc: "Session context: recent ops, build state, action items.",
 		Category: CatMeta, MinArgs: 0, MaxArgs: 0,
 		Flags: []FlagSpec{
 			{Name: "focus", Type: FlagString, Default: "", Desc: "Set session focus (empty string clears)"},
@@ -262,7 +262,8 @@ func init() {
 		}
 	}
 	// Hidden command aliases: old names → new specs
-	byName["next"] = byName["status"]
+	byName["next"] = byName["context"]
+	byName["status"] = byName["context"]
 	byName["reindex"] = byName["reset"]
 }
 

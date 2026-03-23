@@ -2,11 +2,11 @@ IMPORTANT: Use `edr` (via Bash) instead of Read, Edit, Write, Grep, and Glob for
 
 Do NOT run shell commands directly — use `edr run -- cmd` for ALL command execution (tests, builds, scripts). Re-runs only return what changed, not the full output again. `--reset` clears the baseline.
 
-ALWAYS run `edr status` between tasks, after failures, and when deciding what to do next. It shows build state, what files changed, and what to fix.
+ALWAYS run `edr context` between tasks, after failures, and when unsure what to do next. It returns build pass/fail, modified files, stale assumptions, and suggested next actions.
 
 ## Orient
 - `edr map` — symbol overview. `--dir src`, `--lang go`, `--grep pat`, `--budget 500`
-- `edr status --focus "goal"` — set session objective
+- `edr context --focus "goal"` — set session objective
 
 ## Read
 - `edr read f.go` — whole file. `edr read f.go:Func` — one symbol

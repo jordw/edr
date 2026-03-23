@@ -125,7 +125,7 @@ edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "..."
 | `rename` | `edr rename old new --dry-run` |
 | `verify` | `edr verify`, `edr verify --level test` |
 | `run` | `edr run -- make test` — diffs against previous run |
-| `status` | `edr status`, `edr status --focus "goal"` |
+| `context` | `edr context`, `edr context --focus "goal"` |
 | `checkpoint` | `edr checkpoint`, `--restore cp_1`, `--list`, `--diff cp_1` |
 | `reset` | `edr reset`, `--index`, `--session` |
 | `setup` | `edr setup`, `edr setup --force` |

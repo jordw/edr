@@ -31,7 +31,7 @@ func init() {
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(setupCmd)
-	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(contextCmd)
 	rootCmd.AddCommand(checkpointCmd)
 }
 
@@ -459,10 +459,10 @@ var verifyCmd = &cobra.Command{
 
 func init() { cmdspec.RegisterFlags(verifyCmd.Flags(), "verify") }
 
-var statusCmd = &cobra.Command{
-	Use:     "status",
-	Aliases: []string{"next"},
-	Short:   "Session state: recent ops, build state, action items",
+var contextCmd = &cobra.Command{
+	Use:     "context",
+	Aliases: []string{"status", "next"},
+	Short:   "Session context: recent ops, build state, action items",
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := getRoot(cmd)
@@ -492,15 +492,15 @@ var statusCmd = &cobra.Command{
 		}
 
 		result := buildNextResult(sess, db, count)
-		env := output.NewEnvelope("status")
-		env.AddOp("s0", "status", result)
+		env := output.NewEnvelope("context")
+		env.AddOp("s0", "context", result)
 		env.ComputeOK()
 		output.PrintEnvelope(env)
 		return nil
 	},
 }
 
-func init() { cmdspec.RegisterFlags(statusCmd.Flags(), "status") }
+func init() { cmdspec.RegisterFlags(contextCmd.Flags(), "context") }
 
 // sessionCmd is a hidden backward-compatibility command.
 // "edr session new" is now "edr reset --session".

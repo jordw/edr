@@ -189,14 +189,14 @@ edr run --reset -- make test
 #### status
 
 ```bash
-edr status
-edr status --focus "implement auth middleware"
-edr status --count 20
+edr context
+edr context --focus "implement auth middleware"
+edr context --count 20
 ```
 
 Rules:
 
-- `edr status` is the canonical "where am I?" command
+- `edr context` is the canonical "where am I?" command
 - Returns recent ops, build state, stale assumptions (fix items), and live signatures of active symbols (current items)
 - `--focus` sets or clears a session-scoped focus string that persists across calls
 - `--count` controls how many recent ops to include (default 10)
@@ -806,7 +806,7 @@ Rules:
 
 ## Status contract
 
-`edr status` returns a structured status summary for the current session. It is the canonical entry point for an agent resuming work or deciding what to do.
+`edr context` returns a structured status summary for the current session. It is the canonical entry point for an agent resuming work or deciding what to do.
 
 Output fields (all optional, omitted when empty):
 
