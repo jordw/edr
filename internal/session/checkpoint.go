@@ -391,7 +391,7 @@ func (s *Session) nextCheckpointID(sessDir string, isAuto bool) (string, error) 
 }
 
 func saveCheckpoint(sessDir string, cp *Checkpoint) error {
-	if err := os.MkdirAll(sessDir, 0755); err != nil {
+	if err := os.MkdirAll(sessDir, 0700); err != nil {
 		return err
 	}
 	data, err := json.Marshal(cp)
@@ -400,7 +400,7 @@ func saveCheckpoint(sessDir string, cp *Checkpoint) error {
 	}
 	path := filepath.Join(sessDir, cp.ID+".json")
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
@@ -435,11 +435,11 @@ func (s *Session) enforceAutoCheckpointCap(sessDir string) {
 
 func atomicWrite(path string, content []byte) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
 	tmp := path + ".cp_tmp"
-	if err := os.WriteFile(tmp, content, 0644); err != nil {
+	if err := os.WriteFile(tmp, content, 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

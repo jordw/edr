@@ -166,7 +166,7 @@ func ReadIndexedSnapshot(root string) (RepoSnapshot, bool, error) {
 // WriteIndexedSnapshot persists the snapshot used for future stale checks.
 func WriteIndexedSnapshot(root string, snap RepoSnapshot) error {
 	path := snapshotPath(root)
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
 
@@ -176,7 +176,7 @@ func WriteIndexedSnapshot(root string, snap RepoSnapshot) error {
 	}
 
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
@@ -254,9 +254,9 @@ func persistGitignoreMeta(root string) {
 		return
 	}
 	p := gitignoreMetaPath(root)
-	_ = os.MkdirAll(filepath.Dir(p), 0755)
+	_ = os.MkdirAll(filepath.Dir(p), 0700)
 	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err == nil {
+	if err := os.WriteFile(tmp, data, 0600); err == nil {
 		_ = os.Rename(tmp, p)
 	}
 }

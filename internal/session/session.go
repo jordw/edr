@@ -408,7 +408,7 @@ func (s *Session) SaveToFile(path string) error {
 	defer s.mu.Unlock()
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
 
@@ -418,7 +418,7 @@ func (s *Session) SaveToFile(path string) error {
 	}
 
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
@@ -532,7 +532,7 @@ func resolveByPPID() string {
 
 	// No valid mapping — create a fresh session for this process.
 	id := GenerateID()
-	os.MkdirAll(sessDir, 0755)
+	os.MkdirAll(sessDir, 0700)
 	writePPIDMapping(path, id, startTime)
 	return id
 }
@@ -566,7 +566,7 @@ func writePPIDMapping(path, id, startTime string) {
 	if startTime != "" {
 		content = id + "\n" + startTime
 	}
-	os.WriteFile(path, []byte(content), 0644)
+	os.WriteFile(path, []byte(content), 0600)
 }
 
 // WriteSessionMapping writes a PPID mapping file for the stable ancestor.

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jordw/edr/internal/cmdspec"
+	"github.com/jordw/edr/internal/index"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -45,13 +46,21 @@ func extractFlags(cmd *cobra.Command) map[string]any {
 
 // resolveAtFiles expands @path values in string flags to file contents.
 // This allows shell-safe content passing: --old @/tmp/old.txt avoids shell expansion.
-func resolveAtFiles(flags map[string]any) error {
+// Paths are validated to be within the repo root to prevent arbitrary file reads.
+func resolveAtFiles(root string, flags map[string]any) error {
 	for key, val := range flags {
 		s, ok := val.(string)
 		if !ok || !strings.HasPrefix(s, "@") {
 			continue
 		}
 		path := s[1:]
+		if root != "" {
+			resolved, err := index.ResolvePath(root, path)
+			if err != nil {
+				return fmt.Errorf("--%s: %w", key, err)
+			}
+			path = resolved
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("--%s: reading %s: %w", key, path, err)

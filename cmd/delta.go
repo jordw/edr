@@ -125,8 +125,8 @@ func diffAgainstPrevious(runDir, command, current string) string {
 	if len(store) > maxRunOutput {
 		store = store[len(store)-maxRunOutput:]
 	}
-	os.MkdirAll(runDir, 0755)
-	os.WriteFile(lastFile, []byte(store), 0644)
+	os.MkdirAll(runDir, 0700)
+	os.WriteFile(lastFile, []byte(store), 0600)
 
 	if !hasPrev {
 		return current

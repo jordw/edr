@@ -65,12 +65,13 @@ func dispatchCmdWithIndex(cmd *cobra.Command, cmdName string, args []string) err
 // dispatchCmd is the common pattern: open DB, dispatch, wrap in envelope, print.
 // Loads a file-backed session when EDR_SESSION is set.
 func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
+	root := getRoot(cmd)
 	flags := extractFlags(cmd)
-	if err := resolveAtFiles(flags); err != nil {
+	if err := resolveAtFiles(root, flags); err != nil {
 		return err
 	}
 
-	db, err := openDBStrict(cmd)
+	db, err := openDBStrictRoot(root)
 	if err != nil {
 		return err
 	}
@@ -139,8 +140,9 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 
 // dispatchCmdWithStdin is like dispatchCmd but reads stdin into a flag first.
 func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, stdinKey string) error {
+	root := getRoot(cmd)
 	flags := extractFlags(cmd)
-	if err := resolveAtFiles(flags); err != nil {
+	if err := resolveAtFiles(root, flags); err != nil {
 		return err
 	}
 
@@ -158,7 +160,7 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 		}
 	}
 
-	db, err := openDBStrict(cmd)
+	db, err := openDBStrictRoot(root)
 	if err != nil {
 		return err
 	}
@@ -404,7 +406,7 @@ var resetCmd = &cobra.Command{
 
 		// Session reset
 		if !indexOnly {
-			if err := os.MkdirAll(filepath.Join(edrDir, "sessions"), 0755); err != nil {
+			if err := os.MkdirAll(filepath.Join(edrDir, "sessions"), 0700); err != nil {
 				return err
 			}
 			id := session.GenerateID()
@@ -555,7 +557,7 @@ var sessionNewCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := getRoot(cmd)
 		edrDir := filepath.Join(root, ".edr")
-		if err := os.MkdirAll(filepath.Join(edrDir, "sessions"), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Join(edrDir, "sessions"), 0700); err != nil {
 			return err
 		}
 		id := session.GenerateID()

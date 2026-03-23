@@ -233,6 +233,18 @@ func parseBatchArgs(args []string) (*batchState, error) {
 		}
 		if strings.HasPrefix(val, "@") {
 			path := val[1:]
+			root := s.root
+			if root == "" {
+				wd, _ := os.Getwd()
+				root = discoverRoot(wd)
+			}
+			if root != "" {
+				resolved, err := index.ResolvePath(root, path)
+				if err != nil {
+					return "", fmt.Errorf("%s: %w", flag, err)
+				}
+				path = resolved
+			}
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return "", fmt.Errorf("%s: reading %s: %w", flag, path, err)

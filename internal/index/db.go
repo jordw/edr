@@ -126,7 +126,7 @@ func OpenDB(repoRoot string) (*DB, error) {
 	}
 
 	edrDir := filepath.Join(root, ".edr")
-	if err := os.MkdirAll(edrDir, 0755); err != nil {
+	if err := os.MkdirAll(edrDir, 0700); err != nil {
 		return nil, fmt.Errorf("create .edr dir: %w", err)
 	}
 
@@ -165,7 +165,7 @@ func OpenDB(repoRoot string) (*DB, error) {
 	// The file stays open for the lifetime of the DB; flock is acquired/released
 	// per write operation via WithWriteLock.
 	lockPath := filepath.Join(edrDir, "writer.lock")
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		sqlDB.Close()
 		return nil, fmt.Errorf("open writer lock: %w", err)

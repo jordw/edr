@@ -70,7 +70,7 @@ func maybeCleanEdrDir(edrDir string) {
 		return
 	}
 	// Touch the marker first (even if cleanup fails) to avoid retry storms
-	os.WriteFile(marker, nil, 0644)
+	os.WriteFile(marker, nil, 0600)
 	cleanEdrDir(edrDir)
 }
 
