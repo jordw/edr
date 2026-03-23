@@ -25,9 +25,9 @@ CLI args → cmd/ (Cobra) → cmdspec (flag validation) → dispatch (routing) �
 
 **internal/cmdspec/**: Canonical command registry. Every command, flag, category, and alias lives here. CLI flags, dispatch routing, and session behavior all derive from this registry.
 
-**internal/dispatch/**: Command logic. `Dispatch()` routes command names to handlers (`runReadUnified`, `runSmartEdit`, `runSearchUnified`, etc.). This is where args are parsed, the index is queried, and results are constructed.
+**internal/dispatch/**: Command logic. `Dispatch()` routes command names to handlers (`runReadUnified`, `runSmartEdit`, `runSearchUnified`, etc.). This is where args are parsed, symbols are resolved, and results are constructed.
 
-**internal/index/**: Tree-sitter parsing, SQLite index, symbol extraction, signature extraction. `languages.go:GetLangConfig` maps file extensions to grammar + parse rules. `signatures.go` extracts one-line signatures per language. `parser.go` defines `SymbolInfo`. Ref extraction and import resolution in `refs.go`/`resolve.go`.
+**internal/index/**: Tree-sitter parsing, on-demand symbol store, signature extraction. `store.go` defines the `SymbolStore` interface. `ondemand.go` implements it by parsing files on demand (default). `db.go` has the legacy SQLite implementation (`EDR_SQLITE=1`). `languages.go:GetLangConfig` maps file extensions to grammar + parse rules. `signatures.go` extracts one-line signatures per language. `parser.go` defines `SymbolInfo`. Import resolution in `resolve.go`.
 
 **internal/edit/**: Span-based edits with `Transaction` (TOCTOU guard: revalidates file hash before writing). `diff.go` produces unified diffs.
 

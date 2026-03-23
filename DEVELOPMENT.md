@@ -6,8 +6,7 @@
 - **Lint:** `go vet ./...`
 - **Test:** `go test ./...`
 - **Requires:** Go 1.24+, C compiler (for tree-sitter grammars)
-- **SQLite:** pure-Go bindings (`modernc.org/sqlite`), no CGO needed for DB
-- **Index:** stored in `.edr/index.db`, created on first query (`edr reset --index` to force)
+- **Parsing:** on-demand via tree-sitter, no pre-built index. Legacy SQLite mode available with `EDR_SQLITE=1`.
 
 ## Version Embedding
 

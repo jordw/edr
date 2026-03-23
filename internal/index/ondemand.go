@@ -1,6 +1,7 @@
 package index
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -27,7 +28,7 @@ type cachedFile struct {
 	hash    string
 	symbols []SymbolInfo
 	imports []ImportInfo
-	refsFn  func(map[int]int64) []RefInfo // deferred ref extraction
+	src     []byte // raw file source for byte-range body access
 }
 
 // NewOnDemand creates an on-demand symbol store rooted at the given directory.
@@ -77,18 +78,23 @@ func (o *OnDemand) parseFile(absPath string) (*cachedFile, error) {
 		return nil, err
 	}
 
-	parsed, err := ParseFileComplete(absPath, src, lang)
-	if err != nil {
-		return nil, err
-	}
+	// Use light parse (no ref extraction) — on-demand does text-based ref matching.
+	syms, imports := ParseFileLight(absPath, src, lang)
 
 	h := sha256.Sum256(src)
+
+	// Strip bodies — they account for ~80% of cache memory.
+	// Callers that need body text read the file and slice by byte range.
+	for i := range syms {
+		syms[i].Body = ""
+	}
 
 	cf := &cachedFile{
 		mtime:   mtime,
 		hash:    hex.EncodeToString(h[:16]),
-		symbols: parsed.Symbols,
-		imports: parsed.Imports,
+		symbols: syms,
+		imports: imports,
+		src:     src,
 	}
 
 	o.mu.Lock()
@@ -355,21 +361,28 @@ func (o *OnDemand) FilteredSymbols(ctx context.Context, dir, symbolType, namePat
 func (o *OnDemand) FindSemanticCallers(ctx context.Context, symbolName, symbolFile string) ([]SymbolInfo, error) {
 	all := o.parseAll(ctx)
 
+	nameBytes := []byte(symbolName)
 	var callers []SymbolInfo
 	for _, cf := range all {
+		if len(cf.symbols) == 0 || len(cf.src) == 0 {
+			continue
+		}
+		// Quick whole-file check before anything else
+		if !bytes.Contains(cf.src, nameBytes) {
+			continue
+		}
+		// Check import visibility
+		sameFile := cf.symbols[0].File == symbolFile
+		if !sameFile && !importsReach(cf.imports, symbolFile, cf.symbols[0].File, o.root) {
+			continue
+		}
 		for _, s := range cf.symbols {
-			if s.Body == "" {
+			if s.StartByte >= s.EndByte || int(s.EndByte) > len(cf.src) {
 				continue
 			}
-			// Quick text check before expensive analysis
-			if !strings.Contains(s.Body, symbolName) {
-				continue
+			if bytes.Contains(cf.src[s.StartByte:s.EndByte], nameBytes) {
+				callers = append(callers, s)
 			}
-			// Check import visibility
-			if s.File != symbolFile && !importsReach(cf.imports, symbolFile, s.File, o.root) {
-				continue
-			}
-			callers = append(callers, s)
 		}
 	}
 	return callers, nil
@@ -380,13 +393,16 @@ func (o *OnDemand) FindSameFileCallers(ctx context.Context, symbolName, symbolFi
 	if err != nil {
 		return nil, err
 	}
+	nameBytes := []byte(symbolName)
 	var callers []SymbolInfo
 	for _, s := range cf.symbols {
 		if s.Name == symbolName {
 			continue
 		}
-		if s.Body != "" && strings.Contains(s.Body, symbolName) {
-			callers = append(callers, s)
+		if s.StartByte < s.EndByte && int(s.EndByte) <= len(cf.src) {
+			if bytes.Contains(cf.src[s.StartByte:s.EndByte], nameBytes) {
+				callers = append(callers, s)
+			}
 		}
 	}
 	return callers, nil

@@ -17,7 +17,7 @@ brew install jordw/tap/edr
 edr setup
 ```
 
-`edr setup` indexes your project, adds `.edr/` to `.gitignore`, and installs agent instructions to your global config (`~/.claude/CLAUDE.md`, `~/.cursor/rules/edr.mdc`, or `~/.codex/AGENTS.md`). Instructions auto-update when edr is rebuilt. They teach the agent to use edr instead of built-in file tools.
+`edr setup` adds `.edr/` to `.gitignore` and installs agent instructions to your global config (`~/.claude/CLAUDE.md`, `~/.cursor/rules/edr.mdc`, or `~/.codex/AGENTS.md`). Instructions auto-update when edr is rebuilt. They teach the agent to use edr instead of built-in file tools.
 
 <details>
 <summary>Other install methods</summary>
@@ -44,8 +44,6 @@ git clone https://github.com/jordw/edr.git && ./edr/setup.sh
 ```
 
 </details>
-
-The index lives in `.edr/` at the repo root and rebuilds automatically if deleted.
 
 ## Example
 
@@ -82,9 +80,9 @@ edr delta -- pytest
 
 ## How it works
 
-edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and stores symbols in a SQLite index. This gives agents three capabilities they don't have with raw file tools:
+edr parses files on demand with [tree-sitter](https://tree-sitter.github.io/tree-sitter/) — no pre-built index, no setup step, no staleness. This gives agents three capabilities they don't have with raw file tools:
 
-**Symbol-level operations.** Read one function instead of a 400-line file — the agent sees exactly what it needs, makes better decisions, and doesn't get confused by surrounding code. Get a class API with `--signatures` to understand structure before diving in. `--expand` includes dep signatures inline. Find callers with `edr refs --impact` before refactoring. Scope edits to a symbol with `--in Symbol` so they can't match the wrong code. `edr prepare Symbol` returns body, callers, deps, tests, and hash in one call. Edits re-index immediately and auto-verify the build (Go, Node, Rust, Make).
+**Symbol-level operations.** Read one function instead of a 400-line file — the agent sees exactly what it needs, makes better decisions, and doesn't get confused by surrounding code. Get a class API with `--signatures` to understand structure before diving in. `--expand` includes dep signatures inline. Find callers with `edr refs --impact` before refactoring. Scope edits to a symbol with `--in Symbol` so they can't match the wrong code. `edr prepare Symbol` returns body, callers, deps, tests, and hash in one call. Edits auto-verify the build (Go, Node, Rust, Make).
 
 **Batching.** `-r`, `-s`, `-m`, `-q`, `-e`, `-w` combine reads, searches, maps, queries, edits, and writes in one CLI call. One call to gather context, one to apply mutations. Fewer round-trips means faster task completion.
 
@@ -141,7 +139,7 @@ edr -w f.go --content "..." --mkdir
 | `delta` | `edr delta -- make test` — shows only what changed. `--reset`, `--full` |
 | `status` | `edr status`, `edr status --focus "goal"` |
 | `undo` | `edr undo` — revert the last edit/write (auto-checkpointed) |
-| `reset` | `edr reset`, `--index`, `--session` |
+| `reset` | `edr reset`, `--session` |
 | `setup` | `edr setup`, `edr setup --force` |
 
 Output uses plain mode: one JSON header line followed by raw-text body.
@@ -150,7 +148,7 @@ Output uses plain mode: one JSON header line followed by raw-text body.
 
 edr reads and edits any text file. Symbol-aware features (symbol reads, `--signatures`, `refs`, `map`) require a supported language:
 
-**Symbol indexing:** Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby, PHP, Swift, Scala, Zig, Lua, Bash/Shell, C#, Kotlin
+**Symbol parsing:** Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby, PHP, Swift, Scala, Zig, Lua, Bash/Shell, C#, Kotlin
 
 **Import-aware refs:** Go, Python, JavaScript, TypeScript, Java, Kotlin, Scala, C#, PHP, Swift (others fall back to text matching)
 
@@ -159,7 +157,6 @@ edr reads and edits any text file. Symbol-aware features (symbol reads, `--signa
 - **Tree-sitter, not LSP.** Fast, no build step, works on broken code, zero config. The tradeoff: no type information. Refs use import-path matching, not type resolution, so cross-package references may produce false positives. For agent workloads (read, edit, search) structural parsing is enough.
 - **macOS and Linux only.** Windows is not planned.
 - **C/C++ compiler required** when building from source (tree-sitter grammars). Homebrew and the install script use pre-built binaries.
-- **First index: under 1s** on small repos, ~15s on large ones (vitess, 3200 files). Incremental re-index after edits: ~12ms/file.
 
 ## Benchmarks
 

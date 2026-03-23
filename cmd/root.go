@@ -130,29 +130,27 @@ func init() {
 // Verbose returns true if --verbose was set.
 func Verbose() bool { return verbose }
 
-// openDBStrict opens the DB and returns an error if the index does not exist.
-// Read-only commands (read, search, map, refs) use this — they never auto-index.
-// useOnDemand returns true when the on-demand (no-SQLite) store is selected.
-func useOnDemand() bool {
-	return os.Getenv("EDR_ONDEMAND") == "1"
+// useSQLite returns true when the legacy SQLite-backed store is selected via EDR_SQLITE=1.
+func useSQLite() bool {
+	return os.Getenv("EDR_SQLITE") == "1"
 }
 
-// openStore returns a SymbolStore — either on-demand or SQLite-backed.
+// openStore returns a SymbolStore — on-demand by default, SQLite with EDR_SQLITE=1.
 func openStore(root string) (index.SymbolStore, error) {
-	if useOnDemand() {
-		output.SetRoot(root)
-		return index.NewOnDemand(root), nil
+	if useSQLite() {
+		return openDBStrictRoot(root)
 	}
-	return openDBStrictRoot(root)
+	output.SetRoot(root)
+	return index.NewOnDemand(root), nil
 }
 
 // openStoreAndIndex returns a SymbolStore, auto-indexing if SQLite-backed.
 func openStoreAndIndex(root string, quiet bool) (index.SymbolStore, error) {
-	if useOnDemand() {
-		output.SetRoot(root)
-		return index.NewOnDemand(root), nil
+	if useSQLite() {
+		return openDBAndIndex(root, quiet)
 	}
-	return openDBAndIndex(root, quiet)
+	output.SetRoot(root)
+	return index.NewOnDemand(root), nil
 }
 
 func openDBStrict(cmd *cobra.Command) (*index.DB, error) {

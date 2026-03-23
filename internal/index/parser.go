@@ -74,6 +74,20 @@ type ParseResult struct {
 }
 
 // ParseFileComplete parses a file and returns symbols, imports, and a deferred ref extractor.
+// ParseFileLight extracts symbols and imports without ref extraction.
+// Used by the on-demand store where refs are resolved via text search.
+func ParseFileLight(path string, src []byte, lang *LangConfig) ([]SymbolInfo, []ImportInfo) {
+	var symbols []SymbolInfo
+	var imports []ImportInfo
+	parseWith(lang, src, func(root *tree_sitter.Node) {
+		extractSymbols(root, src, path, lang, &symbols, -1)
+		if lang.Imports != nil {
+			imports = extractImports(root, src, path, lang)
+		}
+	})
+	return symbols, imports
+}
+
 func ParseFileComplete(path string, src []byte, lang *LangConfig) (*ParseResult, error) {
 	var symbols []SymbolInfo
 	var imports []ImportInfo

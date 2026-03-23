@@ -3,6 +3,7 @@ package index
 import (
 	"path/filepath"
 	"strings"
+	"sync"
 	"unsafe"
 
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
@@ -63,11 +64,28 @@ type LangConfig struct {
 	MethodsOutside bool           // true if methods live outside the struct (Go)
 }
 
+var langCache sync.Map // ext string -> *LangConfig
+
 // GetLangConfig returns the language configuration for the given filename
 // based on its extension. It returns nil if the extension is not recognized.
+// Results are cached to avoid repeated allocations during file walks.
 func GetLangConfig(filename string) *LangConfig {
 	ext := strings.ToLower(filepath.Ext(filename))
+	if ext == "" {
+		return nil
+	}
+	if cached, ok := langCache.Load(ext); ok {
+		if cached == nil {
+			return nil
+		}
+		return cached.(*LangConfig)
+	}
+	cfg := getLangConfigUncached(ext)
+	langCache.Store(ext, cfg)
+	return cfg
+}
 
+func getLangConfigUncached(ext string) *LangConfig {
 	switch ext {
 	case ".go":
 		return &LangConfig{

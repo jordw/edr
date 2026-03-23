@@ -571,6 +571,12 @@ func plainReindex(w *os.File, op Op) {
 	if v, ok := op["session"].(string); ok {
 		h["session"] = v
 	}
+	if v, ok := op["mode"].(string); ok {
+		h["mode"] = v
+	}
+	if v, ok := op["total_files"]; ok {
+		h["files"] = v
+	}
 	writeHeader(w, h)
 }
 

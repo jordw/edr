@@ -292,7 +292,7 @@ edr <span class="flag">-r</span> src/scheduler.py:run               <span class=
 edr <span class="flag">-q</span> refs run <span class="flag">--callers</span>                  <span class="comment"># callers, import-resolved</span>
 edr <span class="flag">-e</span> src/scheduler.py \
     <span class="flag">--old</span> "def run(self):" \
-    <span class="flag">--new</span> "def run(self, retries=3):"      <span class="comment"># auto re-indexes, verifies build</span></code></pre>
+    <span class="flag">--new</span> "def run(self, retries=3):"      <span class="comment"># verifies build</span></code></pre>
   <p>3 calls, ~3KB.</p>
 
   <p style="margin-top: 1.5rem;"><strong>Batched:</strong> gather everything in one call, mutate in one call:</p>
@@ -366,7 +366,7 @@ edr delta -- pytest</code></pre>
 edr <span class="flag">-r</span> file:Class <span class="flag">--sig</span>           <span class="comment"># Signatures only (no bodies)</span>
 edr <span class="flag">-s</span> "pattern"                  <span class="comment"># Search symbols or text (--text)</span>
 edr <span class="flag">-m</span> <span class="flag">--dir</span> src/                 <span class="comment"># Symbol map of a directory</span>
-edr <span class="flag">-e</span> file <span class="flag">--old</span> "x" <span class="flag">--new</span> "y"   <span class="comment"># Edit with auto re-index + verify</span>
+edr <span class="flag">-e</span> file <span class="flag">--old</span> "x" <span class="flag">--new</span> "y"   <span class="comment"># Edit with auto-verify</span>
 edr <span class="flag">-w</span> file <span class="flag">--inside</span> Class        <span class="comment"># Add method/field without reading</span></code></pre>
 
   <p>Combine freely. One call to gather context, one to mutate:</p>
@@ -396,7 +396,7 @@ edr <span class="flag">-w</span> f.go <span class="flag">--content</span> "..." 
       <tr><td>delta</td><td><code>edr delta -- make test</code> — shows only what changed. <code>--reset</code>, <code>--full</code></td></tr>
       <tr><td>status</td><td><code>edr status</code>, <code>edr status --focus "goal"</code></td></tr>
       <tr><td>undo</td><td>Revert last edit/write. Every mutation is auto-checkpointed.</td></tr>
-      <tr><td>reset</td><td><code>edr reset</code>, <code>--index</code>, <code>--session</code></td></tr>
+      <tr><td>reset</td><td><code>edr reset</code>, <code>--session</code></td></tr>
       <tr><td>setup</td><td><code>edr setup</code>, <code>edr setup --force</code></td></tr>
     </tbody>
   </table>
@@ -407,7 +407,7 @@ edr <span class="flag">-w</span> f.go <span class="flag">--content</span> "..." 
 <section>
   <h2>Languages</h2>
   <p>edr reads and edits any text file. Symbol-aware features require a supported language:</p>
-  <p style="color: var(--fg); font-size: 0.9rem; margin-bottom: 0.25rem;"><strong>Symbol indexing</strong></p>
+  <p style="color: var(--fg); font-size: 0.9rem; margin-bottom: 0.25rem;"><strong>Symbol parsing</strong></p>
   <ul class="lang-list">
     <li>Go</li><li>Python</li><li>JavaScript</li><li>TypeScript</li><li>Rust</li>
     <li>Java</li><li>C</li><li>C++</li><li>Ruby</li><li>PHP</li><li>Swift</li><li>Scala</li>
@@ -423,8 +423,8 @@ edr <span class="flag">-w</span> f.go <span class="flag">--content</span> "..." 
 <!-- How it works -->
 <section>
   <h2>How it works</h2>
-  <p>edr parses your codebase with <a href="https://tree-sitter.github.io/tree-sitter/">tree-sitter</a> and stores symbols in a SQLite index.</p>
-  <p><strong>Symbol-level operations.</strong> Read one function instead of a 400-line file — the agent sees exactly what it needs and makes better decisions. Get a class API with <code>--signatures</code> to understand structure before diving in. Find callers with <code>edr refs --impact</code> before refactoring. Scope edits with <code>--in Symbol</code> so they can't match the wrong code. Edits re-index immediately and auto-verify the build.</p>
+  <p>edr parses files on demand with <a href="https://tree-sitter.github.io/tree-sitter/">tree-sitter</a> — no pre-built index, no setup step, no staleness.</p>
+  <p><strong>Symbol-level operations.</strong> Read one function instead of a 400-line file — the agent sees exactly what it needs and makes better decisions. Get a class API with <code>--signatures</code> to understand structure before diving in. Find callers with <code>edr refs --impact</code> before refactoring. Scope edits with <code>--in Symbol</code> so they can't match the wrong code. Edits auto-verify the build.</p>
   <p><strong>Batching.</strong> <code>-r</code>, <code>-s</code>, <code>-m</code>, <code>-q</code>, <code>-e</code>, <code>-w</code> combine reads, searches, maps, queries, edits, and writes in one CLI call. Fewer round-trips means faster task completion.</p>
   <p><strong>Sessions.</strong> edr tracks what the agent has seen and only returns what changed. Second read of an unchanged file: zero output. <code>edr delta -- make test</code> after a fix: only the new failures.</p>
 </section>
@@ -436,7 +436,7 @@ edr <span class="flag">-w</span> f.go <span class="flag">--content</span> "..." 
     <li style="margin-bottom: 0.75rem;"><strong>Tree-sitter, not LSP.</strong> Fast, no build step, works on broken code, zero config. Tradeoff: no type information. Refs may produce false positives across packages.</li>
     <li style="margin-bottom: 0.75rem;"><strong>macOS and Linux only.</strong> Windows is not planned.</li>
     <li style="margin-bottom: 0.75rem;"><strong>C/C++ compiler required</strong> when building from source. Homebrew and the install script use pre-built binaries.</li>
-    <li><strong>First index: under 1s</strong> on small repos, ~15s on large ones (vitess, 3200 files). Incremental re-index: ~12ms/file.</li>
+    <li><strong>No index step.</strong> Files are parsed on demand — no setup delay, no staleness.</li>
   </ul>
 </section>
 

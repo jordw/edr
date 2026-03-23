@@ -2701,16 +2701,16 @@ func TestSpec_ResetFull(t *testing.T) {
 	if exit != 0 {
 		t.Fatalf("reset exit %d", exit)
 	}
-	// Should have a reindex op
-	foundReindex := false
+	// Should have a status:ok in the output (reindex for SQLite, no-op for on-demand)
+	foundStatus := false
 	for _, op := range result.Ops {
-		if op.Header["cmd"] == "reindex" || op.Header["files"] != nil {
-			foundReindex = true
+		if op.Header["status"] == "ok" || op.Header["status"] == "reset" {
+			foundStatus = true
 			break
 		}
 	}
-	if !foundReindex {
-		t.Error("expected reindex op in reset output")
+	if !foundStatus {
+		t.Error("expected status ok/reset in reset output")
 	}
 }
 
