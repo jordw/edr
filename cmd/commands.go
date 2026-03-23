@@ -35,6 +35,7 @@ func init() {
 	rootCmd.AddCommand(setupCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(checkpointCmd)
+	rootCmd.AddCommand(undoCmd)
 }
 
 // dispatchCmdWithIndex is like dispatchCmd but auto-indexes if needed.
@@ -171,6 +172,34 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	defer saveSess()
 
 	injectSessionHash(sess, cmdName, args, flags)
+
+	// Auto-checkpoint before mutations (rolling cap of 3)
+	dryRun, _ := flags["dry_run"].(bool)
+	if !dryRun && sess != nil {
+		dirtyFiles := sess.GetDirtyFiles()
+		// Include the current target file so first-edit-in-session is undoable
+		if len(args) > 0 {
+			target := args[0]
+			if idx := strings.Index(target, ":"); idx > 0 {
+				target = target[:idx]
+			}
+			found := false
+			for _, f := range dirtyFiles {
+				if f == target {
+					found = true
+					break
+				}
+			}
+			if !found {
+				dirtyFiles = append(dirtyFiles, target)
+			}
+		}
+		label := cmdName
+		if len(args) > 0 {
+			label = cmdName + "_" + args[0]
+		}
+		sess.CreateAutoCheckpoint(filepath.Join(edrDir, "sessions"), root, label, dirtyFiles)
+	}
 
 	env := output.NewEnvelope(cmdName)
 	opID := cmdName[:1] + "0"
@@ -713,6 +742,63 @@ var checkpointCmd = &cobra.Command{
 }
 
 func init() { cmdspec.RegisterFlags(checkpointCmd.Flags(), "checkpoint") }
+
+var undoCmd = &cobra.Command{
+	Use:   "undo",
+	Short: "Revert to the last auto-checkpoint",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		root := getRoot(cmd)
+		edrDir := filepath.Join(root, ".edr")
+		sessDir := filepath.Join(edrDir, "sessions")
+
+		sess, saveSess := session.LoadSession(edrDir)
+		defer saveSess()
+
+		flags := extractFlags(cmd)
+		noSave, _ := flags["no_save"].(bool)
+
+		cpID := session.LatestAutoCheckpoint(sessDir)
+		if cpID == "" {
+			env := output.NewEnvelope("undo")
+			env.AddFailedOpWithCode("u0", "undo", "no_checkpoint", "no auto-checkpoint found; nothing to undo")
+			env.ComputeOK()
+			output.PrintEnvelope(env)
+			return nil
+		}
+
+		dirtyFiles := sess.GetDirtyFiles()
+		restored, notRemoved, preRestoreID, err := sess.RestoreCheckpoint(
+			sessDir, root, cpID, !noSave, dirtyFiles,
+		)
+		if err != nil {
+			return err
+		}
+
+		// Drop the auto-checkpoint we just restored (it is consumed)
+		session.DropCheckpoint(sessDir, cpID)
+
+		result := map[string]any{
+			"status":   "undone",
+			"restored": restored,
+			"target":   cpID,
+		}
+		if preRestoreID != "" {
+			result["safety_checkpoint"] = preRestoreID
+		}
+		if len(notRemoved) > 0 {
+			result["new_files_kept"] = notRemoved
+		}
+
+		env := output.NewEnvelope("undo")
+		env.AddOp("u0", "undo", result)
+		env.ComputeOK()
+		output.PrintEnvelope(env)
+		return nil
+	},
+}
+
+func init() { cmdspec.RegisterFlags(undoCmd.Flags(), "undo") }
 
 // buildNextResult constructs the result map for `edr next`.
 func buildNextResult(sess *session.Session, db *index.DB, root string, count int) map[string]any {

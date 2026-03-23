@@ -94,6 +94,8 @@ func printPlain(e *Envelope) {
 			plainNext(w, op)
 		case "checkpoint":
 			plainCheckpoint(w, op)
+		case "undo":
+			plainUndo(w, op)
 		default:
 			writeHeader(w, op)
 		}
@@ -730,6 +732,27 @@ func plainNext(w *os.File, op Op) {
 			sig, _ := cm["signature"].(string)
 
 			fmt.Fprintf(w, "  %s(%s): %s\n", symbol, reason, sig)
+		}
+	}
+}
+
+func plainUndo(w *os.File, op Op) {
+	h := map[string]any{"status": "undone"}
+	hStr(h, "target", op, "target")
+	hStr(h, "safety", op, "safety_checkpoint")
+	if restored := toStringSlice(op["restored"]); len(restored) > 0 {
+		h["files"] = len(restored)
+	}
+	writeHeader(w, h)
+	if restored := toStringSlice(op["restored"]); len(restored) > 0 {
+		for _, f := range restored {
+			fmt.Fprintf(w, "  %s\n", f)
+		}
+	}
+	if kept := toStringSlice(op["new_files_kept"]); len(kept) > 0 {
+		fmt.Fprintln(w, "\nnew files kept:")
+		for _, f := range kept {
+			fmt.Fprintf(w, "  %s\n", f)
 		}
 	}
 }

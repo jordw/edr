@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -120,24 +121,9 @@ func (s *Session) buildCheckpoint(id, label, repoRoot string, dirtyFiles []strin
 	}
 	copy(snap.OpLog, s.OpLog)
 
-	if len(s.Assumptions) > 0 {
-		snap.Assumptions = make(map[string]AssumptionEntry, len(s.Assumptions))
-		for k, v := range s.Assumptions {
-			snap.Assumptions[k] = v
-		}
-	}
-	if len(s.FileHashes) > 0 {
-		snap.FileHashes = make(map[string]string, len(s.FileHashes))
-		for k, v := range s.FileHashes {
-			snap.FileHashes[k] = v
-		}
-	}
-	if len(s.FileMtimes) > 0 {
-		snap.FileMtimes = make(map[string]FileMtimeEntry, len(s.FileMtimes))
-		for k, v := range s.FileMtimes {
-			snap.FileMtimes[k] = v
-		}
-	}
+	snap.Assumptions = maps.Clone(s.Assumptions)
+	snap.FileHashes = maps.Clone(s.FileHashes)
+	snap.FileMtimes = maps.Clone(s.FileMtimes)
 	return &Checkpoint{
 		ID:        id,
 		Label:     label,
@@ -199,29 +185,14 @@ func (s *Session) RestoreCheckpoint(sessDir, repoRoot, cpID string, saveCurrentF
 	s.LastVerifyStatus = cp.Session.LastVerifyStatus
 	s.EditsSinceVerify = cp.Session.EditsSinceVerify
 
-	if cp.Session.Assumptions != nil {
-		s.Assumptions = make(map[string]AssumptionEntry, len(cp.Session.Assumptions))
-		for k, v := range cp.Session.Assumptions {
-			s.Assumptions[k] = v
-		}
-	} else {
-		s.Assumptions = nil
-	}
-
+	s.Assumptions = maps.Clone(cp.Session.Assumptions)
 	if cp.Session.FileHashes != nil {
-		s.FileHashes = make(map[string]string, len(cp.Session.FileHashes))
-		for k, v := range cp.Session.FileHashes {
-			s.FileHashes[k] = v
-		}
+		s.FileHashes = maps.Clone(cp.Session.FileHashes)
 	} else {
 		s.FileHashes = make(map[string]string)
 	}
-
 	if cp.Session.FileMtimes != nil {
-		s.FileMtimes = make(map[string]FileMtimeEntry, len(cp.Session.FileMtimes))
-		for k, v := range cp.Session.FileMtimes {
-			s.FileMtimes[k] = v
-		}
+		s.FileMtimes = maps.Clone(cp.Session.FileMtimes)
 	} else {
 		s.FileMtimes = make(map[string]FileMtimeEntry)
 	}
@@ -282,6 +253,18 @@ func ListCheckpoints(sessDir string) []CheckpointInfo {
 		return infos[i].CreatedAt.Before(infos[j].CreatedAt)
 	})
 	return infos
+}
+
+// LatestAutoCheckpoint returns the most recent auto-checkpoint ID, or "" if none.
+func LatestAutoCheckpoint(sessDir string) string {
+	infos := ListCheckpoints(sessDir)
+	// Walk backwards (sorted by time ascending) to find most recent auto
+	for i := len(infos) - 1; i >= 0; i-- {
+		if strings.HasPrefix(infos[i].ID, "cp_auto_") {
+			return infos[i].ID
+		}
+	}
+	return ""
 }
 
 // DropCheckpoint removes a checkpoint file.

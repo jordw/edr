@@ -251,7 +251,7 @@ func TestSpec_HelpSurface(t *testing.T) {
 		t.Errorf("edr --help wrote to stderr: %q", stderr)
 	}
 
-	expected := []string{"checkpoint", "delta", "edit", "map", "prepare", "read", "refs", "rename", "reset", "search", "setup", "status", "verify", "write"}
+	expected := []string{"checkpoint", "delta", "edit", "map", "prepare", "read", "refs", "rename", "reset", "search", "setup", "status", "undo", "verify", "write"}
 	cmdRe := regexp.MustCompile(`(?m)^\s{2}(\w+)\s`)
 	matches := cmdRe.FindAllStringSubmatch(stdout, -1)
 
@@ -273,7 +273,7 @@ func TestSpec_SubcommandHelp(t *testing.T) {
 	binary := buildBinary(t)
 	dir := t.TempDir()
 
-	commands := []string{"read", "search", "edit", "write", "map", "refs", "rename", "verify", "delta", "setup", "reset", "status", "checkpoint"}
+	commands := []string{"read", "search", "edit", "write", "map", "refs", "rename", "verify", "delta", "setup", "reset", "status", "checkpoint", "undo"}
 	for _, cmd := range commands {
 		t.Run(cmd, func(t *testing.T) {
 			stdout, _, exit := specRunRaw(t, binary, dir, nil, cmd, "--help")
@@ -2871,13 +2871,13 @@ func TestSpec_CheckpointDrop(t *testing.T) {
 		t.Errorf("expected status=dropped, got %q", status)
 	}
 
-	// List should be empty
+	// Explicit checkpoint should be gone (auto-checkpoints may remain)
 	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "checkpoint", "--list")
 	if exit != 0 {
 		t.Fatalf("list exit %d", exit)
 	}
-	if !strings.Contains(stdout, "(no checkpoints)") {
-		t.Errorf("expected empty list after drop: %s", stdout)
+	if strings.Contains(stdout, "cp_1") {
+		t.Errorf("expected cp_1 to be gone after drop: %s", stdout)
 	}
 }
 

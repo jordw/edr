@@ -199,6 +199,13 @@ var Registry = []*Spec{
 		},
 	},
 	{
+		Name: "undo", Desc: "Revert to the last auto-checkpoint. Undoes the most recent edit/write.",
+		Category: CatGlobalMutate, MinArgs: 0, MaxArgs: 0,
+		Flags: []FlagSpec{
+			{Name: "no_save", Type: FlagBool, Default: false, Desc: "Skip pre-restore safety checkpoint"},
+		},
+	},
+	{
 		Name: "verify", Desc: "Run build/typecheck or tests. Auto-detects go/npm/cargo.",
 		Category: CatMeta, MinArgs: 0, MaxArgs: 0,
 		Flags: []FlagSpec{

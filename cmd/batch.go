@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"strconv"
 
 	"github.com/jordw/edr/internal/cmdspec"
@@ -271,32 +272,27 @@ func buildReadCmd(r doRead, forceFullRead bool) dispatch.MultiCmd {
 }
 
 func executeReads(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams) {
-	cmds := make([]dispatch.MultiCmd, len(p.Reads))
-	for i, r := range p.Reads {
-		cmds[i] = buildReadCmd(r, false)
-	}
-	var budgetOpt []int
-	if p.Budget != nil {
-		budgetOpt = []int{*p.Budget}
-	}
-	results := dispatch.DispatchMulti(ctx, db, cmds, budgetOpt...)
-	addMultiResultOps(env, sess, cmds, results, "r")
+	dispatchReads(ctx, db, sess, env, p.Reads, p.Budget, false, "r")
 }
+
 // executePostEditReads runs reads that were placed after edits in CLI order.
 // These see post-edit file state since edits have already been committed.
 func executePostEditReads(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams) {
-	cmds := make([]dispatch.MultiCmd, len(p.PostEditReads))
-	for i, r := range p.PostEditReads {
-		cmds[i] = buildReadCmd(r, true)
-	}
-	var budgetOpt []int
-	if p.Budget != nil {
-		budgetOpt = []int{*p.Budget}
-	}
-	results := dispatch.DispatchMulti(ctx, db, cmds, budgetOpt...)
-	addMultiResultOps(env, sess, cmds, results, "pr")
+	dispatchReads(ctx, db, sess, env, p.PostEditReads, p.Budget, true, "pr")
 }
 
+func dispatchReads(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, reads []doRead, budget *int, forceFullRead bool, prefix string) {
+	cmds := make([]dispatch.MultiCmd, len(reads))
+	for i, r := range reads {
+		cmds[i] = buildReadCmd(r, forceFullRead)
+	}
+	var budgetOpt []int
+	if budget != nil {
+		budgetOpt = []int{*budget}
+	}
+	results := dispatch.DispatchMulti(ctx, db, cmds, budgetOpt...)
+	addMultiResultOps(env, sess, cmds, results, prefix)
+}
 // executeQueries dispatches query operations and adds results as ops on the envelope.
 // Follows the same normalize-then-build-then-dispatch pattern as executeReads.
 func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams) {
@@ -641,6 +637,33 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, env *out
 	// 2. Queries
 	if hasQueries {
 		executeQueries(ctx, db, sess, env, &p)
+	}
+
+	// Auto-checkpoint before mutations (rolling cap of 3)
+	if (hasEdits || hasWrites || hasRenames) && sess != nil {
+		isDry := p.DryRun != nil && *p.DryRun
+		if !isDry {
+			dirtyFiles := sess.GetDirtyFiles()
+			// Include target files so first-edit-in-session is undoable
+			targetSet := make(map[string]bool)
+			for _, f := range dirtyFiles {
+				targetSet[f] = true
+			}
+			for _, e := range p.Edits {
+				if e.File != "" && !targetSet[e.File] {
+					dirtyFiles = append(dirtyFiles, e.File)
+					targetSet[e.File] = true
+				}
+			}
+			for _, w := range p.Writes {
+				if w.File != "" && !targetSet[w.File] {
+					dirtyFiles = append(dirtyFiles, w.File)
+					targetSet[w.File] = true
+				}
+			}
+			sessDir := filepath.Join(db.EdrDir(), "sessions")
+			sess.CreateAutoCheckpoint(sessDir, db.Root(), "batch", dirtyFiles)
+		}
 	}
 
 	// Pre-promote per-edit dry_run to batch level before writes execute.
