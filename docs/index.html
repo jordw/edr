@@ -288,12 +288,12 @@ footer {
 <span class="comment"># 5+ tool calls, ~25KB of context</span>
 
 <span class="comment"># With edr:</span>
-edr read src/scheduler.py:run              <span class="comment"># just the function (not the file)</span>
-edr refs run <span class="flag">--callers</span>                     <span class="comment"># callers, import-resolved</span>
-edr edit src/scheduler.py \
+edr <span class="flag">-r</span> src/scheduler.py:run               <span class="comment"># just the function (not the file)</span>
+edr <span class="flag">-q</span> refs run <span class="flag">--callers</span>                  <span class="comment"># callers, import-resolved</span>
+edr <span class="flag">-e</span> src/scheduler.py \
     <span class="flag">--old</span> "def run(self):" \
     <span class="flag">--new</span> "def run(self, retries=3):"      <span class="comment"># auto re-indexes, verifies build</span></code></pre>
-  <p>3 calls, ~3KB of context.</p>
+  <p>3 calls, ~3KB.</p>
 
   <p style="margin-top: 1.5rem;"><strong>Batched:</strong> gather everything in one call, mutate in one call:</p>
 <pre><code><span class="comment"># 1. Read three APIs + search, one call</span>

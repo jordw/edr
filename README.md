@@ -55,14 +55,13 @@ Read a function, find its callers, edit it:
 # Without edr: grep to find it, read the range, grep for callers, read each caller
 # 5+ tool calls, ~25KB of context
 
-# With edr:
-edr read src/scheduler.py:run              # just the function (not the file)
-edr refs run --callers                     # callers, import-resolved
-edr edit src/scheduler.py \
+# With edr: 3 calls, ~3KB
+edr -r src/scheduler.py:run               # just the function (not the file)
+edr -q refs run --callers                  # callers, import-resolved
+edr -e src/scheduler.py \
     --old "def run(self):" \
     --new "def run(self, retries=3):"      # auto re-indexes, verifies build
 ```
-3 calls, ~3KB of context.
 
 **Batched:** gather everything in one call, mutate in one call:
 
@@ -199,10 +198,6 @@ Median reduction: **83%**. edr loses on plain text search (structured JSON adds 
 </details>
 
 Scenarios and methodology in [`bench/scenarios/`](bench/scenarios/). Reproduce: `bash bench/run_real_repo_benchmarks.sh` (~10 min). Regenerate tables: `bash bench/gen_readme_table.sh`.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports and PRs welcome on [GitHub](https://github.com/jordw/edr/issues).
 
 ## License
 
