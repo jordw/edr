@@ -52,7 +52,7 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	defer db.Close()
 
 	edrDir := db.EdrDir()
-	sess, saveSess := session.LoadSession(edrDir)
+	sess, saveSess := session.LoadSession(edrDir, db.Root())
 	defer saveSess()
 
 	env := output.NewEnvelope(cmdName)
@@ -141,7 +141,7 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	defer db.Close()
 
 	edrDir := db.EdrDir()
-	sess, saveSess := session.LoadSession(edrDir)
+	sess, saveSess := session.LoadSession(edrDir, db.Root())
 	defer saveSess()
 
 	injectSessionHash(sess, cmdName, args, flags)
@@ -386,7 +386,7 @@ var resetCmd = &cobra.Command{
 	Short:   ToolDesc["reset"],
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := getRoot(cmd)
-		edrDir := filepath.Join(root, ".edr")
+		edrDir := index.HomeEdrDir(root)
 		result := map[string]any{"status": "reset"}
 
 		// Clear session state
@@ -420,8 +420,6 @@ var verifyCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		flags := extractFlags(cmd)
 
-		// Verify does not need the symbol index or .edr directory.
-		// Resolve root without opening a DB to avoid creating .edr as a side effect.
 		root := getRoot(cmd)
 		absRoot, err := filepath.Abs(root)
 		if err != nil {
@@ -429,14 +427,9 @@ var verifyCmd = &cobra.Command{
 		}
 		output.SetRoot(absRoot)
 
-		// Load session for build state tracking (only if .edr exists — verify shouldn't create it)
-		edrDir := filepath.Join(absRoot, ".edr")
-		var sess *session.Session
-		var saveSess func()
-		if _, statErr := os.Stat(edrDir); statErr == nil {
-			sess, saveSess = session.LoadSession(edrDir)
-			defer saveSess()
-		}
+		edrDir := index.HomeEdrDir(absRoot)
+		sess, saveSess := session.LoadSession(edrDir, absRoot)
+		defer saveSess()
 
 		env := output.NewEnvelope("verify")
 
@@ -472,9 +465,9 @@ var statusCmd = &cobra.Command{
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := getRoot(cmd)
-		edrDir := filepath.Join(root, ".edr")
+		edrDir := index.HomeEdrDir(root)
 
-		sess, saveSess := session.LoadSession(edrDir)
+		sess, saveSess := session.LoadSession(edrDir, root)
 		defer saveSess()
 
 		flags := extractFlags(cmd)
@@ -517,13 +510,12 @@ var sessionNewCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := getRoot(cmd)
-		edrDir := filepath.Join(root, ".edr")
-		if err := os.MkdirAll(filepath.Join(edrDir, "sessions"), 0700); err != nil {
-			return err
-		}
+		edrDir := index.HomeEdrDir(root)
+		sessDir := filepath.Join(edrDir, "sessions")
+		os.MkdirAll(sessDir, 0700)
 		id := session.GenerateID()
 		sess := session.New()
-		path := filepath.Join(edrDir, "sessions", id+".json")
+		path := filepath.Join(sessDir, id+".json")
 		if err := sess.SaveToFile(path); err != nil {
 			return err
 		}
@@ -545,10 +537,10 @@ var undoCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := getRoot(cmd)
-		edrDir := filepath.Join(root, ".edr")
+		edrDir := index.HomeEdrDir(root)
 		sessDir := filepath.Join(edrDir, "sessions")
 
-		sess, saveSess := session.LoadSession(edrDir)
+		sess, saveSess := session.LoadSession(edrDir, root)
 		defer saveSess()
 
 		flags := extractFlags(cmd)

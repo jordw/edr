@@ -381,34 +381,6 @@ func containsLegacyMarkerInContent(content string) bool {
 	return false
 }
 
-// EnsureGitignore adds `.edr/` to .gitignore if not already present.
-func EnsureGitignore(repoRoot string) error {
-	path := filepath.Join(repoRoot, ".gitignore")
-	existing, err := os.ReadFile(path)
-	if err == nil {
-		for _, line := range strings.Split(string(existing), "\n") {
-			if strings.TrimSpace(line) == ".edr/" || strings.TrimSpace(line) == ".edr" {
-				return nil // already present
-			}
-		}
-	}
-
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return fmt.Errorf("open .gitignore: %w", err)
-	}
-	defer f.Close()
-
-	prefix := ""
-	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
-		prefix = "\n"
-	}
-	if _, err := f.WriteString(prefix + ".edr/\n"); err != nil {
-		return fmt.Errorf("write .gitignore: %w", err)
-	}
-	return nil
-}
-
 // AllTargets returns the list of valid target names.
 func AllTargets() []string {
 	return []string{"claude", "codex", "cursor", "generic"}

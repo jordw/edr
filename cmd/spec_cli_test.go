@@ -147,7 +147,6 @@ func specRepo(t *testing.T, files map[string]string) (string, string) {
 	dir := t.TempDir()
 	dir, _ = filepath.EvalSymlinks(dir)
 
-	os.MkdirAll(filepath.Join(dir, ".edr"), 0700)
 	for name, content := range files {
 		path := filepath.Join(dir, name)
 		os.MkdirAll(filepath.Dir(path), 0755)
@@ -2201,10 +2200,8 @@ func TestSpec_SetupBasic(t *testing.T) {
 		t.Log("bugs.md #2: setup emits to stderr instead of using transport contract")
 	}
 
-	// .edr directory should exist after setup.
-	if _, err := os.Stat(filepath.Join(dir, ".edr")); err != nil {
-		t.Error(".edr directory should exist after setup")
-	}
+	// edr data directory should exist under ~/.edr/repos/ after first use.
+	// (setup no longer creates .edr/ in the repo root)
 
 	// No global instruction files should be written.
 	for _, rel := range []string{".claude/CLAUDE.md", ".codex/AGENTS.md", ".cursor/rules/edr.mdc"} {

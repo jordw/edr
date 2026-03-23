@@ -506,7 +506,8 @@ func resolveByPPID() string {
 	if err != nil {
 		return ""
 	}
-	sessDir := filepath.Join(root, ".edr", "sessions")
+	edrDir := homeEdrDir(root)
+	sessDir := filepath.Join(edrDir, "sessions")
 	pid := stableAncestorPID()
 	path := filepath.Join(sessDir, fmt.Sprintf("ppid_%d", pid))
 	startTime := processStartTime(pid)
@@ -576,22 +577,46 @@ func WriteSessionMapping(sessDir, id string) {
 	writePPIDMapping(path, id, processStartTime(pid))
 }
 
-// findRepoRoot walks up from cwd to find .edr directory.
+// findRepoRoot walks up from cwd to find .git directory.
 func findRepoRoot() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
 	for {
-		if _, err := os.Stat(filepath.Join(dir, ".edr")); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", fmt.Errorf("no .edr found")
+			return "", fmt.Errorf("no git repo found")
 		}
 		dir = parent
 	}
+}
+
+// homeEdrDir computes the per-repo edr data directory under ~/.edr/repos/.
+// Mirrors index.HomeEdrDir but avoids the cross-package dependency.
+func homeEdrDir(repoRoot string) string {
+	abs, err := filepath.Abs(repoRoot)
+	if err != nil {
+		abs = repoRoot
+	}
+	var base string
+	if override := os.Getenv("EDR_HOME"); override != "" {
+		base = override
+	} else if home, err := os.UserHomeDir(); err == nil {
+		base = filepath.Join(home, ".edr")
+	} else {
+		dir := filepath.Join(abs, ".edr")
+		os.MkdirAll(dir, 0700)
+		return dir
+	}
+	h := sha256.Sum256([]byte(abs))
+	key := hex.EncodeToString(h[:])[:12] + "_" + filepath.Base(abs)
+	dir := filepath.Join(base, "repos", key)
+	os.MkdirAll(dir, 0700)
+	return dir
 }
 
 // GenerateID creates a short unique session ID (8 hex chars from timestamp + random).
@@ -606,15 +631,16 @@ func GenerateID() string {
 // Returns the session and a save function. Call save() after processing
 // to persist changes. If EDR_SESSION is not set, returns an ephemeral
 // session and a no-op save.
-func LoadSession(edrDir string) (*Session, func()) {
+func LoadSession(edrDir string, repoRoots ...string) (*Session, func()) {
 	id := ResolveSessionID()
 	if id == "" {
 		return New(), func() {}
 	}
 	path := filepath.Join(edrDir, "sessions", id+".json")
 	sess := LoadFromFile(path)
-	// Set repo root (edrDir is <repo>/.edr, root is parent)
-	sess.repoRoot = filepath.Dir(edrDir)
+	if len(repoRoots) > 0 && repoRoots[0] != "" {
+		sess.repoRoot = repoRoots[0]
+	}
 	return sess, func() {
 		sess.SaveToFile(path)
 	}

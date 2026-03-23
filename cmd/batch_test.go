@@ -737,8 +737,6 @@ func TestPostProcess_EditPlanDiff(t *testing.T) {
 func TestHandleDo_ReadLineRangeInvalid(t *testing.T) {
 	// Invalid line ranges in the do path should return errors, not panic.
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
 
 	db := index.NewOnDemand(tmp)
@@ -778,8 +776,6 @@ func TestHandleDo_ReadLineRangeInvalid(t *testing.T) {
 func TestHandleDo_EditEmptyNewTextDeletion(t *testing.T) {
 	// Empty new_text with old_text should perform a deletion via do path.
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc remove() {}\n\nfunc keep() {}\n"), 0644)
 
 	db := index.NewOnDemand(tmp)
@@ -830,8 +826,6 @@ func TestDoParams_VerifyObjectSyntax(t *testing.T) {
 func TestHandleDo_VerifyObjectCommand(t *testing.T) {
 	// Bug 1: verify with object syntax should pass the custom command through
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n"), 0644)
 
 	db := index.NewOnDemand(tmp)
@@ -854,8 +848,6 @@ func TestHandleDo_VerifyObjectCommand(t *testing.T) {
 func TestHandleDo_BatchEditFailureReporting(t *testing.T) {
 	// Bug 3: batch edit failure should include edit_index, edit_mode, total_edits
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
 
 	db := index.NewOnDemand(tmp)
@@ -914,8 +906,6 @@ func TestHandleDo_BatchEditFailureReporting(t *testing.T) {
 func TestHandleDo_BatchEditNotFoundFields(t *testing.T) {
 	// Bug 3: Targeted test — edit with non-matching old_text should have structured fields
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
 
 	db := index.NewOnDemand(tmp)
@@ -1024,10 +1014,7 @@ func TestDoStructsMatchCmdspec(t *testing.T) {
 }
 
 func TestHandleDo_SkipsPostEditReadsAndVerifyOnEditFailure(t *testing.T) {
-	// Create a temp dir with a .edr directory for the DB and traces.
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 
 	// Create a dummy Go file so the repo root is valid.
 	os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module test\n"), 0644)
@@ -1066,8 +1053,6 @@ func TestHandleDo_SkipsPostEditReadsAndVerifyOnEditFailure(t *testing.T) {
 func TestHandleDo_DryRunSkipsWrites(t *testing.T) {
 	// Issue #12: writes should not execute when edits have dry-run set
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "existing.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
 
 	db := index.NewOnDemand(tmp)
@@ -1123,8 +1108,6 @@ func TestHandleDo_DryRunSkipsWrites(t *testing.T) {
 func TestHandleDo_NoopEditSkipsVerify(t *testing.T) {
 	// Issue #19: no-op edits (old_text == new_text) should not trigger verify
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
 
 	db := index.NewOnDemand(tmp)
@@ -1163,8 +1146,6 @@ func TestHandleDo_NoopEditSkipsVerify(t *testing.T) {
 func TestHandleDo_VerifyFailedSummaryStatus(t *testing.T) {
 	// Issue #23: summary status should be "verify_failed" when verify fails
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "data.txt"), []byte("old content\n"), 0644)
 
 	db := index.NewOnDemand(tmp)
@@ -1210,8 +1191,6 @@ func TestHandleDo_VerifyFailedSummaryStatus(t *testing.T) {
 func TestHandleDo_WriteInvalidatesSession(t *testing.T) {
 	// Issue #17: session should be invalidated after writes
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 
 	db := index.NewOnDemand(tmp)
 	defer db.Close()
@@ -1251,8 +1230,6 @@ func TestHandleDo_WriteInvalidatesSession(t *testing.T) {
 
 func TestHandleDo_OverlappingEditsRejected(t *testing.T) {
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc alpha() {}\n\nfunc beta() {}\n"), 0644)
 
 	db := index.NewOnDemand(tmp)
@@ -1288,8 +1265,6 @@ func TestHandleDo_OverlappingEditsRejected(t *testing.T) {
 
 func TestHandleDo_NonOverlappingEditsSameFileSucceed(t *testing.T) {
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc alpha() {}\n\nfunc beta() {}\n"), 0644)
 
 	db := index.NewOnDemand(tmp)
@@ -1323,8 +1298,6 @@ func TestHandleDo_NonOverlappingEditsSameFileSucceed(t *testing.T) {
 
 func TestHandleDo_EditFailureSkipsWrites(t *testing.T) {
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n"), 0644)
 
 	db := index.NewOnDemand(tmp)
@@ -1361,8 +1334,6 @@ func TestHandleDo_EditFailureSkipsWrites(t *testing.T) {
 
 func TestHandleDo_WriteDryRunPreview(t *testing.T) {
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "existing.go"), []byte("package main\n"), 0644)
 
 	db := index.NewOnDemand(tmp)
@@ -1413,8 +1384,6 @@ func TestHandleDo_WriteDryRunPreview(t *testing.T) {
 
 func TestHandleDo_WriteNewFileDryRun(t *testing.T) {
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 
 	db := index.NewOnDemand(tmp)
 	defer db.Close()
@@ -1519,8 +1488,6 @@ func TestBatchMode_QuietStderr(t *testing.T) {
 
 func TestHandleDo_MultiEditProducesPerEditOps(t *testing.T) {
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"),
 		[]byte("package main\n\nfunc alpha() {}\n\nfunc beta() {}\n"), 0644)
 
@@ -1569,8 +1536,6 @@ func TestHandleDo_MultiEditProducesPerEditOps(t *testing.T) {
 
 func TestHandleDo_MultiEditDryRunPerEditOps(t *testing.T) {
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"),
 		[]byte("package main\n\nfunc alpha() {}\n\nfunc beta() {}\n"), 0644)
 
@@ -1622,8 +1587,6 @@ func TestHandleDo_MultiEditDryRunPerEditOps(t *testing.T) {
 
 func TestHandleDo_EditFailurePerEditOps(t *testing.T) {
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n"), 0644)
 
 	db := index.NewOnDemand(tmp)
@@ -1670,8 +1633,6 @@ func TestHandleDo_EditFailurePerEditOps(t *testing.T) {
 
 func TestHandleDo_MultiFileEditsParallel(t *testing.T) {
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "a.go"), []byte("package main\n\nfunc alpha() {}\n"), 0644)
 	os.WriteFile(filepath.Join(tmp, "b.go"), []byte("package main\n\nfunc beta() {}\n"), 0644)
 
@@ -1727,8 +1688,6 @@ func TestHandleDo_MultiFileEditsParallel(t *testing.T) {
 
 func TestHandleDo_MultiFileEditPartialFailure(t *testing.T) {
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "a.go"), []byte("package main\n\nfunc alpha() {}\n"), 0644)
 	os.WriteFile(filepath.Join(tmp, "b.go"), []byte("package main\n\nfunc beta() {}\n"), 0644)
 
@@ -1787,8 +1746,6 @@ func TestHandleDo_MultiFileEditPartialFailure(t *testing.T) {
 func TestHandleDo_BatchEditResultShapeParity(t *testing.T) {
 	// Batch edit result should have the same fields as standalone edit
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
 
 	db := index.NewOnDemand(tmp)
@@ -1830,8 +1787,6 @@ func TestHandleDo_BatchEditResultShapeParity(t *testing.T) {
 
 func TestHandleDo_SkippedWritesNotFailed(t *testing.T) {
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n"), 0644)
 
 	db := index.NewOnDemand(tmp)
@@ -1873,8 +1828,6 @@ func TestHandleDo_SkippedWritesNotFailed(t *testing.T) {
 // produce the same set of keys.
 func TestHandleDo_ReadShapeParity(t *testing.T) {
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() { println(\"hi\") }\n"), 0644)
 
 	db := index.NewOnDemand(tmp)
@@ -1972,8 +1925,6 @@ func TestHandleDo_BatchEditErrorParity(t *testing.T) {
 	// Batch edit errors should not contain "edit:" prefix from multi-edit dispatcher.
 	// This verifies parity between batch and standalone error messages.
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
 
 	db := index.NewOnDemand(tmp)
@@ -2005,8 +1956,6 @@ func TestHandleDo_CommandFieldNeverLeaksInternalNames(t *testing.T) {
 	internal := []string{"edit-plan", "multi"}
 
 	tmp := t.TempDir()
-	edrDir := filepath.Join(tmp, ".edr")
-	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
 
 	db := index.NewOnDemand(tmp)

@@ -933,7 +933,7 @@ func runBatch(args []string) error {
 	defer db.Close()
 
 	edrDir := db.EdrDir()
-	sess, saveSess := session.LoadSession(edrDir)
+	sess, saveSess := session.LoadSession(edrDir, db.Root())
 	defer saveSess()
 
 	// Opportunistic cleanup (rate-limited to once per hour)

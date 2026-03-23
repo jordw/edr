@@ -35,7 +35,7 @@ CLI args → cmd/ (Cobra) → cmdspec (flag validation) → dispatch (routing) �
 
 **internal/output/**: `plain.go` renders the transport format: JSON header (first line) → raw body → `---` between batch ops → optional `{"verify":...}` trailer. Every command has a `plain*` renderer function.
 
-**internal/session/**: File-backed sessions (`.edr/sessions/<id>.json`). Delta reads (hash-based), body dedup, op log, assumption tracking, build state, checkpoint/restore. `PostProcess()` handles response optimization.
+**internal/session/**: File-backed sessions (`~/.edr/repos/<key>/sessions/<id>.json`). Delta reads (hash-based), body dedup, op log, assumption tracking, build state, checkpoint/restore. `PostProcess()` handles response optimization.
 
 **internal/setup/**: `edr setup` installer. Injects agent instructions into global configs (~/.claude, .cursorrules, etc.). Instructions are in `instructions/*.md`, token-capped at 600.
 

@@ -250,27 +250,6 @@ func TestExtractInstalledHash(t *testing.T) {
 	}
 }
 
-func TestEnsureGitignore(t *testing.T) {
-	dir := t.TempDir()
-
-	if err := EnsureGitignore(dir); err != nil {
-		t.Fatalf("EnsureGitignore: %v", err)
-	}
-	data, _ := os.ReadFile(filepath.Join(dir, ".gitignore"))
-	if string(data) != ".edr/\n" {
-		t.Errorf("expected '.edr/\\n', got %q", string(data))
-	}
-
-	// Idempotent.
-	if err := EnsureGitignore(dir); err != nil {
-		t.Fatalf("EnsureGitignore (2nd): %v", err)
-	}
-	data, _ = os.ReadFile(filepath.Join(dir, ".gitignore"))
-	if string(data) != ".edr/\n" {
-		t.Errorf("should not duplicate: got %q", string(data))
-	}
-}
-
 func TestSentinelRoundtrip(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -26,8 +26,9 @@ func runVerify(ctx context.Context, db index.SymbolStore, root string, args []st
 		level = "test"
 	}
 	if command == "" {
-		// Check .edr/config.json for persistent verify command
-		command = loadVerifyConfig(root, level)
+		// Check config.json for persistent verify command
+		edrDir := index.HomeEdrDir(root)
+		command = loadVerifyConfig(edrDir, level)
 	}
 	if command == "" {
 		// Auto-detect based on project files
@@ -111,8 +112,8 @@ func verifyOutputTail(output string, maxLines int) string {
 // Returns a make command or "" if no Makefile found.
 // loadVerifyConfig reads .edr/config.json for a persistent verify command.
 // Supports {"verify": "cmd"} or {"verify": {"build": "cmd", "test": "cmd"}}.
-func loadVerifyConfig(root, level string) string {
-	data, err := os.ReadFile(filepath.Join(root, ".edr", "config.json"))
+func loadVerifyConfig(edrDir, level string) string {
+	data, err := os.ReadFile(filepath.Join(edrDir, "config.json"))
 	if err != nil {
 		return ""
 	}

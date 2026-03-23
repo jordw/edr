@@ -36,8 +36,7 @@ func NewOnDemand(root string) *OnDemand {
 	if normalized, err := NormalizeRoot(root); err == nil {
 		root = normalized
 	}
-	edrDir := filepath.Join(root, ".edr")
-	os.MkdirAll(edrDir, 0700) // ensure .edr/ exists for sessions
+	edrDir := HomeEdrDir(root)
 	return &OnDemand{
 		root:   root,
 		edrDir: edrDir,

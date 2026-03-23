@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/jordw/edr/internal/output"
@@ -46,7 +45,6 @@ func init() {
 
 type setupResult struct {
 	Indexed      bool                 `json:"indexed,omitempty"`
-	Gitignore    bool                 `json:"gitignore,omitempty"`
 	Global       []setup.InjectResult `json:"global,omitempty"`
 	Instructions string               `json:"instructions,omitempty"` // only for --generic
 	CurrentHash  string               `json:"current_hash,omitempty"`
@@ -138,15 +136,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	globalExplicit, _ := cmd.Flags().GetBool("global")
 	noGlobal, _ := cmd.Flags().GetBool("no-global")
 
-	// Step 1: Create .edr/ and ensure it's in .gitignore.
-	os.MkdirAll(filepath.Join(root, ".edr"), 0700)
-	if err := setup.EnsureGitignore(root); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: gitignore: %v\n", err)
-	} else {
-		result.Gitignore = true
-	}
-
-	// Step 3: Global instructions.
+	// Step 1: Global instructions.
 	if noGlobal {
 		return printSetupOutput(result, jsonOut)
 	}

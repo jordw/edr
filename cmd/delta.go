@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/session"
 	"github.com/spf13/cobra"
 )
@@ -30,16 +31,11 @@ show inline {old → new} markers. Use --full for raw output.`,
 		// Use args directly to preserve argument boundaries.
 		// strings.Join + sh -c would double-wrap and break quoting.
 		root := getRoot(cmd)
-		edrDir := filepath.Join(root, ".edr")
+		edrDir := index.HomeEdrDir(root)
 		runDir := filepath.Join(edrDir, "delta")
 
-		// Load session for op recording (best-effort)
-		var sess *session.Session
-		var saveSess func()
-		if _, statErr := os.Stat(edrDir); statErr == nil {
-			sess, saveSess = session.LoadSession(edrDir)
-			defer saveSess()
-		}
+		sess, saveSess := session.LoadSession(edrDir, root)
+		defer saveSess()
 
 		// Cache key uses joined args (stable across runs)
 		shellCmd := strings.Join(args, " ")

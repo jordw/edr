@@ -148,14 +148,11 @@ func getRoot(cmd *cobra.Command) string {
 	return root
 }
 
-// discoverRoot walks up from dir looking for .edr/ or .git/ to find the repo root.
+// discoverRoot walks up from dir looking for .git/ to find the repo root.
 // Falls back to dir itself if no marker is found.
 func discoverRoot(dir string) string {
 	cur := dir
 	for {
-		if _, err := os.Stat(filepath.Join(cur, ".edr")); err == nil {
-			return cur
-		}
 		if _, err := os.Stat(filepath.Join(cur, ".git")); err == nil {
 			return cur
 		}
