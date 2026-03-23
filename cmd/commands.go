@@ -13,6 +13,7 @@ import (
 
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
+	"github.com/jordw/edr/internal/edit"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
@@ -28,10 +29,11 @@ func init() {
 	rootCmd.AddCommand(searchCmd)
 	rootCmd.AddCommand(refsCmd)
 	rootCmd.AddCommand(renameCmd)
+	rootCmd.AddCommand(prepareCmd)
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(setupCmd)
-	rootCmd.AddCommand(contextCmd)
+	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(checkpointCmd)
 }
 
@@ -172,6 +174,21 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	opID := cmdName[:1] + "0"
 
 	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
+	if err != nil && strings.Contains(err.Error(), "hash mismatch") && sess != nil && len(args) > 0 {
+		// Auto-refresh: external modification made the session hash stale.
+		// Re-read the file hash from disk and retry once.
+		target := args[0]
+		if idx := strings.Index(target, ":"); idx > 0 {
+			target = target[:idx]
+		}
+		if resolved, resolveErr := db.ResolvePath(target); resolveErr == nil {
+			if currentHash, hashErr := edit.FileHash(resolved); hashErr == nil {
+				sess.RefreshFileHash(target, currentHash)
+				flags["expect_hash"] = currentHash
+				result, err = dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
+			}
+		}
+	}
 	if err != nil {
 		addDispatchFailedOp(env, opID, cmdName, err)
 		env.ComputeOK()
@@ -264,7 +281,13 @@ var readCmd = &cobra.Command{
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "read", args) },
 }
 
-func init() { cmdspec.RegisterFlags(readCmd.Flags(), "read") }
+func init() {
+	cmdspec.RegisterFlags(readCmd.Flags(), "read")
+	// Allow bare --expand (no value) to default to "deps"
+	if f := readCmd.Flags().Lookup("expand"); f != nil {
+		f.NoOptDefVal = "deps"
+	}
+}
 
 var writeCmd = &cobra.Command{
 	Use:   "write <file>",
@@ -328,6 +351,15 @@ var refsCmd = &cobra.Command{
 }
 
 func init() { cmdspec.RegisterFlags(refsCmd.Flags(), "refs") }
+
+var prepareCmd = &cobra.Command{
+	Use:   "prepare <file:symbol|symbol>",
+	Short: ToolDesc["prepare"],
+	Args:  cobra.RangeArgs(1, 2),
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "prepare", args) },
+}
+
+func init() { cmdspec.RegisterFlags(prepareCmd.Flags(), "prepare") }
 
 var renameCmd = &cobra.Command{
 	Use:   "rename <old-name> <new-name>",
@@ -465,10 +497,10 @@ var verifyCmd = &cobra.Command{
 
 func init() { cmdspec.RegisterFlags(verifyCmd.Flags(), "verify") }
 
-var contextCmd = &cobra.Command{
-	Use:     "context",
-	Aliases: []string{},
-	Short:   "Session context: recent ops, build state, action items",
+var statusCmd = &cobra.Command{
+	Use:     "status",
+	Aliases: []string{"context"},
+	Short:   "Session status: recent ops, build state, action items",
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := getRoot(cmd)
@@ -498,15 +530,15 @@ var contextCmd = &cobra.Command{
 		}
 
 		result := buildNextResult(sess, db, root, count)
-		env := output.NewEnvelope("context")
-		env.AddOp("s0", "context", result)
+		env := output.NewEnvelope("status")
+		env.AddOp("s0", "status", result)
 		env.ComputeOK()
 		output.PrintEnvelope(env)
 		return nil
 	},
 }
 
-func init() { cmdspec.RegisterFlags(contextCmd.Flags(), "context") }
+func init() { cmdspec.RegisterFlags(statusCmd.Flags(), "status") }
 
 // sessionCmd is a hidden backward-compatibility command.
 // "edr session new" is now "edr reset --session".

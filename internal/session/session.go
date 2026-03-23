@@ -970,6 +970,16 @@ func (s *Session) CheckFileHash(file string) string {
 	return s.FileHashes[file]
 }
 
+// RefreshFileHash updates the stored hash for a file to the given value.
+// Used to recover from hash mismatches caused by external modifications.
+func (s *Session) RefreshFileHash(file, hash string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.FileHashes == nil {
+		s.FileHashes = make(map[string]string)
+	}
+	s.FileHashes[file] = hash
+}
 
 // updateFileHashFromResult extracts file+hash from an edit result and updates
 // FileHashes so subsequent edits use the post-edit hash, not a stale read hash.
