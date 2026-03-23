@@ -414,7 +414,12 @@ func executeWrites(ctx context.Context, db index.SymbolStore, sess *session.Sess
 func executeEdits(ctx context.Context, db index.SymbolStore, sess *session.Session, env *output.Envelope, p *doParams, warnings *[]string) (bool, bool) {
 	dryRun := p.DryRun != nil && *p.DryRun
 
-	sess.InvalidateForEdit("edit", []string{})
+	// Invalidate session cache for all files being edited.
+	for _, e := range p.Edits {
+		if e.File != "" {
+			sess.InvalidateForEdit("edit", []string{e.File})
+		}
+	}
 
 	cmds := make([]dispatch.MultiCmd, len(p.Edits))
 	for i, e := range p.Edits {

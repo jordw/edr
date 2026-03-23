@@ -257,7 +257,11 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			if err != nil {
 				return "", fmt.Errorf("%s: reading %s: %w", flag, path, err)
 			}
-			return string(data), nil
+			// Strip single trailing newline — editors and shell redirection
+			// add one, but source text rarely ends with a bare newline.
+			s := string(data)
+			s = strings.TrimSuffix(s, "\n")
+			return s, nil
 		}
 		return interpretEscapes(val), nil
 	}
@@ -667,6 +671,9 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			switch s.currentOp {
 			case opEdit:
+				if s.currentEdit.Delete != nil && *s.currentEdit.Delete {
+					return nil, fmt.Errorf("--new cannot be combined with --delete (--delete means replace with empty string)")
+				}
 				resolved, err := resolveContent(arg, val)
 				if err != nil {
 					return nil, err
@@ -691,6 +698,9 @@ func parseBatchArgs(args []string) (*batchState, error) {
 		case "--delete":
 			if s.currentOp != opEdit {
 				return nil, fmt.Errorf("--delete is only valid after -e")
+			}
+			if s.currentEdit.NewText != "" {
+				return nil, fmt.Errorf("--delete cannot be combined with --new (--delete means replace with empty string)")
 			}
 			s.currentEdit.Delete = bp(true)
 

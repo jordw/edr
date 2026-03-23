@@ -175,3 +175,21 @@ func TestInterpretEscapesSingleLine(t *testing.T) {
 	}
 }
 
+func TestBatchParseDeleteNewConflict(t *testing.T) {
+	// --delete before --new
+	_, err := parseBatchArgs([]string{"-e", "f.go", "--old", "x", "--delete", "--new", "y"})
+	if err == nil {
+		t.Error("expected error when --new combined with --delete")
+	}
+	// --new before --delete
+	_, err = parseBatchArgs([]string{"-e", "f.go", "--old", "x", "--new", "y", "--delete"})
+	if err == nil {
+		t.Error("expected error when --delete combined with --new")
+	}
+	// --delete alone should work
+	_, err = parseBatchArgs([]string{"-e", "f.go", "--old", "x", "--delete"})
+	if err != nil {
+		t.Errorf("--delete alone should work: %v", err)
+	}
+}
+
