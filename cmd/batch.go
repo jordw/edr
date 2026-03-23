@@ -902,7 +902,7 @@ func queryToMultiCmd(q doQuery) dispatch.MultiCmd {
 			flags["in"] = *q.In
 		}
 
-	case "refs":
+	case "refs", "prepare":
 		if q.Symbol != nil {
 			args = []string{*q.Symbol}
 		}

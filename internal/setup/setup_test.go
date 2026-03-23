@@ -24,20 +24,6 @@ func TestInstructionsEmbed(t *testing.T) {
 	}
 }
 
-func TestInstructionsNoBodyFlag(t *testing.T) {
-	for _, target := range AllTargets() {
-		t.Run(target, func(t *testing.T) {
-			text, err := Instructions(Target(target))
-			if err != nil {
-				t.Fatalf("Instructions(%q): %v", target, err)
-			}
-			if strings.Contains(text, "--body") {
-				t.Errorf("Instructions(%q) contains non-existent --body flag", target)
-			}
-		})
-	}
-}
-
 func TestInjectGlobal(t *testing.T) {
 	// Override home dir for testing.
 	home := t.TempDir()

@@ -20,7 +20,7 @@ import (
 func IsBatchFlag(arg string) bool {
 	switch arg {
 	case "-r", "--read", "-s", "--search", "-e", "--edit", "-w", "--write",
-		"-m", "--map", "-V", "--verify", "--no-verify":
+		"-m", "--map", "-q", "--query", "-V", "--verify", "--no-verify":
 		return true
 	}
 	return false
@@ -74,6 +74,7 @@ const (
 	opRead
 	opSearch
 	opMap
+	opQuery
 	opEdit
 	opWrite
 )
@@ -121,6 +122,9 @@ func (s *batchState) flush() {
 		s.queries = append(s.queries, s.currentQuery)
 		s.currentQuery = doQuery{}
 	case opMap:
+		s.queries = append(s.queries, s.currentQuery)
+		s.currentQuery = doQuery{}
+	case opQuery:
 		s.queries = append(s.queries, s.currentQuery)
 		s.currentQuery = doQuery{}
 	case opEdit:
@@ -306,6 +310,29 @@ func parseBatchArgs(args []string) (*batchState, error) {
 				s.currentQuery = doQuery{Cmd: "map"}
 			}
 
+		case "-q", "--query":
+			s.flush()
+			s.currentOp = opQuery
+			// Next arg is the command name (refs, prepare, etc.)
+			cmdName, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			spec := cmdspec.ByName(cmdName)
+			if spec == nil || spec.Category != cmdspec.CatRead {
+				return nil, fmt.Errorf("-q: %q is not a valid query command (use refs, prepare, search, map, read)", cmdName)
+			}
+			s.currentQuery = doQuery{Cmd: cmdName}
+			// Consume the target argument (file:symbol) if present
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				val, _ := nextArg(arg)
+				file, sym := splitFileArg(val)
+				s.currentQuery.File = sp(file)
+				if sym != "" {
+					s.currentQuery.Symbol = sp(sym)
+				}
+			}
+
 		case "-e", "--edit":
 			s.flush()
 			s.currentOp = opEdit
@@ -342,10 +369,14 @@ func parseBatchArgs(args []string) (*batchState, error) {
 		// ── read modifiers ──
 
 		case "--sig", "--signatures":
-			if s.currentOp != opRead {
-				return nil, fmt.Errorf("%s is only valid after -r", arg)
+			switch s.currentOp {
+			case opRead:
+				s.currentRead.Signatures = bp(true)
+			case opQuery:
+				s.currentQuery.Signatures = bp(true)
+			default:
+				return nil, fmt.Errorf("%s is only valid after -r or -q", arg)
 			}
-			s.currentRead.Signatures = bp(true)
 
 		case "--skeleton":
 			if s.currentOp != opRead {
@@ -370,10 +401,14 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			if err != nil {
 				return nil, err
 			}
-			if s.currentOp != opRead {
-				return nil, fmt.Errorf("--depth is only valid after -r")
+			switch s.currentOp {
+			case opRead:
+				s.currentRead.Depth = ip(n)
+			case opQuery:
+				s.currentQuery.Depth = ip(n)
+			default:
+				return nil, fmt.Errorf("--depth is only valid after -r or -q")
 			}
-			s.currentRead.Depth = ip(n)
 
 		case "--budget":
 			n, err := nextInt(arg)
@@ -383,10 +418,10 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			switch s.currentOp {
 			case opRead:
 				s.currentRead.Budget = ip(n)
-			case opSearch, opMap:
+			case opSearch, opMap, opQuery:
 				s.currentQuery.Budget = ip(n)
 			default:
-				return nil, fmt.Errorf("--budget is only valid after -r, -s, or -m")
+				return nil, fmt.Errorf("--budget is only valid after -r, -s, -m, or -q")
 			}
 
 		case "--lines":
@@ -413,10 +448,10 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			switch s.currentOp {
 			case opRead:
 				s.currentRead.Full = bp(true)
-			case opSearch, opMap:
+			case opSearch, opMap, opQuery:
 				s.currentQuery.Full = bp(true)
 			default:
-				return nil, fmt.Errorf("--full is only valid after -r, -s, or -m")
+				return nil, fmt.Errorf("--full is only valid after -r, -s, -m, or -q")
 			}
 
 		case "--symbols":
@@ -428,16 +463,20 @@ func parseBatchArgs(args []string) (*batchState, error) {
 		// ── search modifiers ──
 
 		case "--body":
-			if s.currentOp != opSearch {
-				return nil, fmt.Errorf("--body is only valid after -s")
+			switch s.currentOp {
+			case opSearch, opQuery:
+				s.currentQuery.Body = bp(true)
+			default:
+				return nil, fmt.Errorf("--body is only valid after -s or -q")
 			}
-			s.currentQuery.Body = bp(true)
 
 		case "--no-body":
-			if s.currentOp != opSearch {
-				return nil, fmt.Errorf("--no-body is only valid after -s")
+			switch s.currentOp {
+			case opSearch, opQuery:
+				s.currentQuery.Body = bp(false)
+			default:
+				return nil, fmt.Errorf("--no-body is only valid after -s or -q")
 			}
-			s.currentQuery.Body = bp(false)
 
 		case "--include":
 			if s.currentOp != opSearch {
@@ -522,6 +561,36 @@ func parseBatchArgs(args []string) (*batchState, error) {
 				return nil, fmt.Errorf("--no-group is only valid after -s")
 			}
 			s.currentQuery.Group = bp(false)
+
+		// ── query modifiers (refs, prepare) ──
+
+		case "--impact":
+			if s.currentOp != opQuery {
+				return nil, fmt.Errorf("--impact is only valid after -q")
+			}
+			s.currentQuery.Impact = bp(true)
+
+		case "--callers":
+			if s.currentOp != opQuery {
+				return nil, fmt.Errorf("--callers is only valid after -q")
+			}
+			s.currentQuery.Callers = bp(true)
+
+		case "--deps":
+			if s.currentOp != opQuery {
+				return nil, fmt.Errorf("--deps is only valid after -q")
+			}
+			s.currentQuery.Deps = bp(true)
+
+		case "--chain":
+			if s.currentOp != opQuery {
+				return nil, fmt.Errorf("--chain is only valid after -q")
+			}
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentQuery.Chain = sp(val)
 
 		// ── map modifiers ──
 
@@ -964,16 +1033,16 @@ func countSearchResults(env *output.Envelope) int {
 // allBatchFlags returns every flag recognized by parseBatchArgs, grouped by
 // which operation(s) they belong to. Used for "did you mean" suggestions.
 var batchFlagOps = map[string][]string{
-	"--sig":            {"-r"},
-	"--signatures":     {"-r"},
+	"--sig":            {"-r", "-q"},
+	"--signatures":     {"-r", "-q"},
 	"--skeleton":       {"-r"},
-	"--depth":          {"-r"},
-	"--budget":         {"-r", "-s", "-m"},
+	"--depth":          {"-r", "-q"},
+	"--budget":         {"-r", "-s", "-m", "-q"},
 	"--lines":          {"-r", "-e"},
-	"--full":           {"-r", "-s", "-m"},
+	"--full":           {"-r", "-s", "-m", "-q"},
 	"--symbols":        {"-r"},
-	"--body":           {"-s"},
-	"--no-body":        {"-s"},
+	"--body":           {"-s", "-q"},
+	"--no-body":        {"-s", "-q"},
 	"--include":        {"-s"},
 	"--exclude":        {"-s"},
 	"--text":           {"-s"},
@@ -997,6 +1066,10 @@ var batchFlagOps = map[string][]string{
 	"--start-line":     {"-e"},
 	"--end-line":       {"-e"},
 	"--expand":         {"-r"},
+	"--impact":         {"-q"},
+	"--callers":        {"-q"},
+	"--deps":           {"-q"},
+	"--chain":          {"-q"},
 	"--command":        {"--verify"},
 	"--dir":            {"-m"},
 	"--lang":           {"-m"},
