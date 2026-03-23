@@ -419,26 +419,76 @@ func parentPID(pid int) int {
 func resolveByPPID() string {
 	root, err := findRepoRoot()
 	if err != nil {
-		return "default"
+		return ""
 	}
+	sessDir := filepath.Join(root, ".edr", "sessions")
 	pid := stableAncestorPID()
-	path := filepath.Join(root, ".edr", "sessions", fmt.Sprintf("ppid_%d", pid))
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "default"
+	path := filepath.Join(sessDir, fmt.Sprintf("ppid_%d", pid))
+	startTime := processStartTime(pid)
+
+	// Read existing mapping (format: "session_id\nstart_time").
+	// Validate that the process start time still matches to detect PID reuse.
+	if data, err := os.ReadFile(path); err == nil {
+		lines := strings.SplitN(strings.TrimSpace(string(data)), "\n", 2)
+		if len(lines) >= 1 && lines[0] != "" {
+			id := lines[0]
+			if len(lines) == 2 {
+				// Validate start time — if it changed, PID was reused.
+				if startTime != "" && startTime == lines[1] {
+					return id
+				}
+				// Start time mismatch or unavailable — fall through to create new.
+			} else {
+				// Legacy format (no start time) — accept but upgrade on next write.
+				return id
+			}
+		}
 	}
-	id := strings.TrimSpace(string(data))
-	if id == "" {
-		return "default"
-	}
+
+	// No valid mapping — create a fresh session for this process.
+	id := GenerateID()
+	os.MkdirAll(sessDir, 0755)
+	writePPIDMapping(path, id, startTime)
 	return id
+}
+
+// processStartTime returns a stable string identifying when a process started.
+// Used to detect PID reuse: if a PID's start time doesn't match what we
+// recorded, the PID was recycled by the OS for a different process.
+func processStartTime(pid int) string {
+	// Linux: /proc/<pid>/stat field 22 (starttime in clock ticks)
+	if data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)); err == nil {
+		s := string(data)
+		if i := strings.LastIndex(s, ") "); i >= 0 {
+			fields := strings.Fields(s[i+2:])
+			if len(fields) >= 20 {
+				return fields[19] // starttime
+			}
+		}
+		return ""
+	}
+	// macOS: ps -o lstart= -p <pid> (e.g., "Sat Mar 22 19:30:00 2026")
+	out, err := exec.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// writePPIDMapping writes a ppid mapping file with format "session_id\nstart_time".
+func writePPIDMapping(path, id, startTime string) {
+	content := id
+	if startTime != "" {
+		content = id + "\n" + startTime
+	}
+	os.WriteFile(path, []byte(content), 0644)
 }
 
 // WriteSessionMapping writes a PPID mapping file for the stable ancestor.
 func WriteSessionMapping(sessDir, id string) {
 	pid := stableAncestorPID()
 	path := filepath.Join(sessDir, fmt.Sprintf("ppid_%d", pid))
-	os.WriteFile(path, []byte(id), 0644)
+	writePPIDMapping(path, id, processStartTime(pid))
 }
 
 // findRepoRoot walks up from cwd to find .edr directory.

@@ -20,9 +20,11 @@ func TestResolveSessionID_EnvUnset(t *testing.T) {
 	os.Unsetenv("EDR_SESSION")
 	id := ResolveSessionID()
 	// Without EDR_SESSION, PPID-based routing kicks in.
-	// In test context there is no ppid mapping, so it falls back to "default".
-	if id != "default" {
-		t.Errorf("expected \"default\" session ID without EDR_SESSION, got %q", id)
+	// In test context there is no .edr dir, so resolveByPPID auto-creates
+	// a fresh session or returns "" if it can't find a repo root.
+	// Either way, it should NOT return "default".
+	if id == "default" {
+		t.Errorf("should not fall back to shared \"default\" session, got %q", id)
 	}
 }
 
