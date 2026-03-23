@@ -21,7 +21,7 @@ var setRootOnce sync.Once
 // resolveSymbolArgs resolves 1 or 2 args to a symbol.
 // With 1 arg: global name resolution (errors if ambiguous).
 // With 2 args: file + name lookup.
-func resolveSymbolArgs(ctx context.Context, db *index.DB, root string, args []string) (*index.SymbolInfo, error) {
+func resolveSymbolArgs(ctx context.Context, db index.SymbolStore, root string, args []string) (*index.SymbolInfo, error) {
 	// Support "file.go:Symbol" colon syntax — expand to two args
 	if len(args) == 1 {
 		if parts := splitFileSymbol(args[0]); parts != nil {
@@ -35,17 +35,12 @@ func resolveSymbolArgs(ctx context.Context, db *index.DB, root string, args []st
 		if err != nil {
 			return nil, err
 		}
-		if reindexed, _ := index.EnsureFileFresh(ctx, db, sym.File); reindexed {
-			// Re-resolve to get updated byte offsets.
-			return db.ResolveSymbol(ctx, args[0])
-		}
 		return sym, nil
 	case 2:
 		file, err := db.ResolvePath(args[0])
 		if err != nil {
 			return nil, err
 		}
-		index.EnsureFileFresh(ctx, db, file)
 		return db.GetSymbol(ctx, file, args[1])
 	default:
 		return nil, fmt.Errorf("expected 1 or 2 arguments: [file] <symbol>")
@@ -55,7 +50,7 @@ func resolveSymbolArgs(ctx context.Context, db *index.DB, root string, args []st
 // Dispatch routes a command name to the appropriate internal handler and
 // returns the result. It reuses the same logic as the cobra commands but
 // bypasses the CLI layer so callers can invoke commands programmatically.
-func Dispatch(ctx context.Context, db *index.DB, cmd string, args []string, flags map[string]any) (any, error) {
+func Dispatch(ctx context.Context, db index.SymbolStore, cmd string, args []string, flags map[string]any) (any, error) {
 	root := db.Root()
 	setRootOnce.Do(func() { output.SetRoot(root) })
 
@@ -132,7 +127,7 @@ func (e *relPathError) Unwrap() error { return e.wrapped }
 //	read file.go:symbolName            → read-symbol (colon syntax)
 //	read file.go file2.go              → batch-read (multiple files)
 //	read file.go:sym file2.go:sym2     → batch-read (multiple file:symbol)
-func runReadUnified(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runReadUnified(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) == 0 {
 		return nil, fmt.Errorf("read requires at least 1 argument: <file>, <file>:<symbol>, or multiple files")
 	}
@@ -234,7 +229,7 @@ func parseColonRange(s string) (int, int, error) {
 //	write file.go                      → write-file (content in flags)
 //	write file.go --append             → append-file
 //	write file.go --after symbolName   → insert-after
-func runWriteUnified(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runWriteUnified(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) == 0 {
 		return nil, fmt.Errorf("write requires at least 1 argument: <file>")
 	}
@@ -273,7 +268,7 @@ func runWriteUnified(ctx context.Context, db *index.DB, root string, args []stri
 //	map                                → repo-map
 //	map dir/                           → repo-map scoped to dir
 //	map file.go                        → symbols
-func runMapUnified(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runMapUnified(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) > 0 {
 		// If the arg is a directory, treat it as --dir for repo-map
 		resolved := args[0]
@@ -298,7 +293,7 @@ func runMapUnified(ctx context.Context, db *index.DB, root string, args []string
 //	search pattern --text              → text search
 //	search pattern --regex             → text search (auto-detected)
 //	search pattern --include "*.go"    → text search (auto-detected)
-func runSearchUnified(ctx context.Context, db *index.DB, args []string, flags map[string]any) (any, error) {
+func runSearchUnified(ctx context.Context, db index.SymbolStore, args []string, flags map[string]any) (any, error) {
 	// --lines: parse line range and set start_line/end_line for text search filtering
 	if linesSpec := flagString(flags, "lines", ""); linesSpec != "" {
 		if start, end, err := parseColonRange(linesSpec); err == nil {
@@ -352,7 +347,7 @@ func runSearchUnified(ctx context.Context, db *index.DB, args []string, flags ma
 //	refs symbol --chain targetSymbol   → call-chain
 //	refs symbol --callers              → expand (callers context)
 //	refs symbol --deps                 → expand (deps context)
-func runRefsUnified(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runRefsUnified(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	// --callers/--deps: delegate to expand (formerly explore)
 	if flagBool(flags, "callers", false) || flagBool(flags, "deps", false) {
 		return runExpand(ctx, db, root, args, flags)
@@ -395,7 +390,7 @@ type MultiResults []MultiResult
 // Commands targeting different files run in parallel. Commands targeting
 // the same file run sequentially in their original order. Global-mutating
 // commands (init, rename, edit-plan) force fully sequential execution.
-func DispatchMulti(ctx context.Context, db *index.DB, commands []MultiCmd, topBudget ...int) []MultiResult {
+func DispatchMulti(ctx context.Context, db index.SymbolStore, commands []MultiCmd, topBudget ...int) []MultiResult {
 	// Inject per-request source cache if not already present.
 	ctx = index.WithSourceCache(ctx)
 
@@ -495,7 +490,7 @@ func DispatchMulti(ctx context.Context, db *index.DB, commands []MultiCmd, topBu
 	return results
 }
 
-func dispatchSequential(ctx context.Context, db *index.DB, commands []MultiCmd, results []MultiResult) {
+func dispatchSequential(ctx context.Context, db index.SymbolStore, commands []MultiCmd, results []MultiResult) {
 	for i, c := range commands {
 		result, err := Dispatch(ctx, db, c.Cmd, c.Args, c.Flags)
 		if err != nil {
@@ -530,12 +525,22 @@ func commandFileKey(cmd string, args []string) string {
 
 // --- individual command handlers ---
 
-func runInit(ctx context.Context, db *index.DB) (any, error) {
+func runInit(ctx context.Context, db index.SymbolStore) (any, error) {
 	index.ClearTreeCache()
+	sqlDB, ok := db.(*index.DB)
+	if !ok {
+		// On-demand store — no index to build.
+		totalFiles, _, _ := db.Stats(ctx)
+		return map[string]any{
+			"status":      "ok",
+			"mode":        "on-demand",
+			"total_files": totalFiles,
+		}, nil
+	}
 	var filesChanged, symbolsChanged int
-	err := db.WithWriteLock(func() error {
+	err := sqlDB.WithWriteLock(func() error {
 		var e error
-		filesChanged, symbolsChanged, e = index.IndexRepo(ctx, db)
+		filesChanged, symbolsChanged, e = index.IndexRepo(ctx, sqlDB)
 		return e
 	})
 	if err != nil {
@@ -609,7 +614,7 @@ type commitResult struct {
 // commitEdits applies edits via Transaction and reindexes all affected files.
 // The Transaction is atomic: all files are validated and transformed in memory
 // first, then written via temp-file-then-rename with rollback on failure.
-func commitEdits(ctx context.Context, db *index.DB, edits []resolvedEdit) (*commitResult, error) {
+func commitEdits(ctx context.Context, db index.SymbolStore, edits []resolvedEdit) (*commitResult, error) {
 	tx := edit.NewTransaction()
 	for _, r := range edits {
 		tx.Add(r.File, r.StartByte, r.EndByte, r.Replacement, r.ExpectHash)
@@ -631,24 +636,19 @@ func commitEdits(ctx context.Context, db *index.DB, edits []resolvedEdit) (*comm
 		if err := tx.Commit(); err != nil {
 			return err
 		}
-		// Batch all reindex SQLite writes into a single transaction.
-		if err := db.BeginBatch(ctx); err == nil {
-			defer db.RollbackBatch() // no-op after CommitBatch
-		}
-		for _, file := range fileList {
-			if err := index.IndexFile(ctx, db, file); err != nil {
-				if indexErrors == nil {
-					indexErrors = make(map[string]string)
-				}
-				indexErrors[output.Rel(file)] = err.Error()
-			}
-		}
-		if err := db.CommitBatch(); err != nil {
-			return fmt.Errorf("commit reindex batch: %w", err)
-		}
 		return nil
 	}); lockErr != nil {
 		return nil, lockErr
+	}
+	// Reindex edited files (no-op for on-demand stores, updates SQLite for DB stores).
+	if err := db.ReindexFiles(ctx, fileList); err != nil {
+		// Non-fatal: edits already applied.
+		for _, f := range fileList {
+			if indexErrors == nil {
+				indexErrors = make(map[string]string)
+			}
+			indexErrors[output.Rel(f)] = err.Error()
+		}
 	}
 
 	hashes := make(map[string]string)

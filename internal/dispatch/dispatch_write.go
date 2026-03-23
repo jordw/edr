@@ -27,7 +27,7 @@ func writeResult(file string, cr *commitResult, message string) output.EditResul
 	return output.EditResult{File: rel, Message: message, Hash: cr.Hashes[rel], Status: cr.Status, IndexError: indexErr}
 }
 
-func runWriteFile(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runWriteFile(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {
 		return nil, fmt.Errorf("write-file requires 1 argument: <file>")
 	}
@@ -94,7 +94,7 @@ func runWriteFile(ctx context.Context, db *index.DB, root string, args []string,
 	return writeResult(file, cr, fmt.Sprintf("wrote %d bytes", len(content))), nil
 }
 
-func runAppendFile(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runAppendFile(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {
 		return nil, fmt.Errorf("append-file requires 1 argument: <file>")
 	}
@@ -137,7 +137,7 @@ func runAppendFile(ctx context.Context, db *index.DB, root string, args []string
 	return writeResult(file, cr, fmt.Sprintf("appended %d bytes", len(content))), nil
 }
 
-func runInsertAfter(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runInsertAfter(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {
 		return nil, fmt.Errorf("insert-after requires 1-2 arguments: [file] <symbol>")
 	}
@@ -193,7 +193,7 @@ var containerTypes = map[string]bool{
 // runInsertInside inserts content inside a container symbol (class, struct, impl, etc.)
 // just before its closing delimiter. If --after is also set, inserts after that child
 // symbol within the container instead.
-func runInsertInside(ctx context.Context, db *index.DB, root string, file string, containerName string, flags map[string]any) (any, error) {
+func runInsertInside(ctx context.Context, db index.SymbolStore, root string, file string, containerName string, flags map[string]any) (any, error) {
 	content := writeContent(flags)
 	if content == "" {
 		return nil, fmt.Errorf("write --inside requires 'content' (or 'new_text' or 'body') in flags")
@@ -275,7 +275,7 @@ func runInsertInside(ctx context.Context, db *index.DB, root string, file string
 // rerouteGoMethod handles Go struct methods: since methods are defined outside
 // the struct, auto-reroute func insertions to after the struct. Returns (nil, nil)
 // if the content is not a function or the container is not a Go struct.
-func rerouteGoMethod(ctx context.Context, db *index.DB, container *index.SymbolInfo, content string, flags map[string]any) (any, error) {
+func rerouteGoMethod(ctx context.Context, db index.SymbolStore, container *index.SymbolInfo, content string, flags map[string]any) (any, error) {
 	data, readErr := os.ReadFile(container.File)
 	if readErr != nil {
 		return nil, nil
@@ -321,7 +321,7 @@ func rerouteGoMethod(ctx context.Context, db *index.DB, container *index.SymbolI
 }
 
 // insertInsideAfterChild inserts content after a specific child symbol within a container.
-func insertInsideAfterChild(ctx context.Context, db *index.DB, container *index.SymbolInfo, childName string, content string, data []byte) (any, error) {
+func insertInsideAfterChild(ctx context.Context, db index.SymbolStore, container *index.SymbolInfo, childName string, content string, data []byte) (any, error) {
 	// Find the child symbol in the same file
 	child, err := db.GetSymbol(ctx, container.File, childName)
 	if err != nil {

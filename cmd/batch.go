@@ -271,17 +271,17 @@ func buildReadCmd(r doRead, forceFullRead bool) dispatch.MultiCmd {
 	return dispatch.MultiCmd{Cmd: "read", Args: args, Flags: flags}
 }
 
-func executeReads(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams) {
+func executeReads(ctx context.Context, db index.SymbolStore, sess *session.Session, env *output.Envelope, p *doParams) {
 	dispatchReads(ctx, db, sess, env, p.Reads, p.Budget, false, "r")
 }
 
 // executePostEditReads runs reads that were placed after edits in CLI order.
 // These see post-edit file state since edits have already been committed.
-func executePostEditReads(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams) {
+func executePostEditReads(ctx context.Context, db index.SymbolStore, sess *session.Session, env *output.Envelope, p *doParams) {
 	dispatchReads(ctx, db, sess, env, p.PostEditReads, p.Budget, true, "pr")
 }
 
-func dispatchReads(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, reads []doRead, budget *int, forceFullRead bool, prefix string) {
+func dispatchReads(ctx context.Context, db index.SymbolStore, sess *session.Session, env *output.Envelope, reads []doRead, budget *int, forceFullRead bool, prefix string) {
 	cmds := make([]dispatch.MultiCmd, len(reads))
 	for i, r := range reads {
 		cmds[i] = buildReadCmd(r, forceFullRead)
@@ -295,7 +295,7 @@ func dispatchReads(ctx context.Context, db *index.DB, sess *session.Session, env
 }
 // executeQueries dispatches query operations and adds results as ops on the envelope.
 // Follows the same normalize-then-build-then-dispatch pattern as executeReads.
-func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams) {
+func executeQueries(ctx context.Context, db index.SymbolStore, sess *session.Session, env *output.Envelope, p *doParams) {
 	// Distribute top-level budget to queries that lack individual budgets.
 	if p.Budget != nil && len(p.Queries) > 0 {
 		n := len(p.Queries)
@@ -383,7 +383,7 @@ func executeQueries(ctx context.Context, db *index.DB, sess *session.Session, en
 
 // executeWrites dispatches write operations and adds results as ops on the envelope.
 // Returns whether any write failed.
-func executeWrites(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams, dryRun bool) bool {
+func executeWrites(ctx context.Context, db index.SymbolStore, sess *session.Session, env *output.Envelope, p *doParams, dryRun bool) bool {
 	anyFailed := false
 	for i, w := range p.Writes {
 		opID := fmt.Sprintf("w%d", i)
@@ -412,7 +412,7 @@ func executeWrites(ctx context.Context, db *index.DB, sess *session.Session, env
 // executeEdits dispatches edit operations individually via DispatchMulti
 // (same path as standalone `edr edit`), and emits per-edit ops.
 // Returns (editsFailed, allNoop).
-func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, p *doParams, warnings *[]string) (bool, bool) {
+func executeEdits(ctx context.Context, db index.SymbolStore, sess *session.Session, env *output.Envelope, p *doParams, warnings *[]string) (bool, bool) {
 	dryRun := p.DryRun != nil && *p.DryRun
 
 	sess.InvalidateForEdit("edit", []string{})
@@ -534,7 +534,7 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env 
 }
 
 // executeVerify dispatches the verify command and sets verify on the envelope.
-func executeVerify(ctx context.Context, db *index.DB, env *output.Envelope, p *doParams) {
+func executeVerify(ctx context.Context, db index.SymbolStore, env *output.Envelope, p *doParams) {
 	verifyFlags := map[string]any{}
 
 	// Collect edited/written file paths so verify can scope to relevant packages
@@ -574,7 +574,7 @@ func executeVerify(ctx context.Context, db *index.DB, env *output.Envelope, p *d
 }
 
 // handleDo dispatches batch operations and builds an *output.Envelope directly.
-func handleDo(ctx context.Context, db *index.DB, sess *session.Session, env *output.Envelope, raw json.RawMessage) error {
+func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, env *output.Envelope, raw json.RawMessage) error {
 	ctx = index.WithSourceCache(ctx)
 	output.SetRoot(db.Root())
 
@@ -619,13 +619,17 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, env *out
 	// 0. Reindex
 	if hasInit {
 		sess.InvalidateForEdit("reindex", []string{})
-		if err := db.WithWriteLock(func() error {
-			_, _, err := index.IndexRepo(ctx, db)
-			return err
-		}); err != nil {
-			env.AddFailedOp("i0", "reindex", err.Error())
+		if sqlDB, ok := db.(*index.DB); ok {
+			if err := sqlDB.WithWriteLock(func() error {
+				_, _, err := index.IndexRepo(ctx, sqlDB)
+				return err
+			}); err != nil {
+				env.AddFailedOp("i0", "reindex", err.Error())
+			} else {
+				env.AddOp("i0", "reindex", map[string]any{"version": Version + "+" + BuildHash})
+			}
 		} else {
-			env.AddOp("i0", "reindex", map[string]any{"version": Version + "+" + BuildHash})
+			env.AddOp("i0", "reindex", map[string]any{"mode": "on-demand", "version": Version + "+" + BuildHash})
 		}
 	}
 

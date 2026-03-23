@@ -1448,3 +1448,19 @@ func (d *DB) Root() string {
 func (d *DB) EdrDir() string {
 	return filepath.Join(d.root, ".edr")
 }
+
+// ReindexFiles reindexes the given files within a write-locked batch transaction.
+func (d *DB) ReindexFiles(ctx context.Context, paths []string) error {
+	return d.WithWriteLock(func() error {
+		if err := d.BeginBatch(ctx); err == nil {
+			defer d.RollbackBatch()
+		}
+		for _, file := range paths {
+			if err := IndexFile(ctx, d, file); err != nil {
+				// Non-fatal: continue with other files
+				continue
+			}
+		}
+		return d.CommitBatch()
+	})
+}

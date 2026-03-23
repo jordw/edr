@@ -128,7 +128,9 @@ func TestPlainVerifyFailureHeaderOnly(t *testing.T) {
 	}
 }
 
-func TestPlainSessionNewPreserved(t *testing.T) {
+func TestPlainSessionNewOmitted(t *testing.T) {
+	// "session":"new" is now omitted from output to reduce noise.
+	// Only "unchanged" is emitted.
 	tests := []struct {
 		name   string
 		opType string
@@ -163,8 +165,8 @@ func TestPlainSessionNewPreserved(t *testing.T) {
 			if err := json.Unmarshal([]byte(lines[0]), &h); err != nil {
 				t.Fatalf("failed to parse header %q: %v", lines[0], err)
 			}
-			if h["session"] != "new" {
-				t.Errorf("session = %v, want \"new\"", h["session"])
+			if _, exists := h["session"]; exists {
+				t.Errorf("session field should be omitted for new, got %v", h["session"])
 			}
 		})
 	}

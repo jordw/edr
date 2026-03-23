@@ -676,7 +676,7 @@ type MapSymbolEntry struct {
 	EndLine int    `json:"end_line,omitempty"`
 }
 
-func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, RepoMapStats, error) {
+func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string, RepoMapStats, error) {
 	cfg := repoMapConfig{}
 	for _, o := range opts {
 		o(&cfg)

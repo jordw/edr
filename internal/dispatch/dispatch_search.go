@@ -11,9 +11,9 @@ import (
 	"github.com/jordw/edr/internal/search"
 )
 
-const defaultSearchBudget = 2000
+const defaultSearchBudget = 4000
 
-func runRepoMap(ctx context.Context, db *index.DB, flags map[string]any) (any, error) {
+func runRepoMap(ctx context.Context, db index.SymbolStore, flags map[string]any) (any, error) {
 	var opts []index.RepoMapOption
 	if dir := flagString(flags, "dir", ""); dir != "" {
 		opts = append(opts, index.WithDir(dir))
@@ -94,7 +94,7 @@ func runRepoMap(ctx context.Context, db *index.DB, flags map[string]any) (any, e
 	return result, nil
 }
 
-func runSearch(ctx context.Context, db *index.DB, args []string, flags map[string]any) (any, error) {
+func runSearch(ctx context.Context, db index.SymbolStore, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 || args[0] == "" {
 		return nil, fmt.Errorf("search requires a non-empty pattern")
 	}
@@ -107,7 +107,7 @@ func runSearch(ctx context.Context, db *index.DB, args []string, flags map[strin
 	return search.SearchSymbol(ctx, db, args[0], budget, showBody, limit)
 }
 
-func runSearchText(ctx context.Context, db *index.DB, args []string, flags map[string]any) (any, error) {
+func runSearchText(ctx context.Context, db index.SymbolStore, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 || args[0] == "" {
 		return nil, fmt.Errorf("search requires a non-empty pattern")
 	}
@@ -229,7 +229,7 @@ func groupTextResults(result *search.SearchResult) map[string]any {
 	}
 	return out
 }
-func runSearchInSymbol(ctx context.Context, db *index.DB, args []string, flags map[string]any, inSpec string) (any, error) {
+func runSearchInSymbol(ctx context.Context, db index.SymbolStore, args []string, flags map[string]any, inSpec string) (any, error) {
 	if len(args) < 1 || args[0] == "" {
 		return nil, fmt.Errorf("search requires a non-empty pattern")
 	}

@@ -1803,10 +1803,10 @@ func TestSearch_FullBypassesDefaultBudget(t *testing.T) {
 
 func TestRead_DefaultBudgetCap(t *testing.T) {
 	tmp := t.TempDir()
-	// Create a file larger than 2000 tokens
+	// Create a file larger than 4000 tokens
 	var content strings.Builder
 	content.WriteString("package main\n\n")
-	for i := 0; i < 200; i++ {
+	for i := 0; i < 500; i++ {
 		fmt.Fprintf(&content, "func Function%d() {\n\t// implementation %d\n}\n\n", i, i)
 	}
 	os.WriteFile(filepath.Join(tmp, "big.go"), []byte(content.String()), 0644)
@@ -1820,7 +1820,7 @@ func TestRead_DefaultBudgetCap(t *testing.T) {
 	index.IndexRepo(ctx, db)
 	output.SetRoot(db.Root())
 
-	// Read without --budget or --full: should truncate at default 2000 tokens
+	// Read without --budget or --full: should truncate at default 4000 tokens
 	result, err := dispatch.Dispatch(ctx, db, "read", []string{"big.go"}, map[string]any{})
 	if err != nil {
 		t.Fatalf("read: %v", err)
@@ -1830,7 +1830,7 @@ func TestRead_DefaultBudgetCap(t *testing.T) {
 		t.Fatalf("expected map result, got %T", result)
 	}
 	if trunc, _ := m["truncated"].(bool); !trunc {
-		t.Error("full-file read should truncate at default 2000 token budget")
+		t.Error("full-file read should truncate at default 4000 token budget")
 	}
 
 	// Read with --full: should NOT truncate

@@ -23,7 +23,7 @@ func splitFileSymbol(s string) []string {
 	return []string{file, sym}
 }
 
-func runImpact(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runImpact(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {
 		return nil, fmt.Errorf("impact requires 1-2 arguments: [file] <symbol>")
 	}
@@ -110,7 +110,7 @@ func runImpact(ctx context.Context, db *index.DB, root string, args []string, fl
 	}, nil
 }
 
-func runCallChain(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runCallChain(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	// Args come from runRefsUnified as [file, symbol, chain_target] or as
 	// [from_spec, to_spec] when called directly. The last arg is always the
 	// chain target; everything before it identifies the source symbol.

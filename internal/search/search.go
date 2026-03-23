@@ -105,7 +105,7 @@ func scoreSymbolMatch(symbolName, pattern string) float64 {
 
 // SearchSymbol searches the index for symbols matching a pattern.
 // When showBody is true, each match includes a snippet of the symbol's source.
-func SearchSymbol(ctx context.Context, db *index.DB, pattern string, budget int, showBody bool, limit int) (*SearchResult, error) {
+func SearchSymbol(ctx context.Context, db index.SymbolStore, pattern string, budget int, showBody bool, limit int) (*SearchResult, error) {
 	if pattern == "" {
 		return &SearchResult{Kind: "symbol"}, nil
 	}
@@ -311,7 +311,30 @@ func matchDoublestar(path, pattern string) bool {
 // It walks all repo files (not just indexed ones) so it finds matches in
 // YAML, Markdown, Dockerfiles, etc. When useRegex is true, pattern is
 // compiled as a Go regexp.
-func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, useRegex bool, opts ...SearchTextOption) (*SearchResult, error) {
+// stripRegexEscapes removes common regex escape sequences from a pattern to
+// produce a literal string. Agents habitually escape metacharacters (e.g.,
+// "map\[string\]", "db\.Root") even when searching literally.
+func stripRegexEscapes(pattern string) string {
+	var b strings.Builder
+	b.Grow(len(pattern))
+	for i := 0; i < len(pattern); i++ {
+		if pattern[i] == '\\' && i+1 < len(pattern) {
+			next := pattern[i+1]
+			// Strip backslash before common metacharacters
+			if next == '.' || next == '[' || next == ']' || next == '(' || next == ')' ||
+				next == '{' || next == '}' || next == '+' || next == '*' || next == '?' ||
+				next == '|' || next == '^' || next == '$' || next == '\\' {
+				b.WriteByte(next)
+				i++ // skip the backslash
+				continue
+			}
+		}
+		b.WriteByte(pattern[i])
+	}
+	return b.String()
+}
+
+func SearchText(ctx context.Context, db index.SymbolStore, pattern string, budget int, useRegex bool, opts ...SearchTextOption) (*SearchResult, error) {
 	if pattern == "" {
 		return &SearchResult{Kind: "text"}, nil
 	}
@@ -354,10 +377,15 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 		if err != nil {
 			return nil, err
 		}
-	} else if caseSensitive {
-		// exact case match — no lowering
 	} else {
-		lowerPattern = strings.ToLower(pattern)
+		// Literal search: strip regex escapes agents may have added.
+		pattern = stripRegexEscapes(pattern)
+		caseSensitive = hasUpperCase(pattern) // re-check after stripping
+		if caseSensitive {
+			// exact case match — no lowering
+		} else {
+			lowerPattern = strings.ToLower(pattern)
+		}
 	}
 
 	// Phase 1: Collect file paths (fast, sequential walk).
@@ -559,11 +587,20 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 		if _, compileErr := regexp.Compile(normalized); compileErr == nil {
 			retrySr, retryErr := SearchText(ctx, db, normalized, budget, true, opts...)
 			if retryErr == nil && retrySr.TotalMatches > 0 {
-				retrySr.Hint = fmt.Sprintf("no literal matches; auto-retried with regex (%d matches)", retrySr.TotalMatches)
+				retrySr.Hint = fmt.Sprintf("no literal matches; auto-retried as regex (%d matches)", retrySr.TotalMatches)
 				return retrySr, nil
 			}
 		}
-		sr.Hint = "pattern contains regex metacharacters but matched nothing (tried literal and regex)"
+		// Regex compile failed (e.g. "interface{}") — try with escaped regex
+		escaped := regexp.QuoteMeta(stripRegexEscapes(pattern))
+		if escaped != normalized {
+			retrySr, retryErr := SearchText(ctx, db, escaped, budget, true, opts...)
+			if retryErr == nil && retrySr.TotalMatches > 0 {
+				retrySr.Hint = fmt.Sprintf("auto-retried as escaped literal (%d matches)", retrySr.TotalMatches)
+				return retrySr, nil
+			}
+		}
+		sr.Hint = "no matches found (tried literal, regex, and escaped literal)"
 	}
 	return sr, nil
 }
@@ -571,7 +608,7 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 // SearchInSymbol searches for a pattern within a specific symbol's body.
 // The symbol is identified by file:name. Matches are returned with line numbers
 // relative to the file (not the symbol).
-func SearchInSymbol(ctx context.Context, db *index.DB, pattern string, symbolFile string, symbolName string, budget int, useRegex bool, opts ...SearchTextOption) (*SearchResult, error) {
+func SearchInSymbol(ctx context.Context, db index.SymbolStore, pattern string, symbolFile string, symbolName string, budget int, useRegex bool, opts ...SearchTextOption) (*SearchResult, error) {
 	if pattern == "" {
 		return &SearchResult{Kind: "text"}, nil
 	}
@@ -585,7 +622,7 @@ func SearchInSymbol(ctx context.Context, db *index.DB, pattern string, symbolFil
 	if err != nil {
 		return nil, fmt.Errorf("resolving file %q: %w", symbolFile, err)
 	}
-	index.EnsureFileFresh(ctx, db, file)
+	// On-demand stores are always fresh; DB stores reindex via ReindexFiles.
 	sym, err := db.GetSymbol(ctx, file, symbolName)
 	if err != nil {
 		return nil, err

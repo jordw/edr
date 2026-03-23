@@ -349,9 +349,6 @@ func TestSpec_ReadTransport(t *testing.T) {
 			if h["lines"] == nil {
 				t.Error("missing lines in header")
 			}
-			if h["session"] == nil {
-				t.Error("missing session in header")
-			}
 
 			// Symbol reads include sym.
 			if tt.wantSym != "" {
@@ -917,8 +914,8 @@ func TestSpec_SessionDedup(t *testing.T) {
 
 	// First read: session=new.
 	r1, _, _, _ := specRun(t, binary, dir, env, "read", "hello.go")
-	if s, _ := r1.Ops[0].Header["session"].(string); s != "new" {
-		t.Errorf("first read session = %q, want new", s)
+	if s, _ := r1.Ops[0].Header["session"].(string); s != "" && s != "new" {
+		t.Errorf("first read session = %q, want new or empty", s)
 	}
 	if r1.Ops[0].Body == "" {
 		t.Error("first read should have body")
@@ -2176,8 +2173,8 @@ func TestSpec_SessionNew(t *testing.T) {
 		if rx != 0 {
 			t.Fatalf("read with new session: exit %d", rx)
 		}
-		if s, _ := r.Ops[0].Header["session"].(string); s != "new" {
-			t.Errorf("first read in new session: session = %q, want new", s)
+		if s, _ := r.Ops[0].Header["session"].(string); s != "" && s != "new" {
+			t.Errorf("first read in new session: session = %q, want new or empty", s)
 		}
 	}
 }
@@ -3103,3 +3100,47 @@ func TestSpec_Prepare(t *testing.T) {
 	}
 }
 
+
+func TestSpec_SearchEscapedPatterns(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"types.go": "package main\n\nvar x map[string]int\nvar y interface{}\n\nfunc db.helper() {}\n",
+		"funcs.go": "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(x)\n}\n",
+	})
+
+	tests := []struct {
+		name    string
+		pattern string
+		wantN   bool // expect at least 1 match
+	}{
+		{"escaped brackets", `map\[string\]`, true},
+		{"escaped dot", `fmt\.Println`, true},
+		{"unescaped brackets", `map[string]`, true},
+		{"unescaped dot", `fmt.Println`, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, _, _, exit := specRun(t, binary, dir,
+				[]string{"EDR_SESSION=" + nextSession()},
+				"search", tt.pattern, "--text")
+			if exit != 0 {
+				t.Fatalf("exit %d", exit)
+			}
+			h := result.Ops[0].Header
+			n := int(anyFloat(h["n"]))
+			if tt.wantN && n == 0 {
+				t.Errorf("pattern %q: expected matches, got 0", tt.pattern)
+			}
+		})
+	}
+}
+
+func anyFloat(v any) float64 {
+	switch x := v.(type) {
+	case float64:
+		return x
+	case int:
+		return float64(x)
+	}
+	return 0
+}

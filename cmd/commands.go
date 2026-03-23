@@ -41,7 +41,7 @@ func init() {
 func dispatchCmdWithIndex(cmd *cobra.Command, cmdName string, args []string) error {
 	flags := extractFlags(cmd)
 
-	db, err := openDBAndIndex(getRoot(cmd), !verbose)
+	db, err := openStoreAndIndex(getRoot(cmd), !verbose)
 	if err != nil {
 		return err
 	}
@@ -70,7 +70,7 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 		return err
 	}
 
-	db, err := openDBStrictRoot(root)
+	db, err := openStore(root)
 	if err != nil {
 		return err
 	}
@@ -159,7 +159,7 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 		}
 	}
 
-	db, err := openDBStrictRoot(root)
+	db, err := openStore(root)
 	if err != nil {
 		return err
 	}
@@ -547,8 +547,8 @@ var statusCmd = &cobra.Command{
 		}
 
 		// Open DB for assumption checking (best-effort — status works without it)
-		var db *index.DB
-		db, _ = openDBStrictRoot(root)
+		var db index.SymbolStore
+		db, _ = openStore(root)
 		if db != nil {
 			defer db.Close()
 		}
@@ -658,7 +658,7 @@ var undoCmd = &cobra.Command{
 func init() { cmdspec.RegisterFlags(undoCmd.Flags(), "undo") }
 
 // buildNextResult constructs the result map for `edr next`.
-func buildNextResult(sess *session.Session, db *index.DB, root string) map[string]any {
+func buildNextResult(sess *session.Session, db index.SymbolStore, root string) map[string]any {
 	result := map[string]any{}
 
 	// Focus
@@ -704,7 +704,7 @@ func buildNextResult(sess *session.Session, db *index.DB, root string) map[strin
 
 // computeStaleAssumptions resolves current signatures for all tracked assumptions
 // and returns any that have become stale. Shared by computeFixItems and emitWarnings.
-func computeStaleAssumptions(sess *session.Session, db *index.DB) []session.StaleAssumption {
+func computeStaleAssumptions(sess *session.Session, db index.SymbolStore) []session.StaleAssumption {
 	assumptions := sess.GetAssumptions()
 	if len(assumptions) == 0 {
 		return nil
@@ -743,7 +743,7 @@ func computeStaleAssumptions(sess *session.Session, db *index.DB) []session.Stal
 	return sess.CheckAssumptions(currentSigs)
 }
 
-func computeFixItems(sess *session.Session, db *index.DB) []any {
+func computeFixItems(sess *session.Session, db index.SymbolStore) []any {
 	stale := computeStaleAssumptions(sess, db)
 	if len(stale) == 0 {
 		return nil

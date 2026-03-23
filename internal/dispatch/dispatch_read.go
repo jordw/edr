@@ -49,19 +49,19 @@ func grepMatch(name, pattern string) bool {
 	return re.MatchString(name)
 }
 
-func runReadFile(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runReadFile(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {
 		return nil, fmt.Errorf("read-file requires 1-3 arguments: <file> [start-line] [end-line]")
 	}
 	budget := flagInt(flags, "budget", 0)
 	full := flagBool(flags, "full", false)
 
-	// Default budget for full-file reads: 2000 tokens.
+	// Default budget for full-file reads: 4000 tokens.
 	// Overridden by explicit --budget or --full.
 	// Line-range reads (start_line/end_line) are excluded — explicit range = explicit intent.
 	hasLineRange := flagInt(flags, "start_line", 0) > 0 || flagInt(flags, "end_line", 0) > 0 || len(args) >= 2
 	if budget == 0 && !full && !hasLineRange {
-		budget = 2000
+		budget = 4000
 	}
 
 	file := args[0]
@@ -303,7 +303,7 @@ func addSignatureToResult(sym *index.SymbolInfo, src []byte, result map[string]a
 	}
 }
 
-func runReadSymbol(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runReadSymbol(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {
 		return nil, fmt.Errorf("read-symbol requires 1-2 arguments: [file] <symbol>")
 	}
@@ -380,7 +380,7 @@ func runReadSymbol(ctx context.Context, db *index.DB, root string, args []string
 	return r, nil
 }
 
-func runBatchRead(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runBatchRead(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {
 		return nil, fmt.Errorf("batch-read requires at least 1 argument: <file-or-file:symbol> ...")
 	}
@@ -409,7 +409,7 @@ func runBatchRead(ctx context.Context, db *index.DB, root string, args []string,
 }
 
 
-func runSymbols(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runSymbols(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {
 		return nil, fmt.Errorf("symbols requires 1 argument: <file>")
 	}
@@ -539,7 +539,7 @@ func fileMtime(path string) string {
 
 // runPrepare assembles pre-edit context for a symbol in one call:
 // body, callers, deps, test locations, and file hash.
-func runPrepare(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runPrepare(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {
 		return nil, fmt.Errorf("prepare requires 1-2 arguments: [file] <symbol>")
 	}
@@ -618,7 +618,7 @@ func runPrepare(ctx context.Context, db *index.DB, root string, args []string, f
 }
 
 // findCallersWithFallback tries semantic callers first, falls back to text-based refs.
-func findCallersWithFallback(ctx context.Context, db *index.DB, sym *index.SymbolInfo) []index.SymbolInfo {
+func findCallersWithFallback(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo) []index.SymbolInfo {
 	callers, err := db.FindSemanticCallers(ctx, sym.Name, sym.File)
 	if err == nil && len(callers) > 0 {
 		return callers
@@ -666,7 +666,7 @@ func symbolsToSignatures(ctx context.Context, syms []index.SymbolInfo) []related
 
 // attachExpand adds related symbol signatures to a read result.
 // expandMode: "deps" (default if empty/truthy), "callers", or "both".
-func attachExpand(ctx context.Context, db *index.DB, sym *index.SymbolInfo, expandMode string, result map[string]any) {
+func attachExpand(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo, expandMode string, result map[string]any) {
 	showDeps := true
 	showCallers := false
 	switch expandMode {

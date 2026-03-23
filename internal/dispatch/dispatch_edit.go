@@ -15,7 +15,7 @@ import (
 	"github.com/jordw/edr/internal/output"
 )
 
-func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runSmartEdit(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	dryRun := flagBool(flags, "dry-run", false)
 	readBack := flagBool(flags, "read_back", true)
 
@@ -27,7 +27,7 @@ func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string,
 	return attachReadBack(ctx, db, result)
 }
 
-func runSmartEditInner(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any, dryRun bool) (any, error) {
+func runSmartEditInner(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any, dryRun bool) (any, error) {
 
 	// Pre-check: if --expect-hash is set, validate file hash before any edit
 	if expectHash := flagString(flags, "expect_hash", ""); expectHash != "" && len(args) >= 1 {
@@ -178,7 +178,7 @@ func runSmartEditInner(ctx context.Context, db *index.DB, root string, args []st
 }
 
 // smartEditByteRange applies an edit to a byte range and returns a smart-edit result.
-func smartEditByteRange(ctx context.Context, db *index.DB, file string, startByte, endByte uint32, replacement, label string, dryRun bool) (any, error) {
+func smartEditByteRange(ctx context.Context, db index.SymbolStore, file string, startByte, endByte uint32, replacement, label string, dryRun bool) (any, error) {
 	src, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
@@ -245,7 +245,7 @@ func smartEditByteRange(ctx context.Context, db *index.DB, file string, startByt
 // attachReadBack reads context around the edit point and attaches it to the result.
 // If the edit targeted a symbol, reads the full updated symbol body.
 // Otherwise, reads ~10 lines above/below the diff location.
-func attachReadBack(ctx context.Context, db *index.DB, result any) (any, error) {
+func attachReadBack(ctx context.Context, db index.SymbolStore, result any) (any, error) {
 	m, ok := result.(map[string]any)
 	if !ok {
 		return result, nil
@@ -342,7 +342,7 @@ func diffStartLine(diff string) int {
 }
 
 // smartEditSpan applies an edit to a line range.
-func smartEditSpan(ctx context.Context, db *index.DB, file string, startLine, endLine int, replacement, label string, dryRun bool) (any, error) {
+func smartEditSpan(ctx context.Context, db index.SymbolStore, file string, startLine, endLine int, replacement, label string, dryRun bool) (any, error) {
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
@@ -380,7 +380,7 @@ func smartEditSpan(ctx context.Context, db *index.DB, file string, startLine, en
 
 
 // smartEditMoveAfter moves a source symbol after a target symbol within the same file.
-func smartEditMoveAfter(ctx context.Context, db *index.DB, root string, args []string, targetName string, dryRun bool) (any, error) {
+func smartEditMoveAfter(ctx context.Context, db index.SymbolStore, root string, args []string, targetName string, dryRun bool) (any, error) {
 	// Resolve source symbol
 	srcSym, err := resolveSymbolArgs(ctx, db, root, args)
 	if err != nil {
@@ -453,7 +453,6 @@ func smartEditMoveAfter(ctx context.Context, db *index.DB, root string, args []s
 		return nil, fmt.Errorf("write: %w", err)
 	}
 	newHash, _ := edit.FileHash(srcSym.File)
-	index.EnsureFileFresh(ctx, db, srcSym.File)
 
 	return map[string]any{
 		"file":     output.Rel(srcSym.File),
@@ -467,7 +466,7 @@ func smartEditMoveAfter(ctx context.Context, db *index.DB, root string, args []s
 }
 
 // smartEditInsertAt performs a zero-width insertion before the given line number.
-func smartEditInsertAt(ctx context.Context, db *index.DB, file string, lineNum int, text string, dryRun bool) (any, error) {
+func smartEditInsertAt(ctx context.Context, db index.SymbolStore, file string, lineNum int, text string, dryRun bool) (any, error) {
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
@@ -507,7 +506,7 @@ func smartEditInsertAt(ctx context.Context, db *index.DB, file string, lineNum i
 
 
 // smartEditMatch applies an edit by finding and replacing text.
-func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacement string, flags map[string]any, dryRun bool) (any, error) {
+func smartEditMatch(ctx context.Context, db index.SymbolStore, file, matchText, replacement string, flags map[string]any, dryRun bool) (any, error) {
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
@@ -581,7 +580,7 @@ func smartEditMatch(ctx context.Context, db *index.DB, file, matchText, replacem
 // smartEditMatchInSymbol scopes a text-match edit to within a symbol's body.
 // The --in flag specifies the symbol (file:Symbol or just Symbol); old_text is
 // searched only within that symbol's byte range.
-func smartEditMatchInSymbol(ctx context.Context, db *index.DB, file, matchText, replacement string, flags map[string]any, inSpec string, dryRun bool) (any, error) {
+func smartEditMatchInSymbol(ctx context.Context, db index.SymbolStore, file, matchText, replacement string, flags map[string]any, inSpec string, dryRun bool) (any, error) {
 	// Parse the symbol spec — accept "Symbol", "file:Symbol", or line range "N-M" / "N:M"
 	parts := splitFileSymbol(inSpec)
 	var symFile, symName string
@@ -673,7 +672,7 @@ func smartEditMatchInSymbol(ctx context.Context, db *index.DB, file, matchText, 
 }
 
 // applyReplaceAll handles the shared tail of regex and literal replace-all edits.
-func applyReplaceAll(ctx context.Context, db *index.DB, file, oldContent, newContent, matchText string, count int, dryRun bool) (any, error) {
+func applyReplaceAll(ctx context.Context, db index.SymbolStore, file, oldContent, newContent, matchText string, count int, dryRun bool) (any, error) {
 	if oldContent == newContent {
 		return map[string]any{
 			"status":  "noop",
@@ -973,7 +972,7 @@ func ambiguousMatchError(content, relFile, matchText string, locs [][]int) error
 		matchText, len(locs), relFile, strings.Join(lineStrs, ", "))
 }
 
-func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runRenameSymbol(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 2 {
 		return nil, fmt.Errorf("rename requires 2 arguments: <old-name> <new-name>")
 	}
@@ -1157,7 +1156,7 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 // runRenameText performs literal text-based find-and-replace across all repo files.
 // Unlike the default symbol-based rename, this operates on raw text and can replace
 // string literals, comments, identifiers, and any other text.
-func runRenameText(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runRenameText(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	oldText := args[0]
 	newText := args[1]
 	dryRun := flagBool(flags, "dry-run", false)

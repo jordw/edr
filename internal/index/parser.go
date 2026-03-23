@@ -258,7 +258,7 @@ func normalizeType(nodeType string) string {
 // indexed files using tree-sitter. Returns exact identifier byte ranges suitable
 // for rename operations. When semantic refs are available, only scans files that
 // import or define the symbol (filtering out unrelated identifiers with the same name).
-func FindIdentifierOccurrences(ctx context.Context, db *DB, symbolName string) ([]SymbolInfo, error) {
+func FindIdentifierOccurrences(ctx context.Context, db SymbolStore, symbolName string) ([]SymbolInfo, error) {
 	// Always check for ambiguity first, regardless of refs table state.
 	sym, err := db.ResolveSymbol(ctx, symbolName)
 	if err != nil {
@@ -353,23 +353,13 @@ func allCandidatesLackImports(candidates []SymbolInfo) bool {
 	return len(candidates) > 0
 }
 
-func findReferencesTextBased(ctx context.Context, db *DB, symbolName string) ([]SymbolInfo, error) {
-	// Query the files table (all indexed files) rather than DISTINCT file FROM symbols,
-	// so we also scan files that have no extracted symbols (e.g., headers with only prototypes).
-	rows, err := db.db.QueryContext(ctx, `SELECT path FROM files`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
+func findReferencesTextBased(ctx context.Context, db SymbolStore, symbolName string) ([]SymbolInfo, error) {
+	// Walk all repo files to find identifier references.
 	var files []string
-	for rows.Next() {
-		var f string
-		if err := rows.Scan(&f); err != nil {
-			return nil, err
-		}
-		files = append(files, f)
-	}
+	WalkRepoFiles(db.Root(), func(path string) error {
+		files = append(files, path)
+		return nil
+	})
 
 	var refs []SymbolInfo
 	for _, file := range files {
@@ -393,7 +383,7 @@ func findReferencesTextBased(ctx context.Context, db *DB, symbolName string) ([]
 
 // FindReferencesInFile searches for references to a symbol name, where the symbol
 // is defined in the given file. Uses semantic filtering.
-func FindReferencesInFile(ctx context.Context, db *DB, symbolName, symbolFile string) ([]SymbolInfo, error) {
+func FindReferencesInFile(ctx context.Context, db SymbolStore, symbolName, symbolFile string) ([]SymbolInfo, error) {
 	if db.HasRefs(ctx) {
 		results, err := db.FindSemanticReferences(ctx, symbolName, symbolFile)
 		if err == nil && len(results) > 0 {
@@ -405,23 +395,12 @@ func FindReferencesInFile(ctx context.Context, db *DB, symbolName, symbolFile st
 
 // FindDeps finds symbols that the given symbol depends on.
 // Uses semantic deps (import-filtered) when available, falls back to text-based.
-func FindDeps(ctx context.Context, db *DB, sym *SymbolInfo) ([]SymbolInfo, error) {
-	// Try semantic path
-	if db.HasRefs(ctx) {
-		symID, err := db.GetSymbolID(ctx, sym.File, sym.Name)
-		if err == nil {
-			results, err := db.FindSemanticDeps(ctx, symID, sym.File)
-			if err == nil && len(results) > 0 {
-				return results, nil
-			}
-		}
-	}
-
+func FindDeps(ctx context.Context, db SymbolStore, sym *SymbolInfo) ([]SymbolInfo, error) {
 	return findDepsTextBased(ctx, db, sym)
 }
 
 // findDepsTextBased is the legacy text-based dependency search.
-func findDepsTextBased(ctx context.Context, db *DB, sym *SymbolInfo) ([]SymbolInfo, error) {
+func findDepsTextBased(ctx context.Context, db SymbolStore, sym *SymbolInfo) ([]SymbolInfo, error) {
 	lang := GetLangConfig(sym.File)
 	if lang == nil {
 		return nil, fmt.Errorf("unsupported language for %s", sym.File)

@@ -19,7 +19,7 @@ func DispatchVerify(ctx context.Context, root string, args []string, flags map[s
 	return runVerify(ctx, nil, root, args, flags)
 }
 
-func runVerify(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runVerify(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	command := flagString(flags, "command", "")
 	level := flagString(flags, "level", "build")
 	if flagBool(flags, "test", false) {

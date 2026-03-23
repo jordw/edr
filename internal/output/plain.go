@@ -691,9 +691,10 @@ func hStr(h map[string]any, hKey string, op Op, opKey string) {
 
 // hSession copies the session field if it is "unchanged" or "new".
 func hSession(h map[string]any, op Op) {
-	if v, ok := op["session"].(string); ok && (v == "unchanged" || v == "new") {
+	if v, ok := op["session"].(string); ok && v == "unchanged" {
 		h["session"] = v
 	}
+	// "new" is the default — omit to reduce noise.
 }
 
 // hTrunc copies truncation info (trunc + budget_used).

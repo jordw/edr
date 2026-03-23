@@ -11,7 +11,7 @@ import (
 	"github.com/jordw/edr/internal/search"
 )
 
-func runExpand(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+func runExpand(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {
 		return nil, fmt.Errorf("expand requires 1-2 arguments: [file] <symbol>")
 	}
@@ -111,7 +111,7 @@ func runExpand(ctx context.Context, db *index.DB, root string, args []string, fl
 	return result, nil
 }
 
-func runXrefs(ctx context.Context, db *index.DB, root string, args []string) (any, error) {
+func runXrefs(ctx context.Context, db index.SymbolStore, root string, args []string) (any, error) {
 	if len(args) < 1 {
 		return nil, fmt.Errorf("xrefs requires 1-2 arguments: [file] <symbol>")
 	}
