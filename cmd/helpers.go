@@ -55,7 +55,7 @@ func resolveAtFiles(root string, flags map[string]any) error {
 		}
 		path := s[1:]
 		if root != "" {
-			resolved, err := index.ResolvePath(root, path)
+			resolved, err := index.ResolvePathReadOnly(root, path)
 			if err != nil {
 				return fmt.Errorf("--%s: %w", key, err)
 			}

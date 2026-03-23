@@ -20,7 +20,7 @@ import (
 func IsBatchFlag(arg string) bool {
 	switch arg {
 	case "-r", "--read", "-s", "--search", "-e", "--edit", "-w", "--write",
-		"-V", "--verify", "--no-verify":
+		"-m", "--map", "-V", "--verify", "--no-verify":
 		return true
 	}
 	return false
@@ -30,7 +30,7 @@ var batchCmd = &cobra.Command{
 	Use:   "batch",
 	Short: "Execute batched operations",
 	Long: `Execute multiple operations in a single batch. Operations are specified
-as ordered flags: -r (read), -s (search), -e (edit), -w (write), -V (verify).
+as ordered flags: -r (read), -s (search), -m (map), -e (edit), -w (write), -V (verify).
 
 Modifier flags apply to the preceding operation. Verify runs automatically
 when edits are present (use --no-verify to skip).
@@ -73,6 +73,7 @@ const (
 	opNone batchOp = iota
 	opRead
 	opSearch
+	opMap
 	opEdit
 	opWrite
 )
@@ -117,6 +118,9 @@ func (s *batchState) flush() {
 		}
 		s.currentRead = doRead{}
 	case opSearch:
+		s.queries = append(s.queries, s.currentQuery)
+		s.currentQuery = doQuery{}
+	case opMap:
 		s.queries = append(s.queries, s.currentQuery)
 		s.currentQuery = doQuery{}
 	case opEdit:
@@ -239,7 +243,7 @@ func parseBatchArgs(args []string) (*batchState, error) {
 				root = discoverRoot(wd)
 			}
 			if root != "" {
-				resolved, err := index.ResolvePath(root, path)
+				resolved, err := index.ResolvePathReadOnly(root, path)
 				if err != nil {
 					return "", fmt.Errorf("%s: %w", flag, err)
 				}
@@ -289,6 +293,17 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			s.currentQuery = doQuery{
 				Cmd:     "search",
 				Pattern: sp(val),
+			}
+
+		case "-m", "--map":
+			s.flush()
+			s.currentOp = opMap
+			// Map takes an optional file argument. Peek to see if next arg is a flag.
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				val, _ := nextArg(arg)
+				s.currentQuery = doQuery{Cmd: "map", File: sp(val)}
+			} else {
+				s.currentQuery = doQuery{Cmd: "map"}
 			}
 
 		case "-e", "--edit":
@@ -368,10 +383,10 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			switch s.currentOp {
 			case opRead:
 				s.currentRead.Budget = ip(n)
-			case opSearch:
+			case opSearch, opMap:
 				s.currentQuery.Budget = ip(n)
 			default:
-				return nil, fmt.Errorf("--budget is only valid after -r or -s")
+				return nil, fmt.Errorf("--budget is only valid after -r, -s, or -m")
 			}
 
 		case "--lines":
@@ -398,10 +413,10 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			switch s.currentOp {
 			case opRead:
 				s.currentRead.Full = bp(true)
-			case opSearch:
+			case opSearch, opMap:
 				s.currentQuery.Full = bp(true)
 			default:
-				return nil, fmt.Errorf("--full is only valid after -r or -s")
+				return nil, fmt.Errorf("--full is only valid after -r, -s, or -m")
 			}
 
 		case "--symbols":
@@ -507,6 +522,58 @@ func parseBatchArgs(args []string) (*batchState, error) {
 				return nil, fmt.Errorf("--no-group is only valid after -s")
 			}
 			s.currentQuery.Group = bp(false)
+
+		// ── map modifiers ──
+
+		case "--dir":
+			if s.currentOp != opMap {
+				return nil, fmt.Errorf("--dir is only valid after -m")
+			}
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentQuery.Dir = sp(val)
+
+		case "--lang":
+			if s.currentOp != opMap {
+				return nil, fmt.Errorf("--lang is only valid after -m")
+			}
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentQuery.Lang = sp(val)
+
+		case "--grep":
+			if s.currentOp != opMap {
+				return nil, fmt.Errorf("--grep is only valid after -m")
+			}
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentQuery.Grep = sp(val)
+
+		case "--glob":
+			if s.currentOp != opMap {
+				return nil, fmt.Errorf("--glob is only valid after -m")
+			}
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentQuery.Glob = sp(val)
+
+		case "--type":
+			if s.currentOp != opMap {
+				return nil, fmt.Errorf("--type is only valid after -m")
+			}
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.currentQuery.Type = sp(val)
 
 		// ── edit modifiers ──
 
@@ -901,9 +968,9 @@ var batchFlagOps = map[string][]string{
 	"--signatures":     {"-r"},
 	"--skeleton":       {"-r"},
 	"--depth":          {"-r"},
-	"--budget":         {"-r", "-s"},
+	"--budget":         {"-r", "-s", "-m"},
 	"--lines":          {"-r", "-e"},
-	"--full":           {"-r", "-s"},
+	"--full":           {"-r", "-s", "-m"},
 	"--symbols":        {"-r"},
 	"--body":           {"-s"},
 	"--no-body":        {"-s"},
@@ -931,6 +998,11 @@ var batchFlagOps = map[string][]string{
 	"--end-line":       {"-e"},
 	"--expand":         {"-r"},
 	"--command":        {"--verify"},
+	"--dir":            {"-m"},
+	"--lang":           {"-m"},
+	"--grep":           {"-m"},
+	"--glob":           {"-m"},
+	"--type":           {"-m"},
 	"--read-after-edit": {"global"},
 	"--root":           {"global"},
 	"--verbose":        {"global"},
