@@ -84,12 +84,12 @@ if [ -f "$urfave_file" ]; then
     # scenario_name|display_name|native_note|edr_note
     scenarios=(
         "understand_api|Understand a class API|whole file|\`--signatures\`"
-        "read_symbol|Read a specific function|whole file|symbol read"
-        "find_refs|Find references||\`refs\`"
+        "read_symbol|Read a specific function|grep + range read|symbol read"
+        "find_refs|Find references|grep + 3 reads|\`refs\`"
         "search_context|Search with context|grep -C3|structured"
-        "orient_map|Orient in codebase||\`map\`"
-        "edit_function|Edit a function||batch"
-        "add_method|Add method to a class||\`--inside\`"
+        "orient_map|Orient in codebase|glob + 3 reads|\`map\`"
+        "edit_function|Edit a function|grep + range + edit|batch"
+        "add_method|Add method to a class|grep + range + write|\`--inside\`"
         "multi_file_read|Multi-file read||batched"
         "explore_symbol|Explore a symbol||"
     )

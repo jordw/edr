@@ -121,7 +121,54 @@ pct_round() {
 }
 
 native_read_bytes() {
-    wc -c < "$1" | tr -d ' '
+    # The Read tool returns cat -n format (line-numbered output), not raw
+    # file content.  Measure what the agent actually receives.
+    cat -n "$1" | wc -c | tr -d ' '
+}
+
+native_read_range_bytes() {
+    # Read tool with line offset/limit — what a skilled agent uses when it
+    # already knows (from a prior grep) where the target is.  Output format
+    # matches Claude Code's Read tool: "  <lineno>\t<content>\n".
+    local file="$1" start="$2" end="$3"
+    awk -v s="$start" -v e="$end" 'NR>=s && NR<=e {printf "%6d\t%s\n", NR, $0}' "$file" | wc -c | tr -d ' '
+}
+
+native_grep_in_file_bytes() {
+    # Grep tool scoped to a single file — what a skilled agent uses to find
+    # a symbol's line number before doing a range read.
+    grep -n "$1" "$2" 2>/dev/null | wc -c | tr -d ' '
+}
+
+# A skilled agent greps for the symbol, then reads a window around it.
+# SKILLED_WINDOW controls how many lines the agent reads.  80 lines covers
+# most functions/methods; 40 is enough for a targeted edit.
+SKILLED_READ_WINDOW="${SKILLED_READ_WINDOW:-80}"
+SKILLED_EDIT_WINDOW="${SKILLED_EDIT_WINDOW:-40}"
+
+skilled_range_read_bytes() {
+    # Returns bytes for: grep-in-file (to find line) + range read (window).
+    # $1 = pattern, $2 = file path, $3 = window size
+    local pattern="$1" file="$2" window="$3"
+    local grep_bytes line_num start end total_lines
+
+    grep_bytes=$(native_grep_in_file_bytes "$pattern" "$file")
+    line_num=$(grep -n "$pattern" "$file" 2>/dev/null | head -1 | cut -d: -f1)
+    total_lines=$(wc -l < "$file" | tr -d ' ')
+
+    if [ -z "$line_num" ]; then
+        # Pattern not found — fall back to whole file read.
+        echo "$(native_read_bytes "$file")"
+        return
+    fi
+
+    # Center the window on the match.
+    start=$((line_num - window / 4))      # bias: more lines after (function body)
+    end=$((start + window))
+    [ "$start" -lt 1 ] && start=1
+    [ "$end" -gt "$total_lines" ] && end="$total_lines"
+
+    echo "$((grep_bytes + $(native_read_range_bytes "$file" "$start" "$end")))"
 }
 
 grep_include_args() {
@@ -249,6 +296,8 @@ run_understand_api() {
     fi
     local file native_bytes edr_bytes
     file="$(rel_path "$API_FILE")"
+    # Native workflow: Read tool returns the entire file (cat -n format).
+    # Agent wants just the API surface, but Read has no --signatures mode.
     native_bytes=$(native_read_bytes "$file")
     edr_bytes=$(edr_median_bytes edr_cmd read "$API_READ_SPEC" --signatures)
     report "Understand API" "$native_bytes" 1 "$edr_bytes" 1
@@ -260,12 +309,17 @@ run_read_symbol() {
         skip "Read symbol"
         return
     fi
-    local file native_bytes edr_bytes
+    local file symbol_name native_bytes edr_bytes
     file="$(rel_path "$READ_SYMBOL_FILE")"
-    native_bytes=$(native_read_bytes "$file")
+    # Extract symbol name from spec (e.g., "file.py:_execute_task" → "_execute_task")
+    symbol_name="${READ_SYMBOL_SPEC##*:}"
+    # Skilled agent workflow: Grep tool in file to find symbol line (1 call),
+    # then Read tool with line range for an 80-line window (1 call).
+    # Total: 2 calls, grep output + range read.
+    native_bytes=$(skilled_range_read_bytes "$symbol_name" "$file" "$SKILLED_READ_WINDOW")
     edr_bytes=$(edr_median_bytes edr_cmd read "$READ_SYMBOL_SPEC")
-    report "Read symbol" "$native_bytes" 1 "$edr_bytes" 1
-    json_add "read_symbol" "$native_bytes" 1 "$edr_bytes" 1
+    report "Read symbol" "$native_bytes" 2 "$edr_bytes" 1
+    json_add "read_symbol" "$native_bytes" 2 "$edr_bytes" 1
 }
 
 run_find_refs() {
@@ -275,6 +329,10 @@ run_find_refs() {
     fi
     local grep_root grep_bytes read_bytes native_bytes native_calls edr_bytes
     grep_root="${REFS_GREP_ROOT:-$SCOPE_DIR}"
+    # Native workflow: Grep tool searches for the symbol name (grep -rn output),
+    # then agent reads up to 3 matching files (cat -n format) to understand
+    # call sites.  The 3-file cap models typical agent behavior — agents
+    # prioritise the most relevant matches, not exhaustive reading.
     grep_bytes=$(native_grep_bytes "$REFS_PATTERN" "$grep_root")
     read_bytes=$(native_grep_followup_read_bytes "$REFS_PATTERN" "$grep_root")
     native_bytes=$((grep_bytes + read_bytes))
@@ -291,6 +349,9 @@ run_search_context() {
     fi
     local search_root native_bytes edr_bytes
     search_root="${SEARCH_ROOT:-$SCOPE_DIR}"
+    # Native workflow: Grep tool with -C3 context (grep -rn -C3 output).
+    # This is the closest native equivalent — both tools return matching
+    # lines with surrounding context.
     native_bytes=$(
         cd "$BENCH_ROOT"
         local -a inc=()
@@ -309,18 +370,26 @@ run_orient_map() {
         skip "Orient (map)"
         return
     fi
-    local orient_root glob_bytes read_bytes native_bytes native_calls edr_bytes ext
+    local orient_root glob_bytes read_bytes native_bytes native_calls edr_bytes ext file
+    local max_reads=3
     orient_root="$ORIENT_DIR"
-    # Native workflow: glob to list files, then read ONE entry-point file.
-    # An agent orienting in a codebase runs ls/find, skims the listing,
-    # then opens the most promising file — not all of them.
+    # Native workflow: Glob tool lists files, then agent reads 2-3 key files
+    # to understand the module.  Reading only 1 file undercounts native cost;
+    # reading all files overcounts it.  Cap at 3 (the typical agent pattern:
+    # skim listing → open entry point → open 1-2 related files).
     glob_bytes=0
     for ext in "${ORIENT_GLOBS[@]}"; do
         glob_bytes=$((glob_bytes + $(native_glob_bytes "$orient_root" "$ext")))
     done
-    read_bytes=$(native_read_bytes "$(rel_path "${ORIENT_READ_FILES[0]}")")
+    read_bytes=0
+    local read_count=0
+    for file in "${ORIENT_READ_FILES[@]}"; do
+        read_bytes=$((read_bytes + $(native_read_bytes "$(rel_path "$file")")))
+        read_count=$((read_count + 1))
+        [ "$read_count" -ge "$max_reads" ] && break
+    done
     native_bytes=$((glob_bytes + read_bytes))
-    native_calls=2
+    native_calls=$((1 + read_count))
     if [ "$ORIENT_DIR" = "." ]; then
         edr_bytes=$(edr_median_bytes edr_cmd map --budget "${ORIENT_BUDGET:-500}")
     else
@@ -338,11 +407,12 @@ run_edit_function() {
     local file native_read native_bytes native_calls edr_bytes out i
     local -a edr_bytes_arr
     file="$(rel_path "$EDIT_FILE")"
-    native_read=$(native_read_bytes "$file")
-    # Native workflow: read file, then edit (small confirmation response).
-    # Agents don't re-read after editing — the Edit tool confirms success.
-    native_bytes=$((native_read + 100))
-    native_calls=2
+    # Skilled agent workflow: grep for the old_text to find its location (1 call),
+    # Read a 40-line window around the match for context (1 call), then Edit
+    # tool with exact string match returns a short confirmation (~80 bytes, 1 call).
+    native_read=$(skilled_range_read_bytes "$EDIT_OLD_TEXT" "$file" "$SKILLED_EDIT_WINDOW")
+    native_bytes=$((native_read + 80))
+    native_calls=3
     # Use --no-verify: the native baseline doesn't run a build, so neither
     # should edr.  This keeps the comparison fair across all languages (Go,
     # Python, Ruby, TS) — some roots lack go.mod/package.json and verify
@@ -370,8 +440,11 @@ run_add_method() {
     fi
     local file native_bytes native_calls edr_bytes_arr out i
     file="$(rel_path "$WRITE_FILE")"
-    native_bytes=$(native_read_bytes "$file")
-    native_calls=2
+    # Skilled agent workflow: grep for the class name to find its location (1 call),
+    # Read an 80-line window to see the class body and insertion point (1 call),
+    # then Write tool overwrites the file and returns confirmation (~70 bytes, 1 call).
+    native_bytes=$(($(skilled_range_read_bytes "$WRITE_INSIDE" "$file" "$SKILLED_READ_WINDOW") + 70))
+    native_calls=3
     cp "$file" "$file.bak"
     edr_bytes_arr=()
     for ((i = 0; i < ITERS; i++)); do
@@ -435,9 +508,10 @@ if [ -n "${SCOPE_DIR:-}" ]; then
     echo "  Scope:     ${SCOPE_DIR}"
 fi
 echo ""
-echo "  'Native' = simulated Read/Edit/Grep/Glob output size."
-echo "  These tools return raw file content; edr returns structured,"
-echo "  budget-controlled, symbol-scoped JSON."
+echo "  'Native' = skilled agent using Claude Code's Read/Edit/Grep/Glob tools."
+echo "  Skilled agent: greps for symbols before reading, uses line ranges"
+echo "  (not whole files), reads 2-3 files when orienting.  Read output"
+echo "  uses cat -n format.  edr returns structured, symbol-scoped JSON."
 echo ""
 printf "  %-14s │ %-19s │ %-19s │ %5s │ %s\n" "Scenario" "Native (Read/etc)" "edr" "Save%" "Delta"
 printf "  %-14s─┼─%-19s─┼─%-19s─┼─%5s─┼─%s\n" "──────────────" "───────────────────" "───────────────────" "─────" "──────"

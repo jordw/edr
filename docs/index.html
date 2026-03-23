@@ -306,16 +306,16 @@ edr run -- pytest</code></pre>
       <tr><th>Repo</th><th>Lang</th><th>Baseline</th><th>edr</th><th>Reduction</th></tr>
     </thead>
     <tbody>
-      <tr><td><a href="https://github.com/urfave/cli">urfave/cli</a></td><td>Go</td><td>192KB / 20 calls</td><td>10KB / 9 calls</td><td class="pct">95%</td></tr>
-      <tr><td><a href="https://github.com/vitessio/vitess">vitess/sqlparser</a></td><td>Go</td><td>314KB / 17 calls</td><td>49KB / 9 calls</td><td class="pct">85%</td></tr>
-      <tr><td><a href="https://github.com/vitessio/vitess">vitess/vtgate</a></td><td>Go</td><td>730KB / 19 calls</td><td>21KB / 9 calls</td><td class="pct">97%</td></tr>
-      <tr><td><a href="https://github.com/pallets/click">pallets/click</a></td><td>Python</td><td>290KB / 20 calls</td><td>13KB / 9 calls</td><td class="pct">96%</td></tr>
-      <tr><td><a href="https://github.com/rails/thor">rails/thor</a></td><td>Ruby</td><td>166KB / 20 calls</td><td>12KB / 9 calls</td><td class="pct">93%</td></tr>
-      <tr><td><a href="https://github.com/reduxjs/redux-toolkit">redux-toolkit</a></td><td>TS</td><td>182KB / 20 calls</td><td>14KB / 9 calls</td><td class="pct">92%</td></tr>
-      <tr><td><a href="https://github.com/django/django">django</a></td><td>Python</td><td>1,296KB / 20 calls</td><td>25KB / 9 calls</td><td class="pct">98%</td></tr>
+      <tr><td><a href="https://github.com/urfave/cli">urfave/cli</a></td><td>Go</td><td>248KB / 25 calls</td><td>8KB / 9 calls</td><td class="pct">97%</td></tr>
+      <tr><td><a href="https://github.com/vitessio/vitess">vitess/sqlparser</a></td><td>Go</td><td>516KB / 22 calls</td><td>8KB / 9 calls</td><td class="pct">98%</td></tr>
+      <tr><td><a href="https://github.com/vitessio/vitess">vitess/vtgate</a></td><td>Go</td><td>743KB / 24 calls</td><td>18KB / 9 calls</td><td class="pct">98%</td></tr>
+      <tr><td><a href="https://github.com/pallets/click">pallets/click</a></td><td>Python</td><td>358KB / 25 calls</td><td>9KB / 9 calls</td><td class="pct">97%</td></tr>
+      <tr><td><a href="https://github.com/rails/thor">rails/thor</a></td><td>Ruby</td><td>200KB / 25 calls</td><td>9KB / 9 calls</td><td class="pct">96%</td></tr>
+      <tr><td><a href="https://github.com/reduxjs/redux-toolkit">redux-toolkit</a></td><td>TS</td><td>217KB / 25 calls</td><td>10KB / 9 calls</td><td class="pct">95%</td></tr>
+      <tr><td><a href="https://github.com/django/django">django</a></td><td>Python</td><td>1,416KB / 25 calls</td><td>19KB / 9 calls</td><td class="pct">99%</td></tr>
     </tbody>
   </table>
-  <p><strong>Median reduction: 95%</strong> across repos.</p>
+  <p><strong>Median reduction: 97%</strong> across repos.</p>
 
   <details>
     <summary>Per-scenario breakdown (urfave/cli)</summary>
@@ -324,18 +324,18 @@ edr run -- pytest</code></pre>
         <tr><th>Scenario</th><th>Baseline</th><th>edr</th><th>Reduction</th></tr>
       </thead>
       <tbody>
-        <tr><td>Understand a class API</td><td>10,072B</td><td>1,486B</td><td class="pct">85%</td></tr>
-        <tr><td>Read a specific function</td><td>15,307B</td><td>1,182B</td><td class="pct">92%</td></tr>
-        <tr><td>Find references</td><td>67,101B / 4 calls</td><td>179B</td><td class="pct">100%</td></tr>
+        <tr><td>Understand a class API</td><td>13,019B</td><td>1,486B</td><td class="pct">89%</td></tr>
+        <tr><td>Read a specific function</td><td>3,026B / 2 calls</td><td>1,182B</td><td class="pct">61%</td></tr>
+        <tr><td>Find references</td><td>86,463B / 4 calls</td><td>179B</td><td class="pct">100%</td></tr>
         <tr><td>Search with context</td><td>614B</td><td>1,027B</td><td class="pct-neg">-67%</td></tr>
-        <tr><td>Orient in codebase</td><td>11,481B / 2 calls</td><td>2,673B</td><td class="pct">77%</td></tr>
-        <tr><td>Edit a function</td><td>10,172B / 2 calls</td><td>394B</td><td class="pct">96%</td></tr>
-        <tr><td>Add method to a class</td><td>10,072B / 2 calls</td><td>249B</td><td class="pct">98%</td></tr>
-        <tr><td>Multi-file read</td><td>30,794B / 3 calls</td><td>3,295B</td><td class="pct">89%</td></tr>
-        <tr><td>Explore a symbol</td><td>41,285B / 4 calls</td><td>72B</td><td class="pct">100%</td></tr>
+        <tr><td>Orient in codebase</td><td>52,470B / 4 calls</td><td>393B</td><td class="pct">99%</td></tr>
+        <tr><td>Edit a function</td><td>1,403B / 3 calls</td><td>394B</td><td class="pct">72%</td></tr>
+        <tr><td>Add method to a class</td><td>5,393B / 3 calls</td><td>249B</td><td class="pct">95%</td></tr>
+        <tr><td>Multi-file read</td><td>39,397B / 3 calls</td><td>3,340B</td><td class="pct">92%</td></tr>
+        <tr><td>Explore a symbol</td><td>51,967B / 4 calls</td><td>72B</td><td class="pct">100%</td></tr>
       </tbody>
       <tfoot>
-        <tr><th>Total</th><th>196,898B / 20 calls</th><th>10,557B / 9 calls</th><th class="pct">95%</th></tr>
+        <tr><th>Total</th><th>253,752B / 25 calls</th><th>8,322B / 9 calls</th><th class="pct">97%</th></tr>
       </tfoot>
     </table>
   </details>

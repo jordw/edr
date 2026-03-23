@@ -151,35 +151,35 @@ edr reads and edits any text file. Symbol-aware features (symbol reads, `--signa
 
 We run 9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos and measure tool response bytes — the raw amount of text that enters the agent's context window.
 
-The baseline uses the tools agents actually have: whole-file `cat`, `grep -rn`, `find` + read. No symbol extraction, no batching. edr uses symbol reads, `--signatures`, `refs`, `map`, and batch flags.
+The baseline models a skilled agent using Claude Code's built-in tools: `Grep` to find symbols before reading, `Read` with line ranges (not whole files), `Edit`/`Write` confirmations. Orient reads 3 files after globbing; refs follows up on 3 grep matches. edr uses symbol reads, `--signatures`, `refs`, `map`, and batch flags.
 
 | Repo | Lang | Files | Baseline | edr | Reduction |
 |---|---|---|---|---|---|
-| [urfave/cli](https://github.com/urfave/cli) | Go | ~70 | 192KB / 20 calls | 10KB / 9 calls | **95%** |
-| [vitess/sqlparser](https://github.com/vitessio/vitess) | Go | ~70 | 314KB / 17 calls | 49KB / 9 calls | **85%** |
-| [vitess/vtgate](https://github.com/vitessio/vitess) | Go | ~490 | 730KB / 19 calls | 21KB / 9 calls | **97%** |
-| [pallets/click](https://github.com/pallets/click) | Python | ~17 | 290KB / 20 calls | 13KB / 9 calls | **96%** |
-| [rails/thor](https://github.com/rails/thor) | Ruby | ~35 | 166KB / 20 calls | 12KB / 9 calls | **93%** |
-| [reduxjs/redux-toolkit](https://github.com/reduxjs/redux-toolkit) | TS | ~190 | 182KB / 20 calls | 14KB / 9 calls | **92%** |
-| [django/django](https://github.com/django/django) | Python | ~880 | 1,296KB / 20 calls | 25KB / 9 calls | **98%** |
+| [urfave/cli](https://github.com/urfave/cli) | Go | ~70 | 248KB / 25 calls | 8KB / 9 calls | **97%** |
+| [vitess/sqlparser](https://github.com/vitessio/vitess) | Go | ~70 | 516KB / 22 calls | 8KB / 9 calls | **98%** |
+| [vitess/vtgate](https://github.com/vitessio/vitess) | Go | ~490 | 743KB / 24 calls | 18KB / 9 calls | **98%** |
+| [pallets/click](https://github.com/pallets/click) | Python | ~17 | 358KB / 25 calls | 9KB / 9 calls | **97%** |
+| [rails/thor](https://github.com/rails/thor) | Ruby | ~35 | 200KB / 25 calls | 9KB / 9 calls | **96%** |
+| [reduxjs/redux-toolkit](https://github.com/reduxjs/redux-toolkit) | TS | ~190 | 217KB / 25 calls | 10KB / 9 calls | **95%** |
+| [django/django](https://github.com/django/django) | Python | ~880 | 1,416KB / 25 calls | 19KB / 9 calls | **99%** |
 
-Median reduction: **95%** across repos. edr loses on plain text search (structured JSON adds overhead vs raw grep — see breakdown below), but wins everywhere else. Call counts are summed across all 9 scenarios; each edr scenario is 1 call.
+Median reduction: **97%** across repos. edr loses on plain text search (structured JSON adds overhead vs raw grep — see breakdown below), but wins everywhere else. Call counts are summed across all 9 scenarios; each edr scenario is 1 call.
 
 <details>
 <summary>Per-scenario breakdown (urfave/cli)</summary>
 
 | Scenario | Baseline | edr | Reduction |
 |---|---|---|---|
-| Understand a class API | 10,072B (whole file) | 1,486B (`--signatures`) | **85%** |
-| Read a specific function | 15,307B (whole file) | 1,182B (symbol read) | **92%** |
-| Find references | 67,101B / 4 calls | 179B / 1 call (`refs`) | **100%** |
+| Understand a class API | 13,019B (whole file) | 1,486B (`--signatures`) | **89%** |
+| Read a specific function | 3,026B / 2 calls (grep + range read) | 1,182B (symbol read) | **61%** |
+| Find references | 86,463B / 4 calls (grep + 3 reads) | 179B (`refs`) | **100%** |
 | Search with context | 614B (grep -C3) | 1,027B (structured) | **-67%** |
-| Orient in codebase | 11,481B / 2 calls | 2,673B / 1 call (`map`) | **77%** |
-| Edit a function | 10,172B / 2 calls | 394B / 1 call (batch) | **96%** |
-| Add method to a class | 10,072B / 2 calls | 249B / 1 call (`--inside`) | **98%** |
-| Multi-file read | 30,794B / 3 calls | 3,295B / 1 call (batched) | **89%** |
-| Explore a symbol | 41,285B / 4 calls | 72B / 1 call | **100%** |
-| **Total** | **196,898B / 20 calls** | **10,557B / 9 calls** | **95%** |
+| Orient in codebase | 52,470B / 4 calls (glob + 3 reads) | 393B (`map`) | **99%** |
+| Edit a function | 1,403B / 3 calls (grep + range + edit) | 394B (batch) | **72%** |
+| Add method to a class | 5,393B / 3 calls (grep + range + write) | 249B (`--inside`) | **95%** |
+| Multi-file read | 39,397B / 3 calls | 3,340B (batched) | **92%** |
+| Explore a symbol | 51,967B / 4 calls | 72B | **100%** |
+| **Total** | **253,752B / 25 calls** | **8,322B / 9 calls** | **97%** |
 
 </details>
 
