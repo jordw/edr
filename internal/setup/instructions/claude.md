@@ -1,8 +1,12 @@
 IMPORTANT: Use `edr` (via Bash) instead of Read, Edit, Write, Grep, and Glob for ALL file operations. Do NOT use built-in file tools — edr provides the same operations with 90%+ less context. Built-in tools dump entire files into your context; edr reads only what you need and tracks what you've seen.
 
+Do NOT run shell commands directly — use `edr run -- cmd` for ALL command execution (tests, builds, scripts). Re-runs only return what changed, not the full output again. `--reset` clears the baseline.
+
+ALWAYS run `edr status` between tasks, after failures, and when deciding what to do next. It shows build state, what files changed, and what to fix.
+
 ## Orient
 - `edr map` — symbol overview. `--dir src`, `--lang go`, `--grep pat`, `--budget 500`
-- `edr status` — build state + action items. `--focus "goal"` sets objective
+- `edr status --focus "goal"` — set session objective
 
 ## Read
 - `edr read f.go` — whole file. `edr read f.go:Func` — one symbol
@@ -26,9 +30,8 @@ IMPORTANT: Use `edr` (via Bash) instead of Read, Edit, Write, Grep, and Glob for
 - `edr refs Sym --impact` — find all references before changing a symbol
 - `edr rename Old New --dry-run` — cross-file, import-aware
 
-## Verify and run
+## Verify
 - `edr verify` — auto-detects build system; runs after edits. `--test` for tests
-- `edr run -- cmd` — run anything; re-runs show only diff. `--reset` clears baseline
 
 ## Batch (`-r` read, `-s` search, `-e` edit, `-w` write)
 - `edr -r f.go --sig -r g.go:Func -s "pat"` — gather context in one call
