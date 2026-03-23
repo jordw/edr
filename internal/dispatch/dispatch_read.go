@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -11,6 +12,17 @@ import (
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 )
+
+// grepMatch returns true if name matches the grep pattern.
+// Tries regex first (to support alternation like "error|warn");
+// falls back to case-insensitive substring if the pattern is not valid regex.
+func grepMatch(name, pattern string) bool {
+	re, err := regexp.Compile("(?i)(?:" + pattern + ")")
+	if err != nil {
+		return strings.Contains(strings.ToLower(name), strings.ToLower(pattern))
+	}
+	return re.MatchString(name)
+}
 
 func runReadFile(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {
@@ -386,7 +398,7 @@ func runSymbols(ctx context.Context, db *index.DB, root string, args []string, f
 		if typeFilter != "" && !strings.EqualFold(s.Type, typeFilter) {
 			continue
 		}
-		if grepFilter != "" && !strings.Contains(strings.ToLower(s.Name), strings.ToLower(grepFilter)) {
+		if grepFilter != "" && !grepMatch(s.Name, grepFilter) {
 			continue
 		}
 		if hideLocals {

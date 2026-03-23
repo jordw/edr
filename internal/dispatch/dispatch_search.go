@@ -129,6 +129,9 @@ func runSearchText(ctx context.Context, db *index.DB, args []string, flags map[s
 	if limit := flagInt(flags, "limit", 0); limit > 0 {
 		opts = append(opts, search.WithLimit(limit))
 	}
+	if flagBool(flags, "text", false) {
+		opts = append(opts, search.WithForceLiteral())
+	}
 	result, err := search.SearchText(ctx, db, args[0], budget, useRegex, opts...)
 	if err != nil {
 		return nil, err

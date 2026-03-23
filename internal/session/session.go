@@ -882,6 +882,20 @@ func (s *Session) CheckFileHash(file string) string {
 	return s.FileHashes[file]
 }
 
+
+// updateFileHashFromResult extracts file+hash from an edit result and updates
+// FileHashes so subsequent edits use the post-edit hash, not a stale read hash.
+// Caller must hold s.mu.
+func (s *Session) updateFileHashFromResult(m map[string]any) {
+	file, hash := ExtractFileHash(m)
+	if file != "" && hash != "" {
+		if s.FileHashes == nil {
+			s.FileHashes = make(map[string]string)
+		}
+		s.FileHashes[file] = hash
+	}
+}
+
 // firstString returns the first non-empty string value found for the given keys.
 func firstString(m map[string]any, keys ...string) string {
 	for _, k := range keys {
@@ -1069,6 +1083,9 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 	// Level 1: Store edit diffs (always inline, no slim optimization)
 	if DiffEditCommands[cmd] {
 		s.storeDiff(m, flags)
+		// Update FileHashes so the next edit uses the post-edit hash,
+		// not the stale hash from the prior read.
+		s.updateFileHashFromResult(m)
 		if m["diff_available"] == true {
 			data, _ := json.Marshal(m)
 			return string(data)

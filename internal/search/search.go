@@ -180,7 +180,8 @@ type searchTextConfig struct {
 	include []string // glob patterns to include (e.g. "*.go")
 	exclude []string // glob patterns to exclude (e.g. "vendor/*")
 	context int      // lines of context around each match
-	limit   int      // max number of results (0 = unlimited)
+	limit       int  // max number of results (0 = unlimited)
+	forceLiteral bool // suppress regex auto-retry when true
 }
 
 // SearchTextOption configures SearchText behavior.
@@ -204,6 +205,11 @@ func WithContext(n int) SearchTextOption {
 // WithLimit caps the number of results returned.
 func WithLimit(n int) SearchTextOption {
 	return func(c *searchTextConfig) { c.limit = n }
+}
+
+// WithForceLiteral suppresses the regex auto-retry when --text is explicit.
+func WithForceLiteral() SearchTextOption {
+	return func(c *searchTextConfig) { c.forceLiteral = true }
 }
 
 func matchesAnyPath(base, rel string, patterns []string) bool {
@@ -526,7 +532,7 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 		Truncated:    isTrunc,
 		BudgetUsed:   budgetUsed,
 	}
-	if !useRegex && sr.TotalMatches == 0 && looksLikeRegex(pattern) {
+	if !useRegex && !cfg.forceLiteral && sr.TotalMatches == 0 && looksLikeRegex(pattern) {
 		// Normalize BRE syntax (grep default) to ERE (Go regexp):
 		// \| → |, \( → (, \) → )
 		normalized := pattern
