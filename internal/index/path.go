@@ -16,7 +16,13 @@ func NormalizeRoot(root string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("normalize root: %w", err)
 	}
-	return filepath.Clean(abs), nil
+	// Resolve symlinks so that /tmp → /private/tmp (macOS) and similar
+	// symlinked paths produce the same root regardless of entry point.
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return filepath.Clean(abs), nil
+	}
+	return filepath.Clean(resolved), nil
 }
 
 // IsWithinRoot reports whether path is inside root.
@@ -56,6 +62,14 @@ func resolvePathInner(root, path string, allowAbsOutside bool) (string, error) {
 		return "", fmt.Errorf("resolve path %q: %w", path, err)
 	}
 	abs = filepath.Clean(abs)
+	// Resolve symlinks to match the resolved root from NormalizeRoot.
+	// If the full path doesn't exist (e.g., dry-run write of new file),
+	// resolve the parent directory and re-append the basename.
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	} else if resolved, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
+		abs = filepath.Join(resolved, filepath.Base(abs))
+	}
 	if !IsWithinRoot(root, abs) {
 		if allowAbsOutside && isAbs {
 			return abs, nil

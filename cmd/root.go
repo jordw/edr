@@ -266,6 +266,10 @@ func getRoot(cmd *cobra.Command) string {
 			root = discoverRoot(wd)
 		}
 	}
+	// Normalize early so that @file resolution and DB open see the same root.
+	if normalized, err := index.NormalizeRoot(root); err == nil {
+		root = normalized
+	}
 	return root
 }
 

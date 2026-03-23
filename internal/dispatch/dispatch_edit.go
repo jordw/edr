@@ -1025,40 +1025,65 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 
 	// Dry-run: show what would change without applying
 	if dryRun {
+		budget := flagInt(flags, "budget", 0)
+		if budget == 0 {
+			budget = 2000
+		}
+		budgetChars := budget * 4
+		usedChars := 0
+		truncated := false
+
+		sort.Strings(filesChanged)
 		var preview []output.RenameOccurrence
 		var diffs []output.RenameDiff
-		for file, fileRefs := range grouped {
-			src, err := os.ReadFile(file)
+		for _, relFile := range filesChanged {
+			if truncated {
+				break
+			}
+			absFile := filepath.Join(root, relFile)
+			fileRefs := grouped[absFile]
+			// Build preview entries first (cheap)
+			src, err := os.ReadFile(absFile)
 			if err != nil {
 				continue
 			}
-			// Generate per-file diff: apply replacements in reverse order
-			modified := make([]byte, len(src))
-			copy(modified, src)
-			for i := len(fileRefs) - 1; i >= 0; i-- {
-				r := fileRefs[i]
-				modified = append(modified[:r.StartByte], append([]byte(newName), modified[r.EndByte:]...)...)
-			}
-			diff := edit.UnifiedDiff(output.Rel(file), src, modified)
-			if diff != "" {
-				diffs = append(diffs, output.RenameDiff{
-					File: output.Rel(file),
-					Diff: diff,
-				})
-			}
-			// Build preview entries
 			srcLines := strings.SplitAfter(string(src), "\n")
 			for _, r := range fileRefs {
+				if usedChars >= budgetChars {
+					truncated = true
+					break
+				}
 				lineIdx := int(r.StartLine) - 1
 				lineText := ""
 				if lineIdx >= 0 && lineIdx < len(srcLines) {
 					lineText = strings.TrimRight(srcLines[lineIdx], "\n")
 				}
 				preview = append(preview, output.RenameOccurrence{
-					File: output.Rel(file),
+					File: relFile,
 					Line: int(r.StartLine),
 					Text: lineText,
 				})
+				usedChars += len(lineText) + len(relFile) + 20
+			}
+			// Generate diff only if within budget — diffs are expensive for large files
+			if !truncated && usedChars < budgetChars {
+				modified := make([]byte, len(src))
+				copy(modified, src)
+				for i := len(fileRefs) - 1; i >= 0; i-- {
+					r := fileRefs[i]
+					modified = append(modified[:r.StartByte], append([]byte(newName), modified[r.EndByte:]...)...)
+				}
+				diff := edit.UnifiedDiff(relFile, src, modified)
+				if diff != "" {
+					usedChars += len(diff)
+					diffs = append(diffs, output.RenameDiff{
+						File: relFile,
+						Diff: diff,
+					})
+				}
+			}
+			if usedChars >= budgetChars {
+				truncated = true
 			}
 		}
 		return output.RenameResult{
@@ -1070,6 +1095,7 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 			DryRun:       true,
 			Preview:      preview,
 			Diffs:        diffs,
+			Truncated:    truncated,
 		}, nil
 	}
 
@@ -1247,38 +1273,61 @@ func runRenameText(ctx context.Context, db *index.DB, root string, args []string
 	}
 	sort.Strings(filesChanged)
 
-	// Dry-run: preview diffs
+	// Dry-run: preview diffs with budget cap
 	if dryRun {
+		budget := flagInt(flags, "budget", 0)
+		if budget == 0 {
+			budget = 2000
+		}
+		budgetChars := budget * 4
+		usedChars := 0
+		truncated := false
+
 		var preview []output.RenameOccurrence
 		var diffs []output.RenameDiff
-		for file, occs := range fileOccs {
-			src, err := os.ReadFile(file)
-			if err != nil {
-				continue
+		for _, file := range filesChanged {
+			if truncated {
+				break
 			}
-			// Apply replacements in reverse byte order
-			modified := make([]byte, len(src))
-			copy(modified, src)
-			for i := len(occs) - 1; i >= 0; i-- {
-				o := occs[i]
-				modified = append(modified[:o.ByteStart], append([]byte(newText), modified[o.ByteEnd:]...)...)
-			}
-			diff := edit.UnifiedDiff(output.Rel(file), src, modified)
-			if diff != "" {
-				diffs = append(diffs, output.RenameDiff{
-					File: output.Rel(file),
-					Diff: diff,
-				})
-			}
+			absFile := filepath.Join(root, file)
+			occs := fileOccs[absFile]
 			for _, o := range occs {
+				if usedChars >= budgetChars {
+					truncated = true
+					break
+				}
 				preview = append(preview, output.RenameOccurrence{
-					File: output.Rel(file),
+					File: file,
 					Line: o.Line,
 					Text: o.LineText,
 				})
+				usedChars += len(o.LineText) + len(file) + 20
+			}
+			// Generate diff only if within budget — diffs are expensive for large files
+			if usedChars < budgetChars {
+				src, err := os.ReadFile(absFile)
+				if err == nil {
+					modified := make([]byte, len(src))
+					copy(modified, src)
+					for i := len(occs) - 1; i >= 0; i-- {
+						o := occs[i]
+						modified = append(modified[:o.ByteStart], append([]byte(newText), modified[o.ByteEnd:]...)...)
+					}
+					diff := edit.UnifiedDiff(file, src, modified)
+					if diff != "" {
+						usedChars += len(diff)
+						diffs = append(diffs, output.RenameDiff{
+							File: file,
+							Diff: diff,
+						})
+					}
+				}
+			}
+			if usedChars >= budgetChars {
+				truncated = true
 			}
 		}
-		return output.RenameResult{
+		result := output.RenameResult{
 			OldName:      oldText,
 			NewName:      newText,
 			FilesChanged: filesChanged,
@@ -1287,7 +1336,9 @@ func runRenameText(ctx context.Context, db *index.DB, root string, args []string
 			DryRun:       true,
 			Preview:      preview,
 			Diffs:        diffs,
-		}, nil
+			Truncated:    truncated,
+		}
+		return result, nil
 	}
 
 	// Apply: build resolvedEdits

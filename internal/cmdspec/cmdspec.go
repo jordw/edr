@@ -179,6 +179,7 @@ var Registry = []*Spec{
 			{Name: "word", Type: FlagBool, Default: false, Desc: "Whole-word matching only (--text mode)"},
 			{Name: "include", Type: FlagStringSlice, Default: []string(nil), Desc: "File glob(s) to include (--text mode)"},
 			{Name: "exclude", Type: FlagStringSlice, Default: []string(nil), Desc: "File glob(s) to exclude (--text mode)"},
+			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens (default 2000 for --dry-run)"},
 		},
 	},
 	{

@@ -75,6 +75,7 @@ type RenameResult struct {
 	Preview      []RenameOccurrence `json:"preview,omitempty"`
 	Diffs        []RenameDiff       `json:"diffs,omitempty"`
 	Warnings     []string           `json:"warnings,omitempty"`
+	Truncated    bool               `json:"truncated,omitempty"`
 }
 
 // RenameDiff holds a per-file unified diff for dry-run rename preview.

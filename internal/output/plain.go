@@ -332,6 +332,10 @@ func plainRename(w *os.File, op Op) {
 	if v := anyInt(op["occurrences"]); v > 0 {
 		h["n"] = v
 	}
+	if t, ok := op["truncated"].(bool); ok && t {
+		h["truncated"] = true
+		h["hint"] = "use --include to narrow scope, or --budget N for more"
+	}
 	writeHeader(w, h)
 
 	if preview, ok := op["preview"].([]any); ok {
@@ -353,11 +357,20 @@ func plainRename(w *os.File, op Op) {
 				}
 			}
 		}
-	} else if changes, ok := op["files_changed"].([]any); ok && len(op) > 0 {
-		for _, c := range changes {
+	}
+	// Always show files_changed as a summary, but cap when truncated.
+	if changes, ok := op["files_changed"].([]any); ok && len(changes) > 0 {
+		maxFiles := len(changes)
+		if _, trunc := op["truncated"].(bool); trunc && maxFiles > 20 {
+			maxFiles = 20
+		}
+		for _, c := range changes[:maxFiles] {
 			if f, ok := c.(string); ok {
 				fmt.Fprintf(w, "  %s\n", f)
 			}
+		}
+		if maxFiles < len(changes) {
+			fmt.Fprintf(w, "  ... and %d more files\n", len(changes)-maxFiles)
 		}
 	}
 }

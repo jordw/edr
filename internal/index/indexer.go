@@ -904,11 +904,15 @@ func RepoMap(ctx context.Context, db *DB, opts ...RepoMapOption) (string, RepoMa
 			if rel == "" {
 				continue
 			}
-			dir := strings.SplitN(rel, string(filepath.Separator), 2)[0]
-			if strings.Contains(rel, string(filepath.Separator)) {
-				// Use first path component as the directory
-			} else {
-				dir = "." // root-level files
+			// When --dir is active, show subdirectories within that dir,
+			// not top-level repo dirs (which would all collapse to one entry).
+			relForDir := rel
+			if cfg.dir != "" {
+				relForDir = strings.TrimPrefix(rel, cfg.dir+string(filepath.Separator))
+			}
+			dir := strings.SplitN(relForDir, string(filepath.Separator), 2)[0]
+			if !strings.Contains(relForDir, string(filepath.Separator)) {
+				dir = "." // files directly in this directory
 			}
 			if dirFiles[dir] == nil {
 				dirFiles[dir] = map[string]bool{}

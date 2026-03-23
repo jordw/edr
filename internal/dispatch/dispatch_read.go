@@ -13,6 +13,23 @@ import (
 	"github.com/jordw/edr/internal/output"
 )
 
+// isBinaryFile sniffs the first 512 bytes for NUL characters.
+func isBinaryFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 512)
+	n, _ := f.Read(buf)
+	for _, b := range buf[:n] {
+		if b == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // grepMatch returns true if name matches the grep pattern.
 // Tries regex first (to support alternation like "error|warn");
 // falls back to case-insensitive substring if the pattern is not valid regex.
@@ -43,6 +60,15 @@ func runReadFile(ctx context.Context, db *index.DB, root string, args []string, 
 	file, err := db.ResolvePathReadOnly(file)
 	if err != nil {
 		return nil, err
+	}
+
+	// Reject binary files early — dumping raw bytes wastes context.
+	if isBinaryFile(file) {
+		return map[string]any{
+			"file":   output.Rel(file),
+			"binary": true,
+			"error":  "binary file, not readable as text",
+		}, nil
 	}
 
 	// --signatures: file-level signatures view

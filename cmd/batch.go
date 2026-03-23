@@ -141,6 +141,7 @@ type doRename struct {
 	Word    *bool    `json:"word,omitempty"`
 	Include []string `json:"include,omitempty"`
 	Exclude []string `json:"exclude,omitempty"`
+	Budget  *int     `json:"budget,omitempty"`
 }
 
 // Batch known-key sets — derived from the canonical registry in cmdspec.

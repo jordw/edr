@@ -1253,26 +1253,11 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 		status, _ := s.CheckContent(cacheKey, text, false)
 		if status == "unchanged" {
 			s.stats.DeltaReads++
-			// Preserve scalar metadata fields so agents can still see counts/truncation.
-			// Skip array/object values (like grouped match lists) — those are body content.
-			stub := map[string]any{"session": "unchanged"}
-			// Metadata keys to preserve (scalars only, except "symbol" which is a small identity object)
-			metaKeys := []string{"files", "symbols", "truncated", "hint", "total_matches", "total_files", "kind", "total_refs", "total", "n"}
-			for _, key := range metaKeys {
-				if v, ok := m[key]; ok {
-					switch v.(type) {
-					case []any, map[string]any:
-						// Skip complex types — these are body content, not metadata
-					default:
-						stub[key] = v
-					}
-				}
-			}
-			// "symbol" is a small identity object (name/file/type) — always preserve for refs
-			if v, ok := m["symbol"]; ok {
-				stub["symbol"] = v
-			}
-			data, _ := json.Marshal(stub)
+			// Mark as unchanged but preserve the full body — search/map/refs
+			// results are already budget-capped and agents need to re-reference
+			// results after context compression.
+			m["session"] = "unchanged"
+			data, _ := json.Marshal(m)
 			return string(data)
 		}
 		s.StoreContent(cacheKey, text, false)
