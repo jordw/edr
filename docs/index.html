@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>edr - less context, faster agents</title>
-<meta name="description" content="Code tools for coding agents. Smaller reads, fewer calls, changed-only output. 83% median context reduction in benchmarks.">
-<meta property="og:title" content="edr - less context, faster agents">
-<meta property="og:description" content="Code tools for coding agents. Smaller reads, fewer calls, changed-only output. 83% median context reduction in benchmarks.">
+<title>edr - faster, more accurate agents</title>
+<meta name="description" content="Code tools for coding agents. Precise reads, fewer round-trips, no repeated work. Agents find the right code on the first try.">
+<meta property="og:title" content="edr - faster, more accurate agents">
+<meta property="og:description" content="Code tools for coding agents. Precise reads, fewer round-trips, no repeated work. Agents find the right code on the first try.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://github.com/jordw/edr">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%3E</text></svg>">
@@ -240,10 +240,10 @@ footer {
 <!-- Hero -->
 <div class="hero">
   <h1>edr</h1>
-  <p class="tagline">less context, faster agents</p>
+  <p class="tagline">faster, more accurate agents</p>
   <p class="pitch">
-    <strong>Agents are bottlenecked on context, not inference speed.</strong>
-    edr gives them the right context instead of all the context: smaller reads, fewer round-trips, and no repeated output. Works with any agent that can run shell commands.
+    <strong>edr makes coding agents faster and more accurate.</strong>
+    Symbol-aware reads, batched calls, and session tracking — so agents find the right code on the first try, make fewer mistakes, and finish tasks in less time.
   </p>
   <div class="install-bar">
     <span class="prompt">$</span>
@@ -260,24 +260,24 @@ footer {
 <!-- Pillars -->
 <div class="pillars">
   <div class="pillar">
-    <h3>Smaller reads</h3>
-    <p>Read one function instead of the file around it. Or get just a class API: signatures without implementation.</p>
+    <h3>Precise reads</h3>
+    <p>Read one function instead of the file around it. Agents see structure, not noise — and make better decisions.</p>
   </div>
   <div class="pillar">
-    <h3>Fewer calls</h3>
-    <p>Batch reads, searches, edits, and writes so the agent gathers context in one round-trip and mutates in one round-trip.</p>
+    <h3>Fewer round-trips</h3>
+    <p>Batch reads, searches, edits, and writes into one call. Less orchestration overhead, faster task completion.</p>
   </div>
   <div class="pillar">
-    <h3>Only changed output</h3>
-    <p>edr tracks what the agent has already seen, so re-reads and re-runs return diffs instead of repeated output. Zero config.</p>
+    <h3>No repeated work</h3>
+    <p>edr tracks what the agent has seen. Re-reads and re-runs return only what changed. Zero config.</p>
   </div>
 </div>
 
 <!-- Why -->
 <section>
   <h2>Why it matters</h2>
-  <p>Every byte the agent reads is a byte the model has to attend over. An agent that reads a 400-line file to find one function just added 15KB to its context. Multiply that by every read, search, and test run in a task.</p>
-  <p>edr attacks this directly: <strong>fewer tokens in</strong> (read a function, not a file), <strong>fewer round-trips</strong> (batch three reads into one call), and <strong>no redundancy</strong> (re-reads return only what changed). This scales. A 3,000-file monorepo gets the same tight reads as a 50-file project.</p>
+  <p>An agent that reads a 400-line file to find one function just added 15KB of noise to reason over. It's slower, more likely to get confused, and burns tokens on content that doesn't matter. Multiply that by every read, search, and test run in a task.</p>
+  <p>edr attacks this directly: <strong>precise reads</strong> (one function, not the file around it), <strong>fewer round-trips</strong> (batch three reads into one call), and <strong>no redundancy</strong> (re-reads return only what changed). The result is agents that finish faster and make fewer mistakes.</p>
 </section>
 
 <!-- Example -->
@@ -313,7 +313,7 @@ edr delta -- pytest</code></pre>
 <!-- Benchmarks -->
 <section>
   <h2>Benchmarks</h2>
-  <p>We run 9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos and measure tool response bytes, the raw amount of text that enters the agent's context window.</p>
+  <p>9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos. We measure tool response bytes — fewer bytes means less noise for the model to reason over, faster responses, and more accurate decisions.</p>
   <div class="table-wrap">
   <table>
     <thead>
@@ -424,9 +424,9 @@ edr <span class="flag">-w</span> f.go <span class="flag">--content</span> "..." 
 <section>
   <h2>How it works</h2>
   <p>edr parses your codebase with <a href="https://tree-sitter.github.io/tree-sitter/">tree-sitter</a> and stores symbols in a SQLite index.</p>
-  <p><strong>Symbol-level operations.</strong> Read one function instead of a 400-line file. Get a class API with <code>--signatures</code> (85% fewer tokens). Edit by symbol name with <code>--where Symbol</code>. edr resolves the file and scopes automatically. Or scope within a known file with <code>--in Symbol</code>. Use <code>--fuzzy</code> for whitespace-tolerant matching. Edits re-index immediately and auto-verify the build.</p>
-  <p><strong>Batching.</strong> <code>-r</code>, <code>-s</code>, <code>-m</code>, <code>-e</code>, <code>-w</code> combine reads, searches, maps, edits, and writes in one CLI call.</p>
-  <p><strong>Sessions.</strong> edr tracks what the agent has seen. Second read of an unchanged file: 0 tokens. <code>edr delta -- make test</code> after a fix: only the diff from the previous run.</p>
+  <p><strong>Symbol-level operations.</strong> Read one function instead of a 400-line file — the agent sees exactly what it needs and makes better decisions. Get a class API with <code>--signatures</code> to understand structure before diving in. Find callers with <code>edr refs --impact</code> before refactoring. Scope edits with <code>--in Symbol</code> so they can't match the wrong code. Edits re-index immediately and auto-verify the build.</p>
+  <p><strong>Batching.</strong> <code>-r</code>, <code>-s</code>, <code>-m</code>, <code>-q</code>, <code>-e</code>, <code>-w</code> combine reads, searches, maps, queries, edits, and writes in one CLI call. Fewer round-trips means faster task completion.</p>
+  <p><strong>Sessions.</strong> edr tracks what the agent has seen and only returns what changed. Second read of an unchanged file: zero output. <code>edr delta -- make test</code> after a fix: only the new failures.</p>
 </section>
 
 <!-- Limitations -->

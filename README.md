@@ -1,12 +1,12 @@
-# edr - less context, faster agents
+# edr - faster, more accurate agents
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Agents are bottlenecked on context, not inference speed.** edr gives them the right context instead of all the context:
+**edr makes coding agents faster and more accurate.** It replaces built-in file tools with symbol-aware operations, batched calls, and session tracking — so agents find the right code on the first try, make fewer mistakes, and finish tasks in less time.
 
-- **Smaller reads.** Read one function instead of the file around it. Or get just a class API: signatures without implementation.
-- **Fewer calls.** Batch reads, searches, edits, and writes into one round-trip.
-- **Only changed output.** Re-reads and re-runs return diffs, not repeated output. Zero config.
+- **Precise reads.** Read one function instead of the file around it. Agents see structure, not noise.
+- **Fewer round-trips.** Batch reads, searches, edits, and writes into one call. Less orchestration, more progress.
+- **No repeated work.** Re-reads return only what changed. Re-runs show only new output. Zero config.
 
 Works with any agent that can run shell commands. Fully local, no telemetry.
 
@@ -85,15 +85,15 @@ edr delta -- pytest
 
 edr parses your codebase with [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and stores symbols in a SQLite index. This gives agents three capabilities they don't have with raw file tools:
 
-**Symbol-level operations.** Read one function instead of a 400-line file. Large files (>200 lines) auto-skeleton on first read, showing structure instead of content. Get a class API with `--signatures` (85% fewer tokens). `--expand` includes dep signatures inline. Add a method with `--inside ClassName` without reading the file. Scope edits to a symbol with `--in Symbol`. Use `--read-back` to get updated context in the edit response. `edr prepare Symbol` returns body, callers, deps, tests, and hash in one call. Edits re-index immediately and auto-verify the build (Go, Node, Rust, Make).
+**Symbol-level operations.** Read one function instead of a 400-line file — the agent sees exactly what it needs, makes better decisions, and doesn't get confused by surrounding code. Get a class API with `--signatures` to understand structure before diving in. `--expand` includes dep signatures inline. Find callers with `edr refs --impact` before refactoring. Scope edits to a symbol with `--in Symbol` so they can't match the wrong code. `edr prepare Symbol` returns body, callers, deps, tests, and hash in one call. Edits re-index immediately and auto-verify the build (Go, Node, Rust, Make).
 
-**Batching.** `-r`, `-s`, `-m`, `-e`, `-w` combine reads, searches, maps, edits, and writes in one CLI call. One call to gather context, one to apply mutations.
+**Batching.** `-r`, `-s`, `-m`, `-q`, `-e`, `-w` combine reads, searches, maps, queries, edits, and writes in one CLI call. One call to gather context, one to apply mutations. Fewer round-trips means faster task completion.
 
-**Sessions.** edr tracks what the agent has already seen (files, symbols, search results, command output) and only shows what changed. Second read of an unchanged file: 0 tokens. `edr delta -- make test` after a fix: only the diff from the previous run, unchanged lines collapsed. Same principle for builds, linters, any command. Zero config. Sessions activate automatically.
+**Sessions.** edr tracks what the agent has already seen and only returns what changed. Second read of an unchanged file: zero output. `edr delta -- make test` after a fix: only the new failures. Same principle for builds, linters, any command. Zero config.
 
 ## Commands
 
-**Batch flags** — the primary interface. `-r` read, `-s` search, `-m` map, `-e` edit, `-w` write. Modifier flags follow each op. Plan what you need, then combine into one call:
+**Batch flags** — the primary interface. `-r` read, `-s` search, `-m` map, `-q` query (refs/prepare), `-e` edit, `-w` write. Modifier flags follow each op. Plan what you need, then combine into one call:
 
 ```bash
 edr -r file[:Symbol]              # Read file or symbol
@@ -108,6 +108,7 @@ Combine freely. One call to gather context, one to mutate:
 
 ```bash
 edr -r f.go --sig -r g.go:Func --expand -s "pattern" --text -m --dir cmd/
+edr -q refs Sym --impact -q prepare f.go:Sym                # batch refs/prepare
 edr -r f.go:Sym -e f.go --old "x" --new "y" -r f.go:Sym   # post-edit read
 edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"
 edr -w f.go --content "..." --mkdir
@@ -120,6 +121,8 @@ edr -w f.go --content "..." --mkdir
 **Search** (after `-s`): `--text`, `--regex`, `--context N`, `--in f.go:Sym`, `--include "*.go"`, `--limit N`
 
 **Map** (after `-m`): `--dir`, `--lang`, `--grep`, `--glob`, `--type`, `--budget N`
+
+**Query** (after `-q`): `--impact`, `--callers`, `--deps`, `--chain Sym`, `--depth N`, `--signatures`, `--body`, `--budget N`
 
 **Edit** (after `-e`): `--old "x" --new "y"`, `--where Sym` (resolves file), `--in Sym` (scope), `--all`, `--delete`, `--dry-run`, `--fuzzy`, `--read-back`, `@file` for metacharacters
 
@@ -161,9 +164,9 @@ edr reads and edits any text file. Symbol-aware features (symbol reads, `--signa
 
 ## Benchmarks
 
-9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos. We measure tool response bytes, the raw text entering the agent's context window.
+9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos. We measure tool response bytes — fewer bytes means less noise for the model to reason over, faster responses, and more accurate decisions.
 
-The baseline models a skilled agent using Claude Code's built-in tools: `Grep` to find symbols before reading, `Read` with line ranges around grep matches (not whole files), `Edit`/`Write` confirmations. Orient and multi-file read use whole-file reads (there's no shortcut for understanding a module or reading a file). edr uses symbol reads, `--signatures`, `refs`, `map`, and batch flags.
+The baseline models a skilled agent using Claude Code's built-in tools: `Grep` to find symbols before reading, `Read` with line ranges around grep matches (not whole files), `Edit`/`Write` confirmations. edr uses symbol reads, `--signatures`, `refs`, `map`, and batch flags.
 
 | Repo | Lang | Files | Baseline | edr | Reduction |
 |---|---|---|---|---|---|
