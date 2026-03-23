@@ -21,7 +21,7 @@ After changing agent instructions (`internal/setup/instructions/*.md`): rebuild,
 CLI args → cmd/ (Cobra) → cmdspec (flag validation) → dispatch (routing) → internal/* (logic) → output (rendering) → session (post-processing)
 ```
 
-**cmd/**: Cobra command wiring. `commands.go` has standalone commands, `batch.go`/`batch_cmd.go` handle batch mode (`-r`, `-s`, `-e`, `-w`). `commands.go` also builds `edr context` results (`buildNextResult`, `computeCurrentItems`, `computeFixItems`).
+**cmd/**: Cobra command wiring. `commands.go` has standalone commands, `batch.go`/`batch_cmd.go` handle batch mode (`-r`, `-s`, `-e`, `-w`). `commands.go` also builds `edr status` results (`buildNextResult`, `computeCurrentItems`, `computeFixItems`).
 
 **internal/cmdspec/**: Canonical command registry. Every command, flag, category, and alias lives here. CLI flags, dispatch routing, and session behavior all derive from this registry.
 

@@ -1,6 +1,6 @@
 // Package warnings detects when the agent's view of the world is stale.
 // It checks for files modified externally and returns structured results
-// that edr context includes in its response.
+// that edr status includes in its response.
 package warnings
 
 import (

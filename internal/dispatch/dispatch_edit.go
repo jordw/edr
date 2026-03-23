@@ -14,7 +14,7 @@ import (
 
 func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
 	dryRun := flagBool(flags, "dry-run", false)
-	readBack := flagBool(flags, "read_back", false)
+	readBack := flagBool(flags, "read_back", true)
 
 	// Delegate to inner logic, then optionally attach read-back context.
 	result, err := runSmartEditInner(ctx, db, root, args, flags, dryRun)

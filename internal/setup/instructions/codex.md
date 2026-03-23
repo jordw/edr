@@ -9,11 +9,11 @@ Why: edr returns context-efficient output (skeletons, delta reads, token budgets
 
 Only fall back to shell tools if `edr` itself won't compile/run.
 
-Run shell commands via `edr delta -- cmd` (re-runs show only changes). Run `edr context` between tasks or after failures.
+Run shell commands via `edr delta -- cmd` (re-runs show only changes). Run `edr status` between tasks or after failures.
 
 ## Orient
 - `edr map` — symbol overview. `--dir`, `--lang`, `--grep`, `--budget`
-- `edr context --focus "goal"` — set session objective
+- `edr status --focus "goal"` — set session objective
 
 ## Read
 - `edr read f.go` — auto-skeleton for large files (>200 lines); `--full` forces full

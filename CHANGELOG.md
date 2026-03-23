@@ -4,7 +4,7 @@
 
 ### New commands
 
-- **`edr context`** — session dashboard with op log, build state, external change detection, and pattern analysis. Replaces the old `next`/`status` commands.
+- **`edr status`** — session dashboard with op log, build state, external change detection, and pattern analysis. Replaces the old `next`/`status` commands.
 - **`edr delta`** — command wrapper with diff-based output dedup. Only shows what changed between runs. `--reset` clears the baseline.
 - **`edr checkpoint`** — snapshot and restore edit sessions. `--list`, `--diff`, `--restore`.
 

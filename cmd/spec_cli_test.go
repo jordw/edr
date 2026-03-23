@@ -684,7 +684,7 @@ func TestSpec_ContextExternalChanges(t *testing.T) {
 	time.Sleep(50 * time.Millisecond) // ensure mtime changes
 	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\nfunc main() { fmt.Println(\"changed\") }\n"), 0644)
 
-	// 3. edr context should report the external change
+	// 3. edr status should report the external change
 	result, _, _, exit2 := specRun(t, binary, dir, sessEnv, "status")
 	if exit2 != 0 {
 		t.Fatalf("context exit %d", exit2)
@@ -2339,7 +2339,7 @@ func TestSpec_EditDeleteSameShape(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// edr context — CLI spec tests
+// edr status — CLI spec tests
 // ---------------------------------------------------------------------------
 
 func TestSpec_StatusEmpty(t *testing.T) {
@@ -3175,7 +3175,7 @@ func TestSpec_EditReadBack(t *testing.T) {
 		}
 	})
 
-	t.Run("without read-back no extra content", func(t *testing.T) {
+	t.Run("read-back is default", func(t *testing.T) {
 		// Reset file
 		os.WriteFile(filepath.Join(dir, "hello.go"),
 			[]byte("package main\n\nimport \"fmt\"\n\nfunc greet() {\n\tfmt.Println(\"hello\")\n}\n\nfunc main() {\n\tgreet()\n}\n"), 0644)
@@ -3185,8 +3185,27 @@ func TestSpec_EditReadBack(t *testing.T) {
 			t.Fatalf("exit %d", exit)
 		}
 		h := r.Ops[0].Header
+		rb, ok := h["read_back"].(map[string]any)
+		if !ok {
+			t.Fatal("expected read_back by default")
+		}
+		if rb["lines"] == nil {
+			t.Error("read_back should have lines")
+		}
+	})
+
+	t.Run("no-read-back suppresses", func(t *testing.T) {
+		// Reset file
+		os.WriteFile(filepath.Join(dir, "hello.go"),
+			[]byte("package main\n\nimport \"fmt\"\n\nfunc greet() {\n\tfmt.Println(\"hello\")\n}\n\nfunc main() {\n\tgreet()\n}\n"), 0644)
+		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+			"edit", "hello.go", "--old-text", "hello", "--new-text", "hi", "--no-read-back")
+		if exit != 0 {
+			t.Fatalf("exit %d", exit)
+		}
+		h := r.Ops[0].Header
 		if h["read_back"] != nil {
-			t.Error("should not have read_back without --read-back flag")
+			t.Error("should not have read_back with --no-read-back")
 		}
 	})
 }

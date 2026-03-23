@@ -120,7 +120,7 @@ var Registry = []*Spec{
 			{Name: "insert_at", Type: FlagInt, Default: 0, Desc: "Insert new text before line N (zero-width insertion)"},
 			{Name: "fuzzy", Type: FlagBool, Default: false, Desc: "Allow whitespace/indentation-only mismatches (cannot combine with --all)"},
 			{Name: "move_after", Type: FlagString, Default: "", Desc: "Move symbol after another symbol (same file only)"},
-			{Name: "read_back", Type: FlagBool, Default: false, Desc: "Include updated context around the edit in the response"},
+			{Name: "read_back", Type: FlagBool, Default: true, Desc: "Include updated context around the edit in the response"},
 		},
 	},
 	{
