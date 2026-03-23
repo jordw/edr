@@ -4,7 +4,7 @@
 
 **Agents are bottlenecked on context, not inference speed.** edr gives them the right context instead of all the context:
 
-- **Smaller reads** — read one function instead of a 400-line file. `--signatures` gives a class API without method bodies.
+- **Smaller reads** — read one function instead of the file around it. Or get just a class API — signatures without implementation.
 - **Fewer calls** — batch reads, searches, edits, and writes into one round-trip.
 - **Only changed output** — re-reads and re-runs return diffs, not repeated output. Zero config.
 
