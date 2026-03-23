@@ -1,52 +1,14 @@
-# edr
+# edr — less context, faster agents
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Agents are bottlenecked on what context they have and can quickly gather.** Larger context windows and faster inference don't help when the agent is reading whole files to find one function, making sequential calls that could be batched, and re-processing output it's already seen.
+**Agents are bottlenecked on context, not inference speed.** edr gives them the right context instead of all the context:
 
-edr gives agents the right context instead of all the context:
-
-- **Smaller reads** — read one function instead of a 400-line file. `--signatures` gives a class API without pulling in method bodies.
-- **Fewer calls** — batch reads, searches, edits, and writes so the agent gathers context in one round-trip and mutates in one round-trip.
-- **Only changed output** — edr tracks what the agent has already seen, so re-reads and re-runs return diffs instead of repeated output.
+- **Smaller reads** — read one function instead of a 400-line file. `--signatures` gives a class API without method bodies.
+- **Fewer calls** — batch reads, searches, edits, and writes into one round-trip.
+- **Only changed output** — re-reads and re-runs return diffs, not repeated output. Zero config.
 
 Works with any agent that can run shell commands. Fully local, no telemetry.
-
-## Why less context = faster agents
-
-Model speed keeps improving, but agents still bottleneck on the same thing: **how much text they have to process per step**.
-
-An agent that `cat`s a 400-line file to read one function just added 15KB to its context. Multiply by every read, search, and test run in a task. The model has to attend over all of it — prefill cost is quadratic in context length, and every output token generated is slower because it attends over a larger KV cache. Trimming a few milliseconds off inference doesn't help when the input is 10× larger than it needs to be.
-
-edr attacks this directly:
-- **Fewer tokens in** → faster responses. Read a function (1KB) instead of a file (15KB). The model processes 15× less input.
-- **Fewer round-trips** → less wall-clock time. Batch three reads into one call instead of three sequential ones. Each round-trip has overhead — parsing, scheduling, output rendering — that adds up fast.
-- **Sessions eliminate redundancy** → edr tracks what the agent has seen. Re-read a file after an edit? Only the changed lines come back. Re-run tests? Just the diff. The agent stays focused on what actually changed.
-
-**~80% median context reduction** in benchmarks against real repos (vs a skilled agent using grep + line-range reads). Plain text search adds overhead vs raw grep; the win is in structured operations. See [Benchmarks](#benchmarks) for methodology and per-scenario breakdowns.
-
-This scales. A 3,000-file monorepo gets the same tight reads and batched edits as a 50-file project.
-
-## Example
-
-Add a `retries` parameter to a scheduler class. Without edr, this takes 6+ tool calls (read three files, search, two edits). With edr:
-
-```bash
-# 1. Symbol-level: read three signatures + search, one call
-edr -r src/scheduler.py:Scheduler --sig \
-    -r src/config.py:parse_config \
-    -r src/worker.py:Worker --sig \
-    -s "retry"
-
-# 2. Batched edit: two files, auto-verifies build
-edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):" \
-    -e src/config.py --old '"timeout": 30' --new '"timeout": 30, "retries": 3'
-
-# 3. Sessions: run tests, fix a bug, run again — only the diff comes back
-edr delta -- pytest
-# → [no changes, 80 lines]  or just the diff of what changed
-```
-3 calls. Re-reads of files already in context: zero tokens.
 
 ## Install
 
@@ -84,6 +46,40 @@ git clone https://github.com/jordw/edr.git && ./edr/setup.sh
 </details>
 
 The index lives in `.edr/` at the repo root and rebuilds automatically if deleted.
+
+## Example
+
+Read a function, find its callers, edit it:
+
+```bash
+# Without edr: grep to find it, read the range, grep for callers, read each caller
+# 5+ tool calls, ~25KB of context
+
+# With edr:
+edr read src/scheduler.py:run              # just the function (not the file)
+edr refs run --callers                     # callers, import-resolved
+edr edit src/scheduler.py \
+    --old "def run(self):" \
+    --new "def run(self, retries=3):"      # auto re-indexes, verifies build
+```
+3 calls, ~3KB of context.
+
+**Batched** — gather everything in one call, mutate in one call:
+
+```bash
+# 1. Read three APIs + search, one call
+edr -r src/scheduler.py:Scheduler --sig \
+    -r src/config.py:parse_config \
+    -r src/worker.py:Worker --sig \
+    -s "retry"
+
+# 2. Edit two files, auto-verifies build
+edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):" \
+    -e src/config.py --old '"timeout": 30' --new '"timeout": 30, "retries": 3'
+
+# 3. Re-run tests — only the diff comes back
+edr delta -- pytest
+```
 
 ## How it works
 
@@ -149,7 +145,7 @@ edr reads and edits any text file. Symbol-aware features (symbol reads, `--signa
 
 ## Benchmarks
 
-We run 9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos and measure tool response bytes — the raw amount of text that enters the agent's context window.
+9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos. We measure tool response bytes — the raw text entering the agent's context window.
 
 The baseline models a skilled agent using Claude Code's built-in tools: `Grep` to find symbols before reading, `Read` with line ranges around grep matches (not whole files), `Edit`/`Write` confirmations. Orient and multi-file read use whole-file reads (there's no shortcut for understanding a module or reading a file). edr uses symbol reads, `--signatures`, `refs`, `map`, and batch flags.
 
@@ -163,7 +159,7 @@ The baseline models a skilled agent using Claude Code's built-in tools: `Grep` t
 | [reduxjs/redux-toolkit](https://github.com/reduxjs/redux-toolkit) | TS | ~190 | 112KB / 25 calls | 26KB / 9 calls | **77%** |
 | [django/django](https://github.com/django/django) | Python | ~880 | 1027KB / 25 calls | 40KB / 9 calls | **96%** |
 
-Median reduction: **83%** across repos. edr loses on plain text search (structured JSON adds overhead vs raw grep — see breakdown below), but wins everywhere else. The biggest wins are on structured operations (refs, map, signatures); multi-file reads show modest savings since both sides return full content. Call counts are summed across all 9 scenarios; each edr scenario is 1 call.
+Median reduction: **83%**. edr loses on plain text search (structured JSON adds overhead vs raw grep), but wins everywhere else. Biggest gains on structured operations (refs, map, signatures). Call counts are summed across all 9 scenarios; each edr scenario is 1 call.
 
 <details>
 <summary>Per-scenario breakdown (urfave/cli)</summary>
