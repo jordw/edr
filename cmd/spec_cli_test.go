@@ -2469,41 +2469,6 @@ func TestSpec_StatusEmpty(t *testing.T) {
 	if len(result.Ops) == 0 {
 		t.Fatal("expected at least one op")
 	}
-	header := result.Ops[0].Header
-	ops, _ := header["ops"].(float64)
-	if ops != 0 {
-		t.Errorf("expected ops=0, got %v", ops)
-	}
-}
-
-func TestSpec_StatusWithRecentOps(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
-	})
-	sessEnv := []string{"EDR_SESSION=test-next"}
-
-	// Read a symbol to create an op
-	_, _, _, exit := specRun(t, binary, dir, sessEnv, "read", "main.go:hello")
-	if exit != 0 {
-		t.Fatal("read failed")
-	}
-
-	// Check next shows the op
-	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
-	if exit != 0 {
-		t.Fatalf("exit %d", exit)
-	}
-	header := result.Ops[0].Header
-	ops, _ := header["ops"].(float64)
-	if ops != 1 {
-		t.Errorf("expected ops=1, got %v", ops)
-	}
-	if !strings.Contains(stdout, "symbol_read") {
-		t.Errorf("expected 'symbol_read' in output, got: %s", stdout)
-	}
-	if !strings.Contains(stdout, "main.go:hello") {
-		t.Errorf("expected 'main.go:hello' in output, got: %s", stdout)
-	}
 }
 
 func TestSpec_StatusFocus(t *testing.T) {
@@ -2595,101 +2560,11 @@ func TestSpec_StatusStaleAssumption(t *testing.T) {
 	if fixCount < 1 {
 		t.Errorf("expected fix>=1, got %v\nstdout: %s", fixCount, stdout)
 	}
-	if !strings.Contains(stdout, "stale_assumption") {
-		t.Errorf("expected 'stale_assumption' in output: %s", stdout)
+	if !strings.Contains(stdout, "signature changed") {
+		t.Errorf("expected 'signature changed' in output: %s", stdout)
 	}
 	if !strings.Contains(stdout, "hello") {
 		t.Errorf("expected 'hello' in fix output: %s", stdout)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Status: current section
-// ---------------------------------------------------------------------------
-
-func TestSpec_StatusCurrentModified(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n\nfunc greet(name string) string { return name }\n",
-	})
-	sessEnv := []string{"EDR_SESSION=test-current-mod"}
-
-	// Edit hello (symbol-scoped via --in)
-	_, _, _, exit := specRun(t, binary, dir, sessEnv, "edit", "main.go",
-		"--in", "hello", "--old-text", `println("hi")`, "--new-text", `println("hello world")`)
-	if exit != 0 {
-		t.Fatal("edit failed")
-	}
-
-	// Next should show hello as modified in current
-	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
-	if exit != 0 {
-		t.Fatalf("exit %d", exit)
-	}
-	header := result.Ops[0].Header
-	currentCount, _ := header["current"].(float64)
-	if currentCount < 1 {
-		t.Errorf("expected current>=1, got %v\nstdout: %s", currentCount, stdout)
-	}
-	if !strings.Contains(stdout, "hello(modified)") {
-		t.Errorf("expected hello(modified) in current: %s", stdout)
-	}
-	if !strings.Contains(stdout, "func hello()") {
-		t.Errorf("expected signature in current: %s", stdout)
-	}
-}
-
-func TestSpec_StatusCurrentRecent(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
-	})
-	sessEnv := []string{"EDR_SESSION=test-current-recent"}
-
-	// Read hello (symbol-scoped — records assumption)
-	_, _, _, exit := specRun(t, binary, dir, sessEnv, "read", "main.go:hello")
-	if exit != 0 {
-		t.Fatal("read failed")
-	}
-
-	// Next should show hello as recent in current
-	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
-	if exit != 0 {
-		t.Fatalf("exit %d", exit)
-	}
-	if !strings.Contains(stdout, "hello(recent)") {
-		t.Errorf("expected hello(recent) in current: %s", stdout)
-	}
-}
-
-func TestSpec_StatusCurrentStale(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
-	})
-	sessEnv := []string{"EDR_SESSION=test-current-stale"}
-
-	// Read hello (records assumption)
-	_, _, _, exit := specRun(t, binary, dir, sessEnv, "read", "main.go:hello")
-	if exit != 0 {
-		t.Fatal("read failed")
-	}
-
-	// Edit hello's signature
-	_, _, _, exit = specRun(t, binary, dir, sessEnv, "edit", "main.go",
-		"--old-text", "func hello()", "--new-text", "func hello(name string)")
-	if exit != 0 {
-		t.Fatal("edit failed")
-	}
-
-	// Next should show hello as stale in current (not just recent)
-	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
-	if exit != 0 {
-		t.Fatalf("exit %d", exit)
-	}
-	if !strings.Contains(stdout, "hello(stale)") {
-		t.Errorf("expected hello(stale) in current: %s", stdout)
-	}
-	// Should show the NEW signature (what the code looks like now)
-	if !strings.Contains(stdout, "name string") {
-		t.Errorf("expected new signature with 'name string' in current: %s", stdout)
 	}
 }
 

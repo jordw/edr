@@ -576,9 +576,6 @@ func plainReindex(w *os.File, op Op) {
 
 func plainNext(w *os.File, op Op) {
 	h := map[string]any{}
-	if v, ok := op["total_ops"]; ok {
-		h["ops"] = v
-	}
 	hStr(h, "focus", op, "focus")
 
 	// Add build status to header
@@ -593,19 +590,9 @@ func plainNext(w *os.File, op Op) {
 		h["fix"] = len(fix)
 	}
 
-	// Add current count to header
-	if current, ok := op["current"].([]any); ok && len(current) > 0 {
-		h["current"] = len(current)
-	}
-
 	// Add external changes count to header
 	if ext, ok := op["external_changes"].([]any); ok && len(ext) > 0 {
 		h["external_changes"] = len(ext)
-	}
-
-	// Add suggestions count to header
-	if sug := toStringSlice(op["suggestions"]); len(sug) > 0 {
-		h["suggestions"] = len(sug)
 	}
 
 	writeHeader(w, h)
@@ -615,38 +602,10 @@ func plainNext(w *os.File, op Op) {
 		fmt.Fprintf(w, "focus: %s\n\n", focus)
 	}
 
-	// Recent ops
-	if recent, ok := op["recent"].([]any); ok && len(recent) > 0 {
-		fmt.Fprintln(w, "recent:")
-		for _, r := range recent {
-			rm, ok := r.(map[string]any)
-			if !ok {
-				continue
-			}
-			opID, _ := rm["op_id"].(string)
-			file, _ := rm["file"].(string)
-			symbol, _ := rm["symbol"].(string)
-			kind, _ := rm["kind"].(string)
-
-			loc := file
-			if symbol != "" {
-				loc = file + ":" + symbol
-			}
-			if loc == "" {
-				loc = "-"
-			}
-
-			fmt.Fprintf(w, "  %s: %s — %s\n", opID, loc, kind)
-		}
-	} else {
-		fmt.Fprintln(w, "(no recent ops)")
-	}
-
 	// Build state
 	if build, ok := op["build"].(map[string]any); ok {
 		status, _ := build["status"].(string)
 		editsSince, _ := build["edits_since"].(bool)
-		fmt.Fprintln(w)
 		if editsSince {
 			fmt.Fprintf(w, "build: %s (edits since last verify)\n", status)
 		} else {
@@ -663,22 +622,14 @@ func plainNext(w *os.File, op Op) {
 			if !ok {
 				continue
 			}
-			id, _ := fm["id"].(string)
-			typ, _ := fm["type"].(string)
-			confidence, _ := fm["confidence"].(string)
 			file, _ := fm["file"].(string)
 			symbol, _ := fm["symbol"].(string)
 			reason, _ := fm["reason"].(string)
-			assumedAt, _ := fm["assumed_at"].(string)
 			suggest, _ := fm["suggest"].(string)
 
-			fmt.Fprintf(w, "  [%s] %s (%s)\n", id, typ, confidence)
-			detail := fmt.Sprintf("    %s:%s", file, symbol)
+			detail := fmt.Sprintf("  %s:%s", file, symbol)
 			if reason != "" {
 				detail += " — " + reason
-			}
-			if assumedAt != "" {
-				detail += fmt.Sprintf(" (read at %s)", assumedAt)
 			}
 			fmt.Fprintln(w, detail)
 			if suggest != "" {
@@ -704,32 +655,6 @@ func plainNext(w *os.File, op Op) {
 				line += fmt.Sprintf(" (since %s)", since)
 			}
 			fmt.Fprintln(w, line)
-		}
-	}
-
-	// Suggestions from pattern analysis
-	if sug := toStringSlice(op["suggestions"]); len(sug) > 0 {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "suggestions:")
-		for _, msg := range sug {
-			fmt.Fprintf(w, "  %s\n", msg)
-		}
-	}
-
-	// Current: live signatures of active symbols
-	if current, ok := op["current"].([]any); ok && len(current) > 0 {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "current:")
-		for _, c := range current {
-			cm, ok := c.(map[string]any)
-			if !ok {
-				continue
-			}
-			symbol, _ := cm["symbol"].(string)
-			reason, _ := cm["reason"].(string)
-			sig, _ := cm["signature"].(string)
-
-			fmt.Fprintf(w, "  %s(%s): %s\n", symbol, reason, sig)
 		}
 	}
 }

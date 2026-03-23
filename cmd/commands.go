@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/pprof"
-	"sort"
 	"strings"
 
 	"github.com/jordw/edr/internal/cmdspec"
@@ -530,7 +529,7 @@ func init() { cmdspec.RegisterFlags(verifyCmd.Flags(), "verify") }
 var statusCmd = &cobra.Command{
 	Use:     "status",
 	Aliases: []string{"context"},
-	Short:   "Session status: recent ops, build state, action items",
+	Short:   "Session status: build state, stale assumptions, external changes",
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := getRoot(cmd)
@@ -547,11 +546,6 @@ var statusCmd = &cobra.Command{
 			sess.SetFocus(focusVal)
 		}
 
-		count := 10
-		if v, ok := flags["count"].(int); ok && v > 0 {
-			count = v
-		}
-
 		// Open DB for assumption checking (best-effort — status works without it)
 		var db *index.DB
 		db, _ = openDBStrictRoot(root)
@@ -559,7 +553,7 @@ var statusCmd = &cobra.Command{
 			defer db.Close()
 		}
 
-		result := buildNextResult(sess, db, root, count)
+		result := buildNextResult(sess, db, root)
 		env := output.NewEnvelope("status")
 		env.AddOp("s0", "status", result)
 		env.ComputeOK()
@@ -664,41 +658,13 @@ var undoCmd = &cobra.Command{
 func init() { cmdspec.RegisterFlags(undoCmd.Flags(), "undo") }
 
 // buildNextResult constructs the result map for `edr next`.
-func buildNextResult(sess *session.Session, db *index.DB, root string, count int) map[string]any {
+func buildNextResult(sess *session.Session, db *index.DB, root string) map[string]any {
 	result := map[string]any{}
 
 	// Focus
 	if focus := sess.GetFocus(); focus != "" {
 		result["focus"] = focus
 	}
-
-	// Recent ops (reverse order — most recent first)
-	ops := sess.GetRecentOps(count)
-	if len(ops) > 0 {
-		recent := make([]any, len(ops))
-		for i, op := range ops {
-			entry := map[string]any{
-				"op_id": op.OpID,
-				"cmd":   op.Cmd,
-				"kind":  op.Kind,
-			}
-			if op.File != "" {
-				entry["file"] = op.File
-			}
-			if op.Symbol != "" {
-				entry["symbol"] = op.Symbol
-			}
-			if !op.OK {
-				entry["ok"] = false
-			}
-			recent[i] = entry
-		}
-		result["recent"] = recent
-	}
-
-	// Total op count
-	allOps := sess.GetRecentOps(0)
-	result["total_ops"] = len(allOps)
 
 	// Build state
 	buildStatus, editsSince := sess.BuildState()
@@ -716,16 +682,6 @@ func buildNextResult(sess *session.Session, db *index.DB, root string, count int
 		if len(fix) > 0 {
 			result["fix"] = fix
 		}
-
-		current := computeCurrentItems(sess, db)
-		if len(current) > 0 {
-			result["current"] = current
-		}
-	}
-
-	// Session-pattern suggestions
-	if suggestions := analyzePatterns(sess); len(suggestions) > 0 {
-		result["suggestions"] = suggestions
 	}
 
 	// External file modifications
@@ -744,117 +700,6 @@ func buildNextResult(sess *session.Session, db *index.DB, root string, count int
 	}
 
 	return result
-}
-
-// analyzePatterns scans the session op log for suboptimal usage patterns
-// and returns actionable suggestions for the agent.
-func analyzePatterns(sess *session.Session) []string {
-	ops := sess.GetRecentOps(0) // all ops
-	if len(ops) < 3 {
-		return nil // too few ops to detect patterns
-	}
-
-	var suggestions []string
-
-	// 1. Full-file reads without --skeleton or --budget
-	fullReads := 0
-	for _, op := range ops {
-		if op.Cmd == "read" && op.OK && op.Action == "read_symbol" && op.Symbol == "" {
-			fullReads++
-		}
-	}
-	if fullReads >= 3 {
-		suggestions = append(suggestions, fmt.Sprintf(
-			"%d full-file reads without --skeleton or --budget — these waste context tokens",
-			fullReads))
-	}
-
-	// 2. Sequential reads that could be batched — emit the actual command
-	suggestions = append(suggestions, suggestBatchReads(ops)...)
-
-	// 3. Edits without a prior refs check on the same symbol
-	refsChecked := make(map[string]bool)
-	editsWithoutRefs := 0
-	for _, op := range ops {
-		if op.Cmd == "refs" && op.OK && op.File != "" {
-			key := op.File
-			if op.Symbol != "" {
-				key += ":" + op.Symbol
-			}
-			refsChecked[key] = true
-		}
-		if (op.Cmd == "edit" || op.Cmd == "rename") && op.OK && op.Symbol != "" {
-			key := op.File + ":" + op.Symbol
-			if !refsChecked[key] && !refsChecked[op.File] {
-				editsWithoutRefs++
-			}
-		}
-	}
-	if editsWithoutRefs >= 2 {
-		suggestions = append(suggestions, fmt.Sprintf(
-			"%d symbol edits without prior refs check — use edr refs Symbol --impact before refactoring",
-			editsWithoutRefs))
-	}
-
-	// 4. Edit immediately followed by read of the same file
-	suggestions = append(suggestions, suggestReadBack(ops)...)
-
-	return suggestions
-}
-
-// suggestBatchReads finds runs of 3+ sequential reads and emits
-// the concrete batch command the agent should have used.
-func suggestBatchReads(ops []session.OpEntry) []string {
-	var suggestions []string
-	var run []session.OpEntry
-
-	flushRun := func() {
-		if len(run) < 3 {
-			run = run[:0]
-			return
-		}
-		var parts []string
-		for _, op := range run {
-			target := op.File
-			if op.Symbol != "" {
-				target += ":" + op.Symbol
-			}
-			parts = append(parts, "-r "+target)
-		}
-		suggestions = append(suggestions, fmt.Sprintf(
-			"%d sequential reads — next time: edr %s",
-			len(run), strings.Join(parts, " ")))
-		run = run[:0]
-	}
-
-	for _, op := range ops {
-		if op.Cmd == "read" && op.OK {
-			run = append(run, op)
-		} else {
-			flushRun()
-		}
-	}
-	flushRun()
-	return suggestions
-}
-
-// suggestReadBack detects edit→read on the same file and suggests --read-back.
-func suggestReadBack(ops []session.OpEntry) []string {
-	var suggestions []string
-	count := 0
-	for i := 1; i < len(ops); i++ {
-		prev := ops[i-1]
-		cur := ops[i]
-		if prev.Cmd == "edit" && prev.OK && cur.Cmd == "read" && cur.OK && cur.File == prev.File {
-			count++
-		}
-	}
-	if count >= 2 {
-		suggestions = append(suggestions, fmt.Sprintf(
-			"%d edits followed by reads of the same file — use --read-back on the edit instead",
-			count))
-	}
-	return suggestions
 }
 
 // computeStaleAssumptions resolves current signatures for all tracked assumptions
@@ -923,179 +768,6 @@ func computeFixItems(sess *session.Session, db *index.DB) []any {
 		fix = append(fix, item)
 	}
 	return fix
-}
-
-// MaxCurrentItems is the hard cap on symbols in the current: section.
-const MaxCurrentItems = 10
-
-// currentItem represents one symbol in the current: section of next output.
-type currentItem struct {
-	File   string
-	Symbol string
-	Reason string // "modified", "stale", "recent"
-	Sig    string // current signature from index
-}
-
-// computeCurrentItems builds the current: section — live signatures of active symbols.
-// Sources (in priority order): modified symbols, stale assumptions, recent symbol reads.
-// Deduplicates by file:symbol, caps at MaxCurrentItems.
-func computeCurrentItems(sess *session.Session, db *index.DB) []any {
-	if db == nil {
-		return nil
-	}
-
-	type candidate struct {
-		file, symbol, reason string
-		priority             int // 0 = modified (highest), 1 = stale, 2 = recent
-	}
-
-	seen := make(map[string]bool)
-	var candidates []candidate
-
-	addCandidate := func(file, symbol, reason string, priority int) {
-		if file == "" || symbol == "" {
-			return
-		}
-		key := file + ":" + symbol
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		candidates = append(candidates, candidate{file, symbol, reason, priority})
-	}
-
-	// 1. Modified symbols: walk op log for edit/write ops with a symbol
-	allOps := sess.GetRecentOps(0)
-	for i := len(allOps) - 1; i >= 0; i-- {
-		op := allOps[i]
-		if !op.OK || op.Symbol == "" {
-			continue
-		}
-		switch op.Cmd {
-		case "edit", "write":
-			addCandidate(op.File, op.Symbol, "modified", 0)
-		}
-	}
-
-	// 2. Stale assumptions
-	assumptions := sess.GetAssumptions()
-	// We need current sigs to check staleness — reuse the same logic as computeFixItems
-	ctx := context.Background()
-	currentSigs := make(map[string]string, len(assumptions))
-	for key := range assumptions {
-		idx := strings.IndexByte(key, ':')
-		if idx <= 0 {
-			continue
-		}
-		file, symName := key[:idx], key[idx+1:]
-		absFile, err := db.ResolvePath(file)
-		if err != nil {
-			continue
-		}
-		syms, err := db.GetSymbolsByFile(ctx, absFile)
-		if err != nil {
-			continue
-		}
-		src, err := os.ReadFile(absFile)
-		if err != nil {
-			continue
-		}
-		for _, sym := range syms {
-			if sym.Name == symName {
-				sig := index.ExtractSignatureFromSource(sym, src)
-				currentSigs[key] = session.SigHash(sig)
-				break
-			}
-		}
-	}
-	stale := sess.CheckAssumptions(currentSigs)
-	for _, s := range stale {
-		addCandidate(s.File, s.Symbol, "stale", 1)
-	}
-
-	// 3. Recent symbol-scoped reads (last 20 ops, most recent first)
-	recentLimit := 20
-	if recentLimit > len(allOps) {
-		recentLimit = len(allOps)
-	}
-	for i := len(allOps) - 1; i >= len(allOps)-recentLimit; i-- {
-		if i < 0 {
-			break
-		}
-		op := allOps[i]
-		if op.Cmd == "read" && op.Symbol != "" && op.OK {
-			addCandidate(op.File, op.Symbol, "recent", 2)
-		}
-	}
-
-	if len(candidates) == 0 {
-		return nil
-	}
-
-	// Sort by priority (modified first, then stale, then recent)
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return candidates[i].priority < candidates[j].priority
-	})
-
-	// Cap
-	if len(candidates) > MaxCurrentItems {
-		candidates = candidates[:MaxCurrentItems]
-	}
-
-	// Resolve current signatures from index
-	var items []any
-	for _, c := range candidates {
-		absFile, err := db.ResolvePath(c.file)
-		if err != nil {
-			continue
-		}
-		syms, err := db.GetSymbolsByFile(ctx, absFile)
-		if err != nil {
-			continue
-		}
-		src, err := os.ReadFile(absFile)
-		if err != nil {
-			continue
-		}
-		for _, sym := range syms {
-			if sym.Name == c.symbol {
-				sig := index.ExtractSignatureFromSource(sym, src)
-				sig = trimSignature(sig, c.symbol)
-				items = append(items, map[string]any{
-					"file":      c.file,
-					"symbol":    c.symbol,
-					"reason":    c.reason,
-					"signature": sig,
-				})
-				break
-			}
-		}
-	}
-
-	return items
-}
-
-// trimSignature cleans up multi-line signatures for compact display.
-func trimSignature(sig, symbol string) string {
-	if !strings.Contains(sig, "\n") {
-		return sig
-	}
-	lines := strings.Split(sig, "\n")
-	// Prefer declaration lines (func/type/class/def/etc.) that contain the symbol name
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.Contains(trimmed, symbol) && !strings.HasPrefix(trimmed, "//") && !strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, "*") {
-			return trimmed
-		}
-	}
-	// Fallback: first non-empty, non-comment line
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" && !strings.HasPrefix(trimmed, "//") && !strings.HasPrefix(trimmed, "#") {
-			return trimmed
-		}
-	}
-	return strings.TrimSpace(lines[0])
 }
 
 // injectSessionHash adds stale-read protection for mutations. If the session
