@@ -461,7 +461,7 @@ func init() { cmdspec.RegisterFlags(verifyCmd.Flags(), "verify") }
 
 var contextCmd = &cobra.Command{
 	Use:     "context",
-	Aliases: []string{"status", "next"},
+	Aliases: []string{},
 	Short:   "Session context: recent ops, build state, action items",
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {

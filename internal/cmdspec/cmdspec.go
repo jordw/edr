@@ -262,8 +262,6 @@ func init() {
 		}
 	}
 	// Hidden command aliases: old names → new specs
-	byName["next"] = byName["context"]
-	byName["status"] = byName["context"]
 	byName["reindex"] = byName["reset"]
 }
 

@@ -70,7 +70,7 @@ func printPlain(e *Envelope) {
 			plainRefs(w, op)
 		case "reindex", "reset":
 			plainReindex(w, op)
-		case "next", "status", "context":
+		case "context":
 			plainNext(w, op)
 		case "checkpoint":
 			plainCheckpoint(w, op)
