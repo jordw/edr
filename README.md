@@ -123,7 +123,7 @@ edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "..."
 | `verify` | `edr verify`, `edr verify --level test` |
 | `delta` | `edr delta -- make test` shows only what changed |
 | `status` | `edr status`, `edr status --focus "goal"` |
-| `checkpoint` | `edr checkpoint`, `--restore cp_1`, `--list`, `--diff cp_1` |
+| `undo` | `edr undo` — revert the last edit/write (auto-checkpointed) |
 | `reset` | `edr reset`, `--index`, `--session` |
 | `setup` | `edr setup`, `edr setup --force` |
 

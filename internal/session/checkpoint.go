@@ -39,11 +39,9 @@ type SessionSnap struct {
 	FileMtimes       map[string]FileMtimeEntry  `json:"file_mtimes,omitempty"`
 }
 
-// MaxCheckpoints is the limit on explicit checkpoints per session.
-const MaxCheckpoints = 20
-
-// MaxAutoCheckpoints is the limit on auto-checkpoints (rolling).
-const MaxAutoCheckpoints = 3
+// MaxUndoStack is the maximum number of auto-checkpoints kept.
+// Oldest are evicted when the cap is reached.
+const MaxUndoStack = 20
 
 // CheckpointInfo is a lightweight summary for listing.
 type CheckpointInfo struct {
@@ -81,14 +79,25 @@ func (s *Session) CreateAutoCheckpoint(sessDir, repoRoot, label string, dirtyFil
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	id := "cp_auto_" + label
+	// Sequential IDs: find the highest existing auto-checkpoint number
+	existing := ListCheckpoints(sessDir)
+	maxNum := 0
+	for _, cp := range existing {
+		if strings.HasPrefix(cp.ID, "cp_auto_") {
+			numStr := cp.ID[len("cp_auto_"):]
+			var n int
+			if _, err := fmt.Sscanf(numStr, "%d", &n); err == nil && n > maxNum {
+				maxNum = n
+			}
+		}
+	}
+	id := fmt.Sprintf("cp_auto_%d", maxNum+1)
 
-	cp := s.buildCheckpoint(id, "auto: "+label, repoRoot, dirtyFiles)
+	cp := s.buildCheckpoint(id, label, repoRoot, dirtyFiles)
 	if err := saveCheckpoint(sessDir, cp); err != nil {
 		return nil, fmt.Errorf("save auto checkpoint: %w", err)
 	}
 
-	// Enforce auto-checkpoint cap
 	s.enforceAutoCheckpointCap(sessDir)
 	return cp, nil
 }
@@ -366,9 +375,7 @@ func (s *Session) nextCheckpointID(sessDir string, isAuto bool) (string, error) 
 		}
 	}
 
-	if explicitCount >= MaxCheckpoints {
-		return "", fmt.Errorf("checkpoint limit reached (%d); drop one first", MaxCheckpoints)
-	}
+	// No cap on explicit checkpoints (used only by tests now)
 
 	return fmt.Sprintf("cp_%d", maxNum+1), nil
 }
@@ -410,7 +417,7 @@ func (s *Session) enforceAutoCheckpointCap(sessDir string) {
 			autos = append(autos, cp)
 		}
 	}
-	for len(autos) > MaxAutoCheckpoints {
+	for len(autos) > MaxUndoStack {
 		DropCheckpoint(sessDir, autos[0].ID)
 		autos = autos[1:]
 	}

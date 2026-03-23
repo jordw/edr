@@ -44,4 +44,4 @@ Run shell commands via `edr delta -- cmd` (re-runs show only changes). Run `edr 
 - `edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"` — multi-file edit
 
 ## Session
-Automatic. `edr reset --session` after context reset. `edr checkpoint` before risky changes.
+Automatic. `edr reset --session` after context reset. `edr undo` reverts the last edit/write.

@@ -92,8 +92,6 @@ func printPlain(e *Envelope) {
 			plainReindex(w, op)
 		case "status":
 			plainNext(w, op)
-		case "checkpoint":
-			plainCheckpoint(w, op)
 		case "undo":
 			plainUndo(w, op)
 		default:
@@ -754,90 +752,6 @@ func plainUndo(w *os.File, op Op) {
 		for _, f := range kept {
 			fmt.Fprintf(w, "  %s\n", f)
 		}
-	}
-}
-
-func plainCheckpoint(w *os.File, op Op) {
-	status, _ := op["status"].(string)
-
-	switch status {
-	case "created":
-		h := map[string]any{"status": "created"}
-		hStr(h, "id", op, "id")
-		hStr(h, "label", op, "label")
-		hStr(h, "op_id", op, "op_id")
-		if fc, ok := op["file_count"]; ok {
-			h["files"] = fc
-		}
-		writeHeader(w, h)
-
-	case "restored":
-		h := map[string]any{"status": "restored"}
-		hStr(h, "target", op, "target")
-		hStr(h, "pre_restore", op, "pre_restore_checkpoint")
-		if restored, ok := op["restored"].([]string); ok {
-			h["files"] = len(restored)
-		}
-		writeHeader(w, h)
-		if restored, ok := op["restored"].([]string); ok && len(restored) > 0 {
-			fmt.Fprintln(w, "restored:")
-			for _, f := range restored {
-				fmt.Fprintf(w, "  %s\n", f)
-			}
-		}
-		if notRemoved, ok := op["not_removed"].([]string); ok && len(notRemoved) > 0 {
-			fmt.Fprintln(w, "\nnot removed (created after checkpoint):")
-			for _, f := range notRemoved {
-				fmt.Fprintf(w, "  %s\n", f)
-			}
-		}
-
-	case "dropped":
-		h := map[string]any{"status": "dropped"}
-		hStr(h, "id", op, "id")
-		writeHeader(w, h)
-
-	default:
-		// --list, --diff, or unknown
-		if cps, ok := op["checkpoints"]; ok {
-			writeHeader(w, map[string]any{"status": "list"})
-			if items, ok := cps.([]any); ok && len(items) > 0 {
-				for _, item := range items {
-					if m, ok := item.(map[string]any); ok {
-						id, _ := m["id"].(string)
-						label, _ := m["label"].(string)
-						fc, _ := m["file_count"]
-						opID, _ := m["op_id"].(string)
-						line := fmt.Sprintf("  %s", id)
-						if label != "" {
-							line += fmt.Sprintf(" (%s)", label)
-						}
-						line += fmt.Sprintf(" — %v files, at %s", fc, opID)
-						fmt.Fprintln(w, line)
-					}
-				}
-			} else {
-				fmt.Fprintln(w, "(no checkpoints)")
-			}
-			return
-		}
-		if diffs, ok := op["diffs"]; ok {
-			cpID, _ := op["checkpoint"].(string)
-			writeHeader(w, map[string]any{"status": "diff", "checkpoint": cpID})
-			if items, ok := diffs.([]any); ok && len(items) > 0 {
-				for _, item := range items {
-					if m, ok := item.(map[string]any); ok {
-						path, _ := m["path"].(string)
-						st, _ := m["status"].(string)
-						fmt.Fprintf(w, "  %s: %s\n", st, path)
-					}
-				}
-			} else {
-				fmt.Fprintln(w, "(no changes)")
-			}
-			return
-		}
-		writeHeader(w, op)
 	}
 }
 

@@ -175,7 +175,6 @@ func TestOpenerAlignment(t *testing.T) {
 		tested["runCmd"] = true
 		tested["statusCmd"] = true
 		tested["sessionCmd"] = true // hidden compat command
-		tested["checkpointCmd"] = true
 		tested["undoCmd"] = true
 
 		for _, m := range matches {

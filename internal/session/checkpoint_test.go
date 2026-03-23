@@ -104,26 +104,6 @@ func TestCreateCheckpoint_IncrementingIDs(t *testing.T) {
 	}
 }
 
-func TestCreateCheckpoint_MaxLimit(t *testing.T) {
-	dir := t.TempDir()
-	sessDir := filepath.Join(dir, "sessions")
-	repoRoot := filepath.Join(dir, "repo")
-	os.MkdirAll(repoRoot, 0755)
-
-	s := New()
-	for i := 0; i < MaxCheckpoints; i++ {
-		_, err := s.CreateCheckpoint(sessDir, repoRoot, "", nil)
-		if err != nil {
-			t.Fatalf("checkpoint %d: %v", i, err)
-		}
-	}
-	// 21st should fail
-	_, err := s.CreateCheckpoint(sessDir, repoRoot, "", nil)
-	if err == nil {
-		t.Error("expected error at checkpoint limit")
-	}
-}
-
 func TestCreateCheckpoint_SkipsMissingFiles(t *testing.T) {
 	dir := t.TempDir()
 	sessDir := filepath.Join(dir, "sessions")
