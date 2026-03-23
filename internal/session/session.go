@@ -686,7 +686,7 @@ func (s *Session) invalidateFile(file string) {
 func (s *Session) InvalidateForEdit(cmd string, args []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if cmd == "rename" || cmd == "reindex" {
+	if cmd == "rename" {
 		s.FileContent = make(map[string]ContentEntry)
 		s.SymbolContent = make(map[string]ContentEntry)
 		s.SeenBodies = make(map[string]string)

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/jordw/edr/internal/output"
@@ -137,19 +138,8 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	globalExplicit, _ := cmd.Flags().GetBool("global")
 	noGlobal, _ := cmd.Flags().GetBool("no-global")
 
-	// Step 1: Index (unless --skip-index).
-	skipIndex, _ := cmd.Flags().GetBool("skip-index")
-	if !skipIndex {
-		db, err := openDBAndIndex(root, jsonOut)
-		if err != nil {
-			result.Error = fmt.Sprintf("index failed: %v", err)
-			return printSetupOutput(result, jsonOut)
-		}
-		db.Close()
-		result.Indexed = true
-	}
-
-	// Step 2: Ensure .edr/ in .gitignore.
+	// Step 1: Create .edr/ and ensure it's in .gitignore.
+	os.MkdirAll(filepath.Join(root, ".edr"), 0700)
 	if err := setup.EnsureGitignore(root); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: gitignore: %v\n", err)
 	} else {

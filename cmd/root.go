@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,15 +63,11 @@ func Execute() {
 		// Exit 0 because the agent reads ok:false from the output;
 		// non-zero exit codes just alarm the human watching the terminal.
 		cmdName := detectCommandName()
-		if ie, ok := err.(*IndexError); ok {
-			output.ErrorEnvelope(cmdName, ie.Code, ie.Message)
+		msg := err.Error()
+		if strings.Contains(msg, "no such file or directory") {
+			output.ErrorEnvelope(cmdName, "file_not_found", msg)
 		} else {
-			msg := err.Error()
-			if strings.Contains(msg, "no such file or directory") {
-				output.ErrorEnvelope(cmdName, "file_not_found", msg)
-			} else {
-				output.ErrorEnvelope(cmdName, "command_error", msg)
-			}
+			output.ErrorEnvelope(cmdName, "command_error", msg)
 		}
 	}
 }
@@ -82,7 +76,7 @@ func Execute() {
 var knownCommands = map[string]bool{
 	"read": true, "write": true, "edit": true, "map": true,
 	"search": true, "refs": true, "rename": true, "verify": true,
-	"reindex": true, "setup": true, "batch": true,
+	"reset": true, "setup": true, "batch": true,
 }
 
 // detectCommandName extracts the subcommand name from os.Args.
@@ -130,154 +124,14 @@ func init() {
 // Verbose returns true if --verbose was set.
 func Verbose() bool { return verbose }
 
-// useSQLite returns true when the legacy SQLite-backed store is selected via EDR_SQLITE=1.
-func useSQLite() bool {
-	return os.Getenv("EDR_SQLITE") == "1"
-}
-
-// openStore returns a SymbolStore — on-demand by default, SQLite with EDR_SQLITE=1.
+// openStore returns a SymbolStore for the given root.
 func openStore(root string) (index.SymbolStore, error) {
-	if useSQLite() {
-		return openDBStrictRoot(root)
-	}
 	output.SetRoot(root)
 	return index.NewOnDemand(root), nil
 }
 
-// openStoreAndIndex returns a SymbolStore, auto-indexing if SQLite-backed.
-func openStoreAndIndex(root string, quiet bool) (index.SymbolStore, error) {
-	if useSQLite() {
-		return openDBAndIndex(root, quiet)
-	}
-	output.SetRoot(root)
-	return index.NewOnDemand(root), nil
-}
 
-func openDBStrict(cmd *cobra.Command) (*index.DB, error) {
-	return openDBStrictRoot(getRoot(cmd))
-}
 
-// IndexError is a structured error for missing or empty index.
-// It carries an error code ("no_index" or "empty_index") so that
-// callers can produce structured JSON output with the correct code.
-type IndexError struct {
-	Code    string // "no_index" or "empty_index"
-	Message string
-}
-
-func (e *IndexError) Error() string { return e.Message }
-
-// openDBStrictRoot opens the DB, validates the index exists, and returns an error if not.
-func openDBStrictRoot(root string) (*index.DB, error) {
-	db, err := index.OpenDB(root)
-	if err != nil {
-		return nil, err
-	}
-	ctx := context.Background()
-	files, _, err := db.Stats(ctx)
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	if files == 0 {
-		// Auto-index on first use instead of failing.
-		indexed := false
-		if lockErr := db.WithWriteLock(func() error {
-			// Recheck after acquiring lock — another process may have indexed.
-			currentFiles, _, _ := db.Stats(ctx)
-			if currentFiles > 0 {
-				return nil
-			}
-			if verbose {
-				fmt.Fprintf(os.Stderr, "edr: no index found, indexing repository...\n")
-			}
-			_, _, e := index.IndexRepo(ctx, db)
-			indexed = e == nil
-			return e
-		}); lockErr != nil {
-			db.Close()
-			return nil, lockErr
-		}
-		if indexed && verbose {
-			totalFiles, totalSyms, _ := db.Stats(ctx)
-			fmt.Fprintf(os.Stderr, "edr: index ready (%d files, %d symbols)\n", totalFiles, totalSyms)
-		}
-	}
-	output.SetRoot(db.Root())
-	return db, nil
-}
-
-// openDBAndIndex opens the DB and bootstraps the index if needed.
-// Only used by reindex, setup, and batch (which may contain edits that need verification).
-func openDBAndIndex(root string, quiet bool) (*index.DB, error) {
-	db, err := index.OpenDB(root)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx := context.Background()
-	files, _, err := db.Stats(ctx)
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-
-	needsIndex := files == 0
-	if !needsIndex {
-		if stale, _ := index.HasStaleFiles(ctx, db); stale {
-			needsIndex = true
-		}
-	}
-
-	if needsIndex {
-		firstIndex := files == 0
-		indexed := false
-		err = db.WithWriteLock(func() error {
-			// Recheck after acquiring lock — another process may have indexed already
-			currentFiles, _, _ := db.Stats(ctx)
-			if firstIndex && currentFiles > 0 {
-				return nil
-			}
-			if !firstIndex {
-				if stale, _ := index.HasStaleFiles(ctx, db); !stale {
-					return nil
-				}
-			}
-			if !quiet {
-				if firstIndex {
-					fmt.Fprintf(os.Stderr, "edr: no index found, indexing repository...\n")
-				} else {
-					fmt.Fprintf(os.Stderr, "edr: index stale, re-indexing...\n")
-				}
-			}
-			var progress index.ProgressFunc
-			if !quiet {
-				progress = func(files, symbols int) {
-					fmt.Fprintf(os.Stderr, "\redr: indexed %d files (%d symbols)...", files, symbols)
-				}
-			}
-			_, _, e := index.IndexRepo(ctx, db, progress)
-			indexed = e == nil
-			return e
-		})
-		if err != nil {
-			db.Close()
-			return nil, err
-		}
-		if indexed {
-			totalFiles, totalSyms, _ := db.Stats(ctx)
-			if !quiet {
-				fmt.Fprintf(os.Stderr, "\redr: index ready (%d files, %d symbols)\n", totalFiles, totalSyms)
-			}
-			if totalFiles == 0 && !quiet {
-				fmt.Fprintf(os.Stderr, "edr: warning: 0 files indexed in %s\n", root)
-			}
-		}
-	}
-
-	output.SetRoot(db.Root())
-	return db, nil
-}
 
 func getRoot(cmd *cobra.Command) string {
 	root, _ := cmd.Flags().GetString("root")

@@ -47,7 +47,6 @@ type doParams struct {
 	Budget         *int       `json:"budget"`
 	DryRun         *bool      `json:"dry_run"`
 	Verify         any        `json:"verify"`
-	Reindex        *bool      `json:"reindex,omitempty"`
 	ReadAfterEdit  *bool      `json:"read_after_edit,omitempty"`
 	Atomic         *bool      `json:"atomic,omitempty"`
 }
@@ -583,7 +582,6 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 		return err
 	}
 
-	hasInit := p.Reindex != nil && *p.Reindex
 	hasReads := len(p.Reads) > 0
 	hasQueries := len(p.Queries) > 0
 	hasEdits := len(p.Edits) > 0
@@ -611,26 +609,9 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 		}
 	}
 
-	if !hasInit && !hasReads && !hasQueries && !hasEdits && !hasWrites && !hasRenames && !hasVerify {
-		env.AddError("empty_request", "request requires at least one of: reads, queries, edits, writes, renames, verify, reindex")
+	if !hasReads && !hasQueries && !hasEdits && !hasWrites && !hasRenames && !hasVerify {
+		env.AddError("empty_request", "request requires at least one of: reads, queries, edits, writes, renames, verify")
 		return nil
-	}
-
-	// 0. Reindex
-	if hasInit {
-		sess.InvalidateForEdit("reindex", []string{})
-		if sqlDB, ok := db.(*index.DB); ok {
-			if err := sqlDB.WithWriteLock(func() error {
-				_, _, err := index.IndexRepo(ctx, sqlDB)
-				return err
-			}); err != nil {
-				env.AddFailedOp("i0", "reindex", err.Error())
-			} else {
-				env.AddOp("i0", "reindex", map[string]any{"version": Version + "+" + BuildHash})
-			}
-		} else {
-			env.AddOp("i0", "reindex", map[string]any{"mode": "on-demand", "version": Version + "+" + BuildHash})
-		}
 	}
 
 	// 1. Reads

@@ -88,7 +88,7 @@ func printPlain(e *Envelope) {
 			plainMap(w, op)
 		case "refs":
 			plainRefs(w, op)
-		case "reindex", "reset":
+		case "reset":
 			plainReindex(w, op)
 		case "status":
 			plainNext(w, op)

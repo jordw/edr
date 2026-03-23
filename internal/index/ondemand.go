@@ -33,9 +33,14 @@ type cachedFile struct {
 
 // NewOnDemand creates an on-demand symbol store rooted at the given directory.
 func NewOnDemand(root string) *OnDemand {
+	if normalized, err := NormalizeRoot(root); err == nil {
+		root = normalized
+	}
+	edrDir := filepath.Join(root, ".edr")
+	os.MkdirAll(edrDir, 0700) // ensure .edr/ exists for sessions
 	return &OnDemand{
 		root:   root,
-		edrDir: filepath.Join(root, ".edr"),
+		edrDir: edrDir,
 		cache:  make(map[string]*cachedFile),
 	}
 }

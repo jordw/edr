@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime/pprof"
 	"strings"
 
 	"github.com/jordw/edr/internal/cmdspec"
@@ -36,30 +35,6 @@ func init() {
 	rootCmd.AddCommand(undoCmd)
 }
 
-// dispatchCmdWithIndex is like dispatchCmd but auto-indexes if needed.
-// Used only by reindex/init.
-func dispatchCmdWithIndex(cmd *cobra.Command, cmdName string, args []string) error {
-	flags := extractFlags(cmd)
-
-	db, err := openStoreAndIndex(getRoot(cmd), !verbose)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	env := output.NewEnvelope(cmdName)
-
-	opID := cmdName[:1] + "0"
-	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
-	if err != nil {
-		addDispatchFailedOp(env, opID, cmdName, err)
-	} else {
-		env.AddOp(opID, cmdName, result)
-	}
-	env.ComputeOK()
-	output.PrintEnvelope(env)
-	return nil
-}
 
 // dispatchCmd is the common pattern: open DB, dispatch, wrap in envelope, print.
 // Loads a file-backed session when EDR_SESSION is set.
@@ -407,70 +382,34 @@ func init() {
 
 var resetCmd = &cobra.Command{
 	Use:     "reset",
-	Aliases: []string{"reindex", "init"},
+	Aliases: []string{},
 	Short:   ToolDesc["reset"],
 	RunE: func(cmd *cobra.Command, args []string) error {
-		profPath, _ := cmd.Flags().GetString("cpuprofile")
-		if profPath != "" {
-			f, err := os.Create(profPath)
-			if err != nil {
-				return fmt.Errorf("create cpuprofile: %w", err)
-			}
-			pprof.StartCPUProfile(f)
-			defer func() {
-				pprof.StopCPUProfile()
-				f.Close()
-			}()
-		}
-
-		flags := extractFlags(cmd)
-		indexOnly, _ := flags["index"].(bool)
-		sessionOnly, _ := flags["session"].(bool)
-
 		root := getRoot(cmd)
 		edrDir := filepath.Join(root, ".edr")
 		result := map[string]any{"status": "reset"}
 
-		// Session reset
-		if !indexOnly {
-			if err := os.MkdirAll(filepath.Join(edrDir, "sessions"), 0700); err != nil {
-				return err
-			}
-			id := session.GenerateID()
-			sess := session.New()
-			path := filepath.Join(edrDir, "sessions", id+".json")
-			if err := sess.SaveToFile(path); err != nil {
-				return err
-			}
-			session.WriteSessionMapping(filepath.Join(edrDir, "sessions"), id)
-			result["session"] = id
-
-			if !sessionOnly {
-				// Clear checkpoints
-				cpDir := filepath.Join(edrDir, "checkpoints")
-				os.RemoveAll(cpDir)
-			}
-
-			cleanEdrDir(edrDir)
+		// Clear session state
+		if err := os.MkdirAll(filepath.Join(edrDir, "sessions"), 0700); err != nil {
+			return err
 		}
-
-		// Index reset
-		if !sessionOnly {
-			if err := dispatchCmdWithIndex(cmd, "reindex", args); err != nil {
-				return err
-			}
-			result["scope"] = "full"
-			if indexOnly {
-				result["scope"] = "index"
-			}
-		} else {
-			result["scope"] = "session"
-			env := output.NewEnvelope("reset")
-			env.AddOp("r0", "reset", result)
-			env.ComputeOK()
-			output.PrintEnvelope(env)
+		id := session.GenerateID()
+		sess := session.New()
+		path := filepath.Join(edrDir, "sessions", id+".json")
+		if err := sess.SaveToFile(path); err != nil {
+			return err
 		}
+		session.WriteSessionMapping(filepath.Join(edrDir, "sessions"), id)
+		result["session"] = id
 
+		// Clear checkpoints
+		os.RemoveAll(filepath.Join(edrDir, "checkpoints"))
+		cleanEdrDir(edrDir)
+
+		env := output.NewEnvelope("reset")
+		env.AddOp("r0", "reset", result)
+		env.ComputeOK()
+		output.PrintEnvelope(env)
 		return nil
 	},
 }
@@ -798,13 +737,6 @@ func injectSessionHash(sess *session.Session, cmdName string, args []string, fla
 // addDispatchFailedOp creates a failed op on the envelope, matching batch behavior.
 // Per-op errors go on the op; only index-level errors go in envelope errors[].
 func addDispatchFailedOp(env *output.Envelope, opID, opType string, err error) {
-	var idxErr *IndexError
-	if errors.As(err, &idxErr) {
-		// Index errors are envelope-level (not tied to a specific op)
-		env.AddError(idxErr.Code, idxErr.Message)
-		return
-	}
-
 	// Surface structured not-found errors with diagnostic hints
 	var nfe *dispatch.NotFoundError
 	if errors.As(err, &nfe) {

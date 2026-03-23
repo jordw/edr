@@ -147,12 +147,12 @@ func specRepo(t *testing.T, files map[string]string) (string, string) {
 	dir := t.TempDir()
 	dir, _ = filepath.EvalSymlinks(dir)
 
+	os.MkdirAll(filepath.Join(dir, ".edr"), 0700)
 	for name, content := range files {
 		path := filepath.Join(dir, name)
 		os.MkdirAll(filepath.Dir(path), 0755)
 		os.WriteFile(path, []byte(content), 0644)
 	}
-	run(t, binary, dir, "reindex")
 	return binary, dir
 }
 
@@ -1045,22 +1045,22 @@ func TestSpec_AutoIndex(t *testing.T) {
 	dir, _ = filepath.EvalSymlinks(dir)
 	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\nfunc main() {}\n"), 0644)
 
-	// read without prior reindex should auto-index.
+	// read should work without any setup.
 	_, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "read", "hello.go")
 	if exit != 0 {
-		t.Errorf("auto-index read: exit %d, want 0", exit)
+		t.Errorf("read: exit %d, want 0", exit)
 	}
 
-	// map should also auto-index.
+	// map should work.
 	_, _, _, exit = specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "map")
 	if exit != 0 {
-		t.Errorf("auto-index map: exit %d, want 0", exit)
+		t.Errorf("map: exit %d, want 0", exit)
 	}
 
-	// search should also auto-index.
+	// search should work.
 	_, _, _, exit = specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "search", "main")
 	if exit != 0 {
-		t.Errorf("auto-index search: exit %d, want 0", exit)
+		t.Errorf("search: exit %d, want 0", exit)
 	}
 }
 
@@ -1073,7 +1073,7 @@ func TestSpec_AutoIndexSilent(t *testing.T) {
 	// Auto-index should not emit stderr.
 	_, _, stderr, _ := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "read", "hello.go")
 	if stderr != "" {
-		t.Errorf("auto-index should be silent, got stderr: %q", stderr)
+		t.Errorf("should be silent, got stderr: %q", stderr)
 	}
 }
 
@@ -2073,7 +2073,6 @@ func TestSpec_HashOnAppliedOnly(t *testing.T) {
 
 	// Reset file.
 	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\nfunc main() {}\n"), 0644)
-	run(t, buildBinary(t), dir, "reindex")
 
 	// Dry-run edit: no hash.
 	r2, _, _, _ := specRun(t, binary, dir, nil,
@@ -2416,14 +2415,14 @@ func TestSpec_StaleFileAutoRefresh(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "new.go"), []byte("package main\n\nfunc NewFunc() {}\n"), 0644)
 
 	// Spec: stale file state SHOULD be refreshed automatically.
-	// Reading the new file should work without manual reindex.
+	// Reading the new file should work on-demand.
 	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
 		"read", "new.go")
 	if exit != 0 {
-		t.Fatalf("reading new file without reindex: exit %d", exit)
+		t.Fatalf("reading new file on-demand: exit %d", exit)
 	}
 	if result.Ops[0].Body == "" {
-		t.Error("should return content for new file without manual reindex")
+		t.Error("should return content for new file on-demand")
 	}
 }
 
@@ -2701,7 +2700,7 @@ func TestSpec_ResetFull(t *testing.T) {
 	if exit != 0 {
 		t.Fatalf("reset exit %d", exit)
 	}
-	// Should have a status:ok in the output (reindex for SQLite, no-op for on-demand)
+	// Should have a status in the reset output
 	foundStatus := false
 	for _, op := range result.Ops {
 		if op.Header["status"] == "ok" || op.Header["status"] == "reset" {
@@ -2711,18 +2710,6 @@ func TestSpec_ResetFull(t *testing.T) {
 	}
 	if !foundStatus {
 		t.Error("expected status ok/reset in reset output")
-	}
-}
-
-func TestSpec_ResetIndex(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
-	})
-
-	// reset --index should succeed
-	_, _, _, exit := specRun(t, binary, dir, nil, "reset", "--index")
-	if exit != 0 {
-		t.Fatalf("reset --index exit %d", exit)
 	}
 }
 
@@ -2744,25 +2731,9 @@ func TestSpec_ResetSession(t *testing.T) {
 		t.Fatalf("reset --session exit %d", exit)
 	}
 	header := result.Ops[0].Header
-	scope, _ := header["scope"].(string)
-	if scope != "session" {
-		t.Errorf("expected scope=session, got %q", scope)
-	}
 	sessID, _ := header["session"].(string)
 	if sessID == "" {
-		t.Error("expected session ID in reset --session output")
-	}
-}
-
-func TestSpec_ResetAliasReindex(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
-	})
-
-	// "reindex" is alias for "reset --index" behavior (full reset actually)
-	_, _, _, exit := specRun(t, binary, dir, nil, "reindex")
-	if exit != 0 {
-		t.Fatalf("reindex exit %d", exit)
+		t.Error("expected session ID in reset output")
 	}
 }
 

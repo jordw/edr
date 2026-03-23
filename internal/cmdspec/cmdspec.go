@@ -183,11 +183,10 @@ var Registry = []*Spec{
 		},
 	},
 	{
-		Name: "reset", Desc: "Clean slate: reindex, clear session, clear checkpoints.",
+		Name: "reset", Desc: "Clean slate: clear session and checkpoints.",
 		Category: CatGlobalMutate, MinArgs: 0, MaxArgs: 0,
 		Flags: []FlagSpec{
-			{Name: "index", Type: FlagBool, Default: false, Desc: "Rebuild index only"},
-			{Name: "session", Type: FlagBool, Default: false, Desc: "Clear session only"},
+			{Name: "session", Type: FlagBool, Default: false, Desc: "Clear session only (same as default)"},
 		},
 	},
 	{
@@ -271,8 +270,6 @@ func init() {
 			}
 		}
 	}
-	// Hidden command aliases: old names → new specs
-	byName["reindex"] = byName["reset"]
 }
 
 // CanonicalFlagName returns the canonical name for a flag, resolving aliases.
@@ -367,7 +364,7 @@ func DoBatchKeys() map[string]bool {
 	return map[string]bool{
 		"reads": true, "queries": true, "edits": true, "writes": true,
 		"renames": true, "budget": true, "dry_run": true, "verify": true,
-		"reindex": true, "init": true, "read_after_edit": true,
+		"read_after_edit": true,
 	}
 }
 

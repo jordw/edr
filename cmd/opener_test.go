@@ -13,7 +13,7 @@ import (
 // Categories:
 //   - Strict (openDBStrict): read, search, map, refs, rename — via dispatchCmd
 //   - Strict+stdin:          write, edit — via dispatchCmdWithStdin (also uses openDBStrict)
-//   - Auto-index:            reindex/init — via dispatchCmdWithIndex (uses openDBAndIndex)
+// (no index step needed — on-demand parsing)
 //   - No index:              verify — uses index.OpenDB directly
 //   - Own opener:            setup — manages its own DB in setup.go
 func TestOpenerAlignment(t *testing.T) {
@@ -99,19 +99,7 @@ func TestOpenerAlignment(t *testing.T) {
 		})
 	}
 
-	// --- resetCmd must use dispatchCmdWithIndex ---
-	t.Run("resetCmd_uses_dispatchCmdWithIndex", func(t *testing.T) {
-		body := extractRunE("resetCmd")
-		if body == "" {
-			t.Fatalf("could not extract RunE body for resetCmd")
-		}
-		if !strings.Contains(body, "dispatchCmdWithIndex(") {
-			t.Errorf("resetCmd should call dispatchCmdWithIndex, but RunE body is: %s", strings.TrimSpace(body))
-		}
-		if strings.Contains(body, "openDBStrict(") {
-			t.Errorf("resetCmd should not call openDBStrict directly")
-		}
-	})
+	// resetCmd handles session/checkpoint clearing directly (no dispatch needed)
 
 	// --- verifyCmd must use DispatchVerify (no DB, no .edr side effects) ---
 	t.Run("verifyCmd_uses_DispatchVerify", func(t *testing.T) {

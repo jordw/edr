@@ -29,17 +29,10 @@ func hello() {
 	}
 
 	// Open DB and index the repo.
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Call batch-read with a mix of valid and invalid args.
 	args := []string{
 		"main.go",              // valid file
@@ -113,17 +106,10 @@ func hello() {
 		t.Fatal(err)
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
 		"dry_run":  true,
 		"old_text": `println("hello")`,
@@ -169,17 +155,10 @@ func TestDispatchMulti_ParallelDifferentFiles(t *testing.T) {
 		}
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	commands := []dispatch.MultiCmd{
 		{Cmd: "read", Args: []string{"a.go"}},
 		{Cmd: "read", Args: []string{"b.go"}},
@@ -202,21 +181,14 @@ func TestDispatchMulti_GlobalMutatingIsSequential(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Mix of init (global-mutating) and read — should run sequentially
 	commands := []dispatch.MultiCmd{
 		{Cmd: "read", Args: []string{"a.go"}},
-		{Cmd: "reindex"},
+		{Cmd: "rename", Args: []string{"nonexistent", "other"}},
 		{Cmd: "read", Args: []string{"a.go"}},
 	}
 
@@ -240,17 +212,10 @@ func TestDispatchMulti_PreservesResultOrder(t *testing.T) {
 		}
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	commands := []dispatch.MultiCmd{
 		{Cmd: "read", Args: []string{"x.go"}},
 		{Cmd: "read", Args: []string{"y.go"}},
@@ -286,17 +251,10 @@ func TestDispatchMulti_BudgetDistribution(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Without budget: full content
 	cmdsNoBudget := []dispatch.MultiCmd{
 		{Cmd: "read", Args: []string{"big.go"}},
@@ -325,17 +283,10 @@ func TestEditReindexesImmediately(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Edit: rename oldName to newName via old_text/new_text
 	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
 		"old_text": "func oldName()",
@@ -371,16 +322,14 @@ func TestWriteReindexesImmediately(t *testing.T) {
 	// After a write, the new symbols should be immediately queryable.
 	tmp := t.TempDir()
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
+	ctx := context.Background()
 	defer db.Close()
 
-	ctx := context.Background()
 
 	// Write a new Go file with a function
-	_, err = dispatch.Dispatch(ctx, db, "write", []string{"hello.go"}, map[string]any{
+	_, err := dispatch.Dispatch(ctx, db, "write", []string{"hello.go"}, map[string]any{
 		"content": "package main\n\nfunc Hello() {\n\tprintln(\"hello\")\n}\n",
 	})
 	if err != nil {
@@ -406,17 +355,10 @@ func TestEditNoIndexErrorOnSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
 		"old_text": "func foo()",
 		"new_text": "func bar()",
@@ -477,19 +419,12 @@ func TestFlagNormalization_DryRunUnderscore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Test edit with dry_run (underscore)
-	_, err = dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+	_, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
 		"dry_run":  true,
 		"old_text": "func hello()",
 		"new_text": "func goodbye()",
@@ -536,16 +471,14 @@ func TestWriteRefusesEmptyOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
+	ctx := context.Background()
 	defer db.Close()
 
-	ctx := context.Background()
 
 	// Write with empty content should be refused
-	_, err = dispatch.Dispatch(ctx, db, "write", []string{"main.go"}, map[string]any{})
+	_, err := dispatch.Dispatch(ctx, db, "write", []string{"main.go"}, map[string]any{})
 	if err == nil {
 		t.Fatal("expected error for empty overwrite, got nil")
 	}
@@ -573,19 +506,12 @@ func TestEditAmbiguousMatchErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Ambiguous match without all: true should error
-	_, err = dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+	_, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
 		"old_text": "Hello",
 		"new_text": "World",
 	})
@@ -635,17 +561,10 @@ func world() {
 		t.Fatal(err)
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Read with --signatures
 	result, err := dispatch.Dispatch(ctx, db, "read", []string{"main.go"}, map[string]any{
 		"signatures": true,
@@ -685,18 +604,12 @@ func TestSearchEmptyPatternReturnsError(t *testing.T) {
 	if err := os.WriteFile(goFile, []byte("package main\n\nfunc hello() {}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Symbol search with empty pattern
-	_, err = dispatch.Dispatch(ctx, db, "search", []string{""}, nil)
+	_, err := dispatch.Dispatch(ctx, db, "search", []string{""}, nil)
 	if err == nil {
 		t.Fatal("expected error for empty search pattern, got nil")
 	}
@@ -732,16 +645,10 @@ func TestSearchLimit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tmp, "main.go"), []byte(src.String()), 0644); err != nil {
 		t.Fatal(err)
 	}
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Symbol search: no limit returns all
 	sr, err := search.SearchSymbol(ctx, db, "Handle", 0, false, 0)
 	if err != nil {
@@ -780,18 +687,12 @@ func TestWriteInsideAfterGo(t *testing.T) {
 	if err := os.WriteFile(goFile, []byte(original), 0644); err != nil {
 		t.Fatal(err)
 	}
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Write a method --inside S --after Get
-	_, err = dispatch.Dispatch(ctx, db, "write", []string{"store.go"}, map[string]any{
+	_, err := dispatch.Dispatch(ctx, db, "write", []string{"store.go"}, map[string]any{
 		"inside":  "S",
 		"after":   "Get",
 		"content": "func (s *S) Delete() error {\n\treturn nil\n}",
@@ -823,16 +724,10 @@ func TestEditNoopDetection(t *testing.T) {
 	if err := os.WriteFile(goFile, []byte(original), 0644); err != nil {
 		t.Fatal(err)
 	}
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Edit with identical old_text and new_text
 	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
 		"old_text": "hello",
@@ -875,18 +770,12 @@ func TestReadLineRangeStartBeyondEnd(t *testing.T) {
 	if err := os.WriteFile(goFile, []byte("package main\n\nfunc hello() {}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// start_line > end_line should return an error, not panic
-	_, err = dispatch.Dispatch(ctx, db, "read", []string{"main.go", "100", "50"}, map[string]any{})
+	_, err := dispatch.Dispatch(ctx, db, "read", []string{"main.go", "100", "50"}, map[string]any{})
 	if err == nil {
 		t.Fatal("expected error for start > end line range, got nil")
 	}
@@ -901,18 +790,12 @@ func TestReadLineRangeBeyondEOF(t *testing.T) {
 	if err := os.WriteFile(goFile, []byte("package main\n\nfunc hello() {}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// start_line beyond EOF should return an error, not panic
-	_, err = dispatch.Dispatch(ctx, db, "read", []string{"main.go", "99999", "100000"}, map[string]any{})
+	_, err := dispatch.Dispatch(ctx, db, "read", []string{"main.go", "99999", "100000"}, map[string]any{})
 	if err == nil {
 		t.Fatal("expected error for line range beyond EOF, got nil")
 	}
@@ -928,16 +811,10 @@ func TestEditEmptyNewTextIsDeletion(t *testing.T) {
 	if err := os.WriteFile(goFile, []byte(original), 0644); err != nil {
 		t.Fatal(err)
 	}
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Empty new_text with old_text should delete the matched text
 	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
 		"old_text": "func remove() {}\n\n",
@@ -968,16 +845,10 @@ func TestEditDeleteFlag(t *testing.T) {
 	if err := os.WriteFile(goFile, []byte(original), 0644); err != nil {
 		t.Fatal(err)
 	}
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// --delete with old_text should delete the matched text
 	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
 		"old_text": "func remove() {}",
@@ -1008,16 +879,10 @@ func TestEditDeleteFlagSymbol(t *testing.T) {
 	if err := os.WriteFile(goFile, []byte(original), 0644); err != nil {
 		t.Fatal(err)
 	}
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// --delete with symbol should delete the symbol and trailing newline
 	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go", "remove"}, map[string]any{
 		"delete": true,
@@ -1051,16 +916,10 @@ func TestEditLinesFlag(t *testing.T) {
 	if err := os.WriteFile(goFile, []byte(original), 0644); err != nil {
 		t.Fatal(err)
 	}
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Edit with --lines instead of --start-line/--end-line
 	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
 		"lines":    "3:3",
@@ -1086,16 +945,10 @@ func TestEditInsertAt(t *testing.T) {
 	if err := os.WriteFile(goFile, []byte(original), 0644); err != nil {
 		t.Fatal(err)
 	}
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Insert before line 3
 	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
 		"insert_at": 3,
@@ -1128,16 +981,10 @@ func TestEditInsertAtEOF(t *testing.T) {
 	if err := os.WriteFile(goFile, []byte(original), 0644); err != nil {
 		t.Fatal(err)
 	}
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Insert at EOF (line 4, which is past last content line)
 	result, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
 		"insert_at": 4,
@@ -1162,11 +1009,10 @@ func TestEditFuzzyWhitespace(t *testing.T) {
 	// File has tabs, but old_text will use spaces
 	original := "package main\n\nfunc hello() {\n\tfmt.Println(\"hi\")\n}\n"
 	os.WriteFile(goFile, []byte(original), 0644)
-	db, _ := index.OpenDB(tmp)
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	defer db.Close()
 	ctx := context.Background()
-	index.IndexRepo(ctx, db)
-
 	// Without --fuzzy: should fail (spaces vs tabs mismatch)
 	_, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
 		"old_text": "func hello() {\n  fmt.Println(\"hi\")\n}",
@@ -1201,11 +1047,10 @@ func TestEditFuzzyAmbiguousRejects(t *testing.T) {
 	// Two functions with same whitespace-normalized body
 	original := "package main\n\nfunc a() {\n\tx := 1\n}\n\nfunc b() {\n\tx := 1\n}\n"
 	os.WriteFile(goFile, []byte(original), 0644)
-	db, _ := index.OpenDB(tmp)
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	defer db.Close()
 	ctx := context.Background()
-	index.IndexRepo(ctx, db)
-
 	// Fuzzy match should reject ambiguous (multiple matches)
 	_, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
 		"old_text": "x := 1",
@@ -1221,11 +1066,10 @@ func TestEditFuzzyAndAllMutuallyExclusive(t *testing.T) {
 	tmp := t.TempDir()
 	goFile := filepath.Join(tmp, "main.go")
 	os.WriteFile(goFile, []byte("package main\n"), 0644)
-	db, _ := index.OpenDB(tmp)
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	defer db.Close()
 	ctx := context.Background()
-	index.IndexRepo(ctx, db)
-
 	_, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
 		"old_text": "x",
 		"new_text": "y",
@@ -1245,10 +1089,9 @@ func TestEditMoveAfter(t *testing.T) {
 	goFile := filepath.Join(tmp, "main.go")
 	original := "package main\n\nfunc first() {}\n\nfunc second() {}\n\nfunc third() {}\n"
 	os.WriteFile(goFile, []byte(original), 0644)
-	db, _ := index.OpenDB(tmp)
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
 	ctx := context.Background()
-	index.IndexRepo(ctx, db)
 	output.SetRoot(db.Root())
 
 	// Move "first" after "third"
@@ -1284,10 +1127,9 @@ func TestEditMoveAfterCrossFileFails(t *testing.T) {
 	tmp := t.TempDir()
 	os.WriteFile(filepath.Join(tmp, "a.go"), []byte("package main\n\nfunc fromA() {}\n"), 0644)
 	os.WriteFile(filepath.Join(tmp, "b.go"), []byte("package main\n\nfunc fromB() {}\n"), 0644)
-	db, _ := index.OpenDB(tmp)
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
 	ctx := context.Background()
-	index.IndexRepo(ctx, db)
 	output.SetRoot(db.Root())
 
 	// Cross-file move should fail because target is in a different file
@@ -1306,18 +1148,12 @@ func TestEditEmptyNewTextRequiresEditMode(t *testing.T) {
 	if err := os.WriteFile(goFile, []byte("package main\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Empty new_text with no edit mode should still error
-	_, err = dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
+	_, err := dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
 		"new_text": "",
 	})
 	if err == nil {
@@ -1362,17 +1198,10 @@ func doStuff() int {
 		t.Fatal(err)
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Rename the lib-level "count" function to "tally".
 	// The unrelated package's local "count" should NOT be renamed.
 	result, err := dispatch.Dispatch(ctx, db, "rename", []string{"count", "tally"}, map[string]any{
@@ -1411,10 +1240,9 @@ func TestRenameDryRunIncludesDiffs(t *testing.T) {
 	tmp := t.TempDir()
 	goFile := filepath.Join(tmp, "main.go")
 	os.WriteFile(goFile, []byte("package main\n\nfunc OldName() {}\n\nfunc caller() { OldName() }\n"), 0644)
-	db, _ := index.OpenDB(tmp)
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
 	ctx := context.Background()
-	index.IndexRepo(ctx, db)
 	output.SetRoot(db.Root())
 
 	result, err := dispatch.Dispatch(ctx, db, "rename", []string{"OldName", "NewName"}, map[string]any{
@@ -1469,19 +1297,12 @@ func Process() string {
 		t.Fatal(err)
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	// Renaming "Process" should fail because it's ambiguous (exists in two packages).
-	_, err = dispatch.Dispatch(ctx, db, "rename", []string{"Process", "Handle"}, nil)
+	_, err := dispatch.Dispatch(ctx, db, "rename", []string{"Process", "Handle"}, nil)
 	if err == nil {
 		t.Fatal("expected error for ambiguous rename target, got nil")
 	}
@@ -1530,17 +1351,10 @@ func entry() string {
 		t.Fatal(err)
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
+	defer db.Close()
 	result, err := dispatch.Dispatch(ctx, db, "refs", []string{"entry"}, map[string]any{
 		"chain": "target",
 	})
@@ -1559,37 +1373,6 @@ func entry() string {
 	chain, ok := cc["chain"].([]any)
 	if !ok || len(chain) < 3 {
 		t.Fatalf("expected chain of length >= 3, got: %s", string(raw))
-	}
-}
-
-// TestIndexWarningsSurfaced verifies that per-file index errors are
-// accumulated and accessible via DB.IndexWarnings().
-func TestIndexWarningsSurfaced(t *testing.T) {
-	tmp := t.TempDir()
-	// Valid file
-	if err := os.WriteFile(filepath.Join(tmp, "good.go"), []byte(`package main
-
-func good() {}
-`), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	ctx := context.Background()
-	_, _, err = index.IndexRepo(ctx, db)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// After a successful index, warnings should be empty.
-	warnings := db.IndexWarnings()
-	if len(warnings) != 0 {
-		t.Fatalf("expected 0 warnings for valid repo, got %d: %+v", len(warnings), warnings)
 	}
 }
 
@@ -1633,107 +1416,18 @@ func hello() {}
 }
 
 
-func TestSymbolsHintForUnindexedFile(t *testing.T) {
-	tmp := t.TempDir()
-
-	// Create and index a Go file.
-	goFile := filepath.Join(tmp, "main.go")
-	if err := os.WriteFile(goFile, []byte("package main\n\nfunc hello() {}\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a file AFTER indexing (simulates a gitignored file that exists but isn't indexed).
-	unindexed := filepath.Join(tmp, "ignored.go")
-	if err := os.WriteFile(unindexed, []byte("package main\n\nfunc secret() {}\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Dispatch "map" with a file arg routes to symbols.
-	result, err := dispatch.Dispatch(ctx, db, "map", []string{"ignored.go"}, map[string]any{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	data, err := json.Marshal(result)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	s := string(data)
-	if !strings.Contains(s, "not indexed") {
-		t.Errorf("expected hint about unindexed file, got: %s", s)
-	}
-	if !strings.Contains(s, "gitignored") {
-		t.Errorf("expected gitignored mention, got: %s", s)
-	}
-}
-
-func TestSymbolNotFoundHintForUnindexedFile(t *testing.T) {
-	tmp := t.TempDir()
-
-	// Create and index a Go file.
-	goFile := filepath.Join(tmp, "main.go")
-	if err := os.WriteFile(goFile, []byte("package main\n\nfunc hello() {}\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a file AFTER indexing.
-	unindexed := filepath.Join(tmp, "ignored.go")
-	if err := os.WriteFile(unindexed, []byte("package main\n\nfunc secret() {}\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Try to read a symbol from the unindexed file — error should mention gitignored.
-	_, err = dispatch.Dispatch(ctx, db, "read", []string{"ignored.go:secret"}, map[string]any{})
-	if err == nil {
-		t.Fatal("expected error for symbol in unindexed file")
-	}
-	if !strings.Contains(err.Error(), "not indexed") {
-		t.Errorf("expected 'not indexed' in error, got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "gitignored") {
-		t.Errorf("expected 'gitignored' in error, got: %v", err)
-	}
-}
-
 // --- Signatures on non-container returns error ---
 
 func TestReadSymbol_SignaturesOnFunction_ReturnsError(t *testing.T) {
 	tmp := t.TempDir()
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc Execute() {\n\tfmt.Println(\"hi\")\n}\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
 	ctx := context.Background()
-	index.IndexRepo(ctx, db)
+	defer db.Close()
 	output.SetRoot(db.Root())
 
-	_, err = dispatch.Dispatch(ctx, db, "read", []string{"main.go:Execute"}, map[string]any{"signatures": true})
+	_, err := dispatch.Dispatch(ctx, db, "read", []string{"main.go:Execute"}, map[string]any{"signatures": true})
 	if err == nil {
 		t.Fatal("expected error for --signatures on a function")
 	}
@@ -1753,13 +1447,9 @@ func TestSearch_DefaultBudgetApplied(t *testing.T) {
 		os.WriteFile(filepath.Join(tmp, name), []byte(content), 0644)
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
 	ctx := context.Background()
-	index.IndexRepo(ctx, db)
+	defer db.Close()
 	output.SetRoot(db.Root())
 
 	// Search without --budget or --full: should apply default cap
@@ -1782,13 +1472,9 @@ func TestSearch_FullBypassesDefaultBudget(t *testing.T) {
 		os.WriteFile(filepath.Join(tmp, name), []byte(content), 0644)
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
 	ctx := context.Background()
-	index.IndexRepo(ctx, db)
+	defer db.Close()
 	output.SetRoot(db.Root())
 
 	// With --full, no default budget
@@ -1811,13 +1497,9 @@ func TestRead_DefaultBudgetCap(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(tmp, "big.go"), []byte(content.String()), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
 	ctx := context.Background()
-	index.IndexRepo(ctx, db)
+	defer db.Close()
 	output.SetRoot(db.Root())
 
 	// Read without --budget or --full: should truncate at default 4000 tokens
@@ -1871,13 +1553,9 @@ func TestBudgetUsedReported(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(tmp, "big.go"), []byte(content.String()), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
 	ctx := context.Background()
-	index.IndexRepo(ctx, db)
+	defer db.Close()
 	output.SetRoot(db.Root())
 
 	// Read with small budget to force truncation
@@ -1917,14 +1595,10 @@ func TestBudgetUsedReported(t *testing.T) {
 func TestInternalCommandsRejected(t *testing.T) {
 	tmp := t.TempDir()
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n"), 0644)
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	index.IndexRepo(ctx, db)
-
+	defer db.Close()
 	for _, cmd := range []string{"explore", "find", "edit-plan", "multi", "init"} {
 		_, err := dispatch.Dispatch(ctx, db, cmd, nil, nil)
 		if err == nil {
@@ -1945,14 +1619,10 @@ func TestRefsWithCallersAbsorbedExplore(t *testing.T) {
 func caller() { target() }
 func target() {}
 `), 0644)
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	index.IndexRepo(ctx, db)
-
+	defer db.Close()
 	// refs with --callers should work (absorbed from explore)
 	result, err := dispatch.Dispatch(ctx, db, "refs", []string{"target"}, map[string]any{
 		"callers": true,
@@ -1963,27 +1633,6 @@ func target() {}
 	}
 	if result == nil {
 		t.Fatal("refs --callers returned nil")
-	}
-}
-
-// TestReindexDispatch verifies the reindex command name works in dispatch.
-func TestReindexDispatch(t *testing.T) {
-	tmp := t.TempDir()
-	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n"), 0644)
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	ctx := context.Background()
-	index.IndexRepo(ctx, db)
-
-	result, err := dispatch.Dispatch(ctx, db, "reindex", nil, nil)
-	if err != nil {
-		t.Fatalf("reindex: %v", err)
-	}
-	if result == nil {
-		t.Fatal("reindex returned nil")
 	}
 }
 
@@ -2005,14 +1654,10 @@ func hello() {
 }
 `), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	index.IndexRepo(ctx, db)
-
+	defer db.Close()
 	baseKeys := []string{"file", "hash", "lines", "size", "truncated"}
 
 	tests := []struct {
@@ -2059,14 +1704,10 @@ func TestReadSymbolResult_HasSizeAndTruncated(t *testing.T) {
 	tmp := t.TempDir()
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() { println(\"hi\") }\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	index.IndexRepo(ctx, db)
-
+	defer db.Close()
 	result, err := dispatch.Dispatch(ctx, db, "read", []string{"main.go:hello"}, nil)
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -2089,14 +1730,10 @@ func TestReadSignatures_HasLines(t *testing.T) {
 	tmp := t.TempDir()
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\nfunc world() {}\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := index.NewOnDemand(tmp)
+	output.SetRoot(db.Root())
 	ctx := context.Background()
-	index.IndexRepo(ctx, db)
-
+	defer db.Close()
 	result, err := dispatch.Dispatch(ctx, db, "read", []string{"main.go"}, map[string]any{"signatures": true})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)

@@ -209,16 +209,6 @@ func TestInvalidateForEdit_RenameClears(t *testing.T) {
 	}
 }
 
-func TestInvalidateForEdit_InitClears(t *testing.T) {
-	s := New()
-	s.SeenBodies["k"] = "h"
-	s.FileContent["k"] = ContentEntry{Hash: "h"}
-	s.InvalidateForEdit("reindex", nil)
-	if len(s.SeenBodies) != 0 || len(s.FileContent) != 0 {
-		t.Error("reindex should clear all state")
-	}
-}
-
 func TestInvalidateForEdit_NoArgs(t *testing.T) {
 	s := New()
 	s.FileContent["k"] = ContentEntry{Hash: "v"}

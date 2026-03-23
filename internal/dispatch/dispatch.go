@@ -74,8 +74,6 @@ func Dispatch(ctx context.Context, db index.SymbolStore, cmd string, args []stri
 	case "prepare":
 		result, err = runPrepare(ctx, db, root, args, flags)
 
-	case "reindex", "reset":
-		result, err = runInit(ctx, db)
 	case "rename":
 		result, err = runRenameSymbol(ctx, db, root, args, flags)
 	case "verify":
@@ -521,39 +519,6 @@ func commandFileKey(cmd string, args []string) string {
 		return file
 	}
 	return ""
-}
-
-// --- individual command handlers ---
-
-func runInit(ctx context.Context, db index.SymbolStore) (any, error) {
-	index.ClearTreeCache()
-	sqlDB, ok := db.(*index.DB)
-	if !ok {
-		// On-demand store — no index to build.
-		totalFiles, _, _ := db.Stats(ctx)
-		return map[string]any{
-			"status":      "ok",
-			"mode":        "on-demand",
-			"total_files": totalFiles,
-		}, nil
-	}
-	var filesChanged, symbolsChanged int
-	err := sqlDB.WithWriteLock(func() error {
-		var e error
-		filesChanged, symbolsChanged, e = index.IndexRepo(ctx, sqlDB)
-		return e
-	})
-	if err != nil {
-		return nil, err
-	}
-	totalFiles, totalSymbols, _ := db.Stats(ctx)
-	return map[string]any{
-		"status":          "ok",
-		"files_changed":   filesChanged,
-		"symbols_changed": symbolsChanged,
-		"total_files":     totalFiles,
-		"total_symbols":   totalSymbols,
-	}, nil
 }
 
 // --- helpers ---

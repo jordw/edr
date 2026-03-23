@@ -925,13 +925,8 @@ func runBatch(args []string) error {
 
 	// Only auto-index when mutations are present. Read-only batch
 	// operations use the strict opener — same contract as standalone.
-	hasMutations := len(params.Edits) > 0 || len(params.Writes) > 0
 	var db index.SymbolStore
-	if hasMutations {
-		db, err = openStoreAndIndex(root, !verbose)
-	} else {
-		db, err = openStore(root)
-	}
+	db, err = openStore(root)
 	if err != nil {
 		return err
 	}

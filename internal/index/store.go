@@ -41,6 +41,5 @@ type SymbolStore interface {
 	Close() error
 }
 
-// Compile-time checks
-var _ SymbolStore = (*DB)(nil)
+// Compile-time check
 var _ SymbolStore = (*OnDemand)(nil)

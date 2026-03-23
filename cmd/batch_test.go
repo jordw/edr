@@ -16,7 +16,7 @@ import (
 )
 
 // testHandleDo wraps handleDo with the old (string, error) return signature for tests.
-func testHandleDo(ctx context.Context, db *index.DB, sess *session.Session, raw json.RawMessage) (string, error) {
+func testHandleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, raw json.RawMessage) (string, error) {
 	env := output.NewEnvelope("batch")
 	if err := handleDo(ctx, db, sess, env, raw); err != nil {
 		return "", err
@@ -255,16 +255,6 @@ func TestInvalidateForEdit_RenameClears(t *testing.T) {
 	sess.InvalidateForEdit("rename", []string{"old", "new"})
 	if len(sess.Diffs)+len(sess.FileContent)+len(sess.SeenBodies) != 0 {
 		t.Error("rename should clear all")
-	}
-}
-
-func TestInvalidateForEdit_InitClears(t *testing.T) {
-	sess := session.New()
-	sess.Diffs["f.go"] = "d"
-
-	sess.InvalidateForEdit("reindex", []string{})
-	if len(sess.Diffs) != 0 {
-		t.Error("reindex should clear all")
 	}
 }
 
@@ -751,15 +741,8 @@ func TestHandleDo_ReadLineRangeInvalid(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
-		t.Fatal(err)
-	}
-
 	sess := session.New()
 
 	tests := []struct {
@@ -799,15 +782,8 @@ func TestHandleDo_EditEmptyNewTextDeletion(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc remove() {}\n\nfunc keep() {}\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
-		t.Fatal(err)
-	}
-
 	sess := session.New()
 
 	raw := json.RawMessage(`{
@@ -858,10 +834,7 @@ func TestHandleDo_VerifyObjectCommand(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
 
 	sess := session.New()
@@ -885,15 +858,8 @@ func TestHandleDo_BatchEditFailureReporting(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
-		t.Fatal(err)
-	}
-
 	sess := session.New()
 
 	// 3 edits, second fails (nonexistent text)
@@ -952,15 +918,8 @@ func TestHandleDo_BatchEditNotFoundFields(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
-		t.Fatal(err)
-	}
-
 	sess := session.New()
 
 	// Single failing edit
@@ -1073,10 +1032,7 @@ func TestHandleDo_SkipsPostEditReadsAndVerifyOnEditFailure(t *testing.T) {
 	// Create a dummy Go file so the repo root is valid.
 	os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module test\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
 
 	sess := session.New()
@@ -1114,15 +1070,8 @@ func TestHandleDo_DryRunSkipsWrites(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "existing.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
-		t.Fatal(err)
-	}
-
 	sess := session.New()
 
 	writeTarget := filepath.Join(tmp, "should_not_exist.txt")
@@ -1178,15 +1127,8 @@ func TestHandleDo_NoopEditSkipsVerify(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
-		t.Fatal(err)
-	}
-
 	sess := session.New()
 
 	// Edit where old_text == new_text, with verify using a command that would fail
@@ -1225,15 +1167,8 @@ func TestHandleDo_VerifyFailedSummaryStatus(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "data.txt"), []byte("old content\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
-		t.Fatal(err)
-	}
-
 	sess := session.New()
 
 	// Real edit that succeeds, but verify command fails
@@ -1278,10 +1213,7 @@ func TestHandleDo_WriteInvalidatesSession(t *testing.T) {
 	edrDir := filepath.Join(tmp, ".edr")
 	os.MkdirAll(edrDir, 0755)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
 
 	sess := session.New()
@@ -1302,7 +1234,7 @@ func TestHandleDo_WriteInvalidatesSession(t *testing.T) {
 		"writes": [{"file": %q, "content": "fresh content"}]
 	}`, targetFile))
 
-	_, err = testHandleDo(context.Background(), db, sess, raw)
+	_, err := testHandleDo(context.Background(), db, sess, raw)
 	if err != nil {
 		t.Fatalf("handleDo: %v", err)
 	}
@@ -1323,15 +1255,8 @@ func TestHandleDo_OverlappingEditsRejected(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc alpha() {}\n\nfunc beta() {}\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
-		t.Fatal(err)
-	}
-
 	sess := session.New()
 
 	// Two edits with overlapping text on the same file.
@@ -1367,15 +1292,8 @@ func TestHandleDo_NonOverlappingEditsSameFileSucceed(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc alpha() {}\n\nfunc beta() {}\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
-		t.Fatal(err)
-	}
-
 	sess := session.New()
 
 	// Two non-overlapping edits on the same file
@@ -1409,15 +1327,8 @@ func TestHandleDo_EditFailureSkipsWrites(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
-		t.Fatal(err)
-	}
-
 	sess := session.New()
 
 	writeTarget := filepath.Join(tmp, "new_file.go")
@@ -1454,15 +1365,8 @@ func TestHandleDo_WriteDryRunPreview(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "existing.go"), []byte("package main\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
-		t.Fatal(err)
-	}
-
 	sess := session.New()
 
 	// Global dry-run with writes only (no edits)
@@ -1512,10 +1416,7 @@ func TestHandleDo_WriteNewFileDryRun(t *testing.T) {
 	edrDir := filepath.Join(tmp, ".edr")
 	os.MkdirAll(edrDir, 0755)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
 
 	sess := session.New()
@@ -1611,20 +1512,6 @@ func TestBatchMode_QuietStderr(t *testing.T) {
 	}
 }
 
-// --- Task 4: Zero-file index validation ---
-
-func TestOpenDBAndIndex_EmptyDir_OK(t *testing.T) {
-	// An empty directory should succeed (0 files is valid, e.g. fresh git init)
-	tmp := t.TempDir()
-	db, err := openDBAndIndex(tmp, true)
-	if err != nil {
-		t.Fatalf("expected no error for empty directory, got: %v", err)
-	}
-	if db != nil {
-		db.Close()
-	}
-}
-
 // Task 5 tests are in internal/dispatch/dispatch_verify_test.go
 
 
@@ -1637,13 +1524,8 @@ func TestHandleDo_MultiEditProducesPerEditOps(t *testing.T) {
 	os.WriteFile(filepath.Join(tmp, "main.go"),
 		[]byte("package main\n\nfunc alpha() {}\n\nfunc beta() {}\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	index.IndexRepo(context.Background(), db)
-
 	sess := session.New()
 
 	raw := json.RawMessage(`{
@@ -1692,13 +1574,8 @@ func TestHandleDo_MultiEditDryRunPerEditOps(t *testing.T) {
 	os.WriteFile(filepath.Join(tmp, "main.go"),
 		[]byte("package main\n\nfunc alpha() {}\n\nfunc beta() {}\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	index.IndexRepo(context.Background(), db)
-
 	sess := session.New()
 
 	raw := json.RawMessage(`{
@@ -1749,13 +1626,8 @@ func TestHandleDo_EditFailurePerEditOps(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	index.IndexRepo(context.Background(), db)
-
 	sess := session.New()
 
 	// Two edits, both will fail because old_text not found
@@ -1803,13 +1675,8 @@ func TestHandleDo_MultiFileEditsParallel(t *testing.T) {
 	os.WriteFile(filepath.Join(tmp, "a.go"), []byte("package main\n\nfunc alpha() {}\n"), 0644)
 	os.WriteFile(filepath.Join(tmp, "b.go"), []byte("package main\n\nfunc beta() {}\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	index.IndexRepo(context.Background(), db)
-
 	sess := session.New()
 
 	raw := json.RawMessage(`{
@@ -1865,13 +1732,8 @@ func TestHandleDo_MultiFileEditPartialFailure(t *testing.T) {
 	os.WriteFile(filepath.Join(tmp, "a.go"), []byte("package main\n\nfunc alpha() {}\n"), 0644)
 	os.WriteFile(filepath.Join(tmp, "b.go"), []byte("package main\n\nfunc beta() {}\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	index.IndexRepo(context.Background(), db)
-
 	sess := session.New()
 
 	// Edit on a.go succeeds, edit on b.go fails (old_text not found)
@@ -1929,13 +1791,8 @@ func TestHandleDo_BatchEditResultShapeParity(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	index.IndexRepo(context.Background(), db)
-
 	sess := session.New()
 
 	raw := json.RawMessage(`{
@@ -1977,13 +1834,8 @@ func TestHandleDo_SkippedWritesNotFailed(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	index.IndexRepo(context.Background(), db)
-
 	sess := session.New()
 
 	writeTarget := filepath.Join(tmp, "new.go")
@@ -2025,13 +1877,8 @@ func TestHandleDo_ReadShapeParity(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() { println(\"hi\") }\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	index.IndexRepo(context.Background(), db)
-
 	sess := session.New()
 
 	// Batch read via handleDo
@@ -2129,15 +1976,8 @@ func TestHandleDo_BatchEditErrorParity(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	if _, _, err := index.IndexRepo(context.Background(), db); err != nil {
-		t.Fatal(err)
-	}
-
 	sess := session.New()
 
 	raw := json.RawMessage(`{
@@ -2169,13 +2009,8 @@ func TestHandleDo_CommandFieldNeverLeaksInternalNames(t *testing.T) {
 	os.MkdirAll(edrDir, 0755)
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0644)
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := index.NewOnDemand(tmp)
 	defer db.Close()
-	index.IndexRepo(context.Background(), db)
-
 	sess := session.New()
 
 	// Test various batch operations
