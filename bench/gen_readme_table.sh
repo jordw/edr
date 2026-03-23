@@ -85,13 +85,13 @@ if [ -f "$urfave_file" ]; then
     scenarios=(
         "understand_api|Understand a class API|whole file|\`--signatures\`"
         "read_symbol|Read a specific function|grep + range read|symbol read"
-        "find_refs|Find references|grep + 3 reads|\`refs\`"
+        "find_refs|Find references|grep + 3 range reads|\`refs\`"
         "search_context|Search with context|grep -C3|structured"
         "orient_map|Orient in codebase|glob + 3 reads|\`map\`"
         "edit_function|Edit a function|grep + range + edit|batch"
         "add_method|Add method to a class|grep + range + write|\`--inside\`"
         "multi_file_read|Multi-file read||batched"
-        "explore_symbol|Explore a symbol||"
+        "explore_symbol|Explore a symbol|grep + 3 range reads|"
     )
 
     for s in "${scenarios[@]}"; do

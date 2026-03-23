@@ -214,7 +214,8 @@ native_grep_followup_read_bytes() {
     local file
     while IFS= read -r file; do
         [ -n "$file" ] || continue
-        total=$((total + $(native_read_bytes "$(rel_path "$file")")))
+        # Skilled agent reads a window around the match, not the whole file.
+        total=$((total + $(skilled_range_read_bytes "$pattern" "$(rel_path "$file")" "$SKILLED_READ_WINDOW")))
         count=$((count + 1))
         [ "$count" -ge "$MAX_FOLLOWUP_READS" ] && break
     done < <(native_grep_files "$pattern" "$@")
@@ -472,7 +473,10 @@ run_multi_file_read() {
         native_bytes=$((native_bytes + $(native_read_bytes "$(rel_path "$file")")))
     done
     native_calls=${#MULTI_READ_FILES[@]}
-    edr_bytes=$(edr_median_bytes edr_cmd read "${MULTI_READ_FILES[@]}" --budget "${MULTI_READ_BUDGET:-500}")
+    # No --budget: both sides read full file content for a fair comparison.
+    # edr wins on format (structured headers vs cat -n line numbers) and
+    # batching (1 call vs N calls), not truncation.
+    edr_bytes=$(edr_median_bytes edr_cmd read "${MULTI_READ_FILES[@]}")
     report "Multi-file read" "$native_bytes" "$native_calls" "$edr_bytes" 1
     json_add "multi_file_read" "$native_bytes" "$native_calls" "$edr_bytes" 1
 }
@@ -487,11 +491,12 @@ run_explore_symbol() {
     grep_bytes=$(native_grep_bytes "$EXPLORE_PATTERN" "$grep_root")
     caller_reads=0
     for file in "${EXPLORE_NATIVE_READ_FILES[@]}"; do
-        caller_reads=$((caller_reads + $(native_read_bytes "$(rel_path "$file")")))
+        # Skilled agent reads a window around the match, not the whole file.
+        caller_reads=$((caller_reads + $(skilled_range_read_bytes "$EXPLORE_PATTERN" "$(rel_path "$file")" "$SKILLED_READ_WINDOW")))
     done
     native_bytes=$((grep_bytes + caller_reads))
     native_calls=$((1 + ${#EXPLORE_NATIVE_READ_FILES[@]}))
-    edr_bytes=$(edr_median_bytes edr_cmd explore "${EXPLORE_ARGS[@]}" --body --callers --deps)
+    edr_bytes=$(edr_median_bytes edr_cmd refs "${EXPLORE_ARGS[@]}" --body --callers --deps)
     report "Explore symbol" "$native_bytes" "$native_calls" "$edr_bytes" 1
     json_add "explore_symbol" "$native_bytes" "$native_calls" "$edr_bytes" 1
 }

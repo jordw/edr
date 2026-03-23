@@ -23,13 +23,13 @@ edr attacks this directly:
 - **Fewer round-trips** → less wall-clock time. Batch three reads into one call instead of three sequential ones. Each round-trip has overhead — parsing, scheduling, output rendering — that adds up fast.
 - **Sessions eliminate redundancy** → edr tracks what the agent has seen. Re-read a file after an edit? Only the changed lines come back. Re-run tests? Just the diff. The agent stays focused on what actually changed.
 
-**95% median context reduction** across real repos. That translates directly to faster responses — less prefill, smaller KV cache, fewer round-trips — and the agent stays coherent longer because it isn't burning context on files it doesn't need.
+**~80% median context reduction** in benchmarks against real repos (vs a skilled agent using grep + line-range reads). Plain text search adds overhead vs raw grep; the win is in structured operations. See [Benchmarks](#benchmarks) for methodology and per-scenario breakdowns.
 
 This scales. A 3,000-file monorepo gets the same tight reads and batched edits as a 50-file project.
 
 ## Example
 
-Add a `retries` parameter to a scheduler class. Without edr: 6 calls, ~59KB of context. With edr:
+Add a `retries` parameter to a scheduler class. Without edr, this takes 6+ tool calls (read three files, search, two edits). With edr:
 
 ```bash
 # 1. Symbol-level: read three signatures + search, one call
@@ -119,7 +119,7 @@ edr -e src/config.go --old "old" --new "new" -w src/new_test.go --content "..."
 | `read` | `edr read file:Symbol`, `--signatures`, `--lines 10:50` |
 | `search` | `edr search "pattern" --text`, `--in file:Symbol`, `--regex` |
 | `map` | `edr map`, `edr map --dir src/ --type function --lang go --grep pat` |
-| `edit` | `edr edit file --old "x" --new "y"`, `--fuzzy`, `--in Symbol`, `--delete` |
+| `edit` | `edr edit file --old "x" --new "y"`, `--where Symbol`, `--fuzzy`, `--in Symbol`, `--delete` |
 | `write` | `edr write file --inside Class --content "..."`, `--after Symbol`, `--append` |
 | `refs` | `edr refs Symbol`, `--impact`, `--callers`, `--deps`, `--chain target` |
 | `rename` | `edr rename old new --dry-run` |
@@ -151,19 +151,19 @@ edr reads and edits any text file. Symbol-aware features (symbol reads, `--signa
 
 We run 9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos and measure tool response bytes — the raw amount of text that enters the agent's context window.
 
-The baseline models a skilled agent using Claude Code's built-in tools: `Grep` to find symbols before reading, `Read` with line ranges (not whole files), `Edit`/`Write` confirmations. Orient reads 3 files after globbing; refs follows up on 3 grep matches. edr uses symbol reads, `--signatures`, `refs`, `map`, and batch flags.
+The baseline models a skilled agent using Claude Code's built-in tools: `Grep` to find symbols before reading, `Read` with line ranges around grep matches (not whole files), `Edit`/`Write` confirmations. Orient and multi-file read use whole-file reads (there's no shortcut for understanding a module or reading a file). edr uses symbol reads, `--signatures`, `refs`, `map`, and batch flags.
 
 | Repo | Lang | Files | Baseline | edr | Reduction |
 |---|---|---|---|---|---|
-| [urfave/cli](https://github.com/urfave/cli) | Go | ~70 | 248KB / 25 calls | 8KB / 9 calls | **97%** |
-| [vitess/sqlparser](https://github.com/vitessio/vitess) | Go | ~70 | 516KB / 22 calls | 8KB / 9 calls | **98%** |
-| [vitess/vtgate](https://github.com/vitessio/vitess) | Go | ~490 | 743KB / 24 calls | 18KB / 9 calls | **98%** |
-| [pallets/click](https://github.com/pallets/click) | Python | ~17 | 358KB / 25 calls | 9KB / 9 calls | **97%** |
-| [rails/thor](https://github.com/rails/thor) | Ruby | ~35 | 200KB / 25 calls | 9KB / 9 calls | **96%** |
-| [reduxjs/redux-toolkit](https://github.com/reduxjs/redux-toolkit) | TS | ~190 | 217KB / 25 calls | 10KB / 9 calls | **95%** |
-| [django/django](https://github.com/django/django) | Python | ~880 | 1,416KB / 25 calls | 19KB / 9 calls | **99%** |
+| [urfave/cli](https://github.com/urfave/cli) | Go | ~70 | 146KB / 25 calls | 27KB / 9 calls | **82%** |
+| [vitess/sqlparser](https://github.com/vitessio/vitess) | Go | ~70 | 459KB / 22 calls | 29KB / 9 calls | **94%** |
+| [vitess/vtgate](https://github.com/vitessio/vitess) | Go | ~490 | 433KB / 24 calls | 40KB / 9 calls | **91%** |
+| [pallets/click](https://github.com/pallets/click) | Python | ~17 | 180KB / 25 calls | 30KB / 9 calls | **83%** |
+| [rails/thor](https://github.com/rails/thor) | Ruby | ~35 | 157KB / 25 calls | 30KB / 9 calls | **81%** |
+| [reduxjs/redux-toolkit](https://github.com/reduxjs/redux-toolkit) | TS | ~190 | 112KB / 25 calls | 26KB / 9 calls | **77%** |
+| [django/django](https://github.com/django/django) | Python | ~880 | 1027KB / 25 calls | 40KB / 9 calls | **96%** |
 
-Median reduction: **97%** across repos. edr loses on plain text search (structured JSON adds overhead vs raw grep — see breakdown below), but wins everywhere else. Call counts are summed across all 9 scenarios; each edr scenario is 1 call.
+Median reduction: **83%** across repos. edr loses on plain text search (structured JSON adds overhead vs raw grep — see breakdown below), but wins everywhere else. The biggest wins are on structured operations (refs, map, signatures); multi-file reads show modest savings since both sides return full content. Call counts are summed across all 9 scenarios; each edr scenario is 1 call.
 
 <details>
 <summary>Per-scenario breakdown (urfave/cli)</summary>
@@ -172,14 +172,14 @@ Median reduction: **97%** across repos. edr loses on plain text search (structur
 |---|---|---|---|
 | Understand a class API | 13,019B (whole file) | 1,486B (`--signatures`) | **89%** |
 | Read a specific function | 3,026B / 2 calls (grep + range read) | 1,182B (symbol read) | **61%** |
-| Find references | 86,463B / 4 calls (grep + 3 reads) | 179B (`refs`) | **100%** |
+| Find references | 9,086B / 4 calls (grep + 3 range reads) | 179B (`refs`) | **98%** |
 | Search with context | 614B (grep -C3) | 1,027B (structured) | **-67%** |
 | Orient in codebase | 52,470B / 4 calls (glob + 3 reads) | 393B (`map`) | **99%** |
 | Edit a function | 1,403B / 3 calls (grep + range + edit) | 394B (batch) | **72%** |
 | Add method to a class | 5,393B / 3 calls (grep + range + write) | 249B (`--inside`) | **95%** |
-| Multi-file read | 39,397B / 3 calls | 3,340B (batched) | **92%** |
-| Explore a symbol | 51,967B / 4 calls | 72B | **100%** |
-| **Total** | **253,752B / 25 calls** | **8,322B / 9 calls** | **97%** |
+| Multi-file read | 39,397B / 3 calls | 22,028B (batched) | **44%** |
+| Explore a symbol | 25,006B / 4 calls (grep + 3 range reads) | 555B | **98%** |
+| **Total** | **149,414B / 25 calls** | **27,493B / 9 calls** | **82%** |
 
 </details>
 
