@@ -518,7 +518,9 @@ func unique() {}
 		t.Fatalf("IndexRepo: %v", err)
 	}
 
-	file := filepath.Join(tmp, "main.go")
+	// Use db.Root() which resolves symlinks (e.g. /var → /private/var on macOS),
+	// matching the paths stored in the index.
+	file := filepath.Join(db.Root(), "main.go")
 
 	// Unambiguous symbol should succeed.
 	sym, err := db.GetSymbol(ctx, file, "unique")

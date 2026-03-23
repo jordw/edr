@@ -127,14 +127,38 @@ func looksLikeLicense(lines []string) bool {
 	return false
 }
 
+type importRule struct {
+	isStart        func(trimmed string) bool
+	isContinuation func(trimmed string) bool
+}
+
+var jsImportRule = importRule{
+	isStart: func(t string) bool {
+		return strings.HasPrefix(t, "import ") || (strings.HasPrefix(t, "const ") && strings.Contains(t, "require("))
+	},
+}
+
+func prefixRule(prefix string) importRule {
+	fn := func(t string) bool { return strings.HasPrefix(t, prefix) }
+	return importRule{isStart: fn}
+}
+
+var importRules = map[string]importRule{
+	".py": {isStart: func(t string) bool { return strings.HasPrefix(t, "import ") || strings.HasPrefix(t, "from ") }},
+	".js": jsImportRule, ".jsx": jsImportRule, ".ts": jsImportRule, ".tsx": jsImportRule,
+	".java": prefixRule("import "), ".kt": prefixRule("import "),
+	".rs": prefixRule("use "), ".c": prefixRule("#include"), ".h": prefixRule("#include"),
+	".cpp": prefixRule("#include"), ".cc": prefixRule("#include"),
+	".cs": prefixRule("using "), ".php": prefixRule("use "),
+}
+
 // detectImportBlock finds an import block starting at or after line i.
 // Returns (start, end) indices. If no block found, returns (i, i).
 func detectImportBlock(lines []string, start int, ext string) (int, int) {
 	n := len(lines)
 
-	switch ext {
-	case ".go":
-		// Go: import ( ... ) or single import "..."
+	// Go has unique block syntax: import ( ... )
+	if ext == ".go" {
 		for i := start; i < n && i < start+30; i++ {
 			t := strings.TrimSpace(lines[i])
 			if t == "import (" {
@@ -147,166 +171,36 @@ func detectImportBlock(lines []string, start int, ext string) (int, int) {
 				}
 			}
 		}
+		return start, start
+	}
 
-	case ".py":
-		// Python: consecutive import/from lines
-		for i := start; i < n && i < start+30; i++ {
-			t := strings.TrimSpace(lines[i])
-			if strings.HasPrefix(t, "import ") || strings.HasPrefix(t, "from ") {
-				end := i + 1
-				for end < n {
-					te := strings.TrimSpace(lines[end])
-					if te == "" {
-						end++
-						continue
-					}
-					if !strings.HasPrefix(te, "import ") && !strings.HasPrefix(te, "from ") {
-						break
-					}
+	rule, ok := importRules[ext]
+	if !ok {
+		return start, start
+	}
+
+	cont := rule.isContinuation
+	if cont == nil {
+		cont = rule.isStart
+	}
+
+	for i := start; i < n && i < start+30; i++ {
+		t := strings.TrimSpace(lines[i])
+		if rule.isStart(t) {
+			end := i + 1
+			for end < n {
+				te := strings.TrimSpace(lines[end])
+				if te == "" {
 					end++
+					continue
 				}
-				if end-i >= 4 {
-					return i, end
+				if !cont(te) {
+					break
 				}
+				end++
 			}
-		}
-
-	case ".js", ".jsx", ".ts", ".tsx":
-		// JS/TS: consecutive import/require lines
-		for i := start; i < n && i < start+30; i++ {
-			t := strings.TrimSpace(lines[i])
-			if strings.HasPrefix(t, "import ") || strings.HasPrefix(t, "const ") && strings.Contains(t, "require(") {
-				end := i + 1
-				for end < n {
-					te := strings.TrimSpace(lines[end])
-					if te == "" {
-						end++
-						continue
-					}
-					if !strings.HasPrefix(te, "import ") &&
-						!(strings.HasPrefix(te, "const ") && strings.Contains(te, "require(")) {
-						break
-					}
-					end++
-				}
-				if end-i >= 4 {
-					return i, end
-				}
-			}
-		}
-
-	case ".java", ".kt":
-		// Java/Kotlin: consecutive import lines
-		for i := start; i < n && i < start+30; i++ {
-			t := strings.TrimSpace(lines[i])
-			if strings.HasPrefix(t, "import ") {
-				end := i + 1
-				for end < n {
-					te := strings.TrimSpace(lines[end])
-					if te == "" {
-						end++
-						continue
-					}
-					if !strings.HasPrefix(te, "import ") {
-						break
-					}
-					end++
-				}
-				if end-i >= 4 {
-					return i, end
-				}
-			}
-		}
-
-	case ".rs":
-		// Rust: consecutive use lines
-		for i := start; i < n && i < start+30; i++ {
-			t := strings.TrimSpace(lines[i])
-			if strings.HasPrefix(t, "use ") {
-				end := i + 1
-				for end < n {
-					te := strings.TrimSpace(lines[end])
-					if te == "" {
-						end++
-						continue
-					}
-					if !strings.HasPrefix(te, "use ") {
-						break
-					}
-					end++
-				}
-				if end-i >= 4 {
-					return i, end
-				}
-			}
-		}
-
-	case ".c", ".h", ".cpp", ".cc":
-		// C/C++: consecutive #include lines
-		for i := start; i < n && i < start+30; i++ {
-			t := strings.TrimSpace(lines[i])
-			if strings.HasPrefix(t, "#include") {
-				end := i + 1
-				for end < n {
-					te := strings.TrimSpace(lines[end])
-					if te == "" {
-						end++
-						continue
-					}
-					if !strings.HasPrefix(te, "#include") {
-						break
-					}
-					end++
-				}
-				if end-i >= 4 {
-					return i, end
-				}
-			}
-		}
-
-	case ".cs":
-		// C#: consecutive using lines
-		for i := start; i < n && i < start+30; i++ {
-			t := strings.TrimSpace(lines[i])
-			if strings.HasPrefix(t, "using ") {
-				end := i + 1
-				for end < n {
-					te := strings.TrimSpace(lines[end])
-					if te == "" {
-						end++
-						continue
-					}
-					if !strings.HasPrefix(te, "using ") {
-						break
-					}
-					end++
-				}
-				if end-i >= 4 {
-					return i, end
-				}
-			}
-		}
-
-	case ".php":
-		// PHP: consecutive use lines (after namespace)
-		for i := start; i < n && i < start+30; i++ {
-			t := strings.TrimSpace(lines[i])
-			if strings.HasPrefix(t, "use ") {
-				end := i + 1
-				for end < n {
-					te := strings.TrimSpace(lines[end])
-					if te == "" {
-						end++
-						continue
-					}
-					if !strings.HasPrefix(te, "use ") {
-						break
-					}
-					end++
-				}
-				if end-i >= 4 {
-					return i, end
-				}
+			if end-i >= 4 {
+				return i, end
 			}
 		}
 	}

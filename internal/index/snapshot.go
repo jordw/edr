@@ -305,6 +305,7 @@ func checkGitignoreStale(root string) bool {
 	}
 
 	// Check for new .gitignore files
+	foundNew := false
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -318,12 +319,12 @@ func checkGitignoreStale(root string) bool {
 		if filepath.Base(path) == ".gitignore" {
 			rel, _ := filepath.Rel(root, path)
 			if _, known := meta.Files[rel]; !known {
-				ok = false // reuse ok as "found new" flag
+				foundNew = true
 				return filepath.SkipAll
 			}
 		}
 		return nil
 	})
 
-	return !ok
+	return foundNew
 }

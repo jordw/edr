@@ -17,6 +17,48 @@ import (
 	"github.com/jordw/edr/internal/output"
 )
 
+// matchColumn returns the 1-based column of the first match in line.
+func matchColumn(line, pattern, lowerPattern string, re *regexp.Regexp, caseSensitive bool) int {
+	if re != nil {
+		if loc := re.FindStringIndex(line); loc != nil {
+			return loc[0] + 1
+		}
+		return 0
+	}
+	if caseSensitive {
+		return strings.Index(line, pattern) + 1
+	}
+	if lowerPattern != "" {
+		return strings.Index(strings.ToLower(line), lowerPattern) + 1
+	}
+	return 0
+}
+
+// buildSnippet extracts context lines around lineIdx from allLines.
+func buildSnippet(allLines []string, lineIdx, contextSize, baseLineNum int) (snippet string, displayStart, displayEnd int) {
+	displayStart = baseLineNum
+	displayEnd = baseLineNum
+	if contextSize <= 0 {
+		return "", displayStart, displayEnd
+	}
+	ctxStart := lineIdx - contextSize
+	if ctxStart < 0 {
+		ctxStart = 0
+	}
+	ctxEnd := lineIdx + contextSize + 1
+	if ctxEnd > len(allLines) {
+		ctxEnd = len(allLines)
+	}
+	var ctxLines []string
+	for i := ctxStart; i < ctxEnd; i++ {
+		ctxLines = append(ctxLines, allLines[i])
+	}
+	snippet = strings.Join(ctxLines, "\n")
+	displayStart = baseLineNum - (lineIdx - ctxStart)
+	displayEnd = baseLineNum + (ctxEnd - lineIdx - 1)
+	return snippet, displayStart, displayEnd
+}
+
 // SearchResult wraps matches with truncation metadata.
 type SearchResult struct {
 	Kind         string         `json:"kind"`                   // "symbol" or "text"
@@ -421,26 +463,7 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 				lineNum := lineIdx + 1
 				matchedLine := strings.TrimSpace(line)
 
-				var snippet string
-				displayStart := lineNum
-				displayEnd := lineNum
-				if cfg.context > 0 {
-					ctxStart := lineIdx - cfg.context
-					if ctxStart < 0 {
-						ctxStart = 0
-					}
-					ctxEnd := lineIdx + cfg.context + 1
-					if ctxEnd > len(allLines) {
-						ctxEnd = len(allLines)
-					}
-					var ctxLines []string
-					for i := ctxStart; i < ctxEnd; i++ {
-						ctxLines = append(ctxLines, allLines[i])
-					}
-					snippet = strings.Join(ctxLines, "\n")
-					displayStart = ctxStart + 1
-					displayEnd = ctxEnd
-				}
+				snippet, displayStart, displayEnd := buildSnippet(allLines, lineIdx, cfg.context, lineNum)
 
 				sizeStr := matchedLine
 				if snippet != "" {
@@ -453,14 +476,7 @@ func SearchText(ctx context.Context, db *index.DB, pattern string, budget int, u
 
 				score := scoreTextMatch(rel, line, pattern, lowerPattern, re)
 
-				col := 0
-				if re != nil {
-					if loc := re.FindStringIndex(line); loc != nil {
-						col = loc[0] + 1
-					}
-				} else {
-					col = strings.Index(strings.ToLower(line), lowerPattern) + 1
-				}
+				col := matchColumn(line, pattern, lowerPattern, re, caseSensitive)
 
 				fm.matches = append(fm.matches, output.Match{
 					Symbol: output.Symbol{
@@ -632,26 +648,7 @@ func SearchInSymbol(ctx context.Context, db *index.DB, pattern string, symbolFil
 		lineNum := int(sym.StartLine) + lineIdx
 		matchedLine := strings.TrimSpace(line)
 
-		var snippet string
-		displayStart := lineNum
-		displayEnd := lineNum
-		if cfg.context > 0 {
-			ctxStart := lineIdx - cfg.context
-			if ctxStart < 0 {
-				ctxStart = 0
-			}
-			ctxEnd := lineIdx + cfg.context + 1
-			if ctxEnd > len(bodyLines) {
-				ctxEnd = len(bodyLines)
-			}
-			var ctxLines []string
-			for i := ctxStart; i < ctxEnd; i++ {
-				ctxLines = append(ctxLines, bodyLines[i])
-			}
-			snippet = strings.Join(ctxLines, "\n")
-			displayStart = int(sym.StartLine) + ctxStart
-			displayEnd = int(sym.StartLine) + ctxEnd - 1
-		}
+		snippet, displayStart, displayEnd := buildSnippet(bodyLines, lineIdx, cfg.context, lineNum)
 
 		sizeStr := matchedLine
 		if snippet != "" {
@@ -662,16 +659,7 @@ func SearchInSymbol(ctx context.Context, db *index.DB, pattern string, symbolFil
 			size = 1
 		}
 
-		col := 0
-		if re != nil {
-			if loc := re.FindStringIndex(line); loc != nil {
-				col = loc[0] + 1
-			}
-		} else if lowerPattern != "" {
-			col = strings.Index(strings.ToLower(line), lowerPattern) + 1
-		} else {
-			col = strings.Index(line, pattern) + 1
-		}
+		col := matchColumn(line, pattern, lowerPattern, re, caseSensitive)
 
 		matches = append(matches, output.Match{
 			Symbol: output.Symbol{

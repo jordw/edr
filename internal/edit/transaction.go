@@ -1,8 +1,6 @@
 package edit
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,8 +70,7 @@ func (t *Transaction) Commit() error {
 		}
 
 		// Verify hash from ALL edits that carry one (not just the first).
-		sum := sha256.Sum256(data)
-		got := hex.EncodeToString(sum[:])[:16]
+		got := HashBytes(data)
 		for _, e := range edits {
 			if e.ExpectHash != "" && e.ExpectHash != got {
 				return fmt.Errorf("transaction: hash mismatch on %s: expected %s, got %s", file, e.ExpectHash, got)
@@ -136,8 +133,7 @@ func (t *Transaction) Commit() error {
 		if err != nil {
 			return rollback(fmt.Errorf("transaction: re-read %s for backup: %w", file, err))
 		}
-		revalidateSum := sha256.Sum256(origData)
-		revalidateHash := hex.EncodeToString(revalidateSum[:])[:16]
+		revalidateHash := HashBytes(origData)
 		if revalidateHash != res.origHash {
 			return rollback(fmt.Errorf("transaction: file %s was modified externally between read and write (expected %s, got %s)", file, res.origHash, revalidateHash))
 		}

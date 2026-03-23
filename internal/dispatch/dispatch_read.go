@@ -13,6 +13,14 @@ import (
 	"github.com/jordw/edr/internal/output"
 )
 
+// relatedSym is a compact symbol reference with signature, used in expand/prepare output.
+type relatedSym struct {
+	File      string `json:"file"`
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Signature string `json:"signature"`
+}
+
 // isBinaryFile sniffs the first 512 bytes for NUL characters.
 func isBinaryFile(path string) bool {
 	f, err := os.Open(path)
@@ -575,66 +583,15 @@ func runPrepare(ctx context.Context, db *index.DB, root string, args []string, f
 	// Deps signatures
 	deps, err := index.FindDeps(ctx, db, sym)
 	if err == nil && len(deps) > 0 {
-		type relSym struct {
-			File      string `json:"file"`
-			Name      string `json:"name"`
-			Type      string `json:"type"`
-			Signature string `json:"signature"`
-		}
-		var items []relSym
-		for _, d := range deps {
-			sig := index.ExtractSignatureCtx(ctx, d)
-			if sig != "" {
-				items = append(items, relSym{File: output.Rel(d.File), Name: d.Name, Type: d.Type, Signature: sig})
-			}
-		}
-		if len(items) > 0 {
+		if items := symbolsToSignatures(ctx, deps); len(items) > 0 {
 			result["deps"] = items
 		}
 	}
 
 	// Callers signatures
-	callers, err := db.FindSemanticCallers(ctx, sym.Name, sym.File)
-	if err != nil || len(callers) == 0 {
-		refs, _ := index.FindReferencesInFile(ctx, db, sym.Name, sym.File)
-		allSyms, _ := db.AllSymbols(ctx)
-		symMap := make(map[string][]index.SymbolInfo)
-		for _, s := range allSyms {
-			symMap[s.File] = append(symMap[s.File], s)
-		}
-		seen := make(map[string]bool)
-		for _, ref := range refs {
-			if ref.File == sym.File && ref.StartLine >= sym.StartLine && ref.EndLine <= sym.EndLine {
-				continue
-			}
-			for _, s := range symMap[ref.File] {
-				if ref.StartLine >= s.StartLine && ref.EndLine <= s.EndLine {
-					key := s.File + ":" + s.Name
-					if !seen[key] {
-						seen[key] = true
-						callers = append(callers, s)
-					}
-				}
-			}
-		}
-	}
-	if len(callers) > 0 {
-		type relSym struct {
-			File      string `json:"file"`
-			Name      string `json:"name"`
-			Type      string `json:"type"`
-			Signature string `json:"signature"`
-		}
-		var items []relSym
-		for _, c := range callers {
-			sig := index.ExtractSignatureCtx(ctx, c)
-			if sig != "" {
-				items = append(items, relSym{File: output.Rel(c.File), Name: c.Name, Type: c.Type, Signature: sig})
-			}
-		}
-		if len(items) > 0 {
-			result["callers"] = items
-		}
+	callers := findCallersWithFallback(ctx, db, sym)
+	if items := symbolsToSignatures(ctx, callers); len(items) > 0 {
+		result["callers"] = items
 	}
 
 	// Test search: look for test functions matching the symbol name
@@ -660,6 +617,53 @@ func runPrepare(ctx context.Context, db *index.DB, root string, args []string, f
 	return result, nil
 }
 
+// findCallersWithFallback tries semantic callers first, falls back to text-based refs.
+func findCallersWithFallback(ctx context.Context, db *index.DB, sym *index.SymbolInfo) []index.SymbolInfo {
+	callers, err := db.FindSemanticCallers(ctx, sym.Name, sym.File)
+	if err == nil && len(callers) > 0 {
+		return callers
+	}
+	refs, _ := index.FindReferencesInFile(ctx, db, sym.Name, sym.File)
+	allSyms, _ := db.AllSymbols(ctx)
+	symMap := make(map[string][]index.SymbolInfo)
+	for _, s := range allSyms {
+		symMap[s.File] = append(symMap[s.File], s)
+	}
+	seen := make(map[string]bool)
+	for _, ref := range refs {
+		if ref.File == sym.File && ref.StartLine >= sym.StartLine && ref.EndLine <= sym.EndLine {
+			continue
+		}
+		for _, s := range symMap[ref.File] {
+			if ref.StartLine >= s.StartLine && ref.EndLine <= s.EndLine {
+				key := s.File + ":" + s.Name
+				if !seen[key] {
+					seen[key] = true
+					callers = append(callers, s)
+				}
+			}
+		}
+	}
+	return callers
+}
+
+// symbolsToSignatures converts symbols to signature structs for output.
+func symbolsToSignatures(ctx context.Context, syms []index.SymbolInfo) []relatedSym {
+	var items []relatedSym
+	for _, s := range syms {
+		sig := index.ExtractSignatureCtx(ctx, s)
+		if sig != "" {
+			items = append(items, relatedSym{
+				File:      output.Rel(s.File),
+				Name:      s.Name,
+				Type:      s.Type,
+				Signature: sig,
+			})
+		}
+	}
+	return items
+}
+
 // attachExpand adds related symbol signatures to a read result.
 // expandMode: "deps" (default if empty/truthy), "callers", or "both".
 func attachExpand(ctx context.Context, db *index.DB, sym *index.SymbolInfo, expandMode string, result map[string]any) {
@@ -677,78 +681,19 @@ func attachExpand(ctx context.Context, db *index.DB, sym *index.SymbolInfo, expa
 		// treat unrecognized as deps
 	}
 
-	type relatedSym struct {
-		File      string `json:"file"`
-		Name      string `json:"name"`
-		Type      string `json:"type"`
-		Signature string `json:"signature"`
-	}
-
 	if showDeps {
 		deps, err := index.FindDeps(ctx, db, sym)
 		if err == nil && len(deps) > 0 {
-			var items []relatedSym
-			for _, d := range deps {
-				sig := index.ExtractSignatureCtx(ctx, d)
-				if sig == "" {
-					continue
-				}
-				items = append(items, relatedSym{
-					File:      output.Rel(d.File),
-					Name:      d.Name,
-					Type:      d.Type,
-					Signature: sig,
-				})
-			}
-			if len(items) > 0 {
+			if items := symbolsToSignatures(ctx, deps); len(items) > 0 {
 				result["deps"] = items
 			}
 		}
 	}
 
 	if showCallers {
-		callers, err := db.FindSemanticCallers(ctx, sym.Name, sym.File)
-		if err != nil || len(callers) == 0 {
-			// Fallback to text-based refs
-			refs, _ := index.FindReferencesInFile(ctx, db, sym.Name, sym.File)
-			allSyms, _ := db.AllSymbols(ctx)
-			symMap := make(map[string][]index.SymbolInfo)
-			for _, s := range allSyms {
-				symMap[s.File] = append(symMap[s.File], s)
-			}
-			seen := make(map[string]bool)
-			for _, ref := range refs {
-				if ref.File == sym.File && ref.StartLine >= sym.StartLine && ref.EndLine <= sym.EndLine {
-					continue
-				}
-				for _, s := range symMap[ref.File] {
-					if ref.StartLine >= s.StartLine && ref.EndLine <= s.EndLine {
-						key := s.File + ":" + s.Name
-						if !seen[key] {
-							seen[key] = true
-							callers = append(callers, s)
-						}
-					}
-				}
-			}
-		}
-		if len(callers) > 0 {
-			var items []relatedSym
-			for _, c := range callers {
-				sig := index.ExtractSignatureCtx(ctx, c)
-				if sig == "" {
-					continue
-				}
-				items = append(items, relatedSym{
-					File:      output.Rel(c.File),
-					Name:      c.Name,
-					Type:      c.Type,
-					Signature: sig,
-				})
-			}
-			if len(items) > 0 {
-				result["callers"] = items
-			}
+		callers := findCallersWithFallback(ctx, db, sym)
+		if items := symbolsToSignatures(ctx, callers); len(items) > 0 {
+			result["callers"] = items
 		}
 	}
 }

@@ -30,26 +30,11 @@ func ExtractSignatureFromSource(sym SymbolInfo, src []byte) string {
 		return goSignature(body, sym.Type)
 	case ".py":
 		return pythonSignature(body)
-	case ".js", ".jsx", ".ts", ".tsx":
-		return jsSignature(body)
-	case ".rs":
-		return rustSignature(body)
-	case ".java":
-		return javaSignature(body)
-	case ".rb":
-		return rubySignature(body)
-	case ".c", ".h":
-		return cSignature(body)
-	case ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh":
-		return cppSignature(body)
-	case ".php":
-		return phpSignature(body)
-	case ".zig":
-		return zigSignature(body)
-	case ".lua":
-		return luaSignature(body)
-	case ".sh", ".bash":
-		return bashSignature(body)
+	case ".js", ".jsx", ".ts", ".tsx",
+		".rs", ".java", ".c", ".h",
+		".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh",
+		".php", ".zig":
+		return braceSignature(body)
 	default:
 		return firstLine(body)
 	}
@@ -59,12 +44,7 @@ func ExtractSignatureFromSource(sym SymbolInfo, src []byte) string {
 func goSignature(body, symType string) string {
 	switch symType {
 	case "function", "method":
-		// Take everything up to the opening brace
-		if idx := strings.Index(body, "{"); idx >= 0 {
-			sig := strings.TrimRight(body[:idx], " \t\n")
-			return sig
-		}
-		return firstLine(body)
+		return braceSignature(body)
 	case "type":
 		// For structs/interfaces: "type Foo struct {" + field names
 		if idx := strings.Index(body, "{"); idx >= 0 {
@@ -133,77 +113,12 @@ func pythonSignature(body string) string {
 	return strings.Join(sig, "\n")
 }
 
-// jsSignature extracts a JS/TS function signature.
-func jsSignature(body string) string {
-	// Take everything up to the opening brace
-	if idx := strings.Index(body, "{"); idx >= 0 {
-		sig := strings.TrimRight(body[:idx], " \t\n")
-		return sig
-	}
-	// Arrow functions without braces: take first line
-	return firstLine(body)
-}
-
-// rustSignature extracts a Rust fn/struct/impl signature.
-func rustSignature(body string) string {
+// braceSignature extracts everything up to the opening brace, or the first line.
+// Used by brace-delimited languages (JS, Rust, Java, C, C++, PHP, Zig).
+func braceSignature(body string) string {
 	if idx := strings.Index(body, "{"); idx >= 0 {
 		return strings.TrimRight(body[:idx], " \t\n")
 	}
-	return firstLine(body)
-}
-
-// javaSignature extracts a Java method/class signature.
-func javaSignature(body string) string {
-	if idx := strings.Index(body, "{"); idx >= 0 {
-		return strings.TrimRight(body[:idx], " \t\n")
-	}
-	return firstLine(body)
-}
-
-// rubySignature extracts a Ruby def/class signature.
-func rubySignature(body string) string {
-	return firstLine(body)
-}
-
-// cSignature extracts a C/C++ function/struct signature.
-func cSignature(body string) string {
-	if idx := strings.Index(body, "{"); idx >= 0 {
-		return strings.TrimRight(body[:idx], " \t\n")
-	}
-	return firstLine(body)
-}
-
-// cppSignature extracts a C++ function/class/struct signature.
-func cppSignature(body string) string {
-	if idx := strings.Index(body, "{"); idx >= 0 {
-		return strings.TrimRight(body[:idx], " \t\n")
-	}
-	return firstLine(body)
-}
-
-// phpSignature extracts a PHP function/class signature.
-func phpSignature(body string) string {
-	if idx := strings.Index(body, "{"); idx >= 0 {
-		return strings.TrimRight(body[:idx], " \t\n")
-	}
-	return firstLine(body)
-}
-
-// zigSignature extracts a Zig fn/test signature.
-func zigSignature(body string) string {
-	if idx := strings.Index(body, "{"); idx >= 0 {
-		return strings.TrimRight(body[:idx], " \t\n")
-	}
-	return firstLine(body)
-}
-
-// luaSignature extracts a Lua function signature.
-func luaSignature(body string) string {
-	return firstLine(body)
-}
-
-// bashSignature extracts a Bash function signature.
-func bashSignature(body string) string {
 	return firstLine(body)
 }
 
@@ -312,7 +227,7 @@ func containerHeader(sym SymbolInfo, src []byte, ext string) string {
 		// Python: first line (class Foo:) or up to the colon
 		return pythonSignature(body)
 	case ".rb":
-		return rubySignature(body)
+		return firstLine(body)
 	default:
 		// Brace-delimited languages: everything up to and including "{"
 		if idx := strings.Index(body, "{"); idx >= 0 {

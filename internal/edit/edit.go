@@ -49,8 +49,7 @@ func ReplaceSpan(path string, startByte, endByte uint32, replacement string, exp
 	}
 
 	if expectHash != "" {
-		sum := sha256.Sum256(data)
-		actual := hex.EncodeToString(sum[:])[:16]
+		actual := HashBytes(data)
 		if actual != expectHash {
 			return fmt.Errorf("replacespan: hash mismatch for %s: expected %s, got %s", path, expectHash, actual)
 		}

@@ -663,6 +663,34 @@ func (d *DB) HasRefs(ctx context.Context) bool {
 	return err == nil && count > 0
 }
 
+type importFilter struct {
+	cache      map[string][]ImportInfo
+	symbolFile string
+	root       string
+	db         *DB
+}
+
+func (d *DB) newImportFilter(symbolFile string) *importFilter {
+	return &importFilter{
+		cache:      make(map[string][]ImportInfo),
+		symbolFile: symbolFile,
+		root:       d.root,
+		db:         d,
+	}
+}
+
+func (f *importFilter) reaches(ctx context.Context, file string) bool {
+	if file == f.symbolFile {
+		return true
+	}
+	imports, ok := f.cache[file]
+	if !ok {
+		imports = f.db.getImportsForFile(ctx, file)
+		f.cache[file] = imports
+	}
+	return importsReach(imports, f.symbolFile, file, f.root)
+}
+
 // FindSemanticReferences finds references to a symbol, filtered by import visibility.
 // symbolFile is the file where the target symbol is defined.
 func (d *DB) FindSemanticReferences(ctx context.Context, symbolName, symbolFile string) ([]SymbolInfo, error) {
@@ -695,48 +723,25 @@ func (d *DB) FindSemanticReferences(ctx context.Context, symbolName, symbolFile 
 		candidates = append(candidates, rr)
 	}
 
-	// Filter by import visibility
+	filter := d.newImportFilter(symbolFile)
 	var results []SymbolInfo
 	seen := make(map[string]bool)
-	importCache := make(map[string][]ImportInfo)
-
 	for _, c := range candidates {
-		// Same-file refs always included
-		if c.refFile == symbolFile {
-			key := c.container.File + ":" + c.container.Name
-			if !seen[key] {
-				seen[key] = true
-				results = append(results, SymbolInfo{
-					Type:      "reference",
-					Name:      symbolName,
-					File:      c.refFile,
-					StartLine: uint32(c.refLine),
-					EndLine:   uint32(c.refLine),
-				})
-			}
+		if !filter.reaches(ctx, c.refFile) {
 			continue
 		}
-
-		// Check if the referring file imports the symbol's file
-		imports, ok := importCache[c.refFile]
-		if !ok {
-			imports = d.getImportsForFile(ctx, c.refFile)
-			importCache[c.refFile] = imports
+		key := c.refFile + ":" + fmt.Sprintf("%d", c.refLine)
+		if seen[key] {
+			continue
 		}
-
-		if importsReach(imports, symbolFile, c.refFile, d.root) {
-			key := c.refFile + ":" + fmt.Sprintf("%d", c.refLine)
-			if !seen[key] {
-				seen[key] = true
-				results = append(results, SymbolInfo{
-					Type:      "reference",
-					Name:      symbolName,
-					File:      c.refFile,
-					StartLine: uint32(c.refLine),
-					EndLine:   uint32(c.refLine),
-				})
-			}
-		}
+		seen[key] = true
+		results = append(results, SymbolInfo{
+			Type:      "reference",
+			Name:      symbolName,
+			File:      c.refFile,
+			StartLine: uint32(c.refLine),
+			EndLine:   uint32(c.refLine),
+		})
 	}
 
 	return results, nil
@@ -752,25 +757,14 @@ func (d *DB) FindReferencingFiles(ctx context.Context, symbolName, symbolFile st
 	}
 	defer rows.Close()
 
-	importCache := make(map[string][]ImportInfo)
+	filter := d.newImportFilter(symbolFile)
 	var files []string
 	for rows.Next() {
 		var f string
 		if err := rows.Scan(&f); err != nil {
 			continue
 		}
-		// Same-file always included
-		if f == symbolFile {
-			files = append(files, f)
-			continue
-		}
-		// Check import visibility
-		imports, ok := importCache[f]
-		if !ok {
-			imports = d.getImportsForFile(ctx, f)
-			importCache[f] = imports
-		}
-		if importsReach(imports, symbolFile, f, d.root) {
+		if filter.reaches(ctx, f) {
 			files = append(files, f)
 		}
 	}
@@ -793,37 +787,22 @@ func (d *DB) FindSemanticCallers(ctx context.Context, symbolName, symbolFile str
 		return nil, err
 	}
 
-	// Filter by import visibility
+	filter := d.newImportFilter(symbolFile)
 	var results []SymbolInfo
 	seen := make(map[string]bool)
-	importCache := make(map[string][]ImportInfo)
-
 	for _, c := range candidates {
 		key := c.File + ":" + c.Name
 		if seen[key] {
 			continue
 		}
-
-		if c.File == symbolFile {
-			// Same-file: skip self
-			if c.Name == symbolName {
-				continue
-			}
-			seen[key] = true
-			results = append(results, c)
+		if c.File == symbolFile && c.Name == symbolName {
 			continue
 		}
-
-		imports, ok := importCache[c.File]
-		if !ok {
-			imports = d.getImportsForFile(ctx, c.File)
-			importCache[c.File] = imports
+		if !filter.reaches(ctx, c.File) {
+			continue
 		}
-
-		if importsReach(imports, symbolFile, c.File, d.root) {
-			seen[key] = true
-			results = append(results, c)
-		}
+		seen[key] = true
+		results = append(results, c)
 	}
 
 	return results, nil
@@ -886,14 +865,17 @@ func (d *DB) FindSemanticDeps(ctx context.Context, symbolID int64, symbolFile st
 		return nil, nil
 	}
 
-	// Get imports for the symbol's file
+	// Direction is reversed for deps: we check what symbolFile imports (outward),
+	// not what imports symbolFile.
 	imports := d.getImportsForFile(ctx, symbolFile)
+	reachable := func(candidateFile string) bool {
+		return candidateFile == symbolFile || importsReach(imports, candidateFile, symbolFile, d.root)
+	}
 
 	var results []SymbolInfo
 	seen := make(map[string]bool)
 
 	for _, name := range names {
-		// Look up symbols with this exact name
 		syms, err := d.db.QueryContext(ctx, `
 			SELECT name, type, file, start_line, end_line, start_byte, end_byte
 			FROM symbols WHERE name = ?
@@ -911,8 +893,7 @@ func (d *DB) FindSemanticDeps(ctx context.Context, symbolID int64, symbolFile st
 			if seen[key] {
 				continue
 			}
-			// Same file or import-reachable
-			if s.File == symbolFile || importsReach(imports, s.File, symbolFile, d.root) {
+			if reachable(s.File) {
 				seen[key] = true
 				results = append(results, s)
 			}

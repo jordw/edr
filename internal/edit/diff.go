@@ -79,20 +79,16 @@ func lcsSimple(old, new []string) []lcsMatch {
 		suffix++
 	}
 
+	// Greedy scan of the middle section: for each old line, find the first
+	// matching new line at or after the current new-index.
 	if prefix < m-suffix && prefix < n-suffix {
-		middle := prefix
-		oi, ni := prefix, prefix
-		for oi < m-suffix && ni < n-suffix {
-			if old[oi] == new[ni] {
-				result = append(result, lcsMatch{oi, ni})
-				oi++
-				ni++
-			} else {
-				_ = middle
-				ni++
-				if ni >= n-suffix {
-					oi++
-					ni = prefix
+		ni := prefix
+		for oi := prefix; oi < m-suffix; oi++ {
+			for nj := ni; nj < n-suffix; nj++ {
+				if old[oi] == new[nj] {
+					result = append(result, lcsMatch{oi, nj})
+					ni = nj + 1
+					break
 				}
 			}
 		}
