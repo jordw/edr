@@ -1042,6 +1042,13 @@ func suggestBatchFlag(flag string, currentOp batchOp) error {
 }
 
 func interpretEscapes(s string) string {
+	// If the value already contains a real newline, the shell handled
+	// quoting (multi-line string or $'...\n...'), so skip escape
+	// processing to avoid corrupting literal backslash sequences in the
+	// content (e.g. Go format strings like "foo:\n%v").
+	if strings.ContainsAny(s, "\n\t") {
+		return s
+	}
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := 0; i < len(s); i++ {

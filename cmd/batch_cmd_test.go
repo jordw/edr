@@ -153,3 +153,25 @@ func TestSilentErrorMessage(t *testing.T) {
 		t.Errorf("Error() = %q, want empty", msg)
 	}
 }
+
+func TestInterpretEscapesSkipsMultiline(t *testing.T) {
+	// When the value already contains real newlines (shell handled quoting),
+	// interpretEscapes should not process \n or \t sequences, since they
+	// may be literal backslash sequences in source code (e.g. Go format strings).
+	input := "t.Errorf(\"expected:\\n%v\\ngot:\\n%v\", a, b)\nreturn nil"
+	got := interpretEscapes(input)
+	if got != input {
+		t.Errorf("interpretEscapes should not modify multi-line input\ngot:  %q\nwant: %q", got, input)
+	}
+}
+
+func TestInterpretEscapesSingleLine(t *testing.T) {
+	// Single-line values without real newlines/tabs should still get escape processing.
+	input := `first\nsecond\tindented`
+	want := "first\nsecond\tindented"
+	got := interpretEscapes(input)
+	if got != want {
+		t.Errorf("interpretEscapes(%q) = %q, want %q", input, got, want)
+	}
+}
+
