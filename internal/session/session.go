@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jordw/edr/internal/cmdspec"
 )
@@ -29,6 +30,14 @@ import (
 type ContentEntry struct {
 	Hash  string `json:"hash"`
 	Order int    `json:"order"`
+}
+
+// FileMtimeEntry tracks a file's mtime and content hash at the time the agent
+// last read it. Used by the warnings package to detect external modifications.
+type FileMtimeEntry struct {
+	Mtime int64  `json:"mtime"` // UnixMicro
+	Hash  string `json:"hash"`  // content hash at read time
+	OpID  string `json:"op_id"` // op when this was recorded
 }
 
 // PostProcessStats tracks session optimization hits for trace collection.
@@ -65,7 +74,6 @@ type Session struct {
 	ContentOrder  int                     `json:"-"`
 	SeenBodies    map[string]string       `json:"seen_bodies"`
 	Diffs         map[string]string       `json:"diffs"`
-	SeenHints  map[string]bool   `json:"seen_hints,omitempty"`
 	FileHashes map[string]string `json:"file_hashes,omitempty"`
 
 	// Op log: sliding window of recent operations for `edr next`.
@@ -78,9 +86,20 @@ type Session struct {
 	// Assumptions tracks signature hashes for symbols the agent has read.
 	Assumptions map[string]AssumptionEntry `json:"assumptions,omitempty"`
 
+	// RunHashes tracks output hashes for command runs, enabling session-aware dedup.
+	RunHashes map[string]string `json:"run_hashes,omitempty"`
+
 	// Build state: tracks verify results and edit activity.
 	LastVerifyStatus string `json:"last_verify_status,omitempty"`
 	EditsSinceVerify bool   `json:"edits_since_verify,omitempty"`
+
+	// FileMtimes tracks mtime+hash for files the agent has read, enabling
+	// external modification detection via the warnings package.
+	FileMtimes map[string]FileMtimeEntry `json:"file_mtimes,omitempty"`
+
+	// repoRoot is the absolute path to the repo root, set at load time.
+	// Used for stat fallback when mtime is not in the result map.
+	repoRoot string
 
 	// stats tracks optimization hits per handleDo call (reset between calls).
 	stats PostProcessStats
@@ -236,6 +255,44 @@ func (s *Session) BuildState() (status string, editsSince bool) {
 	return s.LastVerifyStatus, false
 }
 
+
+// --- Run output caching ---
+
+// CheckRunOutput checks whether command output matches the previously stored hash.
+// Returns "unchanged" if the output is identical, "new" otherwise.
+func (s *Session) CheckRunOutput(key string, output string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.RunHashes == nil {
+		return "new"
+	}
+	prev, ok := s.RunHashes[key]
+	if !ok {
+		return "new"
+	}
+	if ContentHash(output) == prev {
+		return "unchanged"
+	}
+	return "new"
+}
+
+// StoreRunOutput stores the output hash for a command run.
+func (s *Session) StoreRunOutput(key string, output string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.RunHashes == nil {
+		s.RunHashes = make(map[string]string)
+	}
+	s.RunHashes[key] = ContentHash(output)
+}
+
+// ClearRunOutput removes the stored hash for a command key.
+func (s *Session) ClearRunOutput(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.RunHashes, key)
+}
+
 const MaxContentEntries = 200
 
 // New creates an in-memory session.
@@ -245,39 +302,67 @@ func New() *Session {
 		SymbolContent: make(map[string]ContentEntry),
 		SeenBodies:    make(map[string]string),
 		Diffs:         make(map[string]string),
-		SeenHints:     make(map[string]bool),
 		FileHashes:    make(map[string]string),
+		FileMtimes:    make(map[string]FileMtimeEntry),
 	}
 }
 
-// GetSeenHints returns a copy of the seen hints set.
-func (s *Session) GetSeenHints() map[string]bool {
+// SetRepoRoot sets the absolute repo root path for mtime stat fallback.
+func (s *Session) SetRepoRoot(root string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make(map[string]bool, len(s.SeenHints))
-	for k, v := range s.SeenHints {
+	s.repoRoot = root
+}
+
+// RepoRoot returns the repo root path.
+func (s *Session) RepoRoot() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.repoRoot
+}
+
+// --- File mtime tracking ---
+
+// GetFileMtimes returns a copy of the tracked file mtimes.
+func (s *Session) GetFileMtimes() map[string]FileMtimeEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]FileMtimeEntry, len(s.FileMtimes))
+	for k, v := range s.FileMtimes {
 		out[k] = v
 	}
 	return out
 }
 
-// RecordHints marks hint keys as seen so they are not repeated.
-func (s *Session) RecordHints(keys []string) {
-	if len(keys) == 0 {
-		return
-	}
+// RecordFileMtime records the mtime and content hash for a file the agent read.
+func (s *Session) RecordFileMtime(relPath string, mtime int64, hash string, opID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.SeenHints == nil {
-		s.SeenHints = make(map[string]bool)
+	if s.FileMtimes == nil {
+		s.FileMtimes = make(map[string]FileMtimeEntry)
 	}
-	for _, k := range keys {
-		s.SeenHints[k] = true
+	s.FileMtimes[relPath] = FileMtimeEntry{Mtime: mtime, Hash: hash, OpID: opID}
+}
+
+// UpdateFileMtime updates just the mtime for a tracked file (e.g., after
+// detecting a touch that didn't change content).
+func (s *Session) UpdateFileMtime(relPath string, mtime int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if entry, ok := s.FileMtimes[relPath]; ok {
+		entry.Mtime = mtime
+		s.FileMtimes[relPath] = entry
 	}
 }
 
-// --- File-backed persistence ---
+// ClearFileMtime removes mtime tracking for a file.
+func (s *Session) ClearFileMtime(relPath string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.FileMtimes, relPath)
+}
 
+// --- File-backed persistence ---
 // LoadFromFile loads a session from disk. Returns a new empty session if the
 // file does not exist or is corrupt.
 func LoadFromFile(path string) *Session {
@@ -302,8 +387,8 @@ func LoadFromFile(path string) *Session {
 	if s.Diffs == nil {
 		s.Diffs = make(map[string]string)
 	}
-	if s.SeenHints == nil {
-		s.SeenHints = make(map[string]bool)
+	if s.FileMtimes == nil {
+		s.FileMtimes = make(map[string]FileMtimeEntry)
 	}
 	// Restore opCount from existing log so new IDs don't collide
 	if len(s.OpLog) > 0 {
@@ -528,6 +613,8 @@ func LoadSession(edrDir string) (*Session, func()) {
 	}
 	path := filepath.Join(edrDir, "sessions", id+".json")
 	sess := LoadFromFile(path)
+	// Set repo root (edrDir is <repo>/.edr, root is parent)
+	sess.repoRoot = filepath.Dir(edrDir)
 	return sess, func() {
 		sess.SaveToFile(path)
 	}
@@ -772,6 +859,7 @@ func (s *Session) ProcessReadResult(cmd string, result map[string]any, flags map
 				s.FileHashes = make(map[string]string)
 			}
 			s.FileHashes[file] = hash
+			s.updateFileMtimeFromResult(file, hash, result)
 		}
 	}
 
@@ -893,7 +981,50 @@ func (s *Session) updateFileHashFromResult(m map[string]any) {
 			s.FileHashes = make(map[string]string)
 		}
 		s.FileHashes[file] = hash
+		s.updateFileMtimeFromResult(file, hash, m)
 	}
+}
+
+// updateFileMtimeFromResult updates mtime tracking after a read or edit.
+// It tries the "mtime" field in the result first, then falls back to stat.
+// Caller must hold s.mu.
+func (s *Session) updateFileMtimeFromResult(file, hash string, m map[string]any) {
+	var unixMicro int64
+
+	if mtimeStr, ok := m["mtime"].(string); ok && mtimeStr != "" {
+		if t, err := time.Parse(time.RFC3339, mtimeStr); err == nil {
+			unixMicro = t.UnixMicro()
+		}
+	}
+
+	// Fallback: stat the file using RepoRoot if set.
+	if unixMicro == 0 && s.repoRoot != "" {
+		absPath := file
+		if !strings.HasPrefix(file, "/") {
+			absPath = filepath.Join(s.repoRoot, file)
+		}
+		if info, err := os.Stat(absPath); err == nil {
+			unixMicro = info.ModTime().UnixMicro()
+		}
+	}
+
+	if unixMicro == 0 {
+		return
+	}
+
+	if s.FileMtimes == nil {
+		s.FileMtimes = make(map[string]FileMtimeEntry)
+	}
+	opID := ""
+	if len(s.OpLog) > 0 {
+		opID = s.OpLog[len(s.OpLog)-1].OpID
+	}
+	s.FileMtimes[file] = FileMtimeEntry{
+		Mtime: unixMicro,
+		Hash:  hash,
+		OpID:  opID,
+	}
+
 }
 
 // firstString returns the first non-empty string value found for the given keys.

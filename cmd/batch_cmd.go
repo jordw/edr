@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/jordw/edr/internal/cmdspec"
-	"github.com/jordw/edr/internal/hints"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
@@ -769,9 +768,6 @@ func runBatch(args []string) error {
 		return err
 	}
 
-	// Emit contextual hints to stderr
-	emitBatchHints(sess, &params, env)
-
 	output.PrintEnvelope(env)
 	return nil
 }
@@ -835,103 +831,6 @@ func (e silentError) ExitCode() int {
 	return e.code
 }
 
-
-// emitBatchHints builds hints.Ops from the batch params and emits contextual
-// suggestions to stderr. Hint keys are recorded in the session to avoid repeats.
-func emitBatchHints(sess *session.Session, p *doParams, env *output.Envelope) {
-	var ops []hints.Op
-
-	for _, r := range p.Reads {
-		flags := make(map[string]bool)
-		if r.Signatures != nil && *r.Signatures {
-			flags["sig"] = true
-		}
-		if r.Skeleton != nil && *r.Skeleton {
-			flags["skeleton"] = true
-		}
-		if r.Budget != nil {
-			flags["budget"] = true
-		}
-		if r.Full != nil && *r.Full {
-			flags["full"] = true
-		}
-		ops = append(ops, hints.Op{Kind: "read", Flags: flags})
-	}
-
-	for _, q := range p.Queries {
-		cmd := q.Cmd
-		if cmd == "" {
-			cmd = inferQueryCmd(q)
-		}
-		flags := make(map[string]bool)
-		meta := make(map[string]string)
-		if q.Text != nil && *q.Text {
-			flags["text"] = true
-		}
-		if q.Context != nil {
-			flags["context"] = true
-		}
-		if q.Budget != nil {
-			flags["budget"] = true
-		}
-		if q.Full != nil && *q.Full {
-			flags["full"] = true
-		}
-		if q.Impact != nil && *q.Impact {
-			flags["impact"] = true
-		}
-		if q.Chain != nil {
-			flags["chain"] = true
-		}
-		if q.Type != nil {
-			flags["type"] = true
-		}
-		if q.Grep != nil {
-			flags["grep"] = true
-		}
-		// Count search results from the envelope
-		if cmd == "search" {
-			resultCount := countSearchResults(env)
-			meta["results"] = strconv.Itoa(resultCount)
-		}
-		ops = append(ops, hints.Op{Kind: cmd, Flags: flags, Meta: meta})
-	}
-
-	for _, e := range p.Edits {
-		flags := make(map[string]bool)
-		if e.DryRun != nil && *e.DryRun {
-			flags["dry_run"] = true
-		}
-		if e.All != nil && *e.All {
-			flags["all"] = true
-		}
-		ops = append(ops, hints.Op{Kind: "edit", Flags: flags})
-	}
-
-	for _, w := range p.Writes {
-		flags := make(map[string]bool)
-		if w.Inside != nil {
-			flags["inside"] = true
-		}
-		if w.After != nil {
-			flags["after"] = true
-		}
-		ops = append(ops, hints.Op{Kind: "write", Flags: flags})
-	}
-
-	if len(ops) == 0 {
-		return
-	}
-
-	ctx := hints.Context{
-		Ops:       ops,
-		IsBatch:   true,
-		HasError:  !env.OK,
-		SeenHints: sess.GetSeenHints(),
-	}
-	keys := hints.Emit(ctx)
-	sess.RecordHints(keys)
-}
 
 // countSearchResults counts total matches across search ops in the envelope.
 func countSearchResults(env *output.Envelope) int {

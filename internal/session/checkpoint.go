@@ -35,6 +35,7 @@ type SessionSnap struct {
 	LastVerifyStatus string                     `json:"last_verify_status,omitempty"`
 	EditsSinceVerify bool                       `json:"edits_since_verify,omitempty"`
 	FileHashes       map[string]string          `json:"file_hashes,omitempty"`
+	FileMtimes       map[string]FileMtimeEntry  `json:"file_mtimes,omitempty"`
 }
 
 // MaxCheckpoints is the limit on explicit checkpoints per session.
@@ -131,7 +132,12 @@ func (s *Session) buildCheckpoint(id, label, repoRoot string, dirtyFiles []strin
 			snap.FileHashes[k] = v
 		}
 	}
-
+	if len(s.FileMtimes) > 0 {
+		snap.FileMtimes = make(map[string]FileMtimeEntry, len(s.FileMtimes))
+		for k, v := range s.FileMtimes {
+			snap.FileMtimes[k] = v
+		}
+	}
 	return &Checkpoint{
 		ID:        id,
 		Label:     label,
@@ -209,6 +215,15 @@ func (s *Session) RestoreCheckpoint(sessDir, repoRoot, cpID string, saveCurrentF
 		}
 	} else {
 		s.FileHashes = make(map[string]string)
+	}
+
+	if cp.Session.FileMtimes != nil {
+		s.FileMtimes = make(map[string]FileMtimeEntry, len(cp.Session.FileMtimes))
+		for k, v := range cp.Session.FileMtimes {
+			s.FileMtimes[k] = v
+		}
+	} else {
+		s.FileMtimes = make(map[string]FileMtimeEntry)
 	}
 
 	// Invalidate all content caches (conservative — agent needs fresh reads)

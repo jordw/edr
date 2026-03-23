@@ -13,10 +13,10 @@ import (
 
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
-	"github.com/jordw/edr/internal/hints"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
+	"github.com/jordw/edr/internal/warnings"
 	"github.com/spf13/cobra"
 )
 
@@ -85,7 +85,6 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	if err != nil {
 		addDispatchFailedOp(env, opID, cmdName, err)
 		env.ComputeOK()
-		emitStandaloneHints(sess, cmdName, flags, env)
 		output.PrintEnvelope(env)
 		return nil
 	}
@@ -131,9 +130,6 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 
 	// Record op in session log
 	recordOp(sess, cmdName, args, flags, result, err == nil)
-
-	// Emit contextual hints to stderr
-	emitStandaloneHints(sess, cmdName, flags, env)
 
 	output.PrintEnvelope(env)
 	return nil
@@ -491,7 +487,7 @@ var contextCmd = &cobra.Command{
 			defer db.Close()
 		}
 
-		result := buildNextResult(sess, db, count)
+		result := buildNextResult(sess, db, root, count)
 		env := output.NewEnvelope("context")
 		env.AddOp("s0", "context", result)
 		env.ComputeOK()
@@ -675,7 +671,7 @@ var checkpointCmd = &cobra.Command{
 func init() { cmdspec.RegisterFlags(checkpointCmd.Flags(), "checkpoint") }
 
 // buildNextResult constructs the result map for `edr next`.
-func buildNextResult(sess *session.Session, db *index.DB, count int) map[string]any {
+func buildNextResult(sess *session.Session, db *index.DB, root string, count int) map[string]any {
 	result := map[string]any{}
 
 	// Focus
@@ -734,17 +730,106 @@ func buildNextResult(sess *session.Session, db *index.DB, count int) map[string]
 		}
 	}
 
+	// Session-pattern suggestions
+	if suggestions := analyzePatterns(sess); len(suggestions) > 0 {
+		result["suggestions"] = suggestions
+	}
+
+	// External file modifications
+	extMods := warnings.Check(sess, root)
+	if len(extMods) > 0 {
+		var items []any
+		for _, w := range extMods {
+			items = append(items, map[string]any{
+				"file":    w.File,
+				"kind":    w.Kind,
+				"since":   w.OpID,
+				"message": w.Message,
+			})
+		}
+		result["external_changes"] = items
+	}
+
 	return result
 }
 
-// computeFixItems checks all tracked assumptions against current signatures.
-func computeFixItems(sess *session.Session, db *index.DB) []any {
+// analyzePatterns scans the session op log for suboptimal usage patterns
+// and returns actionable suggestions for the agent.
+func analyzePatterns(sess *session.Session) []string {
+	ops := sess.GetRecentOps(0) // all ops
+	if len(ops) < 3 {
+		return nil // too few ops to detect patterns
+	}
+
+	var suggestions []string
+
+	// 1. Full-file reads without --skeleton or --budget
+	fullReads := 0
+	for _, op := range ops {
+		if op.Cmd == "read" && op.OK && op.Action == "read_symbol" && op.Symbol == "" {
+			fullReads++
+		}
+	}
+	if fullReads >= 3 {
+		suggestions = append(suggestions, fmt.Sprintf(
+			"%d full-file reads without --skeleton or --budget — these waste context tokens",
+			fullReads))
+	}
+
+	// 2. Sequential single-file reads that could be batched
+	maxRun := 0
+	currentRun := 0
+	for _, op := range ops {
+		if op.Cmd == "read" && op.OK {
+			currentRun++
+			if currentRun > maxRun {
+				maxRun = currentRun
+			}
+		} else {
+			currentRun = 0
+		}
+	}
+	if maxRun >= 3 {
+		suggestions = append(suggestions, fmt.Sprintf(
+			"%d sequential reads — batch with edr -r file1.go -r file2.go",
+			maxRun))
+	}
+
+	// 3. Edits without a prior refs check on the same symbol
+	refsChecked := make(map[string]bool)
+	editsWithoutRefs := 0
+	for _, op := range ops {
+		if op.Cmd == "refs" && op.OK && op.File != "" {
+			key := op.File
+			if op.Symbol != "" {
+				key += ":" + op.Symbol
+			}
+			refsChecked[key] = true
+		}
+		if (op.Cmd == "edit" || op.Cmd == "rename") && op.OK && op.Symbol != "" {
+			key := op.File + ":" + op.Symbol
+			if !refsChecked[key] && !refsChecked[op.File] {
+				editsWithoutRefs++
+			}
+		}
+	}
+	if editsWithoutRefs >= 2 {
+		suggestions = append(suggestions, fmt.Sprintf(
+			"%d symbol edits without prior refs check — use edr refs Symbol --impact before refactoring",
+			editsWithoutRefs))
+	}
+
+	return suggestions
+}
+
+// computeStaleAssumptions resolves current signatures for all tracked assumptions
+// and returns any that have become stale. Shared by computeFixItems and emitWarnings.
+func computeStaleAssumptions(sess *session.Session, db *index.DB) []session.StaleAssumption {
 	assumptions := sess.GetAssumptions()
 	if len(assumptions) == 0 {
 		return nil
 	}
 
-	// Compute current signatures for all tracked symbols
 	currentSigs := make(map[string]string, len(assumptions))
 	ctx := context.Background()
 	for key := range assumptions {
@@ -775,7 +860,11 @@ func computeFixItems(sess *session.Session, db *index.DB) []any {
 		}
 	}
 
-	stale := sess.CheckAssumptions(currentSigs)
+	return sess.CheckAssumptions(currentSigs)
+}
+
+func computeFixItems(sess *session.Session, db *index.DB) []any {
+	stale := computeStaleAssumptions(sess, db)
 	if len(stale) == 0 {
 		return nil
 	}
@@ -1210,25 +1299,3 @@ func classifyOp(cmd string, flags map[string]any, result any, ok bool) (action, 
 	}
 }
 
-// emitStandaloneHints emits contextual hints for standalone (non-batch) commands.
-func emitStandaloneHints(sess *session.Session, cmdName string, flags map[string]any, env *output.Envelope) {
-	f := make(map[string]bool)
-	for k := range flags {
-		f[k] = true
-	}
-
-	op := hints.Op{
-		Kind:  cmdName,
-		Flags: f,
-		Meta:  make(map[string]string),
-	}
-
-	ctx := hints.Context{
-		Ops:       []hints.Op{op},
-		IsBatch:   false,
-		HasError:  !env.OK,
-		SeenHints: sess.GetSeenHints(),
-	}
-	keys := hints.Emit(ctx)
-	sess.RecordHints(keys)
-}

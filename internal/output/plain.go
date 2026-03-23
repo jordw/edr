@@ -21,6 +21,26 @@ import (
 	"strings"
 )
 
+// toStringSlice extracts a []string from an any that might be []string or []any.
+func toStringSlice(v any) []string {
+	if v == nil {
+		return nil
+	}
+	if ss, ok := v.([]string); ok {
+		return ss
+	}
+	if aa, ok := v.([]any); ok {
+		out := make([]string, 0, len(aa))
+		for _, a := range aa {
+			if s, ok := a.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 // printPlain renders the envelope as JSON-header + raw-body to stdout.
 func printPlain(e *Envelope) {
 	w := os.Stdout
@@ -509,6 +529,16 @@ func plainNext(w *os.File, op Op) {
 		h["current"] = len(current)
 	}
 
+	// Add external changes count to header
+	if ext, ok := op["external_changes"].([]any); ok && len(ext) > 0 {
+		h["external_changes"] = len(ext)
+	}
+
+	// Add suggestions count to header
+	if sug := toStringSlice(op["suggestions"]); len(sug) > 0 {
+		h["suggestions"] = len(sug)
+	}
+
 	writeHeader(w, h)
 
 	// Focus line
@@ -585,6 +615,35 @@ func plainNext(w *os.File, op Op) {
 			if suggest != "" {
 				fmt.Fprintf(w, "    => %s\n", suggest)
 			}
+		}
+	}
+
+	// External changes
+	if ext, ok := op["external_changes"].([]any); ok && len(ext) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "external_changes:")
+		for _, e := range ext {
+			em, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			file, _ := em["file"].(string)
+			kind, _ := em["kind"].(string)
+			since, _ := em["since"].(string)
+			line := fmt.Sprintf("  %s %s", file, kind)
+			if since != "" {
+				line += fmt.Sprintf(" (since %s)", since)
+			}
+			fmt.Fprintln(w, line)
+		}
+	}
+
+	// Suggestions from pattern analysis
+	if sug := toStringSlice(op["suggestions"]); len(sug) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "suggestions:")
+		for _, msg := range sug {
+			fmt.Fprintf(w, "  %s\n", msg)
 		}
 	}
 

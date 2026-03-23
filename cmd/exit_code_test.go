@@ -10,7 +10,6 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	os.Setenv("EDR_NO_HINTS", "1")
 	os.Exit(m.Run())
 }
 
@@ -70,13 +69,12 @@ func run(t *testing.T, binary, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "EDR_NO_HINTS=1")
+	cmd.Env = os.Environ()
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("command %v failed: %v\n%s", args, err, out)
 	}
 }
 
-// testEnv returns os.Environ() with EDR_NO_HINTS=1.
 func testEnv(extra ...string) []string {
-	return append(append(os.Environ(), "EDR_NO_HINTS=1"), extra...)
+	return append(os.Environ(), extra...)
 }

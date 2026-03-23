@@ -57,7 +57,7 @@ func TestCleanEdrDir_DeadPpidRemoved(t *testing.T) {
 
 func TestCleanEdrDir_StaleRunBaselinesRemoved(t *testing.T) {
 	edrDir := t.TempDir()
-	runDir := filepath.Join(edrDir, "run")
+	runDir := filepath.Join(edrDir, "delta")
 	os.MkdirAll(runDir, 0755)
 
 	// Fresh baseline — should survive
