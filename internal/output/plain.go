@@ -329,7 +329,7 @@ func plainRename(w *os.File, op Op) {
 	hStr(h, "status", op, "status")
 	hStr(h, "from", op, "old_name")
 	hStr(h, "to", op, "new_name")
-	if v, ok := op["occurrences"].(int); ok && v > 0 {
+	if v := anyInt(op["occurrences"]); v > 0 {
 		h["n"] = v
 	}
 	writeHeader(w, h)

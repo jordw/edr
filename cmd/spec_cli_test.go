@@ -1741,6 +1741,122 @@ func TestSpec_RenameApply(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Rename --text
+// ---------------------------------------------------------------------------
+
+func TestSpec_RenameTextDryRun(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go":   "package main\n\nconst Name = \"verify\"\n\nfunc verify() {}\n",
+		"other.go":   "package main\n\n// verify runs verification.\nfunc run() { verify() }\n",
+		"readme.txt": "This tool can verify things.\n",
+	})
+
+	result, body, _, exit := specRun(t, binary, dir, nil, "rename", "--text", "--dry-run", "verify", "check")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "dry_run" {
+		t.Errorf("status = %v, want dry_run", h["status"])
+	}
+	occ, _ := h["n"].(float64)
+	if occ < 3 {
+		t.Errorf("expected at least 3 occurrences, got %v", occ)
+	}
+	if !strings.Contains(body, "verify") {
+		t.Error("dry-run body should show preview lines")
+	}
+	// File should be unchanged after dry-run
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	if strings.Contains(string(content), "check") {
+		t.Error("dry-run should not modify files")
+	}
+}
+
+func TestSpec_RenameTextApply(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nconst Name = \"oldstr\"\n\nfunc oldstr() { println(\"oldstr\") }\n",
+		"other.go": "package main\n\nfunc run() { oldstr() }\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil, "rename", "--text", "oldstr", "newstr")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+	occ, _ := h["n"].(float64)
+	if occ < 3 {
+		t.Errorf("expected at least 3 occurrences, got %v", occ)
+	}
+
+	for _, f := range []string{"hello.go", "other.go"} {
+		content, _ := os.ReadFile(filepath.Join(dir, f))
+		s := string(content)
+		if strings.Contains(s, "oldstr") {
+			t.Errorf("%s still contains oldstr", f)
+		}
+		if !strings.Contains(s, "newstr") {
+			t.Errorf("%s should contain newstr", f)
+		}
+	}
+}
+
+func TestSpec_RenameTextWord(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc foo() {}\nfunc foobar() {}\nfunc call() { foo(); foobar() }\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil, "rename", "--text", "--word", "--dry-run", "foo", "baz")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	occ, _ := h["n"].(float64)
+	// Should match "foo" but not "foobar" -- 2 occurrences: definition + call
+	if occ != 2 {
+		t.Errorf("expected 2 word-boundary occurrences, got %v", occ)
+	}
+}
+
+func TestSpec_RenameTextIncludeExclude(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go":      "package main\n\nfunc target() {}\n",
+		"main_test.go": "package main\n\nfunc TestTarget() { target() }\n",
+	})
+
+	// With --exclude *_test.go, should only hit main.go
+	result, _, _, exit := specRun(t, binary, dir, nil, "rename", "--text", "--dry-run", "--exclude", "*_test.go", "target", "replaced")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	files, _ := h["files_changed"].([]any)
+	for _, f := range files {
+		if strings.Contains(f.(string), "_test.go") {
+			t.Errorf("--exclude should have filtered test files, got %v", f)
+		}
+	}
+}
+
+func TestSpec_RenameTextNoop(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil, "rename", "--text", "nonexistent", "replacement")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "noop" {
+		t.Errorf("status = %v, want noop", h["status"])
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Batch edit + verify
 // ---------------------------------------------------------------------------
 

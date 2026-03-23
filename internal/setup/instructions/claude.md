@@ -30,6 +30,7 @@ Run shell commands via `edr delta -- cmd` (re-runs show only changes). Run `edr 
 - `--where Sym` resolves file+scope. `--in Sym` scopes within file
 - `--all`, `--dry-run`, `--lines 20:30`, `--delete`, `@file` for shell metacharacters
 - `edr refs Sym --impact` before refactoring. `edr rename Old New --dry-run`
+- `edr rename --text "old" "new"` — literal string replace across repo. `--word`, `--include`, `--exclude`
 
 ## Write
 - `edr write f.go --content "..."` — create or overwrite

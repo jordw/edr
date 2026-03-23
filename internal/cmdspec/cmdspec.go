@@ -171,10 +171,14 @@ var Registry = []*Spec{
 		},
 	},
 	{
-		Name: "rename", Desc: "Cross-file rename with import-aware resolution. --dry-run to preview.",
+		Name: "rename", Desc: "Cross-file rename with import-aware resolution. --text for literal string replace. --dry-run to preview.",
 		Category: CatGlobalMutate, MinArgs: 2, MaxArgs: 2,
 		Flags: []FlagSpec{
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
+			{Name: "text", Type: FlagBool, Default: false, Desc: "Text-based rename (literal string replacement across files)"},
+			{Name: "word", Type: FlagBool, Default: false, Desc: "Whole-word matching only (--text mode)"},
+			{Name: "include", Type: FlagStringSlice, Default: []string(nil), Desc: "File glob(s) to include (--text mode)"},
+			{Name: "exclude", Type: FlagStringSlice, Default: []string(nil), Desc: "File glob(s) to exclude (--text mode)"},
 		},
 	},
 	{

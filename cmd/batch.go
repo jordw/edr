@@ -134,9 +134,13 @@ type doWrite struct {
 }
 
 type doRename struct {
-	OldName string  `json:"old_name"`
-	NewName string  `json:"new_name"`
-	DryRun  *bool   `json:"dry_run,omitempty"`
+	OldName string   `json:"old_name"`
+	NewName string   `json:"new_name"`
+	DryRun  *bool    `json:"dry_run,omitempty"`
+	Text    *bool    `json:"text,omitempty"`
+	Word    *bool    `json:"word,omitempty"`
+	Include []string `json:"include,omitempty"`
+	Exclude []string `json:"exclude,omitempty"`
 }
 
 // Batch known-key sets — derived from the canonical registry in cmdspec.
@@ -665,6 +669,18 @@ func handleDo(ctx context.Context, db *index.DB, sess *session.Session, env *out
 			renameFlags := map[string]any{}
 			if r.DryRun != nil && *r.DryRun {
 				renameFlags["dry_run"] = true
+			}
+			if r.Text != nil && *r.Text {
+				renameFlags["text"] = true
+			}
+			if r.Word != nil && *r.Word {
+				renameFlags["word"] = true
+			}
+			if len(r.Include) > 0 {
+				renameFlags["include"] = r.Include
+			}
+			if len(r.Exclude) > 0 {
+				renameFlags["exclude"] = r.Exclude
 			}
 			result, err := dispatch.Dispatch(ctx, db, "rename", []string{r.OldName, r.NewName}, renameFlags)
 			if err != nil {

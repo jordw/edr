@@ -1,10 +1,13 @@
 package dispatch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/jordw/edr/internal/edit"
@@ -972,8 +975,13 @@ func ambiguousMatchError(content, relFile, matchText string, locs [][]int) error
 
 func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 2 {
-		return nil, fmt.Errorf("rename-symbol requires 2 arguments: <old-name> <new-name>")
+		return nil, fmt.Errorf("rename requires 2 arguments: <old-name> <new-name>")
 	}
+
+	if flagBool(flags, "text", false) {
+		return runRenameText(ctx, db, root, args, flags)
+	}
+
 	oldRaw := args[0]
 	newName := args[1]
 	dryRun := flagBool(flags, "dry-run", false)
@@ -1118,4 +1126,228 @@ func runRenameSymbol(ctx context.Context, db *index.DB, root string, args []stri
 		Warnings:     renameWarnings,
 	}
 	return result, nil
+}
+
+// runRenameText performs literal text-based find-and-replace across all repo files.
+// Unlike the default symbol-based rename, this operates on raw text and can replace
+// string literals, comments, identifiers, and any other text.
+func runRenameText(ctx context.Context, db *index.DB, root string, args []string, flags map[string]any) (any, error) {
+	oldText := args[0]
+	newText := args[1]
+	dryRun := flagBool(flags, "dry-run", false)
+	wordOnly := flagBool(flags, "word", false)
+	includes := flagStringSlice(flags, "include")
+	excludes := flagStringSlice(flags, "exclude")
+
+	if oldText == newText {
+		return output.RenameResult{OldName: oldText, NewName: newText, Status: "noop", DryRun: dryRun, Noop: true}, nil
+	}
+
+	// Collect repo files, applying include/exclude filters.
+	var files []string
+	_ = index.WalkRepoFiles(root, func(path string) error {
+		rel, _ := filepath.Rel(root, path)
+		base := filepath.Base(path)
+		if len(includes) > 0 && !matchesAnyGlob(base, rel, includes) {
+			return nil
+		}
+		if len(excludes) > 0 && matchesAnyGlob(base, rel, excludes) {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	})
+
+	type textOccurrence struct {
+		File       string
+		ByteStart  int
+		ByteEnd    int
+		Line       int
+		LineText   string
+	}
+
+	var allOccs []textOccurrence
+	fileOccs := make(map[string][]textOccurrence)
+
+	for _, file := range files {
+		if ctx.Err() != nil {
+			break
+		}
+		data, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		// Skip binary files
+		checkLen := len(data)
+		if checkLen > 8192 {
+			checkLen = 8192
+		}
+		if bytes.Contains(data[:checkLen], []byte{0}) {
+			continue
+		}
+
+		content := string(data)
+		searchIn := content
+		offset := 0
+		for {
+			idx := strings.Index(searchIn, oldText)
+			if idx < 0 {
+				break
+			}
+			absIdx := offset + idx
+			matchEnd := absIdx + len(oldText)
+
+			// Whole-word check: character before and after must not be word chars
+			if wordOnly {
+				if absIdx > 0 && isWordChar(content[absIdx-1]) {
+					offset = absIdx + 1
+					searchIn = content[offset:]
+					continue
+				}
+				if matchEnd < len(content) && isWordChar(content[matchEnd]) {
+					offset = absIdx + 1
+					searchIn = content[offset:]
+					continue
+				}
+			}
+
+			line := 1 + strings.Count(content[:absIdx], "\n")
+			lineStart := strings.LastIndex(content[:absIdx], "\n") + 1
+			lineEnd := strings.Index(content[absIdx:], "\n")
+			if lineEnd < 0 {
+				lineEnd = len(content)
+			} else {
+				lineEnd += absIdx
+			}
+			lineText := strings.TrimRight(content[lineStart:lineEnd], "\r\n")
+
+			occ := textOccurrence{
+				File:      file,
+				ByteStart: absIdx,
+				ByteEnd:   matchEnd,
+				Line:      line,
+				LineText:  lineText,
+			}
+			allOccs = append(allOccs, occ)
+			fileOccs[file] = append(fileOccs[file], occ)
+
+			offset = matchEnd
+			searchIn = content[offset:]
+		}
+	}
+
+	if len(allOccs) == 0 {
+		return output.RenameResult{OldName: oldText, NewName: newText, Status: "noop", DryRun: dryRun, Noop: true}, nil
+	}
+
+	// Collect file list
+	var filesChanged []string
+	for file := range fileOccs {
+		filesChanged = append(filesChanged, output.Rel(file))
+	}
+	sort.Strings(filesChanged)
+
+	// Dry-run: preview diffs
+	if dryRun {
+		var preview []output.RenameOccurrence
+		var diffs []output.RenameDiff
+		for file, occs := range fileOccs {
+			src, err := os.ReadFile(file)
+			if err != nil {
+				continue
+			}
+			// Apply replacements in reverse byte order
+			modified := make([]byte, len(src))
+			copy(modified, src)
+			for i := len(occs) - 1; i >= 0; i-- {
+				o := occs[i]
+				modified = append(modified[:o.ByteStart], append([]byte(newText), modified[o.ByteEnd:]...)...)
+			}
+			diff := edit.UnifiedDiff(output.Rel(file), src, modified)
+			if diff != "" {
+				diffs = append(diffs, output.RenameDiff{
+					File: output.Rel(file),
+					Diff: diff,
+				})
+			}
+			for _, o := range occs {
+				preview = append(preview, output.RenameOccurrence{
+					File: output.Rel(file),
+					Line: o.Line,
+					Text: o.LineText,
+				})
+			}
+		}
+		return output.RenameResult{
+			OldName:      oldText,
+			NewName:      newText,
+			FilesChanged: filesChanged,
+			Occurrences:  len(allOccs),
+			Status:       "dry_run",
+			DryRun:       true,
+			Preview:      preview,
+			Diffs:        diffs,
+		}, nil
+	}
+
+	// Apply: build resolvedEdits
+	var edits []resolvedEdit
+	for file, occs := range fileOccs {
+		hash, _ := edit.FileHash(file)
+		for i, o := range occs {
+			h := ""
+			if i == 0 {
+				h = hash
+			}
+			edits = append(edits, resolvedEdit{
+				File:        file,
+				StartByte:   uint32(o.ByteStart),
+				EndByte:     uint32(o.ByteEnd),
+				Replacement: newText,
+				ExpectHash:  h,
+			})
+		}
+	}
+
+	cr, err := commitEdits(ctx, db, edits)
+	if err != nil {
+		return nil, fmt.Errorf("rename --text failed: %w", err)
+	}
+
+	var warnings []string
+	if len(cr.IndexErrors) > 0 {
+		var parts []string
+		for file, errMsg := range cr.IndexErrors {
+			parts = append(parts, file+": "+errMsg)
+		}
+		warnings = append(warnings, "re-index partial failure: "+strings.Join(parts, "; "))
+	}
+
+	return output.RenameResult{
+		OldName:      oldText,
+		NewName:      newText,
+		FilesChanged: filesChanged,
+		Occurrences:  len(allOccs),
+		Status:       cr.Status,
+		Hashes:       cr.Hashes,
+		Warnings:     warnings,
+	}, nil
+}
+
+func isWordChar(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
+}
+
+// matchesAnyGlob checks if a file matches any of the given glob patterns.
+// Supports both basename matching and path matching with ** doublestar.
+func matchesAnyGlob(base, rel string, patterns []string) bool {
+	for _, p := range patterns {
+		if matched, _ := filepath.Match(p, base); matched {
+			return true
+		}
+		if matched, _ := filepath.Match(p, rel); matched {
+			return true
+		}
+	}
+	return false
 }

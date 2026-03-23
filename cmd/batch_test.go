@@ -1058,6 +1058,7 @@ func TestDoStructsMatchCmdspec(t *testing.T) {
 	// doRename fields
 	renameFields := map[string]bool{
 		"old_name": true, "new_name": true, "dry_run": true,
+		"text": true, "word": true, "include": true, "exclude": true,
 	}
 	checkStructFieldsFiltered(t, "doRename", doRenameKnownKeys, renameFields)
 }
