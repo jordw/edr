@@ -120,7 +120,7 @@ func (s *batchState) flush() {
 		s.queries = append(s.queries, s.currentQuery)
 		s.currentQuery = doQuery{}
 	case opEdit:
-		if s.currentEdit.File != "" {
+		if s.currentEdit.File != "" || s.currentEdit.Where != "" {
 			s.edits = append(s.edits, s.currentEdit)
 			s.seenMutation = true
 		}
@@ -282,12 +282,18 @@ func parseBatchArgs(args []string) (*batchState, error) {
 		case "-e", "--edit":
 			s.flush()
 			s.currentOp = opEdit
-			val, err := nextArg(arg)
-			if err != nil {
-				return nil, err
+			// Peek: if next arg is a flag (starts with --), this is a file-less edit
+			// (e.g. -e --where "symbol" ...). Don't consume the next arg as a file.
+			if i+1 < len(args) && strings.HasPrefix(args[i+1], "--") {
+				s.currentEdit = doEdit{}
+			} else {
+				val, err := nextArg(arg)
+				if err != nil {
+					return nil, err
+				}
+				file, sym := splitFileArg(val)
+				s.currentEdit = doEdit{File: file, Symbol: sym}
 			}
-			file, sym := splitFileArg(val)
-			s.currentEdit = doEdit{File: file, Symbol: sym}
 
 		case "-w", "--write":
 			s.flush()
@@ -453,6 +459,16 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			default:
 				return nil, fmt.Errorf("--in is only valid after -s or -e")
 			}
+
+		case "--where":
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			if s.currentOp != opEdit {
+				return nil, fmt.Errorf("--where is only valid after -e")
+			}
+			s.currentEdit.Where = val
 
 		// ── search modifiers (regex) ──
 
@@ -867,6 +883,7 @@ var batchFlagOps = map[string][]string{
 	"--context":        {"-s"},
 	"--limit":          {"-s"},
 	"--in":             {"-s", "-e"},
+	"--where":          {"-e"},
 	"--regex":          {"-s"},
 	"--old":            {"-e"},
 	"--old-text":       {"-e"},

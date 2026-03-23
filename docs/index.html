@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>edr — the editor for agents</title>
-<meta name="description" content="Context-preserving code navigation and editing CLI for coding agents. 95% fewer tokens, symbol-level ops, batching, deltas.">
+<meta name="description" content="Context-preserving code navigation and editing CLI for coding agents. Smaller reads, fewer calls, changed-only output.">
 <meta property="og:title" content="edr — the editor for agents">
-<meta property="og:description" content="Context-preserving code navigation and editing CLI for coding agents. 95% fewer tokens, symbol-level ops, batching, deltas.">
+<meta property="og:description" content="Context-preserving code navigation and editing CLI for coding agents. Smaller reads, fewer calls, changed-only output.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://github.com/jordw/edr">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%3E</text></svg>">
@@ -139,11 +139,19 @@ section p strong, section li strong { color: var(--fg); }
 .flag { color: #d2a8ff; }
 
 /* Table */
+.table-wrap {
+  overflow-x: auto;
+  margin: 1rem 0;
+}
 table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.85rem;
   margin: 1rem 0;
+}
+.table-wrap table {
+  min-width: 640px;
+  margin: 0;
 }
 th, td {
   text-align: left;
@@ -221,6 +229,7 @@ footer {
   .install-bar { font-size: 0.8rem; }
   table { font-size: 0.75rem; }
   th, td { padding: 0.4rem 0.5rem; }
+  .table-wrap table { min-width: 560px; }
 }
 </style>
 </head>
@@ -243,6 +252,7 @@ footer {
   <div style="font-size: 0.8rem; color: var(--muted);">
     Then run <code>edr setup</code> in your project.
     <a href="https://github.com/jordw/edr#install">Other install methods</a>
+    &middot; Fully local, no telemetry
     &middot; <a href="https://github.com/jordw/edr">GitHub</a>
   </div>
 </div>
@@ -250,16 +260,16 @@ footer {
 <!-- Pillars -->
 <div class="pillars">
   <div class="pillar">
-    <h3>Symbol-level ops</h3>
-    <p>Read one function instead of a 400-line file. Get a class API with <code>--signatures</code>. 85% smaller responses.</p>
+    <h3>Smaller reads</h3>
+    <p>Read one function instead of a 400-line file. Use <code>--signatures</code> to get a class API without pulling in method bodies.</p>
   </div>
   <div class="pillar">
-    <h3>Batching</h3>
-    <p>Read three files and search in one call instead of four. One call to gather, one to mutate.</p>
+    <h3>Fewer calls</h3>
+    <p>Batch reads, searches, edits, and writes so the agent gathers context in one round-trip and mutates in one round-trip.</p>
   </div>
   <div class="pillar">
-    <h3>Sessions</h3>
-    <p>edr tracks what the agent has seen. Re-reads and re-runs return only what changed. Zero config &mdash; sessions activate automatically.</p>
+    <h3>Only changed output</h3>
+    <p>edr tracks what the agent has already seen, so re-reads and re-runs return diffs instead of repeated output. Zero config.</p>
   </div>
 </div>
 
@@ -301,6 +311,7 @@ edr delta -- pytest</code></pre>
 <section>
   <h2>Benchmarks</h2>
   <p>We run 9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos and measure tool response bytes &mdash; the raw amount of text that enters the agent's context window.</p>
+  <div class="table-wrap">
   <table>
     <thead>
       <tr><th>Repo</th><th>Lang</th><th>Files</th><th>Baseline</th><th>edr</th><th>Reduction</th></tr>
@@ -315,10 +326,12 @@ edr delta -- pytest</code></pre>
       <tr><td><a href="https://github.com/django/django">django/django</a></td><td>Python</td><td>~880</td><td>1027KB / 25 calls</td><td>40KB / 9 calls</td><td class="pct">96%</td></tr>
     </tbody>
   </table>
+  </div>
   <p><strong>Median reduction: 83%</strong> across repos. edr loses on plain text search (structured JSON adds overhead vs raw grep &mdash; see breakdown below), but wins everywhere else. The biggest wins are on structured operations (refs, map, signatures); multi-file reads show modest savings since both sides return full content. Call counts are summed across all 9 scenarios; each edr scenario is 1 call.</p>
 
   <details>
     <summary>Per-scenario breakdown (urfave/cli)</summary>
+    <div class="table-wrap">
     <table>
       <thead>
         <tr><th>Scenario</th><th>Baseline</th><th>edr</th><th>Reduction</th></tr>
@@ -338,6 +351,7 @@ edr delta -- pytest</code></pre>
         <tr><th>Total</th><th>149,414B / 25 calls</th><th>27,493B / 9 calls</th><th class="pct">82%</th></tr>
       </tfoot>
     </table>
+    </div>
   </details>
 </section>
 
@@ -351,6 +365,7 @@ edr <span class="flag">-s</span> "pattern"                  <span class="comment
 edr <span class="flag">-e</span> file <span class="flag">--old</span> "x" <span class="flag">--new</span> "y"   <span class="comment"># Edit with auto re-index + verify</span>
 edr <span class="flag">-w</span> file <span class="flag">--inside</span> Class        <span class="comment"># Add method/field without reading</span></code></pre>
 
+  <div class="table-wrap">
   <table class="cmd-table">
     <thead><tr><th>Command</th><th>Description</th></tr></thead>
     <tbody>
@@ -362,13 +377,14 @@ edr <span class="flag">-w</span> file <span class="flag">--inside</span> Class  
       <tr><td>refs</td><td><code>Symbol</code>, <code>--impact</code>, <code>--callers</code>, <code>--deps</code>, <code>--chain</code></td></tr>
       <tr><td>rename</td><td>Cross-file, import-aware. <code>--dry-run</code></td></tr>
       <tr><td>verify</td><td>Auto-detects go/npm/cargo/make</td></tr>
-      <tr><td>run</td><td><code>run -- make test</code> &mdash; diffs against previous run</td></tr>
+      <tr><td>delta</td><td><code>delta -- make test</code> &mdash; diffs against previous run</td></tr>
       <tr><td>context</td><td>Session context, build state, action items. <code>--focus</code></td></tr>
       <tr><td>checkpoint</td><td>Snapshot/restore. <code>--restore</code>, <code>--list</code>, <code>--diff</code></td></tr>
       <tr><td>reset</td><td>Clean slate: reindex, clear session. <code>--index</code>, <code>--session</code></td></tr>
       <tr><td>setup</td><td>Index project, install agent instructions. <code>--force</code></td></tr>
     </tbody>
   </table>
+  </div>
 </section>
 
 <!-- Languages -->

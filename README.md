@@ -6,9 +6,9 @@
 
 edr gives agents the right context instead of all the context:
 
-- **Symbol-level ops** — read one function, not the whole file.
-- **Batching** — three reads and a search in one call, not four.
-- **Sessions** — edr tracks what the agent has seen. Re-reads and re-runs return only what changed.
+- **Smaller reads** — read one function instead of a 400-line file. `--signatures` gives a class API without pulling in method bodies.
+- **Fewer calls** — batch reads, searches, edits, and writes so the agent gathers context in one round-trip and mutates in one round-trip.
+- **Only changed output** — edr tracks what the agent has already seen, so re-reads and re-runs return diffs instead of repeated output.
 
 Works with any agent that can run shell commands. Fully local, no telemetry.
 

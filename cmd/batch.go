@@ -113,6 +113,7 @@ type doEdit struct {
 	EndLine    *int   `json:"end_line,omitempty"`
 	All        *bool  `json:"all,omitempty"`
 	In         string `json:"in,omitempty"`
+	Where      string `json:"where,omitempty"`
 	DryRun     *bool  `json:"dry_run,omitempty"`
 	ExpectHash string `json:"expect_hash,omitempty"`
 	Delete     *bool  `json:"delete,omitempty"`
@@ -210,8 +211,8 @@ func parseDo(raw json.RawMessage) (doParams, []string, error) {
 		}
 	}
 	for i, e := range p.Edits {
-		if e.File == "" {
-			warnings = append(warnings, fmt.Sprintf("edits[%d]: missing required field \"file\"", i))
+		if e.File == "" && e.Where == "" {
+			warnings = append(warnings, fmt.Sprintf("edits[%d]: missing required field \"file\" (or \"where\")", i))
 		}
 	}
 	for i, w := range p.Writes {
@@ -412,15 +413,24 @@ func executeEdits(ctx context.Context, db *index.DB, sess *session.Session, env 
 
 	cmds := make([]dispatch.MultiCmd, len(p.Edits))
 	for i, e := range p.Edits {
-		args := []string{e.File}
-		if e.Symbol != "" {
-			args = []string{e.File, e.Symbol}
+		var args []string
+		if e.Where != "" {
+			// --where mode: no file arg, dispatch resolves from index
+			args = nil
+		} else {
+			args = []string{e.File}
+			if e.Symbol != "" {
+				args = []string{e.File, e.Symbol}
+			}
 		}
 		flags := map[string]any{}
+		if e.Where != "" {
+			flags["where"] = e.Where
+		}
 		if e.OldText != "" {
 			flags["old_text"] = e.OldText
 		}
-		if e.NewText != "" || e.OldText != "" || e.Symbol != "" || (e.StartLine != nil && e.EndLine != nil) {
+		if e.NewText != "" || e.OldText != "" || e.Symbol != "" || (e.StartLine != nil && e.EndLine != nil) || e.Where != "" {
 			flags["new_text"] = e.NewText
 		}
 		setOptInt(flags, "start_line", e.StartLine)

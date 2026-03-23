@@ -101,8 +101,8 @@ var Registry = []*Spec{
 		},
 	},
 	{
-		Name: "edit", Desc: "Edit file by exact text match, symbol replacement, or line range.",
-		Category: CatWrite, MinArgs: 1, MaxArgs: 2, StdinKey: "new_text", FileScoped: true,
+		Name: "edit", Desc: "Edit by text match, symbol replacement, line range, or symbol query (--where).",
+		Category: CatWrite, MinArgs: 0, MaxArgs: 2, StdinKey: "new_text", FileScoped: true,
 		DiffEdit: true,
 		Flags: []FlagSpec{
 			{Name: "start_line", Type: FlagInt, Default: 0, Desc: "Start line"},
@@ -111,6 +111,7 @@ var Registry = []*Spec{
 			{Name: "new_text", Type: FlagString, Default: "", Desc: "Replacement text", Alias: "new"},
 			{Name: "all", Type: FlagBool, Default: false, Desc: "Replace all matches"},
 			{Name: "in", Type: FlagString, Default: "", Desc: "Scope text match to within a symbol body (file:Symbol)"},
+			{Name: "where", Type: FlagString, Default: "", Desc: "Symbol query — resolves file and scopes edit automatically"},
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
 			{Name: "expect_hash", Alias: "hash", Type: FlagString, Default: "", Desc: "Reject edit if file hash doesn't match"},
 			{Name: "delete", Type: FlagBool, Default: false, Desc: "Delete matched text or symbol (equivalent to --new-text \"\")"},

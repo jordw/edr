@@ -2964,3 +2964,116 @@ func TestSpec_ResetAliasReindex(t *testing.T) {
 	}
 }
 
+func TestSpec_EditWhere(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc handleAuth(token string) string {\n\treturn \"auth:\" + token\n}\n\nfunc handleRequest(token string) string {\n\treturn \"req:\" + token\n}\n",
+	})
+
+	// --where should resolve symbol and scope the edit
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"edit", "--where", "handleAuth", "--old-text", "token", "--new-text", "sessionToken", "--all")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+	if h["file"] != "hello.go" {
+		t.Errorf("file = %v, want hello.go", h["file"])
+	}
+
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	s := string(content)
+	// handleAuth should have "sessionToken", handleRequest should still have "token"
+	if !strings.Contains(s, "sessionToken") {
+		t.Error("--where edit should replace in target symbol")
+	}
+	if strings.Count(s, "\"token\"") > 0 && !strings.Contains(s, "func handleRequest(token") {
+		t.Errorf("handleRequest should still have original \"token\"")
+	}
+	// handleRequest must be untouched
+	if strings.Contains(s, "handleRequest(sessionToken") {
+		t.Error("--where should not affect other symbols")
+	}
+}
+
+func TestSpec_EditWhereDelete(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc target() {\n\t_ = 1\n}\n\nfunc keep() {\n\t_ = 2\n}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"edit", "--where", "target", "--delete")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	s := string(content)
+	if strings.Contains(s, "func target()") {
+		t.Error("target should be deleted")
+	}
+	if !strings.Contains(s, "func keep()") {
+		t.Error("keep should be preserved")
+	}
+}
+
+func TestSpec_EditWhereConflicts(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc foo() {}\n",
+	})
+
+	// --where + file arg: mutual exclusion (error in JSON output)
+	result, _, _, _ := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--where", "foo", "--old-text", "x", "--new-text", "y")
+	if len(result.Ops) == 0 || result.Ops[0].Header["error"] == nil {
+		t.Error("expected error for --where + file arg")
+	}
+
+	// --where + --in: mutual exclusion
+	result, _, _, _ = specRun(t, binary, dir, nil,
+		"edit", "--where", "foo", "--in", "foo", "--old-text", "x", "--new-text", "y")
+	if len(result.Ops) == 0 || result.Ops[0].Header["error"] == nil {
+		t.Error("expected error for --where + --in")
+	}
+
+	// --where + --lines: mutual exclusion
+	result, _, _, _ = specRun(t, binary, dir, nil,
+		"edit", "--where", "foo", "--lines", "1:3", "--new-text", "y")
+	if len(result.Ops) == 0 || result.Ops[0].Header["error"] == nil {
+		t.Error("expected error for --where + --lines")
+	}
+}
+
+func TestSpec_EditWhereBatch(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc alpha() {\n\tx := \"old\"\n\t_ = x\n}\n\nfunc beta() {\n\ty := \"old\"\n\t_ = y\n}\n",
+	})
+
+	// Batch: -e --where should work without a file arg
+	result, _, _, exit := specRun(t, binary, dir, nil,
+		"-e", "--where", "alpha", "--old-text", "\"old\"", "--new-text", "\"new\"")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	s := string(content)
+	if !strings.Contains(s, "\"new\"") {
+		t.Error("batch --where edit should apply")
+	}
+	// beta should be untouched
+	if strings.Count(s, "\"old\"") != 1 {
+		t.Errorf("beta should still have \"old\", got:\n%s", s)
+	}
+}
+

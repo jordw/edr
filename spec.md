@@ -63,6 +63,7 @@ Meta command:
 Batch syntax:
 
 - `edr -r ... -s ... -e ... -w ...`
+- `-e` MAY omit its positional file argument when `--where` is present: `edr -e --where <symbol> --old "x" --new "y"`
 - Batch is an invocation form, not a separate semantic command.
 - Batch is the preferred workflow for agents when they need multiple ops in one turn.
 - Standalone verbs are the canonical semantic contract and the primary documentation surface.
@@ -134,6 +135,8 @@ edr edit <path>:<symbol> --delete
 edr edit <path>:<symbol> --move-after <symbol>
 edr edit <path> --insert-at 20 --new-text "..."
 edr edit <path> --old-text "x" --new-text "y" --in <path>:<symbol>
+edr edit --where <symbol> --old-text "x" --new-text "y"
+edr edit --where <symbol> --delete
 edr edit <path> --old-text "x" --new-text "y" --fuzzy
 edr edit <path> --old-text "x" --new-text "y" --no-expect-hash
 edr edit ... --dry-run
@@ -143,6 +146,11 @@ Rules:
 
 - `--old-text` / `--new-text` are the canonical text-replacement flags
 - `<path>:<symbol>` is the canonical symbol-edit form
+- `--where` resolves a symbol by name via the index, determines its file, and scopes the edit to that symbol's body. It eliminates the need for a file argument
+- `--where` MUST NOT be combined with a positional file argument, `--in`, or `--lines`
+- when `--where` resolves to an ambiguous symbol (multiple files), edr MUST error with candidates — same behavior as `resolveSymbolArgs` with one arg
+- `--where` with `--old-text` behaves identically to `edr edit <resolved-file> --old-text "x" --new-text "y" --in <resolved-symbol>` — it is sugar, not a new semantic
+- `--where` without `--old-text` behaves identically to `edr edit <resolved-file>:<symbol> --new-text "..."` — whole-symbol replacement
 - line edits use `--lines`, not separate positional modes
 - `--delete` is the canonical explicit symbol-deletion form
 - `--move-after` MUST be supported for same-file symbol moves; it MUST be explicit and MUST NOT guess cross-file intent

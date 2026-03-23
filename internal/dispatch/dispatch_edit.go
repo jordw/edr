@@ -44,6 +44,46 @@ func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string,
 		newTextSet = true
 	}
 
+	oldText := flagString(flags, "old_text", "")
+
+	// --where: resolve symbol by name, determine file, scope edit automatically.
+	// This is sugar over --in with automatic file resolution.
+	if whereSpec := flagString(flags, "where", ""); whereSpec != "" {
+		if len(args) > 0 {
+			return nil, fmt.Errorf("--where and positional file argument are mutually exclusive")
+		}
+		if flagString(flags, "in", "") != "" {
+			return nil, fmt.Errorf("--where and --in are mutually exclusive")
+		}
+		if flagString(flags, "lines", "") != "" || flagInt(flags, "start_line", 0) > 0 || flagInt(flags, "end_line", 0) > 0 {
+			return nil, fmt.Errorf("--where is incompatible with --lines/--start-line/--end-line")
+		}
+		if flagInt(flags, "insert_at", 0) > 0 {
+			return nil, fmt.Errorf("--where is incompatible with --insert-at")
+		}
+
+		// Resolve the symbol via the index
+		sym, err := resolveSymbolArgs(ctx, db, root, []string{whereSpec})
+		if err != nil {
+			return nil, fmt.Errorf("--where: %w", err)
+		}
+
+		if oldText != "" {
+			// Scoped text match within the resolved symbol
+			return smartEditMatchInSymbol(ctx, db, sym.File, oldText, newText, flags, sym.Name, dryRun)
+		}
+
+		// Whole-symbol replacement or deletion
+		endByte := sym.EndByte
+		if newText == "" && newTextSet {
+			src, _ := os.ReadFile(sym.File)
+			if src != nil && int(endByte) < len(src) && src[endByte] == '\n' {
+				endByte++
+			}
+		}
+		return smartEditByteRange(ctx, db, sym.File, sym.StartByte, endByte, newText, sym.Name, dryRun)
+	}
+
 	// Determine targeting mode:
 	// 1. --start_line/--end_line: line range (requires file as first arg)
 	// 2. --old_text: find and replace text (requires file as first arg)
@@ -60,7 +100,6 @@ func runSmartEdit(ctx context.Context, db *index.DB, root string, args []string,
 	}
 	startLine := flagInt(flags, "start_line", 0)
 	endLine := flagInt(flags, "end_line", 0)
-	oldText := flagString(flags, "old_text", "")
 
 	// Require new_text if an edit mode is active.
 	if !newTextSet && newText == "" {

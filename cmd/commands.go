@@ -197,9 +197,15 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 		dryRun, _ := flags["dry_run"].(bool)
 		status, _ := resultStatus(result)
 		if !dryRun && status == "applied" {
-			verifyResult, verifyErr := dispatch.Dispatch(context.Background(), db, "verify", []string{}, map[string]any{
-				"files": []string{args[0]},
-			})
+			verifyFlags := map[string]any{}
+			if len(args) > 0 {
+				verifyFlags["files"] = []string{args[0]}
+			} else if rm, ok := result.(map[string]any); ok {
+				if f, ok := rm["file"].(string); ok {
+					verifyFlags["files"] = []string{f}
+				}
+			}
+			verifyResult, verifyErr := dispatch.Dispatch(context.Background(), db, "verify", []string{}, verifyFlags)
 			if verifyErr != nil {
 				env.SetVerify(map[string]any{"status": "failed", "error": verifyErr.Error()})
 			} else {
@@ -272,9 +278,13 @@ var writeCmd = &cobra.Command{
 func init() { cmdspec.RegisterFlags(writeCmd.Flags(), "write") }
 
 var editCmd = &cobra.Command{
-	Use:   "edit <file[:symbol]>",
+	Use:   "edit [file[:symbol]]",
 	Short: ToolDesc["edit"],
 	Args: func(cmd *cobra.Command, args []string) error {
+		// --where replaces the file argument — allow 0 args
+		if cmd.Flags().Changed("where") && len(args) == 0 {
+			return nil
+		}
 		if len(args) >= 1 && len(args) <= 2 {
 			return nil
 		}
