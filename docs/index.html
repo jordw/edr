@@ -300,22 +300,22 @@ edr delta -- pytest</code></pre>
 <!-- Benchmarks -->
 <section>
   <h2>Benchmarks</h2>
-  <p>9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos. Measuring tool response bytes &mdash; what enters the agent's context window.</p>
+  <p>We run 9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos and measure tool response bytes &mdash; the raw amount of text that enters the agent's context window.</p>
   <table>
     <thead>
-      <tr><th>Repo</th><th>Lang</th><th>Baseline</th><th>edr</th><th>Reduction</th></tr>
+      <tr><th>Repo</th><th>Lang</th><th>Files</th><th>Baseline</th><th>edr</th><th>Reduction</th></tr>
     </thead>
     <tbody>
-      <tr><td><a href="https://github.com/urfave/cli">urfave/cli</a></td><td>Go</td><td>248KB / 25 calls</td><td>8KB / 9 calls</td><td class="pct">97%</td></tr>
-      <tr><td><a href="https://github.com/vitessio/vitess">vitess/sqlparser</a></td><td>Go</td><td>516KB / 22 calls</td><td>8KB / 9 calls</td><td class="pct">98%</td></tr>
-      <tr><td><a href="https://github.com/vitessio/vitess">vitess/vtgate</a></td><td>Go</td><td>743KB / 24 calls</td><td>18KB / 9 calls</td><td class="pct">98%</td></tr>
-      <tr><td><a href="https://github.com/pallets/click">pallets/click</a></td><td>Python</td><td>358KB / 25 calls</td><td>9KB / 9 calls</td><td class="pct">97%</td></tr>
-      <tr><td><a href="https://github.com/rails/thor">rails/thor</a></td><td>Ruby</td><td>200KB / 25 calls</td><td>9KB / 9 calls</td><td class="pct">96%</td></tr>
-      <tr><td><a href="https://github.com/reduxjs/redux-toolkit">redux-toolkit</a></td><td>TS</td><td>217KB / 25 calls</td><td>10KB / 9 calls</td><td class="pct">95%</td></tr>
-      <tr><td><a href="https://github.com/django/django">django</a></td><td>Python</td><td>1,416KB / 25 calls</td><td>19KB / 9 calls</td><td class="pct">99%</td></tr>
+      <tr><td><a href="https://github.com/urfave/cli">urfave/cli</a></td><td>Go</td><td>~70</td><td>146KB / 25 calls</td><td>27KB / 9 calls</td><td class="pct">82%</td></tr>
+      <tr><td><a href="https://github.com/vitessio/vitess">vitess/sqlparser</a></td><td>Go</td><td>~70</td><td>459KB / 22 calls</td><td>29KB / 9 calls</td><td class="pct">94%</td></tr>
+      <tr><td><a href="https://github.com/vitessio/vitess">vitess/vtgate</a></td><td>Go</td><td>~490</td><td>433KB / 24 calls</td><td>40KB / 9 calls</td><td class="pct">91%</td></tr>
+      <tr><td><a href="https://github.com/pallets/click">pallets/click</a></td><td>Python</td><td>~17</td><td>180KB / 25 calls</td><td>30KB / 9 calls</td><td class="pct">83%</td></tr>
+      <tr><td><a href="https://github.com/rails/thor">rails/thor</a></td><td>Ruby</td><td>~35</td><td>157KB / 25 calls</td><td>30KB / 9 calls</td><td class="pct">81%</td></tr>
+      <tr><td><a href="https://github.com/reduxjs/redux-toolkit">reduxjs/redux-toolkit</a></td><td>TS</td><td>~190</td><td>112KB / 25 calls</td><td>26KB / 9 calls</td><td class="pct">77%</td></tr>
+      <tr><td><a href="https://github.com/django/django">django/django</a></td><td>Python</td><td>~880</td><td>1027KB / 25 calls</td><td>40KB / 9 calls</td><td class="pct">96%</td></tr>
     </tbody>
   </table>
-  <p><strong>Median reduction: 97%</strong> across repos.</p>
+  <p><strong>Median reduction: 83%</strong> across repos. edr loses on plain text search (structured JSON adds overhead vs raw grep &mdash; see breakdown below), but wins everywhere else. The biggest wins are on structured operations (refs, map, signatures); multi-file reads show modest savings since both sides return full content. Call counts are summed across all 9 scenarios; each edr scenario is 1 call.</p>
 
   <details>
     <summary>Per-scenario breakdown (urfave/cli)</summary>
@@ -324,18 +324,18 @@ edr delta -- pytest</code></pre>
         <tr><th>Scenario</th><th>Baseline</th><th>edr</th><th>Reduction</th></tr>
       </thead>
       <tbody>
-        <tr><td>Understand a class API</td><td>13,019B</td><td>1,486B</td><td class="pct">89%</td></tr>
-        <tr><td>Read a specific function</td><td>3,026B / 2 calls</td><td>1,182B</td><td class="pct">61%</td></tr>
-        <tr><td>Find references</td><td>86,463B / 4 calls</td><td>179B</td><td class="pct">100%</td></tr>
-        <tr><td>Search with context</td><td>614B</td><td>1,027B</td><td class="pct-neg">-67%</td></tr>
-        <tr><td>Orient in codebase</td><td>52,470B / 4 calls</td><td>393B</td><td class="pct">99%</td></tr>
-        <tr><td>Edit a function</td><td>1,403B / 3 calls</td><td>394B</td><td class="pct">72%</td></tr>
-        <tr><td>Add method to a class</td><td>5,393B / 3 calls</td><td>249B</td><td class="pct">95%</td></tr>
-        <tr><td>Multi-file read</td><td>39,397B / 3 calls</td><td>3,340B</td><td class="pct">92%</td></tr>
-        <tr><td>Explore a symbol</td><td>51,967B / 4 calls</td><td>72B</td><td class="pct">100%</td></tr>
+        <tr><td>Understand a class API</td><td>13,019B (whole file)</td><td>1,486B (<code>--signatures</code>)</td><td class="pct">89%</td></tr>
+        <tr><td>Read a specific function</td><td>3,026B / 2 calls (grep + range read)</td><td>1,182B (symbol read)</td><td class="pct">61%</td></tr>
+        <tr><td>Find references</td><td>9,086B / 4 calls (grep + 3 range reads)</td><td>179B (<code>refs</code>)</td><td class="pct">98%</td></tr>
+        <tr><td>Search with context</td><td>614B (grep -C3)</td><td>1,027B (structured)</td><td class="pct-neg">-67%</td></tr>
+        <tr><td>Orient in codebase</td><td>52,470B / 4 calls (glob + 3 reads)</td><td>393B (<code>map</code>)</td><td class="pct">99%</td></tr>
+        <tr><td>Edit a function</td><td>1,403B / 3 calls (grep + range + edit)</td><td>394B (batch)</td><td class="pct">72%</td></tr>
+        <tr><td>Add method to a class</td><td>5,393B / 3 calls (grep + range + write)</td><td>249B (<code>--inside</code>)</td><td class="pct">95%</td></tr>
+        <tr><td>Multi-file read</td><td>39,397B / 3 calls</td><td>22,028B (batched)</td><td class="pct">44%</td></tr>
+        <tr><td>Explore a symbol</td><td>25,006B / 4 calls (grep + 3 range reads)</td><td>555B</td><td class="pct">98%</td></tr>
       </tbody>
       <tfoot>
-        <tr><th>Total</th><th>253,752B / 25 calls</th><th>8,322B / 9 calls</th><th class="pct">97%</th></tr>
+        <tr><th>Total</th><th>149,414B / 25 calls</th><th>27,493B / 9 calls</th><th class="pct">82%</th></tr>
       </tfoot>
     </table>
   </details>
