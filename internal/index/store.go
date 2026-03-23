@@ -3,7 +3,7 @@ package index
 import "context"
 
 // SymbolStore is the interface for symbol lookup and cross-file queries.
-// Implementations: *DB (SQLite-backed) and *OnDemand (parse-on-demand).
+// Implementation: *OnDemand (parse-on-demand).
 type SymbolStore interface {
 	// Path accessors
 	Root() string
@@ -33,8 +33,8 @@ type SymbolStore interface {
 	Stats(ctx context.Context) (files int, symbols int, err error)
 	IndexWarnings() []FileError
 
-	// Mutation (for post-edit reindex)
-	ReindexFiles(ctx context.Context, paths []string) error
+	// Mutation (post-edit cache invalidation)
+	InvalidateFiles(ctx context.Context, paths []string) error
 	WithWriteLock(fn func() error) error
 
 	// Lifecycle

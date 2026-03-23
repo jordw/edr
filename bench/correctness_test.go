@@ -13,7 +13,7 @@ import (
 )
 
 // setupAdversarialRepo creates a temp copy of bench/testdata/adversarial, indexed and ready.
-func setupAdversarialRepo(tb testing.TB) (*index.DB, string) {
+func setupAdversarialRepo(tb testing.TB) (index.SymbolStore, string) {
 	tb.Helper()
 
 	wd, err := os.Getwd()
@@ -45,21 +45,13 @@ func setupAdversarialRepo(tb testing.TB) (*index.DB, string) {
 		tb.Fatal(err)
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		tb.Fatal(err)
-	}
+	db := index.NewOnDemand(tmp)
 	tb.Cleanup(func() { db.Close() })
-
-	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		tb.Fatal(err)
-	}
 	return db, tmp
 }
 
 // dispatchResult calls Dispatch, marshals to JSON, and unmarshals into dest.
-func dispatchResult(t testing.TB, ctx context.Context, db *index.DB, cmd string, args []string, flags map[string]any, dest any) {
+func dispatchResult(t testing.TB, ctx context.Context, db index.SymbolStore, cmd string, args []string, flags map[string]any, dest any) {
 	t.Helper()
 	result, err := dispatch.Dispatch(ctx, db, cmd, args, flags)
 	if err != nil {
@@ -77,7 +69,7 @@ func dispatchResult(t testing.TB, ctx context.Context, db *index.DB, cmd string,
 }
 
 // dispatchError calls Dispatch expecting an error. Returns the error string.
-func dispatchError(t testing.TB, ctx context.Context, db *index.DB, cmd string, args []string, flags map[string]any) string {
+func dispatchError(t testing.TB, ctx context.Context, db index.SymbolStore, cmd string, args []string, flags map[string]any) string {
 	t.Helper()
 	_, err := dispatch.Dispatch(ctx, db, cmd, args, flags)
 	if err == nil {

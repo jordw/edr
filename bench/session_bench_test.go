@@ -15,7 +15,7 @@ import (
 
 // handleDoJSON simulates a handleDo call: dispatches through the session
 // post-processing pipeline. Returns JSON output bytes.
-func handleDoJSON(t testing.TB, ctx context.Context, db *index.DB, sess *session.Session,
+func handleDoJSON(t testing.TB, ctx context.Context, db index.SymbolStore, sess *session.Session,
 	cmd string, args []string, flags map[string]any) []byte {
 	t.Helper()
 
@@ -310,7 +310,7 @@ func TestSessionMultiLang(t *testing.T) {
 
 		// Restore file for subsequent tests
 		os.WriteFile(pyFile, pyOriginal, 0644)
-		index.IndexFile(ctx, db, pyFile)
+		db.InvalidateFiles(ctx, []string{pyFile})
 	})
 
 	// Phase 8: Write inside container
@@ -328,7 +328,7 @@ func TestSessionMultiLang(t *testing.T) {
 
 		// Restore
 		os.WriteFile(goFile, goOriginal, 0644)
-		index.IndexFile(ctx, db, goFile)
+		db.InvalidateFiles(ctx, []string{goFile})
 	})
 
 	// Phase 9: DispatchMulti — batch reads from multiple languages
@@ -452,7 +452,7 @@ func BenchmarkSessionWorkflow(b *testing.B) {
 
 		b.StopTimer()
 		os.WriteFile(pyFile, pyOriginal, 0644)
-		index.IndexFile(ctx, db, pyFile)
+		db.InvalidateFiles(ctx, []string{pyFile})
 		b.StartTimer()
 
 		b.ReportMetric(float64(totalBytes), "response_bytes")

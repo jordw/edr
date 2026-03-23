@@ -19,7 +19,7 @@ import (
 // Index benchmarks
 // ---------------------------------------------------------------------------
 
-func BenchmarkIndexRepo(b *testing.B) {
+func BenchmarkParseRepo(b *testing.B) {
 	wd, _ := os.Getwd()
 	srcDir := filepath.Join(wd, "testdata")
 
@@ -38,15 +38,11 @@ func BenchmarkIndexRepo(b *testing.B) {
 			data, _ := os.ReadFile(path)
 			return os.WriteFile(dst, data, info.Mode())
 		})
-		db, err := index.OpenDB(tmp)
-		if err != nil {
-			b.Fatal(err)
-		}
+		db := index.NewOnDemand(tmp)
 		ctx := context.Background()
-		if _, _, err := index.IndexRepo(ctx, db); err != nil {
-			b.Fatal(err)
-		}
-		// Report DB and WAL sizes
+		// Force a full parse of all files
+		db.AllSymbols(ctx)
+		// Report total parsed files
 		dbPath := filepath.Join(tmp, ".edr", "index.db")
 		if info, err := os.Stat(dbPath); err == nil {
 			b.ReportMetric(float64(info.Size()/1024), "db_size_kb")
@@ -59,16 +55,15 @@ func BenchmarkIndexRepo(b *testing.B) {
 	}
 }
 
-func BenchmarkIndexFile(b *testing.B) {
+func BenchmarkParseFile(b *testing.B) {
 	db, tmp := setupRepo(b)
 	file := filepath.Join(tmp, "lib", "scheduler.py")
 	ctx := context.Background()
 
 	b.ResetTimer()
 	for b.Loop() {
-		if err := index.IndexFile(ctx, db, file); err != nil {
-			b.Fatal(err)
-		}
+		db.InvalidateFiles(ctx, []string{file})
+		db.GetSymbolsByFile(ctx, file)
 	}
 }
 
@@ -361,7 +356,7 @@ func BenchmarkWriteInside(b *testing.B) {
 
 		b.StopTimer()
 		os.WriteFile(file, original, 0644)
-		index.IndexFile(ctx, db, file)
+		db.InvalidateFiles(ctx, []string{file})
 		b.StartTimer()
 	}
 }
@@ -416,7 +411,7 @@ func BenchmarkAgentEditCycle(b *testing.B) {
 
 		b.StopTimer()
 		os.WriteFile(file, original, 0644)
-		index.IndexFile(ctx, db, file)
+		db.InvalidateFiles(ctx, []string{file})
 		b.StartTimer()
 	}
 }

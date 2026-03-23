@@ -622,7 +622,7 @@ func SearchInSymbol(ctx context.Context, db index.SymbolStore, pattern string, s
 	if err != nil {
 		return nil, fmt.Errorf("resolving file %q: %w", symbolFile, err)
 	}
-	// On-demand stores are always fresh; DB stores reindex via ReindexFiles.
+	// Stores are always fresh — on-demand parsing.
 	sym, err := db.GetSymbol(ctx, file, symbolName)
 	if err != nil {
 		return nil, err

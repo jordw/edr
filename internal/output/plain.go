@@ -89,7 +89,7 @@ func printPlain(e *Envelope) {
 		case "refs":
 			plainRefs(w, op)
 		case "reset":
-			plainReindex(w, op)
+			plainReset(w, op)
 		case "status":
 			plainNext(w, op)
 		case "undo":
@@ -554,7 +554,7 @@ func writeSymbolLine(w *os.File, s any, label string) {
 	fmt.Fprintf(w, "%s:%d: %s\n", file, line, name)
 }
 
-func plainReindex(w *os.File, op Op) {
+func plainReset(w *os.File, op Op) {
 	h := map[string]any{}
 	if v, ok := op["status"].(string); ok {
 		h["status"] = v

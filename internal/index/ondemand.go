@@ -14,7 +14,7 @@ import (
 )
 
 // OnDemand implements SymbolStore by parsing files with tree-sitter on demand.
-// No SQLite, no pre-built index, no staleness.
+// Parses files with tree-sitter on demand. No pre-built index, no staleness.
 type OnDemand struct {
 	root   string
 	edrDir string
@@ -446,7 +446,7 @@ func (o *OnDemand) IndexWarnings() []FileError { return nil }
 
 // --- Mutation ---
 
-func (o *OnDemand) ReindexFiles(_ context.Context, paths []string) error {
+func (o *OnDemand) InvalidateFiles(_ context.Context, paths []string) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	for _, p := range paths {

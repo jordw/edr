@@ -34,7 +34,7 @@ var ParamDesc = func() map[string]string {
 	m["writes"] = "File writes: [{file, content, mkdir?, after?, inside?}]"
 	m["renames"] = "Cross-file renames: [{old_name, new_name, dry_run?}]"
 	m["verify"] = `true = auto-detect build check, "build"/"test" = shortcut for level, other string = custom command`
-	m["init_flag"] = "Force re-index before other operations"
+	m["init_flag"] = "Force reset before other operations"
 	m["read_after_edit"] = "Read edited file signatures after applying edits (saves a round trip, shows updated API shape)"
 	return m
 }()

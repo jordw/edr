@@ -23,7 +23,7 @@ func heapAllocKB() float64 {
 }
 
 // setupRepo creates a temp copy of bench/testdata indexed and ready for queries.
-func setupRepo(tb testing.TB) (*index.DB, string) {
+func setupRepo(tb testing.TB) (index.SymbolStore, string) {
 	tb.Helper()
 
 	wd, err := os.Getwd()
@@ -55,21 +55,13 @@ func setupRepo(tb testing.TB) (*index.DB, string) {
 		tb.Fatal(err)
 	}
 
-	db, err := index.OpenDB(tmp)
-	if err != nil {
-		tb.Fatal(err)
-	}
+	db := index.NewOnDemand(tmp)
 	tb.Cleanup(func() { db.Close() })
-
-	ctx := context.Background()
-	if _, _, err := index.IndexRepo(ctx, db); err != nil {
-		tb.Fatal(err)
-	}
 	return db, tmp
 }
 
 // dispatchJSON calls Dispatch and returns the JSON output.
-func dispatchJSON(ctx context.Context, db *index.DB, cmd string, args []string, flags map[string]any) ([]byte, error) {
+func dispatchJSON(ctx context.Context, db index.SymbolStore, cmd string, args []string, flags map[string]any) ([]byte, error) {
 	result, err := dispatch.Dispatch(ctx, db, cmd, args, flags)
 	if err != nil {
 		return nil, err
@@ -80,7 +72,7 @@ func dispatchJSON(ctx context.Context, db *index.DB, cmd string, args []string, 
 // benchDispatch runs a dispatch command, reporting both wall time (automatic)
 // and response_bytes (custom metric). Agents care about response bytes;
 // server operators care about wall time. Both are visible in output.
-func benchDispatch(b *testing.B, db *index.DB, cmd string, args []string, flags map[string]any) {
+func benchDispatch(b *testing.B, db index.SymbolStore, cmd string, args []string, flags map[string]any) {
 	b.Helper()
 	ctx := context.Background()
 	b.ResetTimer()

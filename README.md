@@ -58,7 +58,7 @@ edr -r src/scheduler.py:run               # just the function (not the file)
 edr -q refs run --callers                  # callers, import-resolved
 edr -e src/scheduler.py \
     --old "def run(self):" \
-    --new "def run(self, retries=3):"      # auto re-indexes, verifies build
+    --new "def run(self, retries=3):"      # verifies build
 ```
 
 **Batched:** gather everything in one call, mutate in one call:
@@ -97,7 +97,7 @@ edr -r file[:Symbol]              # Read file or symbol
 edr -r file:Class --sig           # Signatures only (no bodies)
 edr -s "pattern"                  # Search symbols or text (--text)
 edr -m --dir src/                 # Symbol map of a directory
-edr -e file --old "x" --new "y"   # Edit with auto re-index + verify
+edr -e file --old "x" --new "y"   # Edit with auto-verify
 edr -w file --inside Class        # Add method/field without reading
 ```
 

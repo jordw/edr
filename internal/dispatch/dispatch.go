@@ -576,7 +576,7 @@ type commitResult struct {
 	Status      string // "applied", "applied_index_stale"
 }
 
-// commitEdits applies edits via Transaction and reindexes all affected files.
+// commitEdits applies edits via Transaction and invalidates caches for affected files.
 // The Transaction is atomic: all files are validated and transformed in memory
 // first, then written via temp-file-then-rename with rollback on failure.
 func commitEdits(ctx context.Context, db index.SymbolStore, edits []resolvedEdit) (*commitResult, error) {
@@ -594,7 +594,7 @@ func commitEdits(ctx context.Context, db index.SymbolStore, edits []resolvedEdit
 		fileList = append(fileList, f)
 	}
 
-	// Hold writer lock across both commit and reindex to prevent concurrent
+	// Hold writer lock across commit to prevent concurrent
 	// same-file edit races.
 	var indexErrors map[string]string
 	if lockErr := db.WithWriteLock(func() error {
@@ -605,8 +605,8 @@ func commitEdits(ctx context.Context, db index.SymbolStore, edits []resolvedEdit
 	}); lockErr != nil {
 		return nil, lockErr
 	}
-	// Reindex edited files (no-op for on-demand stores, updates SQLite for DB stores).
-	if err := db.ReindexFiles(ctx, fileList); err != nil {
+	// Invalidate caches for edited files.
+	if err := db.InvalidateFiles(ctx, fileList); err != nil {
 		// Non-fatal: edits already applied.
 		for _, f := range fileList {
 			if indexErrors == nil {

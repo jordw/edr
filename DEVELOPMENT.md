@@ -6,7 +6,7 @@
 - **Lint:** `go vet ./...`
 - **Test:** `go test ./...`
 - **Requires:** Go 1.24+, C compiler (for tree-sitter grammars)
-- **Parsing:** on-demand via tree-sitter, no pre-built index. Legacy SQLite mode available with `EDR_SQLITE=1`.
+- **Parsing:** on-demand via tree-sitter, no pre-built index. 
 
 ## Version Embedding
 

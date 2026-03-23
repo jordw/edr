@@ -1124,7 +1124,7 @@ func runRenameSymbol(ctx context.Context, db index.SymbolStore, root string, arg
 		for file, errMsg := range cr.IndexErrors {
 			parts = append(parts, file+": "+errMsg)
 		}
-		renameWarnings = append(renameWarnings, "re-index partial failure: "+strings.Join(parts, "; "))
+		renameWarnings = append(renameWarnings, "reparse partial failure: "+strings.Join(parts, "; "))
 	}
 
 	// Verify the new symbol is queryable. ResolveSymbol fails if the name is
@@ -1370,7 +1370,7 @@ func runRenameText(ctx context.Context, db index.SymbolStore, root string, args 
 		for file, errMsg := range cr.IndexErrors {
 			parts = append(parts, file+": "+errMsg)
 		}
-		warnings = append(warnings, "re-index partial failure: "+strings.Join(parts, "; "))
+		warnings = append(warnings, "reparse partial failure: "+strings.Join(parts, "; "))
 	}
 
 	return output.RenameResult{

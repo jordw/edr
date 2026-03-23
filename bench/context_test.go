@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jordw/edr/internal/index"
 )
 
 // ---------------------------------------------------------------------------
@@ -48,7 +47,7 @@ func BenchmarkWorkflowTraditional(b *testing.B) {
 
 		b.StopTimer()
 		os.WriteFile(file, original, 0644)
-		index.IndexFile(ctx, db, file)
+		db.InvalidateFiles(ctx, []string{file})
 		b.StartTimer()
 	}
 }
@@ -77,7 +76,7 @@ func BenchmarkWorkflowProgressive(b *testing.B) {
 
 		b.StopTimer()
 		os.WriteFile(file, original, 0644)
-		index.IndexFile(ctx, db, file)
+		db.InvalidateFiles(ctx, []string{file})
 		b.StartTimer()
 	}
 }

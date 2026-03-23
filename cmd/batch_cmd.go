@@ -923,7 +923,7 @@ func runBatch(args []string) error {
 		root = discoverRoot(wd)
 	}
 
-	// Only auto-index when mutations are present. Read-only batch
+	// Read-only batch
 	// operations use the strict opener — same contract as standalone.
 	var db index.SymbolStore
 	db, err = openStore(root)

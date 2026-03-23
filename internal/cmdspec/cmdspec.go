@@ -32,7 +32,7 @@ type Category string
 const (
 	CatRead         Category = "read"          // read-only queries
 	CatWrite        Category = "write"         // file mutations
-	CatGlobalMutate Category = "global_mutate" // global-state mutations (reindex, rename)
+	CatGlobalMutate Category = "global_mutate" // global-state mutations (reset, rename)
 	CatMeta         Category = "meta"          // non-mutating utilities (verify, diff)
 )
 
