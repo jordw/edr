@@ -1,5 +1,54 @@
 # Changelog
 
+## v0.2.1 — 2026-03-22
+
+### New commands
+
+- **`edr context`** — session dashboard with op log, build state, external change detection, and pattern analysis. Replaces the old `next`/`status` commands.
+- **`edr delta`** — command wrapper with diff-based output dedup. Only shows what changed between runs. `--reset` clears the baseline.
+- **`edr checkpoint`** — snapshot and restore edit sessions. `--list`, `--diff`, `--restore`.
+
+### New edit capabilities
+
+- **`--where` flag** — resolve symbol name to file+scope automatically, no file path needed.
+- **`--in` flag** — scope edits within a symbol body.
+- **`--delete`** — remove a symbol by name.
+- **`--insert-at`** — insert text at a specific line.
+- **`--move-after`** — move a symbol after another in the same file.
+- **`--fuzzy`** — fuzzy match for old_text (whitespace-tolerant).
+- **`--lines`** — constrain edit to a line range.
+- **`--atomic`** — all-or-nothing batch edits (roll back on any failure).
+- **`--hash`** — chain edits without re-reading by passing the previous edit's hash.
+- **`@file` syntax** — pass old_text/new_text from files to avoid shell metacharacter issues.
+
+### Languages
+
+- **Swift and Scala added** — 18 languages now supported.
+
+### Performance
+
+- **Tree cache** — LRU cache for parsed tree-sitter trees. Symbol reads ~9x faster on repeated files.
+- **Immediate reindexing** — edits and writes reindex under a writer lock instead of lazily. No more stale index after mutations.
+- **Honest benchmarks** — baselines now model a skilled agent using range reads, not naive whole-file reads.
+
+### Improvements
+
+- **Plain transport format** — JSON header + raw body is now the default output format.
+- **PPID-based session isolation** — auto-creates per-process sessions, detects PID reuse.
+- **Stale session cleanup** — dead sessions, old run baselines, and stale PPID mappings cleaned from `.edr/`.
+- **Rename `--dry-run`** — now shows full cross-file diff preview.
+- **Cursor support** — `edr setup` writes instructions for Cursor in addition to Claude and Codex.
+- **GitHub Pages site** — docs hosted at project site.
+- **Agent instructions overhauled** — multiple rounds of rewriting for clarity, compliance, and token efficiency.
+- **Always exit 0** for agent-facing commands; errors reported in JSON output.
+
+### Bug fixes
+
+- 23+ bugs fixed across the spec contract, session dedup, batch parity, flag normalization, and output consistency.
+- Fixed concurrent edit races with batched SQLite writes.
+- Fixed C/C++ rename missing call sites and `.h` prototype declarations.
+- Fixed `--move-after` and `--delete` bypassing stdin requirement.
+
 ## v0.2.0 — 2026-03-15
 
 ### Breaking changes
