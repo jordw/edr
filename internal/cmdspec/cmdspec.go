@@ -86,6 +86,7 @@ var Registry = []*Spec{
 			{Name: "lines", Type: FlagString, Default: "", Desc: "Line range (e.g. 10:50)"},
 			{Name: "full", Type: FlagBool, Default: false, Desc: "Force full content (skip session delta)"},
 			{Name: "symbols", Type: FlagBool, Default: false, Desc: "Include symbol list in read result"},
+			{Name: "expand", Type: FlagString, Default: "", Desc: "Include related signatures: deps (default), callers, or both"},
 		},
 	},
 	{
@@ -119,6 +120,7 @@ var Registry = []*Spec{
 			{Name: "insert_at", Type: FlagInt, Default: 0, Desc: "Insert new text before line N (zero-width insertion)"},
 			{Name: "fuzzy", Type: FlagBool, Default: false, Desc: "Allow whitespace/indentation-only mismatches (cannot combine with --all)"},
 			{Name: "move_after", Type: FlagString, Default: "", Desc: "Move symbol after another symbol (same file only)"},
+			{Name: "read_back", Type: FlagBool, Default: false, Desc: "Include updated context around the edit in the response"},
 		},
 	},
 	{
@@ -184,6 +186,14 @@ var Registry = []*Spec{
 		},
 	},
 	{
+		Name: "prepare", Desc: "Pre-edit context: symbol body, callers, deps, tests, hash.",
+		Category: CatRead, MinArgs: 1, MaxArgs: 2, FileScoped: true,
+		DeltaRead: true, BodyTrack: true,
+		Flags: []FlagSpec{
+			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens"},
+		},
+	},
+	{
 		Name: "verify", Desc: "Run build/typecheck or tests. Auto-detects go/npm/cargo.",
 		Category: CatMeta, MinArgs: 0, MaxArgs: 0,
 		Flags: []FlagSpec{
@@ -202,7 +212,7 @@ var Registry = []*Spec{
 		},
 	},
 	{
-		Name: "context", Desc: "Session context: recent ops, build state, action items.",
+		Name: "status", Desc: "Session status: recent ops, build state, action items.",
 		Category: CatMeta, MinArgs: 0, MaxArgs: 0,
 		Flags: []FlagSpec{
 			{Name: "focus", Type: FlagString, Default: "", Desc: "Set session focus (empty string clears)"},

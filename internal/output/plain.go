@@ -76,7 +76,7 @@ func printPlain(e *Envelope) {
 
 		opType, _ := op["type"].(string)
 		switch opType {
-		case "read":
+		case "read", "prepare":
 			plainRead(w, op)
 		case "search":
 			plainSearch(w, op)
@@ -90,7 +90,7 @@ func printPlain(e *Envelope) {
 			plainRefs(w, op)
 		case "reindex", "reset":
 			plainReindex(w, op)
-		case "context":
+		case "status":
 			plainNext(w, op)
 		case "checkpoint":
 			plainCheckpoint(w, op)
@@ -190,10 +190,46 @@ func plainRead(w *os.File, op Op) {
 	hTrunc(h, op)
 	hSession(h, op)
 	hStr(h, "hint", op, "hint")
+	hStr(h, "auto", op, "auto")
 	writeHeader(w, h)
 
 	content, _ := op["content"].(string)
 	writeBody(w, content)
+
+	// Render expanded deps/callers/tests as compact lists
+	for _, key := range []string{"deps", "callers"} {
+		items, ok := op[key]
+		if !ok {
+			continue
+		}
+		// items is a slice (JSON-serialized from []relatedSym)
+		slice, ok := toSliceOfMaps(items)
+		if !ok || len(slice) == 0 {
+			continue
+		}
+		fmt.Fprintf(w, "\n--- %s ---\n", key)
+		for _, item := range slice {
+			file, _ := item["file"].(string)
+			sig, _ := item["signature"].(string)
+			if sig != "" {
+				fmt.Fprintf(w, "%s  %s\n", file, sig)
+			}
+		}
+	}
+
+	// Render test locations
+	if tests, ok := op["tests"]; ok {
+		slice, ok := toSliceOfMaps(tests)
+		if ok && len(slice) > 0 {
+			fmt.Fprintf(w, "\n--- tests ---\n")
+			for _, t := range slice {
+				file, _ := t["file"].(string)
+				name, _ := t["name"].(string)
+				line := anyInt(t["line"])
+				fmt.Fprintf(w, "%s:%d  %s\n", file, line, name)
+			}
+		}
+	}
 }
 
 func plainSearch(w *os.File, op Op) {
@@ -262,10 +298,30 @@ func plainEdit(w *os.File, op Op) {
 	hStr(h, "status", op, "status")
 	hStr(h, "hash", op, "hash")
 	hStr(h, "msg", op, "message")
+
+	// Include read_back metadata in the header if present
+	if rb, ok := op["read_back"].(map[string]any); ok {
+		rbH := map[string]any{}
+		if v, ok := rb["lines"]; ok {
+			rbH["lines"] = v
+		}
+		if v, ok := rb["symbol"]; ok {
+			rbH["symbol"] = v
+		}
+		h["read_back"] = rbH
+	}
+
 	writeHeader(w, h)
 
 	diff, _ := op["diff"].(string)
 	writeBody(w, diff)
+
+	// Append read-back content after the diff
+	if rb, ok := op["read_back"].(map[string]any); ok {
+		if content, ok := rb["content"].(string); ok && content != "" {
+			writeBody(w, content)
+		}
+	}
 }
 
 func plainRename(w *os.File, op Op) {
@@ -773,6 +829,23 @@ func hTrunc(h map[string]any, op Op) {
 			h["budget_used"] = bu
 		}
 	}
+}
+
+// toSliceOfMaps converts a JSON-deserialized slice of objects to []map[string]any.
+func toSliceOfMaps(v any) ([]map[string]any, bool) {
+	switch s := v.(type) {
+	case []map[string]any:
+		return s, true
+	case []any:
+		out := make([]map[string]any, 0, len(s))
+		for _, item := range s {
+			if m, ok := item.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out, len(out) > 0
+	}
+	return nil, false
 }
 
 // anyInt extracts an int from any (handles float64 from JSON and int from Go).

@@ -13,8 +13,8 @@ func TestPublicCommandSurface(t *testing.T) {
 	expected := map[string]bool{
 		"read": true, "search": true, "map": true,
 		"edit": true, "write": true, "refs": true,
-		"verify": true, "reset": true, "rename": true,
-		"delta": true, "setup": true, "context": true,
+		"verify": true, "reset": true, "rename": true, "prepare": true,
+		"delta": true, "setup": true, "status": true,
 		"checkpoint": true,
 	}
 

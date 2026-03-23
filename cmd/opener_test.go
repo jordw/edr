@@ -33,6 +33,7 @@ func TestOpenerAlignment(t *testing.T) {
 		{"searchCmd", "search"},
 		{"refsCmd", "refs"},
 		{"renameCmd", "rename"},
+		{"prepareCmd", "prepare"},
 	}
 
 	// Commands that must use dispatchCmdWithStdin (also calls openDBStrict internally)
@@ -172,7 +173,7 @@ func TestOpenerAlignment(t *testing.T) {
 		tested["verifyCmd"] = true
 		tested["setupCmd"] = true
 		tested["runCmd"] = true
-		tested["contextCmd"] = true
+		tested["statusCmd"] = true
 		tested["sessionCmd"] = true // hidden compat command
 		tested["checkpointCmd"] = true
 

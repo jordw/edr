@@ -251,7 +251,7 @@ func TestSpec_HelpSurface(t *testing.T) {
 		t.Errorf("edr --help wrote to stderr: %q", stderr)
 	}
 
-	expected := []string{"checkpoint", "context", "delta", "edit", "map", "read", "refs", "rename", "reset", "search", "setup", "verify", "write"}
+	expected := []string{"checkpoint", "delta", "edit", "map", "prepare", "read", "refs", "rename", "reset", "search", "setup", "status", "verify", "write"}
 	cmdRe := regexp.MustCompile(`(?m)^\s{2}(\w+)\s`)
 	matches := cmdRe.FindAllStringSubmatch(stdout, -1)
 
@@ -273,7 +273,7 @@ func TestSpec_SubcommandHelp(t *testing.T) {
 	binary := buildBinary(t)
 	dir := t.TempDir()
 
-	commands := []string{"read", "search", "edit", "write", "map", "refs", "rename", "verify", "delta", "setup", "reset", "context", "checkpoint"}
+	commands := []string{"read", "search", "edit", "write", "map", "refs", "rename", "verify", "delta", "setup", "reset", "status", "checkpoint"}
 	for _, cmd := range commands {
 		t.Run(cmd, func(t *testing.T) {
 			stdout, _, exit := specRunRaw(t, binary, dir, nil, cmd, "--help")
@@ -685,7 +685,7 @@ func TestSpec_ContextExternalChanges(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\nfunc main() { fmt.Println(\"changed\") }\n"), 0644)
 
 	// 3. edr context should report the external change
-	result, _, _, exit2 := specRun(t, binary, dir, sessEnv, "context")
+	result, _, _, exit2 := specRun(t, binary, dir, sessEnv, "status")
 	if exit2 != 0 {
 		t.Fatalf("context exit %d", exit2)
 	}
@@ -2346,7 +2346,7 @@ func TestSpec_StatusEmpty(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{
 		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
 	})
-	result, _, _, exit := specRun(t, binary, dir, nil, "context")
+	result, _, _, exit := specRun(t, binary, dir, nil, "status")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2373,7 +2373,7 @@ func TestSpec_StatusWithRecentOps(t *testing.T) {
 	}
 
 	// Check next shows the op
-	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "context")
+	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2397,7 +2397,7 @@ func TestSpec_StatusFocus(t *testing.T) {
 	sessEnv := []string{"EDR_SESSION=test-focus"}
 
 	// Set focus
-	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "context", "--focus", "rename hello to greet")
+	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status", "--focus", "rename hello to greet")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2406,7 +2406,7 @@ func TestSpec_StatusFocus(t *testing.T) {
 	}
 
 	// Focus persists
-	_, stdout, _, exit = specRun(t, binary, dir, sessEnv, "context")
+	_, stdout, _, exit = specRun(t, binary, dir, sessEnv, "status")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2415,7 +2415,7 @@ func TestSpec_StatusFocus(t *testing.T) {
 	}
 
 	// Clear focus
-	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "context", "--focus", "")
+	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status", "--focus", "")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2438,7 +2438,7 @@ func TestSpec_StatusBuildState(t *testing.T) {
 	}
 
 	// Next should show build: passed or skipped
-	result, nStdout, _, exit := specRun(t, binary, dir, sessEnv, "context")
+	result, nStdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2470,7 +2470,7 @@ func TestSpec_StatusStaleAssumption(t *testing.T) {
 	}
 
 	// Next should show stale assumption
-	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "context")
+	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2505,7 +2505,7 @@ func TestSpec_StatusCurrentModified(t *testing.T) {
 	}
 
 	// Next should show hello as modified in current
-	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "context")
+	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2535,7 +2535,7 @@ func TestSpec_StatusCurrentRecent(t *testing.T) {
 	}
 
 	// Next should show hello as recent in current
-	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "context")
+	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2564,7 +2564,7 @@ func TestSpec_StatusCurrentStale(t *testing.T) {
 	}
 
 	// Next should show hello as stale in current (not just recent)
-	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "context")
+	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2825,7 +2825,7 @@ func TestSpec_CheckpointSessionStateRestored(t *testing.T) {
 	sessEnv := []string{"EDR_SESSION=test-cp-session"}
 
 	// Set focus, edit, checkpoint
-	_, _, _, exit := specRun(t, binary, dir, sessEnv, "context", "--focus", "original goal")
+	_, _, _, exit := specRun(t, binary, dir, sessEnv, "status", "--focus", "original goal")
 	if exit != 0 {
 		t.Fatal("focus failed")
 	}
@@ -2840,7 +2840,7 @@ func TestSpec_CheckpointSessionStateRestored(t *testing.T) {
 	}
 
 	// Change focus and edit more
-	_, _, _, exit = specRun(t, binary, dir, sessEnv, "context", "--focus", "new goal")
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "status", "--focus", "new goal")
 	if exit != 0 {
 		t.Fatal("focus change failed")
 	}
@@ -2857,7 +2857,7 @@ func TestSpec_CheckpointSessionStateRestored(t *testing.T) {
 	}
 
 	// Check focus was restored
-	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "context")
+	_, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
 	if exit != 0 {
 		t.Fatalf("status exit %d", exit)
 	}
