@@ -38,6 +38,15 @@ type regexPattern struct {
 	re      *regexp.Regexp
 	typ     string
 	nameIdx int
+	prefix  string // optional: if non-empty, line must contain this before trying regex
+}
+
+func pat(re *regexp.Regexp, typ string, nameIdx int, prefix ...string) regexPattern {
+	p := regexPattern{re: re, typ: typ, nameIdx: nameIdx}
+	if len(prefix) > 0 {
+		p.prefix = prefix[0]
+	}
+	return p
 }
 
 // --- Language definitions ---
@@ -45,20 +54,20 @@ type regexPattern struct {
 var regexGo = &regexLang{
 	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", methodsOutside: true, langID: "go",
 	patterns: []regexPattern{
-		{regexp.MustCompile(`^func\s+\((\w+)\s+\*?(\w+)\)\s+(\w+)\s*\(`), "method", 3},
-		{regexp.MustCompile(`^func\s+(\w+)\s*[\(\[]`), "function", 1},
-		{regexp.MustCompile(`^type\s+(\w+)\s+struct\s*\{`), "struct", 1},
-		{regexp.MustCompile(`^type\s+(\w+)\s+interface\s*\{`), "interface", 1},
-		{regexp.MustCompile(`^type\s+(\w+)\s+`), "type", 1},
-		{regexp.MustCompile(`^var\s+(\w+)\s+`), "variable", 1},
+		pat(regexp.MustCompile(`^func\s+\((\w+)\s+\*?(\w+)\)\s+(\w+)\s*\(`), "method", 3, "func"),
+		pat(regexp.MustCompile(`^func\s+(\w+)\s*[\(\[]`), "function", 1, "func"),
+		pat(regexp.MustCompile(`^type\s+(\w+)\s+struct\s*\{`), "struct", 1, "type"),
+		pat(regexp.MustCompile(`^type\s+(\w+)\s+interface\s*\{`), "interface", 1, "type"),
+		pat(regexp.MustCompile(`^type\s+(\w+)\s+`), "type", 1, "type"),
+		pat(regexp.MustCompile(`^var\s+(\w+)\s+`), "variable", 1, "var"),
 	},
 }
 
 var regexPython = &regexLang{
 	endStyle: regexIndentEnd, container: ContainerIndent, langID: "python",
 	patterns: []regexPattern{
-		{regexp.MustCompile(`^(\s*)class\s+(\w+)`), "class", 2},
-		{regexp.MustCompile(`^(\s*)(?:async\s+)?def\s+(\w+)\s*\(`), "function", 2},
+		pat(regexp.MustCompile(`^(\s*)class\s+(\w+)`), "class", 2, "class"),
+		pat(regexp.MustCompile(`^(\s*)(?:async\s+)?def\s+(\w+)\s*\(`), "function", 2, "def"),
 	},
 }
 
@@ -74,61 +83,61 @@ var jsKeywords = map[string]bool{
 var regexTypeScript = &regexLang{
 	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "typescript",
 	patterns: []regexPattern{
-		{regexp.MustCompile(`^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)`), "class", 1},
-		{regexp.MustCompile(`^(?:export\s+)?interface\s+(\w+)`), "interface", 1},
-		{regexp.MustCompile(`^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s+(\w+)`), "function", 1},
-		{regexp.MustCompile(`^(?:export\s+)?type\s+(\w+)\s*(?:<[^>]*>)?\s*=`), "type", 1},
-		{regexp.MustCompile(`^(?:export\s+)?(?:const\s+)?enum\s+(\w+)`), "type", 1},
-		{regexp.MustCompile(`^(?:export\s+)?(?:declare\s+)?namespace\s+(\w+)`), "class", 1},
+		pat(regexp.MustCompile(`^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)`), "class", 1, "class"),
+		pat(regexp.MustCompile(`^(?:export\s+)?interface\s+(\w+)`), "interface", 1, "interface"),
+		pat(regexp.MustCompile(`^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s+(\w+)`), "function", 1, "function"),
+		pat(regexp.MustCompile(`^(?:export\s+)?type\s+(\w+)\s*(?:<[^>]*>)?\s*=`), "type", 1, "type"),
+		pat(regexp.MustCompile(`^(?:export\s+)?(?:const\s+)?enum\s+(\w+)`), "type", 1, "enum"),
+		pat(regexp.MustCompile(`^(?:export\s+)?(?:declare\s+)?namespace\s+(\w+)`), "class", 1, "namespace"),
 		// Methods with modifier keywords
-		{regexp.MustCompile(`^\s+(?:private|protected|public|static|abstract|override|readonly|async|get|set)\s+(?:(?:private|protected|public|static|abstract|override|readonly|async|get|set)\s+)*#?(\w+)\s*(?:<[^>]*>)?\s*[\(:]`), "method", 1},
-		{regexp.MustCompile(`^\s+(constructor)\s*\(`), "method", 1},
+		pat(regexp.MustCompile(`^\s+(?:private|protected|public|static|abstract|override|readonly|async|get|set)\s+(?:(?:private|protected|public|static|abstract|override|readonly|async|get|set)\s+)*#?(\w+)\s*(?:<[^>]*>)?\s*[\(:]`), "method", 1),
+		pat(regexp.MustCompile(`^\s+(constructor)\s*\(`), "method", 1),
 		// Unmodified methods — require { at end of line
-		{regexp.MustCompile(`^\s+#?(\w+)\s*\([^)]*\)\s*(?::\s*[^{]*)?\{\s*$`), "method", 1},
+		pat(regexp.MustCompile(`^\s+#?(\w+)\s*\([^)]*\)\s*(?::\s*[^{]*)?\{\s*$`), "method", 1),
 		// Arrow functions
-		{regexp.MustCompile(`^(?:export\s+)?(?:const|let|var)\s+(\w+)\s*(?::\s*[^=]+)?\s*=\s*(?:async\s+)?(?:function|\(|[a-zA-Z_]\w*\s*=>)`), "function", 1},
+		pat(regexp.MustCompile(`^(?:export\s+)?(?:const|let|var)\s+(\w+)\s*(?::\s*[^=]+)?\s*=\s*(?:async\s+)?(?:function|\(|[a-zA-Z_]\w*\s*=>)`), "function", 1),
 		// Static arrow methods
-		{regexp.MustCompile(`^\s+(?:static\s+)?(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[a-zA-Z_]\w*)\s*(?::\s*[^=]+)?\s*=>`), "method", 1},
+		pat(regexp.MustCompile(`^\s+(?:static\s+)?(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[a-zA-Z_]\w*)\s*(?::\s*[^=]+)?\s*=>`), "method", 1),
 	},
 }
 
 var regexRust = &regexLang{
 	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "rust",
 	patterns: []regexPattern{
-		{regexp.MustCompile(`^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)`), "function", 1},
-		{regexp.MustCompile(`^(?:pub(?:\([^)]*\))?\s+)?struct\s+(\w+)`), "struct", 1},
-		{regexp.MustCompile(`^(?:pub(?:\([^)]*\))?\s+)?enum\s+(\w+)`), "type", 1},
-		{regexp.MustCompile(`^(?:pub(?:\([^)]*\))?\s+)?trait\s+(\w+)`), "interface", 1},
-		{regexp.MustCompile(`^impl(?:<[^>]*>)?\s+(?:[\w:]+\s+for\s+)?(\w+)`), "impl", 1},
+		pat(regexp.MustCompile(`^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)`), "function", 1),
+		pat(regexp.MustCompile(`^(?:pub(?:\([^)]*\))?\s+)?struct\s+(\w+)`), "struct", 1),
+		pat(regexp.MustCompile(`^(?:pub(?:\([^)]*\))?\s+)?enum\s+(\w+)`), "type", 1),
+		pat(regexp.MustCompile(`^(?:pub(?:\([^)]*\))?\s+)?trait\s+(\w+)`), "interface", 1),
+		pat(regexp.MustCompile(`^impl(?:<[^>]*>)?\s+(?:[\w:]+\s+for\s+)?(\w+)`), "impl", 1),
 	},
 }
 
 var regexJava = &regexLang{
 	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "java",
 	patterns: []regexPattern{
-		{regexp.MustCompile(`^\s*(?:public|private|protected)?\s*(?:static\s+)?(?:abstract\s+)?(?:class|interface|enum)\s+(\w+)`), "class", 1},
+		pat(regexp.MustCompile(`^\s*(?:public|private|protected)?\s*(?:static\s+)?(?:abstract\s+)?(?:class|interface|enum)\s+(\w+)`), "class", 1),
 		// Constructors: visibility + UpperCaseName(  — no return type
-		{regexp.MustCompile(`^\s*(?:public|private|protected)\s+([A-Z]\w*)\s*\(`), "method", 1},
+		pat(regexp.MustCompile(`^\s*(?:public|private|protected)\s+([A-Z]\w*)\s*\(`), "method", 1),
 		// Methods: have a return type before the name
-		{regexp.MustCompile(`^\s*(?:public|private|protected)?\s*(?:static\s+)?(?:abstract\s+)?(?:synchronized\s+)?(?:\w+(?:<[^>]*>)?(?:\[\])*)\s+(\w+)\s*\(`), "method", 1},
+		pat(regexp.MustCompile(`^\s*(?:public|private|protected)?\s*(?:static\s+)?(?:abstract\s+)?(?:synchronized\s+)?(?:\w+(?:<[^>]*>)?(?:\[\])*)\s+(\w+)\s*\(`), "method", 1),
 	},
 }
 
 var regexRuby = &regexLang{
 	endStyle: regexIndentEnd, container: ContainerKeyword, containerClose: "end", langID: "ruby",
 	patterns: []regexPattern{
-		{regexp.MustCompile(`^(\s*)class\s+(\w+)`), "class", 2},
-		{regexp.MustCompile(`^(\s*)module\s+(\w+)`), "class", 2},
-		{regexp.MustCompile(`^(\s*)def\s+(\w+[?!=]?)`), "function", 2},
+		pat(regexp.MustCompile(`^(\s*)class\s+(\w+)`), "class", 2),
+		pat(regexp.MustCompile(`^(\s*)module\s+(\w+)`), "class", 2),
+		pat(regexp.MustCompile(`^(\s*)def\s+(\w+[?!=]?)`), "function", 2),
 	},
 }
 
 var regexC = &regexLang{
 	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "c",
 	patterns: []regexPattern{
-		{regexp.MustCompile(`^(?:static\s+)?(?:inline\s+)?(?:const\s+)?(?:unsigned\s+)?(?:struct\s+)?(?:\w+(?:\s*\*)*)\s+(\w+)\s*\([^;]*$`), "function", 1},
-		{regexp.MustCompile(`^(?:typedef\s+)?struct\s+(\w+)\s*\{`), "struct", 1},
-		{regexp.MustCompile(`^(?:typedef\s+)?enum\s+(\w+)\s*\{`), "type", 1},
+		pat(regexp.MustCompile(`^(?:static\s+)?(?:inline\s+)?(?:const\s+)?(?:unsigned\s+)?(?:struct\s+)?(?:\w+(?:\s*\*)*)\s+(\w+)\s*\([^;]*$`), "function", 1),
+		pat(regexp.MustCompile(`^(?:typedef\s+)?struct\s+(\w+)\s*\{`), "struct", 1),
+		pat(regexp.MustCompile(`^(?:typedef\s+)?enum\s+(\w+)\s*\{`), "type", 1),
 	},
 }
 
@@ -136,13 +145,13 @@ var regexCSharp = &regexLang{
 	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "csharp",
 	patterns: []regexPattern{
 		// class, struct, interface, enum, record
-		{regexp.MustCompile(`^\s*(?:public|private|protected|internal)?\s*(?:static\s+)?(?:abstract\s+)?(?:sealed\s+)?(?:partial\s+)?(?:class|struct|interface|enum|record)\s+(\w+)`), "class", 1},
+		pat(regexp.MustCompile(`^\s*(?:public|private|protected|internal)?\s*(?:static\s+)?(?:abstract\s+)?(?:sealed\s+)?(?:partial\s+)?(?:class|struct|interface|enum|record)\s+(\w+)`), "class", 1),
 		// namespace
-		{regexp.MustCompile(`^\s*namespace\s+([\w.]+)`), "class", 1},
+		pat(regexp.MustCompile(`^\s*namespace\s+([\w.]+)`), "class", 1),
 		// Constructors: visibility + UpperCaseName(
-		{regexp.MustCompile(`^\s*(?:public|private|protected|internal)\s+([A-Z]\w*)\s*\(`), "method", 1},
+		pat(regexp.MustCompile(`^\s*(?:public|private|protected|internal)\s+([A-Z]\w*)\s*\(`), "method", 1),
 		// Methods: have a return type before the name
-		{regexp.MustCompile(`^\s*(?:public|private|protected|internal)?\s*(?:static\s+)?(?:abstract\s+)?(?:virtual\s+)?(?:override\s+)?(?:async\s+)?(?:\w+(?:<[^>]*>)?(?:\[\]|\?)*)\s+(\w+)\s*\(`), "method", 1},
+		pat(regexp.MustCompile(`^\s*(?:public|private|protected|internal)?\s*(?:static\s+)?(?:abstract\s+)?(?:virtual\s+)?(?:override\s+)?(?:async\s+)?(?:\w+(?:<[^>]*>)?(?:\[\]|\?)*)\s+(\w+)\s*\(`), "method", 1),
 	},
 }
 
@@ -150,9 +159,9 @@ var regexKotlin = &regexLang{
 	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "kotlin",
 	patterns: []regexPattern{
 		// class, interface, object, enum class, data class, sealed class
-		{regexp.MustCompile(`^\s*(?:public|private|protected|internal)?\s*(?:open\s+)?(?:abstract\s+)?(?:sealed\s+)?(?:data\s+)?(?:class|interface|object|enum)\s+(\w+)`), "class", 1},
+		pat(regexp.MustCompile(`^\s*(?:public|private|protected|internal)?\s*(?:open\s+)?(?:abstract\s+)?(?:sealed\s+)?(?:data\s+)?(?:class|interface|object|enum)\s+(\w+)`), "class", 1),
 		// fun keyword — Kotlin's function declaration
-		{regexp.MustCompile(`^\s*(?:public|private|protected|internal)?\s*(?:open\s+)?(?:override\s+)?(?:suspend\s+)?fun\s+(?:<[^>]*>\s*)?(\w+)\s*\(`), "function", 1},
+		pat(regexp.MustCompile(`^\s*(?:public|private|protected|internal)?\s*(?:open\s+)?(?:override\s+)?(?:suspend\s+)?fun\s+(?:<[^>]*>\s*)?(\w+)\s*\(`), "function", 1),
 	},
 }
 
@@ -160,12 +169,12 @@ var regexSwift = &regexLang{
 	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "swift",
 	patterns: []regexPattern{
 		// class, struct, enum, protocol, extension
-		{regexp.MustCompile(`^\s*(?:public|private|fileprivate|internal|open)?\s*(?:final\s+)?(?:class|struct|enum|protocol)\s+(\w+)`), "class", 1},
-		{regexp.MustCompile(`^\s*extension\s+(\w+)`), "impl", 1},
+		pat(regexp.MustCompile(`^\s*(?:public|private|fileprivate|internal|open)?\s*(?:final\s+)?(?:class|struct|enum|protocol)\s+(\w+)`), "class", 1),
+		pat(regexp.MustCompile(`^\s*extension\s+(\w+)`), "impl", 1),
 		// func — Swift's function/method declaration
-		{regexp.MustCompile(`^\s*(?:public|private|fileprivate|internal|open)?\s*(?:static\s+|class\s+)?(?:override\s+)?(?:mutating\s+)?func\s+(\w+)`), "function", 1},
+		pat(regexp.MustCompile(`^\s*(?:public|private|fileprivate|internal|open)?\s*(?:static\s+|class\s+)?(?:override\s+)?(?:mutating\s+)?func\s+(\w+)`), "function", 1),
 		// init
-		{regexp.MustCompile(`^\s*(?:public|private|fileprivate|internal|open)?\s*(?:convenience\s+)?(?:required\s+)?(init)\s*[\(]`), "method", 1},
+		pat(regexp.MustCompile(`^\s*(?:public|private|fileprivate|internal|open)?\s*(?:convenience\s+)?(?:required\s+)?(init)\s*[\(]`), "method", 1),
 	},
 }
 
@@ -173,9 +182,9 @@ var regexPHP = &regexLang{
 	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "php",
 	patterns: []regexPattern{
 		// class, interface, trait, enum
-		{regexp.MustCompile(`^\s*(?:abstract\s+)?(?:final\s+)?(?:class|interface|trait|enum)\s+(\w+)`), "class", 1},
+		pat(regexp.MustCompile(`^\s*(?:abstract\s+)?(?:final\s+)?(?:class|interface|trait|enum)\s+(\w+)`), "class", 1),
 		// function keyword — PHP's function declaration
-		{regexp.MustCompile(`^\s*(?:public|private|protected)?\s*(?:static\s+)?function\s+(\w+)\s*\(`), "function", 1},
+		pat(regexp.MustCompile(`^\s*(?:public|private|protected)?\s*(?:static\s+)?function\s+(\w+)\s*\(`), "function", 1),
 	},
 }
 
@@ -261,6 +270,10 @@ func RegexParse(path string, src []byte) []SymbolInfo {
 
 	for i, line := range lines {
 		for _, pat := range lang.patterns {
+			// Fast prefix check: skip regex if the line can't possibly match.
+			if pat.prefix != "" && !strings.Contains(line, pat.prefix) {
+				continue
+			}
 			m := pat.re.FindStringSubmatch(line)
 			if m == nil {
 				continue

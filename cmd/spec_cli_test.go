@@ -292,7 +292,7 @@ func TestSpec_HelpCanonicalFlags(t *testing.T) {
 
 	// Per-command help must use canonical long-form flag names, not shorthand.
 	commands := map[string][]string{
-		"read": {"--sig "},
+		"focus": {"--sig "},
 		"edit": {`--old "`, `--new "`},
 	}
 
@@ -560,7 +560,6 @@ func TestSpec_ExitCodes(t *testing.T) {
 		{"orient success", []string{"orient"}, 0},
 		{"focus failure", []string{"focus", "nope.go"}, 0},
 		{"edit failure", []string{"edit", "nope.go", "--old-text", "x", "--new-text", "y"}, 0},
-		{"refs failure", []string{"refs", "zzz_nonexistent"}, 0},
 		{"dry-run success", []string{"edit", "hello.go", "--old-text", "package main", "--new-text", "package test", "--dry-run"}, 0},
 	}
 
