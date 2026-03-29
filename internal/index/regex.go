@@ -8,10 +8,23 @@ import (
 	"strings"
 )
 
+// ContainerStyle describes how a language delimits container bodies.
+type ContainerStyle int
+
+const (
+	ContainerBrace   ContainerStyle = iota // { } (Go, JS/TS, C, Rust, Java)
+	ContainerIndent                        // indentation (Python)
+	ContainerKeyword                       // closing keyword like "end" (Ruby, Lua)
+)
+
 // regexLang defines patterns and end-detection style for a language.
 type regexLang struct {
-	patterns []regexPattern
-	endStyle regexEndStyle
+	patterns       []regexPattern
+	endStyle       regexEndStyle
+	container      ContainerStyle
+	containerClose string // "}", "end", ""
+	methodsOutside bool   // true if methods live outside the struct (Go)
+	langID         string
 }
 
 type regexEndStyle int
@@ -30,7 +43,7 @@ type regexPattern struct {
 // --- Language definitions ---
 
 var regexGo = &regexLang{
-	endStyle: regexBraceEnd,
+	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", methodsOutside: true, langID: "go",
 	patterns: []regexPattern{
 		{regexp.MustCompile(`^func\s+\((\w+)\s+\*?(\w+)\)\s+(\w+)\s*\(`), "method", 3},
 		{regexp.MustCompile(`^func\s+(\w+)\s*[\(\[]`), "function", 1},
@@ -42,7 +55,7 @@ var regexGo = &regexLang{
 }
 
 var regexPython = &regexLang{
-	endStyle: regexIndentEnd,
+	endStyle: regexIndentEnd, container: ContainerIndent, langID: "python",
 	patterns: []regexPattern{
 		{regexp.MustCompile(`^(\s*)class\s+(\w+)`), "class", 2},
 		{regexp.MustCompile(`^(\s*)(?:async\s+)?def\s+(\w+)\s*\(`), "function", 2},
@@ -59,7 +72,7 @@ var jsKeywords = map[string]bool{
 }
 
 var regexTypeScript = &regexLang{
-	endStyle: regexBraceEnd,
+	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "typescript",
 	patterns: []regexPattern{
 		{regexp.MustCompile(`^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)`), "class", 1},
 		{regexp.MustCompile(`^(?:export\s+)?interface\s+(\w+)`), "interface", 1},
@@ -80,7 +93,7 @@ var regexTypeScript = &regexLang{
 }
 
 var regexRust = &regexLang{
-	endStyle: regexBraceEnd,
+	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "rust",
 	patterns: []regexPattern{
 		{regexp.MustCompile(`^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)`), "function", 1},
 		{regexp.MustCompile(`^(?:pub(?:\([^)]*\))?\s+)?struct\s+(\w+)`), "struct", 1},
@@ -91,7 +104,7 @@ var regexRust = &regexLang{
 }
 
 var regexJava = &regexLang{
-	endStyle: regexBraceEnd,
+	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "java",
 	patterns: []regexPattern{
 		{regexp.MustCompile(`^\s*(?:public|private|protected)?\s*(?:static\s+)?(?:abstract\s+)?(?:class|interface|enum)\s+(\w+)`), "class", 1},
 		// Constructors: visibility + UpperCaseName(  — no return type
@@ -102,7 +115,7 @@ var regexJava = &regexLang{
 }
 
 var regexRuby = &regexLang{
-	endStyle: regexIndentEnd,
+	endStyle: regexIndentEnd, container: ContainerKeyword, containerClose: "end", langID: "ruby",
 	patterns: []regexPattern{
 		{regexp.MustCompile(`^(\s*)class\s+(\w+)`), "class", 2},
 		{regexp.MustCompile(`^(\s*)module\s+(\w+)`), "class", 2},
@@ -111,7 +124,7 @@ var regexRuby = &regexLang{
 }
 
 var regexC = &regexLang{
-	endStyle: regexBraceEnd,
+	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "c",
 	patterns: []regexPattern{
 		{regexp.MustCompile(`^(?:static\s+)?(?:inline\s+)?(?:const\s+)?(?:unsigned\s+)?(?:struct\s+)?(?:\w+(?:\s*\*)*)\s+(\w+)\s*\([^;]*$`), "function", 1},
 		{regexp.MustCompile(`^(?:typedef\s+)?struct\s+(\w+)\s*\{`), "struct", 1},
@@ -140,6 +153,39 @@ func regexLangForFile(path string) *regexLang {
 // RegexSupported returns true if the file extension has regex patterns.
 func RegexSupported(path string) bool {
 	return regexLangForFile(path) != nil
+}
+
+// LangContainer returns the container style for a file path.
+func LangContainer(path string) ContainerStyle {
+	lang := regexLangForFile(path)
+	if lang == nil {
+		return ContainerBrace
+	}
+	return lang.container
+}
+
+// LangContainerClose returns the closing token for a file path ("}", "end", "").
+func LangContainerClose(path string) string {
+	lang := regexLangForFile(path)
+	if lang == nil {
+		return "}"
+	}
+	return lang.containerClose
+}
+
+// LangMethodsOutside returns true if methods live outside the type (Go).
+func LangMethodsOutside(path string) bool {
+	lang := regexLangForFile(path)
+	return lang != nil && lang.methodsOutside
+}
+
+// LangID returns the language identifier for a file path, or "".
+func LangID(path string) string {
+	lang := regexLangForFile(path)
+	if lang == nil {
+		return ""
+	}
+	return lang.langID
 }
 
 // RegexParse extracts symbols from source code using regex patterns.

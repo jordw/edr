@@ -5,6 +5,19 @@ import (
 	"strings"
 )
 
+// SymbolInfo represents a parsed symbol (function, class, struct, etc.).
+type SymbolInfo struct {
+	Type      string // "function", "class", "struct", "method", etc.
+	Name      string
+	File      string
+	StartLine uint32
+	EndLine   uint32
+	StartByte uint32
+	EndByte   uint32
+	Body      string // raw source text of the symbol
+	ParentIndex int  // index into symbols slice at parse time; -1 = no parent
+}
+
 // FileError records a per-file failure during parsing.
 type FileError struct {
 	File  string `json:"file"`

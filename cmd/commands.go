@@ -25,9 +25,7 @@ func init() {
 	rootCmd.AddCommand(editCmd)
 	rootCmd.AddCommand(mapCmd)
 	rootCmd.AddCommand(searchCmd)
-	rootCmd.AddCommand(refsCmd)
 	rootCmd.AddCommand(renameCmd)
-	rootCmd.AddCommand(prepareCmd)
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(setupCmd)
@@ -346,24 +344,6 @@ var searchCmd = &cobra.Command{
 }
 
 func init() { cmdspec.RegisterFlags(searchCmd.Flags(), "search") }
-
-var refsCmd = &cobra.Command{
-	Use:   "refs <file:symbol|symbol>",
-	Short: ToolDesc["refs"],
-	Args:  cobra.RangeArgs(1, 2),
-	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "refs", args) },
-}
-
-func init() { cmdspec.RegisterFlags(refsCmd.Flags(), "refs") }
-
-var prepareCmd = &cobra.Command{
-	Use:   "prepare <file:symbol|symbol>",
-	Short: ToolDesc["prepare"],
-	Args:  cobra.RangeArgs(1, 2),
-	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "prepare", args) },
-}
-
-func init() { cmdspec.RegisterFlags(prepareCmd.Flags(), "prepare") }
 
 var renameCmd = &cobra.Command{
 	Use:   "rename <old-name> <new-name>",
@@ -916,11 +896,6 @@ func classifyOp(cmd string, flags map[string]any, result any, ok bool) (action, 
 			}
 		}
 		return "verify", "verify_failed"
-	case "refs":
-		if _, hasImpact := flags["impact"]; hasImpact {
-			return "refs_impact", "impact_checked"
-		}
-		return "refs", "refs_checked"
 	case "rename":
 		return "rename", "renamed"
 	case "map":

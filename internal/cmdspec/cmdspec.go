@@ -156,29 +156,13 @@ var Registry = []*Spec{
 		},
 	},
 	{
-		Name: "refs", Desc: "Find all references to a symbol. --impact for transitive callers.",
-		Category: CatRead, MinArgs: 1, MaxArgs: 2, FileScoped: true,
-		DeltaRead: true, BodyTrack: true,
-		Flags: []FlagSpec{
-			{Name: "impact", Type: FlagBool, Default: false, Desc: "Transitive callers"},
-			{Name: "chain", Type: FlagString, Default: "", Desc: "Find call path to target"},
-			{Name: "depth", Type: FlagInt, Default: 3, Desc: "Max traversal depth"},
-			{Name: "callers", Type: FlagBool, Default: false, Desc: "Include callers"},
-			{Name: "deps", Type: FlagBool, Default: false, Desc: "Include dependencies"},
-			{Name: "body", Type: FlagBool, Default: false, Desc: "Include source in results"},
-			{Name: "signatures", Type: FlagBool, Default: false, Desc: "Signatures only"},
-			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens"},
-		},
-	},
-	{
-		Name: "rename", Desc: "Cross-file rename with import-aware resolution. --text for literal string replace. --dry-run to preview.",
+		Name: "rename", Desc: "Text-based find-and-replace across repo files. --dry-run to preview.",
 		Category: CatGlobalMutate, MinArgs: 2, MaxArgs: 2,
 		Flags: []FlagSpec{
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
-			{Name: "text", Type: FlagBool, Default: false, Desc: "Text-based rename (literal string replacement across files)"},
-			{Name: "word", Type: FlagBool, Default: false, Desc: "Whole-word matching only (--text mode)"},
-			{Name: "include", Type: FlagStringSlice, Default: []string(nil), Desc: "File glob(s) to include (--text mode)"},
-			{Name: "exclude", Type: FlagStringSlice, Default: []string(nil), Desc: "File glob(s) to exclude (--text mode)"},
+			{Name: "word", Type: FlagBool, Default: false, Desc: "Whole-word matching only"},
+			{Name: "include", Type: FlagStringSlice, Default: []string(nil), Desc: "File glob(s) to include"},
+			{Name: "exclude", Type: FlagStringSlice, Default: []string(nil), Desc: "File glob(s) to exclude"},
 			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens (default 2000 for --dry-run)"},
 		},
 	},
@@ -187,14 +171,6 @@ var Registry = []*Spec{
 		Category: CatGlobalMutate, MinArgs: 0, MaxArgs: 0,
 		Flags: []FlagSpec{
 			{Name: "session", Type: FlagBool, Default: false, Desc: "Clear session only (same as default)"},
-		},
-	},
-	{
-		Name: "prepare", Desc: "Pre-edit context: symbol body, callers, deps, tests, hash.",
-		Category: CatRead, MinArgs: 1, MaxArgs: 2, FileScoped: true,
-		DeltaRead: true, BodyTrack: true,
-		Flags: []FlagSpec{
-			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens"},
 		},
 	},
 	{
@@ -212,14 +188,6 @@ var Registry = []*Spec{
 			{Name: "level", Type: FlagString, Default: "", Desc: "Verification level: build (default) or test"},
 			{Name: "test", Type: FlagBool, Default: false, Desc: "Shorthand for --level test"},
 			{Name: "timeout", Type: FlagInt, Default: 0, Desc: "Timeout in seconds"},
-		},
-	},
-	{
-		Name: "delta", Desc: "Run a command; show only what changed since last run.",
-		Category: CatMeta, MinArgs: 1, MaxArgs: -1,
-		Flags: []FlagSpec{
-			{Name: "full", Type: FlagBool, Default: false, Desc: "Bypass diff, show full output"},
-			{Name: "reset", Type: FlagBool, Default: false, Desc: "Clear baseline before running (treat as first run)"},
 		},
 	},
 	{
@@ -295,7 +263,7 @@ func Names() []string {
 
 // --- Classification helpers ---
 
-// IsRead returns true for read-category commands (read, map, search, refs).
+// IsRead returns true for read-category commands (read, map, search).
 func IsRead(name string) bool {
 	s := byName[name]
 	return s != nil && s.Category == CatRead
@@ -332,13 +300,13 @@ func IsDiffEdit(name string) bool {
 	return s != nil && s.DiffEdit
 }
 
-// IsDeltaRead returns true for commands that support delta reads (read, refs).
+// IsDeltaRead returns true for commands that support delta reads (read).
 func IsDeltaRead(name string) bool {
 	s := byName[name]
 	return s != nil && s.DeltaRead
 }
 
-// IsBodyTrack returns true for commands whose bodies are tracked for dedup (read, refs, search).
+// IsBodyTrack returns true for commands whose bodies are tracked for dedup (read, search).
 func IsBodyTrack(name string) bool {
 	s := byName[name]
 	return s != nil && s.BodyTrack
@@ -405,23 +373,6 @@ func RenameBatchKeys() map[string]bool {
 	return m
 }
 
-// QueryBatchKeys returns valid keys for doQuery batch objects.
-// This is the union of all read-category commands' flag names,
-// plus structural fields (cmd, file, symbol, pattern).
-func QueryBatchKeys() map[string]bool {
-	m := map[string]bool{
-		"cmd": true, "file": true, "symbol": true,
-		"budget": true, "pattern": true,
-	}
-	for _, s := range Registry {
-		if s.Category == CatRead {
-			for _, f := range s.Flags {
-				m[f.Name] = true
-			}
-		}
-	}
-	return m
-}
 
 // --- Cobra flag registration ---
 

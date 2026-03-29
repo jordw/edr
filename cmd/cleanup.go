@@ -47,18 +47,6 @@ func cleanEdrDir(edrDir string) {
 		}
 	}
 
-	// 2. Run baselines: stale .last files
-	runDir := filepath.Join(edrDir, "delta")
-	entries, _ = os.ReadDir(runDir)
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".last") {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil || info.ModTime().Before(cutoff) {
-			os.Remove(filepath.Join(runDir, e.Name()))
-		}
-	}
 }
 
 // maybeCleanEdrDir runs cleanEdrDir at most once per cleanupInterval.

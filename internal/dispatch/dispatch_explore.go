@@ -3,12 +3,10 @@ package dispatch
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/jordw/edr/internal/edit"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
-	"github.com/jordw/edr/internal/search"
 )
 
 func runExpand(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
@@ -111,62 +109,4 @@ func runExpand(ctx context.Context, db index.SymbolStore, root string, args []st
 	return result, nil
 }
 
-func runXrefs(ctx context.Context, db index.SymbolStore, root string, args []string) (any, error) {
-	if len(args) < 1 {
-		return nil, fmt.Errorf("xrefs requires 1-2 arguments: [file] <symbol>")
-	}
-
-	// Resolve symbol with optional file disambiguation
-	sym, err := resolveSymbolArgs(ctx, db, root, args)
-	if err != nil {
-		// If symbol not found, try a quick search to suggest alternatives
-		if strings.Contains(err.Error(), "not found") && len(args) >= 1 {
-			name := args[len(args)-1]
-			if sr, sErr := search.SearchSymbol(ctx, db, name, 50, false, 0); sErr == nil && sr.TotalMatches > 0 {
-				match := sr.Matches[0].Symbol
-				return nil, fmt.Errorf("%w; found %q in %s — try: search or explore",
-					err, match.Name, match.File)
-			}
-		}
-		return nil, err
-	}
-
-	refs, err := index.FindReferencesInFile(ctx, db, sym.Name, sym.File)
-	if err != nil {
-		return nil, err
-	}
-
-	// Filter out the definition itself from references
-	defFile := output.Rel(sym.File)
-	defLine := int(sym.StartLine)
-	var results []output.Symbol
-	for _, r := range refs {
-		rf := output.Rel(r.File)
-		rl := int(r.StartLine)
-		if rf == defFile && rl == defLine {
-			continue
-		}
-		results = append(results, output.Symbol{
-			Type:  "reference",
-			Name:  r.Name,
-			File:  rf,
-			Lines: [2]int{rl, int(r.EndLine)},
-		})
-	}
-	if results == nil {
-		results = []output.Symbol{}
-	}
-
-	resp := map[string]any{
-		"symbol": output.Symbol{
-			Type:  sym.Type,
-			Name:  sym.Name,
-			File:  defFile,
-			Lines: [2]int{defLine, int(sym.EndLine)},
-		},
-		"references":    results,
-		"total_refs":    len(results),
-	}
-	return resp, nil
-}
 

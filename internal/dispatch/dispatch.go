@@ -69,13 +69,8 @@ func Dispatch(ctx context.Context, db index.SymbolStore, cmd string, args []stri
 		result, err = runMapUnified(ctx, db, root, args, flags)
 	case "search":
 		result, err = runSearchUnified(ctx, db, args, flags)
-	case "refs":
-		result, err = runRefsUnified(ctx, db, root, args, flags)
-	case "prepare":
-		result, err = runPrepare(ctx, db, root, args, flags)
-
 	case "rename":
-		result, err = runRenameSymbol(ctx, db, root, args, flags)
+		result, err = runRename(ctx, db, root, args, flags)
 	case "verify":
 		result, err = runVerify(ctx, db, root, args, flags)
 	default:
@@ -337,33 +332,6 @@ func runSearchUnified(ctx context.Context, db index.SymbolStore, args []string, 
 }
 
 // runExploreUnified routes to expand or gather based on flags.
-//
-// runRefsUnified routes to xrefs, impact, call-chain, or expand based on flags.
-//
-//	refs symbol                        → xrefs
-//	refs symbol --impact               → impact (transitive callers)
-//	refs symbol --chain targetSymbol   → call-chain
-//	refs symbol --callers              → expand (callers context)
-//	refs symbol --deps                 → expand (deps context)
-func runRefsUnified(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
-	// --callers/--deps: delegate to expand (formerly explore)
-	if flagBool(flags, "callers", false) || flagBool(flags, "deps", false) {
-		return runExpand(ctx, db, root, args, flags)
-	}
-
-	if flagBool(flags, "impact", false) {
-		return runImpact(ctx, db, root, args, flags)
-	}
-
-	chainTarget := flagString(flags, "chain", "")
-	if chainTarget != "" {
-		newArgs := append(args, chainTarget)
-		return runCallChain(ctx, db, root, newArgs, flags)
-	}
-
-	return runXrefs(ctx, db, root, args)
-}
-
 // MultiCmd represents a single command in a multi-command batch.
 type MultiCmd struct {
 	Cmd   string         `json:"cmd"`
@@ -545,6 +513,19 @@ func looksLikeFilePath(arg string) bool {
 		return true
 	}
 	return false
+}
+
+// splitFileSymbol splits "file:Symbol" into [file, symbol], or returns nil.
+func splitFileSymbol(s string) []string {
+	idx := strings.LastIndex(s, ":")
+	if idx <= 0 || idx == len(s)-1 {
+		return nil
+	}
+	file, sym := s[:idx], s[idx+1:]
+	if !looksLikeFilePath(file) {
+		return nil
+	}
+	return []string{file, sym}
 }
 
 // toOutputSymbol converts an index.SymbolInfo to output.Symbol.

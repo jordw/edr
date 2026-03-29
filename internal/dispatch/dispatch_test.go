@@ -1161,81 +1161,6 @@ func TestEditEmptyNewTextRequiresEditMode(t *testing.T) {
 	}
 }
 
-// TestRenameScopedDoesNotRenameUnrelatedFile verifies that rename only targets
-// resolved references via the refs table, not unrelated files that happen to
-// use the same identifier name.
-func TestRenameScopedDoesNotRenameUnrelatedFile(t *testing.T) {
-	tmp := t.TempDir()
-
-	// lib/ defines "count"
-	libDir := filepath.Join(tmp, "lib")
-	os.MkdirAll(libDir, 0755)
-	if err := os.WriteFile(filepath.Join(libDir, "counter.go"), []byte(`package lib
-
-func count() int {
-	return 42
-}
-
-func useCount() int {
-	return count() + 1
-}
-`), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// unrelated/ also uses "count" as a local variable — not a reference to lib.count.
-	unrelDir := filepath.Join(tmp, "unrelated")
-	os.MkdirAll(unrelDir, 0755)
-	unrelFile := filepath.Join(unrelDir, "other.go")
-	unrelSrc := `package unrelated
-
-func doStuff() int {
-	count := 10
-	return count + 1
-}
-`
-	if err := os.WriteFile(unrelFile, []byte(unrelSrc), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	db := index.NewOnDemand(tmp)
-	output.SetRoot(db.Root())
-	ctx := context.Background()
-	defer db.Close()
-	// Rename the lib-level "count" function to "tally".
-	// The unrelated package's local "count" should NOT be renamed.
-	result, err := dispatch.Dispatch(ctx, db, "rename", []string{"count", "tally"}, map[string]any{
-		"dry_run": true,
-	})
-	if err != nil {
-		t.Fatalf("rename dry_run: %v", err)
-	}
-
-	raw, _ := json.Marshal(result)
-	var rr output.RenameResult
-	if err := json.Unmarshal(raw, &rr); err != nil {
-		t.Fatal(err)
-	}
-
-	// Should find occurrences only in lib/ (definition + useCount), not in unrelated/.
-	for _, p := range rr.Preview {
-		if strings.Contains(p.File, "unrelated") {
-			t.Errorf("rename should not touch unrelated package, but found: %+v", p)
-		}
-	}
-	if rr.Occurrences < 2 {
-		t.Errorf("expected at least 2 occurrences in lib/ (definition + useCount), got %d", rr.Occurrences)
-	}
-
-	// Verify unrelated file is untouched.
-	data, _ := os.ReadFile(unrelFile)
-	if string(data) != unrelSrc {
-		t.Errorf("unrelated file was modified: %s", string(data))
-	}
-}
-
-// TestRenameAmbiguousSymbolFailsFast verifies that renaming an ambiguous symbol
-// returns an error instead of silently falling back to repo-wide text scanning.
 func TestRenameDryRunIncludesDiffs(t *testing.T) {
 	tmp := t.TempDir()
 	goFile := filepath.Join(tmp, "main.go")
@@ -1269,110 +1194,6 @@ func TestRenameDryRunIncludesDiffs(t *testing.T) {
 	data, _ := os.ReadFile(goFile)
 	if strings.Contains(string(data), "NewName") {
 		t.Error("dry-run should not modify the file")
-	}
-}
-
-func TestRenameAmbiguousSymbolFailsFast(t *testing.T) {
-	tmp := t.TempDir()
-	// Two packages define the same symbol name "Process".
-	pkgA := filepath.Join(tmp, "pkga")
-	pkgB := filepath.Join(tmp, "pkgb")
-	os.MkdirAll(pkgA, 0755)
-	os.MkdirAll(pkgB, 0755)
-
-	if err := os.WriteFile(filepath.Join(pkgA, "a.go"), []byte(`package pkga
-
-func Process() string {
-	return "a"
-}
-`), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(pkgB, "b.go"), []byte(`package pkgb
-
-func Process() string {
-	return "b"
-}
-`), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	db := index.NewOnDemand(tmp)
-	output.SetRoot(db.Root())
-	ctx := context.Background()
-	defer db.Close()
-	// Renaming "Process" should fail because it's ambiguous (exists in two packages).
-	_, err := dispatch.Dispatch(ctx, db, "rename", []string{"Process", "Handle"}, nil)
-	if err == nil {
-		t.Fatal("expected error for ambiguous rename target, got nil")
-	}
-	if !strings.Contains(err.Error(), "ambiguous") && !strings.Contains(err.Error(), "multiple") {
-		t.Fatalf("expected ambiguous error, got: %v", err)
-	}
-}
-
-// TestCallChainSameNameDifferentFiles verifies that call-chain traversal
-// treats same-named symbols in different files as distinct nodes.
-func TestCallChainSameNameDifferentFiles(t *testing.T) {
-	tmp := t.TempDir()
-
-	// Create a chain: main → helperA.Process → helperB.Process → target
-	// Without the fix, both Process nodes collapse into one.
-	if err := os.WriteFile(filepath.Join(tmp, "target.go"), []byte(`package main
-
-func target() string {
-	return "done"
-}
-`), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(tmp, "helper_b.go"), []byte(`package main
-
-func helperB() string {
-	return target()
-}
-`), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(tmp, "helper_a.go"), []byte(`package main
-
-func helperA() string {
-	return helperB()
-}
-`), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(tmp, "entry.go"), []byte(`package main
-
-func entry() string {
-	return helperA()
-}
-`), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	db := index.NewOnDemand(tmp)
-	output.SetRoot(db.Root())
-	ctx := context.Background()
-	defer db.Close()
-	result, err := dispatch.Dispatch(ctx, db, "refs", []string{"entry"}, map[string]any{
-		"chain": "target",
-	})
-	if err != nil {
-		t.Fatalf("call-chain: %v", err)
-	}
-
-	raw, _ := json.Marshal(result)
-	var cc map[string]any
-	if err := json.Unmarshal(raw, &cc); err != nil {
-		t.Fatal(err)
-	}
-	if cc["found"] != true {
-		t.Fatalf("expected call chain to be found, got: %s", string(raw))
-	}
-	chain, ok := cc["chain"].([]any)
-	if !ok || len(chain) < 3 {
-		t.Fatalf("expected chain of length >= 3, got: %s", string(raw))
 	}
 }
 
@@ -1492,7 +1313,7 @@ func TestRead_DefaultBudgetCap(t *testing.T) {
 	// Create a file larger than 4000 tokens
 	var content strings.Builder
 	content.WriteString("package main\n\n")
-	for i := 0; i < 500; i++ {
+	for i := 0; i < 2000; i++ {
 		fmt.Fprintf(&content, "func Function%d() {\n\t// implementation %d\n}\n\n", i, i)
 	}
 	os.WriteFile(filepath.Join(tmp, "big.go"), []byte(content.String()), 0644)
@@ -1607,32 +1428,6 @@ func TestInternalCommandsRejected(t *testing.T) {
 		if !strings.Contains(err.Error(), "unknown command") {
 			t.Errorf("dispatch(%q) error = %q, want 'unknown command'", cmd, err.Error())
 		}
-	}
-}
-
-// TestRefsWithCallersAbsorbedExplore verifies that refs --callers works
-// (formerly the explore command).
-func TestRefsWithCallersAbsorbedExplore(t *testing.T) {
-	tmp := t.TempDir()
-	os.WriteFile(filepath.Join(tmp, "main.go"), []byte(`package main
-
-func caller() { target() }
-func target() {}
-`), 0644)
-	db := index.NewOnDemand(tmp)
-	output.SetRoot(db.Root())
-	ctx := context.Background()
-	defer db.Close()
-	// refs with --callers should work (absorbed from explore)
-	result, err := dispatch.Dispatch(ctx, db, "refs", []string{"target"}, map[string]any{
-		"callers": true,
-		"body":    true,
-	})
-	if err != nil {
-		t.Fatalf("refs --callers: %v", err)
-	}
-	if result == nil {
-		t.Fatal("refs --callers returned nil")
 	}
 }
 

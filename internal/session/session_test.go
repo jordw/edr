@@ -1017,13 +1017,6 @@ func TestCommandMaps_Coverage(t *testing.T) {
 	if !BodyCommands["read"] {
 		t.Error("read should be in BodyCommands")
 	}
-	// refs (absorbed explore) should have DeltaRead and BodyTrack
-	if !DeltaReadCommands["refs"] {
-		t.Error("refs should be in DeltaReadCommands")
-	}
-	if !BodyCommands["refs"] {
-		t.Error("refs should be in BodyCommands")
-	}
 }
 
 func TestBatchThenSingleReadDelta(t *testing.T) {
@@ -1070,7 +1063,7 @@ func TestBatchThenSingleReadDelta_FileLevel(t *testing.T) {
 }
 
 
-// --- Session dedup for search/map/refs ---
+// --- Session dedup for search/map ---
 
 func TestPostProcess_SearchSessionNew(t *testing.T) {
 	sess := New()
@@ -1117,16 +1110,6 @@ func TestPostProcess_MapSessionNew(t *testing.T) {
 
 	if !strings.Contains(out, `"session":"new"`) {
 		t.Errorf("first map should have session=new, got: %s", out)
-	}
-}
-
-func TestPostProcess_RefsSessionNew(t *testing.T) {
-	sess := New()
-	result := `{"refs":[{"file":"a.go","line":10}]}`
-	out := sess.PostProcess("refs", []string{"Foo"}, map[string]any{}, nil, result)
-
-	if !strings.Contains(out, `"session":"new"`) {
-		t.Errorf("first refs should have session=new, got: %s", out)
 	}
 }
 

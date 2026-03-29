@@ -18,13 +18,13 @@ func importsReach(imports []ImportInfo, targetFile, importingFile, root string) 
 		return true
 	}
 
-	lang := GetLangConfig(importingFile)
-	if lang == nil {
+	langID := LangID(importingFile)
+	if langID == "" {
 		return true // unknown lang, be permissive
 	}
 
 	for _, imp := range imports {
-		if importReachesFile(imp, targetFile, importingFile, root, lang.LangID) {
+		if importReachesFile(imp, targetFile, importingFile, root, langID) {
 			return true
 		}
 	}

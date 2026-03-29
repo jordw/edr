@@ -12,9 +12,9 @@ func TestPublicCommandSurface(t *testing.T) {
 	// These are the commands that should appear in edr --help
 	expected := map[string]bool{
 		"read": true, "search": true, "map": true,
-		"edit": true, "write": true, "refs": true,
-		"verify": true, "reset": true, "rename": true, "prepare": true,
-		"delta": true, "setup": true, "status": true,
+		"edit": true, "write": true,
+		"verify": true, "reset": true, "rename": true,
+		"setup": true, "status": true,
 		"undo": true,
 	}
 

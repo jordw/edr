@@ -11,7 +11,7 @@ import (
 // the correct DB opener. This prevents regressions when new commands are added.
 //
 // Categories:
-//   - Strict (openDBStrict): read, search, map, refs, rename — via dispatchCmd
+//   - Strict (openDBStrict): read, search, map, rename — via dispatchCmd
 //   - Strict+stdin:          write, edit — via dispatchCmdWithStdin (also uses openDBStrict)
 // (no index step needed — on-demand parsing)
 //   - No index:              verify — uses index.OpenDB directly
@@ -31,9 +31,7 @@ func TestOpenerAlignment(t *testing.T) {
 		{"readCmd", "read"},
 		{"mapCmd", "map"},
 		{"searchCmd", "search"},
-		{"refsCmd", "refs"},
 		{"renameCmd", "rename"},
-		{"prepareCmd", "prepare"},
 	}
 
 	// Commands that must use dispatchCmdWithStdin (also calls openDBStrict internally)

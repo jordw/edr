@@ -215,7 +215,7 @@ func (o *OnDemand) parseAll(ctx context.Context) map[string]*cachedFile {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if GetLangConfig(path) != nil {
+		if RegexSupported(path) {
 			ch <- path
 		}
 		return nil
@@ -261,7 +261,7 @@ func (o *OnDemand) parseDir(ctx context.Context, dir string) map[string]*cachedF
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if strings.HasPrefix(path, absDir) && GetLangConfig(path) != nil {
+		if strings.HasPrefix(path, absDir) && RegexSupported(path) {
 			ch <- path
 		}
 		return nil
@@ -426,7 +426,7 @@ func (o *OnDemand) HasRefs(_ context.Context) bool {
 func (o *OnDemand) Stats(ctx context.Context) (files int, symbols int, err error) {
 	var fileCount, symCount int
 	WalkRepoFiles(o.root, func(path string) error {
-		if GetLangConfig(path) != nil {
+		if RegexSupported(path) {
 			fileCount++
 		}
 		return nil

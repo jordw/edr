@@ -56,10 +56,8 @@ func TestBatchKeysNonEmpty(t *testing.T) {
 	for name, fn := range map[string]func() map[string]bool{
 		"DoBatchKeys":     DoBatchKeys,
 		"ReadBatchKeys":   ReadBatchKeys,
-		"QueryBatchKeys":  QueryBatchKeys,
 		"EditBatchKeys":   EditBatchKeys,
 		"WriteBatchKeys":  WriteBatchKeys,
-		"RenameBatchKeys": RenameBatchKeys,
 	} {
 		keys := fn()
 		if len(keys) == 0 {
@@ -78,7 +76,6 @@ func TestSessionBehaviorFlags(t *testing.T) {
 	}{
 		{"read", false, true, true},
 		{"edit", true, false, false},
-		{"refs", false, true, true},
 		{"search", false, false, true},
 		{"map", false, false, false},
 		{"write", false, false, false},

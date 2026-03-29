@@ -1,46 +1,15 @@
+// Outline produces depth-limited views of source files and symbols.
+// Uses regex-based symbol boundaries and text-based block collapsing.
 package index
 
 import (
 	"fmt"
 	"os"
 	"strings"
-
-	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
-// blockNodeTypes are AST node types that represent control flow blocks.
-// When collapsing, these get their body replaced with "..."
-var blockNodeTypes = map[string]bool{
-	// Shared
-	"if_statement": true, "for_statement": true, "while_statement": true,
-	"try_statement": true, "switch_statement": true,
-	// Go
-	"if_expression": true, "for_expression": true, "expression_switch_statement": true,
-	"type_switch_statement": true, "select_statement": true,
-	// Python
-	"with_statement": true, "match_statement": true, "elif_clause": true,
-	"else_clause": true, "except_clause": true, "finally_clause": true,
-	// JS/TS
-	"for_in_statement": true, "switch_case": true, "catch_clause": true,
-	// Rust
-	"if_expression_rust": true, "match_expression": true, "loop_expression": true,
-	// Ruby
-	"if": true, "unless": true, "while": true, "for": true, "begin": true, "case": true,
-	// C/C++ definitions — collapsed at depth=1 (--sig) but visible at depth=2 (--skeleton)
-	"function_definition": true, "struct_specifier": true, "enum_specifier": true,
-}
-
-// bodyNodeTypes are the AST node types that contain the "body" of a block
-// (the part we want to collapse).
-var bodyNodeTypes = map[string]bool{
-	"block": true, "body": true, "block_statement": true,
-	"statement_block": true, "compound_statement": true,
-	// C/C++ struct/enum bodies
-	"field_declaration_list": true, "enumerator_list": true,
-}
-
 // OutlineFile produces a depth-limited view of a source file.
-// depth=1: just signatures. depth=2: bodies with blocks collapsed. depth=3+: more expansion.
+// depth=1: signatures only. depth=2+: skeleton with blocks collapsed.
 func OutlineFile(path string, depth int) (string, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -49,27 +18,31 @@ func OutlineFile(path string, depth int) (string, error) {
 	return OutlineFileFromSource(path, src, depth)
 }
 
-// OutlineFileFromSource is like OutlineFile but takes pre-loaded source bytes,
-// avoiding redundant file reads.
+// OutlineFileFromSource is like OutlineFile but takes pre-loaded source bytes.
 func OutlineFileFromSource(path string, src []byte, depth int) (string, error) {
-	lang := GetLangConfig(path)
-	if lang == nil {
+	if !RegexSupported(path) {
 		return "", fmt.Errorf("unsupported language for %s", path)
 	}
 
-	var result string
-	cachedParseWith(lang, src, func(root *tree_sitter.Node) {
-		if depth == 1 && (lang.LangID == "c" || lang.LangID == "cpp") {
-			result = collapseCSigView(root, src)
-		} else {
-			result = collapseNode(root, src, depth, 0)
+	syms := RegexParse(path, src)
+
+	if depth <= 1 {
+		// Signatures: one line per symbol
+		var lines []string
+		for _, sym := range syms {
+			sig := ExtractSignatureFromSource(sym, src)
+			if sig != "" {
+				lines = append(lines, sig)
+			}
 		}
-	})
-	return result, nil
+		return strings.Join(lines, "\n"), nil
+	}
+
+	// Skeleton: full file with symbol bodies collapsed
+	return collapseFile(src, syms, depth), nil
 }
 
-// OutlineSymbol produces a depth-limited view of a specific symbol's source.
-// depth=1: signature only. depth=2: body with blocks collapsed. etc.
+// OutlineSymbol produces a depth-limited view of a specific symbol.
 func OutlineSymbol(path string, sym SymbolInfo, depth int) (string, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -78,233 +51,168 @@ func OutlineSymbol(path string, sym SymbolInfo, depth int) (string, error) {
 	return OutlineSymbolFromSource(path, sym, src, depth)
 }
 
-// OutlineSymbolFromSource is like OutlineSymbol but takes pre-loaded source bytes,
-// avoiding redundant file reads.
+// OutlineSymbolFromSource is like OutlineSymbol but takes pre-loaded source bytes.
 func OutlineSymbolFromSource(path string, sym SymbolInfo, src []byte, depth int) (string, error) {
-	lang := GetLangConfig(path)
-	if lang == nil {
-		return "", fmt.Errorf("unsupported language for %s", path)
-	}
-
 	if depth <= 1 {
 		return ExtractSignatureFromSource(sym, src), nil
 	}
 
-	var result string
-	cachedParseWith(lang, src, func(root *tree_sitter.Node) {
-		symNode := findNodeAt(root, uint(sym.StartByte), uint(sym.EndByte))
-		if symNode == nil {
-			result = string(src[sym.StartByte:sym.EndByte])
-		} else {
-			result = collapseNode(symNode, src, depth, 0)
-		}
-	})
-	return result, nil
+	// Return the symbol body with inner blocks collapsed
+	if int(sym.EndByte) > len(src) || sym.StartByte > sym.EndByte {
+		return string(src[sym.StartByte:]), nil
+	}
+	body := src[sym.StartByte:sym.EndByte]
+
+	// For depth=2, collapse control-flow blocks inside the body
+	return collapseBlocks(string(body)), nil
 }
 
-// findNodeAt finds the most specific node spanning exactly [start, end).
-func findNodeAt(node *tree_sitter.Node, startByte, endByte uint) *tree_sitter.Node {
-	if node.StartByte() == startByte && node.EndByte() == endByte {
-		return node
+// collapseFile produces a skeleton view: symbol bodies replaced with "..."
+// while keeping signatures and structure visible.
+func collapseFile(src []byte, syms []SymbolInfo, depth int) string {
+	lines := strings.Split(string(src), "\n")
+	if len(syms) == 0 {
+		return string(src)
 	}
-	for i := 0; i < int(node.ChildCount()); i++ {
-		child := node.Child(uint(i))
-		if child != nil && child.StartByte() <= startByte && child.EndByte() >= endByte {
-			result := findNodeAt(child, startByte, endByte)
-			if result != nil {
-				return result
+
+	// Build a set of line ranges to collapse (symbol bodies, not signatures).
+	// For each symbol, keep the first line (signature) and collapse the rest.
+	var collapses []collapse
+	for _, sym := range syms {
+		if sym.EndLine <= sym.StartLine+1 {
+			continue // single-line symbol, nothing to collapse
+		}
+		// Keep the signature line(s), collapse the body
+		bodyStart := int(sym.StartLine) + 1 // line after signature
+		bodyEnd := int(sym.EndLine) - 1     // line before closing brace/end
+		if bodyStart <= bodyEnd {
+			collapses = append(collapses, collapse{bodyStart, bodyEnd})
+		}
+	}
+
+	if len(collapses) == 0 {
+		return string(src)
+	}
+
+	// Merge overlapping/nested collapses — keep outermost
+	merged := mergeCollapses(collapses)
+
+	// Build output
+	var out []string
+	collapsed := make(map[int]bool) // lines to skip (1-based)
+	for _, c := range merged {
+		for i := c.start; i <= c.end; i++ {
+			collapsed[i] = true
+		}
+	}
+
+	// Track which collapses we've emitted "..." for
+	emitted := make(map[int]bool)
+	for i, line := range lines {
+		lineNum := i + 1
+		if collapsed[lineNum] {
+			// Find which collapse this belongs to
+			for _, c := range merged {
+				if lineNum == c.start && !emitted[c.start] {
+					// Emit "..." with proper indentation
+					indent := extractLeadingWS(lines[c.start-2]) // indent of signature line
+					out = append(out, indent+"\t...")
+					emitted[c.start] = true
+					break
+				}
 			}
-		}
-	}
-	// If no exact match, return this node if it spans the range
-	if node.StartByte() <= startByte && node.EndByte() >= endByte {
-		return node
-	}
-	return nil
-}
-
-// collapseNode renders a node's source with blocks collapsed beyond the depth limit.
-// blockDepth tracks how many block-level nestings we've entered.
-func collapseNode(node *tree_sitter.Node, src []byte, maxDepth int, blockDepth int) string {
-	kind := node.Kind()
-
-	// If this is a block node and we're at the depth limit, collapse it
-	if blockNodeTypes[kind] && blockDepth >= maxDepth-1 {
-		return collapseBlockToHeader(node, src)
-	}
-
-	// If this node has no children, return its source text
-	if node.ChildCount() == 0 {
-		return string(src[node.StartByte():node.EndByte()])
-	}
-
-	// Recurse into children, incrementing blockDepth for block nodes
-	nextBlockDepth := blockDepth
-	if blockNodeTypes[kind] {
-		nextBlockDepth++
-	}
-
-	// Build output by combining children's text with gaps (whitespace/punctuation between them)
-	var result strings.Builder
-	lastEnd := node.StartByte()
-
-	for i := 0; i < int(node.ChildCount()); i++ {
-		child := node.Child(uint(i))
-		if child == nil {
 			continue
 		}
-
-		// Preserve text between children (whitespace, operators, etc.)
-		if child.StartByte() > lastEnd {
-			result.Write(src[lastEnd:child.StartByte()])
-		}
-
-		result.WriteString(collapseNode(child, src, maxDepth, nextBlockDepth))
-		lastEnd = child.EndByte()
+		out = append(out, line)
 	}
 
-	// Preserve trailing text after last child
-	if lastEnd < node.EndByte() {
-		result.Write(src[lastEnd:node.EndByte()])
-	}
-
-	return result.String()
+	return strings.Join(out, "\n")
 }
 
-// collapseBlockToHeader returns a block statement's header (condition) + "..."
-// e.g., "if x > 0:\n    ..." or "for _, item := range items { ... }"
-func collapseBlockToHeader(node *tree_sitter.Node, src []byte) string {
-	kind := node.Kind()
-
-	// Find the body/block child — that's what we collapse
-	for i := 0; i < int(node.ChildCount()); i++ {
-		child := node.Child(uint(i))
-		if child == nil {
-			continue
-		}
-		childKind := child.Kind()
-
-		// Is this a body/block node we should collapse?
-		if bodyNodeTypes[childKind] || childKind == "block" || childKind == "body" ||
-			childKind == "consequence" || childKind == "alternative" {
-
-			// Everything before the body is the header
-			header := strings.TrimRight(string(src[node.StartByte():child.StartByte()]), " \t\n")
-
-			// Detect indentation of the body content
-			indent := detectBlockIndent(child, src)
-
-			// Produce header + collapsed body
-			if isBraceLanguageBlock(childKind, kind) {
-				return header + " { ... }"
-			}
-			// Python/Ruby style: newline + indented ...
-			return header + "\n" + indent + "..."
-		}
-	}
-
-	// No clear body child found — show first line + ...
-	full := string(src[node.StartByte():node.EndByte()])
-	firstNL := strings.Index(full, "\n")
-	if firstNL >= 0 {
-		header := full[:firstNL]
-		indent := detectIndentOfNextLine(full[firstNL+1:])
-		return header + "\n" + indent + "..."
-	}
-	return full
-}
-
-// skipInCSig lists node types to exclude from C/C++ --sig output.
-// These are preprocessor noise that clutters the API surface view.
-var skipInCSig = map[string]bool{
-	"#ifndef": true, "#ifdef": true, "#endif": true, "#define": true,
-	"preproc_include": true, "preproc_def": true, "preproc_call": true,
-	"preproc_function_def": true,
-}
-
-// collapseCSigView produces a clean API surface for C/C++ headers.
-// It unwraps include-guard #ifdef/#ifndef wrappers and strips #include
-// directives, showing only type definitions, declarations, and section comments.
-func collapseCSigView(node *tree_sitter.Node, src []byte) string {
-	var parts []string
-	collectCSigParts(node, src, &parts)
-	return strings.Join(parts, "\n")
-}
-
-func collectCSigParts(node *tree_sitter.Node, src []byte, parts *[]string) {
-	for i := 0; i < int(node.ChildCount()); i++ {
-		child := node.Child(uint(i))
-		if child == nil {
-			continue
-		}
-		kind := child.Kind()
-
-		// Skip preprocessor noise
-		if skipInCSig[kind] || kind == "identifier" {
-			continue
-		}
-
-		// Unwrap include-guard wrappers — recurse into their children
-		if kind == "preproc_ifdef" || kind == "preproc_ifndef" {
-			collectCSigParts(child, src, parts)
-			continue
-		}
-
-		if kind == "comment" {
-			text := string(src[child.StartByte():child.EndByte()])
-			// Skip file-level doc comments (multi-line, before any declaration)
-			if len(*parts) == 0 && strings.Contains(text, "\n") {
-				continue
-			}
-			// Skip include-guard close comments (e.g., /* HEADER_H */)
-			trimmed := strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(text, "*/"), "/*"))
-			if strings.HasSuffix(trimmed, "_H") || strings.HasSuffix(trimmed, "_H_") ||
-				strings.HasSuffix(trimmed, "_HPP") || strings.HasSuffix(trimmed, "_HPP_") {
-				continue
-			}
-		}
-
-		// Keep declarations, type_definitions, and section comments — collapse bodies
-		*parts = append(*parts, collapseNode(child, src, 1, 0))
-	}
-}
-
-func isBraceLanguageBlock(childKind, parentKind string) bool {
-	return childKind == "statement_block" || childKind == "block_statement" ||
-		childKind == "compound_statement" ||
-		// C/C++ struct/enum bodies
-		childKind == "field_declaration_list" || childKind == "enumerator_list" ||
-		// Go blocks
-		(childKind == "block" && (parentKind == "if_statement" || parentKind == "for_statement" ||
-			parentKind == "expression_switch_statement" || parentKind == "type_switch_statement" ||
-			parentKind == "select_statement"))
-}
-
-func detectBlockIndent(node *tree_sitter.Node, src []byte) string {
-	// Look at the first line inside the block to detect indentation
-	start := node.StartByte()
-	end := node.EndByte()
-	if start >= end {
-		return "    "
-	}
-	body := string(src[start:end])
+// collapseBlocks collapses control-flow blocks inside a symbol body.
+func collapseBlocks(body string) string {
 	lines := strings.Split(body, "\n")
-	for _, line := range lines[1:] { // skip first line (might be '{')
+	var out []string
+
+	cfKeywords := []string{"if ", "if(", "for ", "for(", "while ", "while(", "switch ", "switch(",
+		"try ", "try{", "catch ", "catch(", "else ", "else{", "select ", "select{",
+		"match ", "match{"}
+
+	i := 0
+	for i < len(lines) {
+		line := lines[i]
 		trimmed := strings.TrimSpace(line)
-		if trimmed != "" && trimmed != "}" && trimmed != "end" {
-			ws := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			return ws
+
+		// Check if this line starts a control-flow block
+		isCF := false
+		for _, kw := range cfKeywords {
+			if strings.HasPrefix(trimmed, kw) {
+				isCF = true
+				break
+			}
+		}
+
+		if isCF && strings.Contains(line, "{") {
+			// Emit the header line, then skip the body
+			out = append(out, line)
+			depth := 0
+			for j := i; j < len(lines); j++ {
+				for _, ch := range lines[j] {
+					if ch == '{' {
+						depth++
+					} else if ch == '}' {
+						depth--
+					}
+				}
+				if depth <= 0 && j > i {
+					indent := extractLeadingWS(line)
+					out = append(out, indent+"\t...")
+					out = append(out, lines[j]) // closing }
+					i = j + 1
+					break
+				}
+			}
+			if depth > 0 {
+				// Never closed — just output remaining lines
+				out = append(out, lines[i:]...)
+				break
+			}
+		} else {
+			out = append(out, line)
+			i++
 		}
 	}
-	return "    "
+
+	return strings.Join(out, "\n")
 }
 
-func detectIndentOfNextLine(s string) string {
-	for _, line := range strings.Split(s, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" {
-			return line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+// mergeCollapses merges overlapping collapse ranges, keeping outermost.
+func mergeCollapses(collapses []collapse) []collapse {
+	if len(collapses) == 0 {
+		return nil
+	}
+	// Since symbols are already ordered by start line, just merge overlaps
+	merged := []collapse{collapses[0]}
+	for _, c := range collapses[1:] {
+		last := &merged[len(merged)-1]
+		if c.start <= last.end+1 {
+			if c.end > last.end {
+				last.end = c.end
+			}
+		} else {
+			merged = append(merged, c)
 		}
 	}
-	return "    "
+	return merged
+}
+
+type collapse struct{ start, end int }
+
+func extractLeadingWS(line string) string {
+	for i, ch := range line {
+		if ch != ' ' && ch != '\t' {
+			return line[:i]
+		}
+	}
+	return line
 }

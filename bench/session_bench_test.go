@@ -161,37 +161,6 @@ func TestSessionMultiLang(t *testing.T) {
 		}
 	})
 
-	// Phase 5: Explore and refs — semantic analysis
-	t.Run("explore/python_gather", func(t *testing.T) {
-		out := handleDoJSON(t, ctx, db, sess, "refs", []string{"_execute_task"}, map[string]any{
-			"body": true, "budget": 1500,
-		})
-		assertJSONHas(t, out, "symbol")
-	})
-
-	t.Run("explore/go_callers_deps", func(t *testing.T) {
-		out := handleDoJSON(t, ctx, db, sess, "refs", []string{"internal/queue.go", "Dequeue"}, map[string]any{
-			"callers": true, "deps": true, "body": true,
-		})
-		// refs returns {symbol, body, callers, deps}
-		assertJSONHas(t, out, "symbol")
-	})
-
-	t.Run("refs/cross_file", func(t *testing.T) {
-		// Scope to Go's TaskQueue to avoid ambiguity with Rust/Ruby
-		out := handleDoJSON(t, ctx, db, sess, "refs", []string{"internal/queue.go", "TaskQueue"}, nil)
-		if len(out) < 20 {
-			t.Errorf("refs TaskQueue: too short response: %d bytes", len(out))
-		}
-	})
-
-	t.Run("refs/chain", func(t *testing.T) {
-		out := handleDoJSON(t, ctx, db, sess, "refs", []string{"Scheduler"}, map[string]any{"chain": "_execute_task"})
-		if len(out) < 10 {
-			t.Errorf("refs chain: too short response: %d bytes", len(out))
-		}
-	})
-
 	// Phase 6: Edits across multiple languages (dry-run to keep testdata clean)
 	edits := []struct {
 		file    string
@@ -258,16 +227,6 @@ func TestSessionMultiLang(t *testing.T) {
 		json.Unmarshal(out, &m)
 		if status, _ := m["status"].(string); status != "dry_run" {
 			t.Errorf("edit_in_symbol should be dry_run, got %q", status)
-		}
-	})
-
-	// Phase 6c: Refs --impact
-	t.Run("refs/impact", func(t *testing.T) {
-		out := handleDoJSON(t, ctx, db, sess, "refs", []string{"_execute_task"}, map[string]any{
-			"impact": true,
-		})
-		if len(out) < 10 {
-			t.Errorf("refs impact: too short: %d bytes", len(out))
 		}
 	})
 
@@ -434,12 +393,6 @@ func BenchmarkSessionWorkflow(b *testing.B) {
 		result, _ := dispatch.Dispatch(ctx, db, "search", []string{"enqueue"}, map[string]any{"body": true, "budget": 500})
 		data, _ := json.Marshal(result)
 		text := sess.PostProcess("search", []string{"enqueue"}, map[string]any{"body": true, "budget": 500}, result, string(data))
-		totalBytes += len(text)
-
-		// Explore
-		result, _ = dispatch.Dispatch(ctx, db, "refs", []string{"_execute_task"}, map[string]any{"gather": true, "body": true, "budget": 1500})
-		data, _ = json.Marshal(result)
-		text = sess.PostProcess("refs", []string{"_execute_task"}, map[string]any{"gather": true, "body": true, "budget": 1500}, result, string(data))
 		totalBytes += len(text)
 
 		// Edit + revert

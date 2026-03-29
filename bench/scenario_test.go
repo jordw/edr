@@ -209,26 +209,6 @@ func TestScenarioDispatch(t *testing.T) {
 		t.Logf("read_symbol: %dB name=%s", len(out), result.Symbol)
 	})
 
-	t.Run("find_refs", func(t *testing.T) {
-		var s ScenarioRefs
-		if err := scenario.GetScenario("find_refs", &s); err != nil {
-			t.Fatal(err)
-		}
-		out, err := dispatchJSON(ctx, db, "refs", s.Args, nil)
-		if err != nil {
-			t.Fatalf("dispatch: %v", err)
-		}
-		var result struct {
-			Symbol     struct{ Name string } `json:"symbol"`
-			References []json.RawMessage     `json:"references"`
-		}
-		json.Unmarshal(out, &result)
-		if result.Symbol.Name == "" {
-			t.Error("refs should return a symbol definition")
-		}
-		t.Logf("find_refs: %dB symbol=%s refs=%d", len(out), result.Symbol.Name, len(result.References))
-	})
-
 	t.Run("search_context", func(t *testing.T) {
 		var s ScenarioSearch
 		if err := scenario.GetScenario("search_context", &s); err != nil {
@@ -327,33 +307,6 @@ func TestScenarioDispatch(t *testing.T) {
 		t.Logf("multi_file_read: %dB files=%d/%d", len(out), len(results), len(s.Files))
 	})
 
-	t.Run("explore_symbol", func(t *testing.T) {
-		var s ScenarioExplore
-		if err := scenario.GetScenario("explore_symbol", &s); err != nil {
-			t.Fatal(err)
-		}
-		out, err := dispatchJSON(ctx, db, "refs", s.Args, map[string]any{
-			"body":    true,
-			"callers": true,
-			"deps":    true,
-		})
-		if err != nil {
-			t.Fatalf("dispatch: %v", err)
-		}
-		var result struct {
-			Symbol struct{ Name string } `json:"symbol"`
-			Body   string                `json:"content"`
-		}
-		json.Unmarshal(out, &result)
-		if result.Symbol.Name == "" {
-			t.Error("explore should return a symbol")
-		}
-		if result.Body == "" {
-			t.Error("explore with --body should return body content")
-		}
-		t.Logf("explore_symbol: %dB symbol=%s body=%dB", len(out), result.Symbol.Name, len(result.Body))
-	})
-
 	t.Run("edit_fuzzy", func(t *testing.T) {
 		var s ScenarioEdit
 		if err := scenario.GetScenario("edit_fuzzy", &s); err != nil {
@@ -430,23 +383,6 @@ func TestScenarioDispatch(t *testing.T) {
 			t.Error("rename should find occurrences")
 		}
 		t.Logf("rename_symbol: %dB %s->%s occurrences=%d", len(out), result.OldName, result.NewName, result.Occurrences)
-	})
-
-	t.Run("refs_impact", func(t *testing.T) {
-		var s ScenarioRefsImpact
-		if err := scenario.GetScenario("refs_impact", &s); err != nil {
-			t.Fatal(err)
-		}
-		out, err := dispatchJSON(ctx, db, "refs", s.Args, map[string]any{
-			"impact": true,
-		})
-		if err != nil {
-			t.Fatalf("dispatch: %v", err)
-		}
-		if len(out) < 10 {
-			t.Error("refs_impact should return non-trivial output")
-		}
-		t.Logf("refs_impact: %dB", len(out))
 	})
 
 	t.Run("read_lines", func(t *testing.T) {

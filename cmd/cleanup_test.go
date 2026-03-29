@@ -55,31 +55,6 @@ func TestCleanEdrDir_DeadPpidRemoved(t *testing.T) {
 	}
 }
 
-func TestCleanEdrDir_StaleRunBaselinesRemoved(t *testing.T) {
-	edrDir := t.TempDir()
-	runDir := filepath.Join(edrDir, "delta")
-	os.MkdirAll(runDir, 0755)
-
-	// Fresh baseline — should survive
-	fresh := filepath.Join(runDir, "abc123.last")
-	os.WriteFile(fresh, []byte("output"), 0644)
-
-	// Stale baseline — should be removed
-	stale := filepath.Join(runDir, "def456.last")
-	os.WriteFile(stale, []byte("old output"), 0644)
-	old := time.Now().Add(-8 * 24 * time.Hour)
-	os.Chtimes(stale, old, old)
-
-	cleanEdrDir(edrDir)
-
-	if _, err := os.Stat(fresh); err != nil {
-		t.Error("fresh run baseline should not be removed")
-	}
-	if _, err := os.Stat(stale); err == nil {
-		t.Error("stale run baseline should be removed")
-	}
-}
-
 func TestMaybeCleanEdrDir_RateLimited(t *testing.T) {
 	edrDir := t.TempDir()
 	sessDir := filepath.Join(edrDir, "sessions")

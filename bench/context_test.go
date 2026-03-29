@@ -110,7 +110,7 @@ func TestResponseSizeRegression(t *testing.T) {
 			cmd:      "read",
 			args:     []string{"lib/scheduler.py", "_execute_task"},
 			flags:    map[string]any{"depth": 2},
-			maxBytes: 800, // actual ~555B
+			maxBytes: 2500, // regex-based skeleton is less aggressive than tree-sitter
 		},
 		{
 			name:     "multi-file read with budget",
@@ -227,28 +227,6 @@ func TestResponseSizeRegression(t *testing.T) {
 			args:     []string{"lib/scheduler.py"},
 			flags:    map[string]any{"append": true, "content": "# appended", "dry_run": true},
 			maxBytes: 500, // actual ~280B
-		},
-		// --- Refs gates ---
-		{
-			name:     "refs chain",
-			cmd:      "refs",
-			args:     []string{"Scheduler"},
-			flags:    map[string]any{"chain": "_execute_task"},
-			maxBytes: 300, // actual ~102B
-		},
-		{
-			name:     "refs impact",
-			cmd:      "refs",
-			args:     []string{"_execute_task"},
-			flags:    map[string]any{"impact": true},
-			maxBytes: 1500, // actual ~1349B (BFS depth 3 finds transitive callers)
-		},
-		{
-			name:     "explore gather",
-			cmd:      "refs",
-			args:     []string{"_execute_task"},
-			flags:    map[string]any{"gather": true, "body": true, "budget": 1500},
-			maxBytes: 8000, // actual ~405B but gather with body can grow
 		},
 		// --- Rename gates ---
 		{

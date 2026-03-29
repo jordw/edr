@@ -137,7 +137,6 @@ type doRename struct {
 	OldName string   `json:"old_name"`
 	NewName string   `json:"new_name"`
 	DryRun  *bool    `json:"dry_run,omitempty"`
-	Text    *bool    `json:"text,omitempty"`
 	Word    *bool    `json:"word,omitempty"`
 	Include []string `json:"include,omitempty"`
 	Exclude []string `json:"exclude,omitempty"`
@@ -146,12 +145,11 @@ type doRename struct {
 
 // Batch known-key sets — derived from the canonical registry in cmdspec.
 var (
-	doKnownKeys      = cmdspec.DoBatchKeys()
-	doQueryKnownKeys = cmdspec.QueryBatchKeys()
-	doEditKnownKeys  = cmdspec.EditBatchKeys()
-	doWriteKnownKeys = cmdspec.WriteBatchKeys()
+	doKnownKeys       = cmdspec.DoBatchKeys()
+	doEditKnownKeys   = cmdspec.EditBatchKeys()
+	doWriteKnownKeys  = cmdspec.WriteBatchKeys()
 	doRenameKnownKeys = cmdspec.RenameBatchKeys()
-	doReadKnownKeys  = cmdspec.ReadBatchKeys()
+	doReadKnownKeys   = cmdspec.ReadBatchKeys()
 )
 
 // checkSubObjectFields validates fields in JSON sub-objects and returns warnings.
@@ -201,7 +199,7 @@ func parseDo(raw json.RawMessage) (doParams, []string, error) {
 			}
 		}
 		for section, known := range map[string]map[string]bool{
-			"reads": doReadKnownKeys, "queries": doQueryKnownKeys,
+			"reads": doReadKnownKeys,
 			"edits": doEditKnownKeys, "writes": doWriteKnownKeys,
 			"renames": doRenameKnownKeys,
 		} {
@@ -683,9 +681,6 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 			renameFlags := map[string]any{}
 			if r.DryRun != nil && *r.DryRun {
 				renameFlags["dry_run"] = true
-			}
-			if r.Text != nil && *r.Text {
-				renameFlags["text"] = true
 			}
 			if r.Word != nil && *r.Word {
 				renameFlags["word"] = true

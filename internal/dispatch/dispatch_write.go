@@ -213,12 +213,9 @@ func runInsertInside(ctx context.Context, db index.SymbolStore, root string, fil
 		return nil, fmt.Errorf("symbol %q is a %s, not a container type (class/struct/impl/module)", containerName, container.Type)
 	}
 
-	// Determine language config
-	cfg := index.GetLangConfig(container.File)
-
 	// Languages with MethodsOutside (Go): --inside adds fields, not methods.
 	// Auto-reroute methods to --after.
-	if cfg != nil && cfg.MethodsOutside && (container.Type == "struct" || container.Type == "type") {
+	if index.LangMethodsOutside(container.File) && (container.Type == "struct" || container.Type == "type") {
 		if result, err := rerouteGoMethod(ctx, db, container, content, flags); result != nil || err != nil {
 			return result, err
 		}
@@ -237,7 +234,7 @@ func runInsertInside(ctx context.Context, db index.SymbolStore, root string, fil
 	}
 
 	// Find insertion point: just before the closing delimiter
-	insertByte, baseIndent, err := findContainerInsertionPoint(data, container, cfg)
+	insertByte, baseIndent, err := findContainerInsertionPoint(data, container, container.File)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +246,7 @@ func runInsertInside(ctx context.Context, db index.SymbolStore, root string, fil
 	// Determine separator: brace languages insert before closing brace,
 	// indent/keyword languages insert after the last line of the body.
 	insertion := indentedContent + "\n"
-	if cfg != nil && cfg.Container != index.ContainerBrace {
+	if index.LangContainer(container.File) != index.ContainerBrace {
 		insertion = "\n" + indentedContent + "\n"
 	}
 
@@ -351,15 +348,10 @@ func insertInsideAfterChild(ctx context.Context, db index.SymbolStore, container
 
 // findContainerInsertionPoint finds the byte offset just before the closing delimiter
 // of a container symbol, and returns the base indentation for content inside it.
-func findContainerInsertionPoint(data []byte, container *index.SymbolInfo, cfg *index.LangConfig) (int, string, error) {
+func findContainerInsertionPoint(data []byte, container *index.SymbolInfo, filePath string) (int, string, error) {
 	body := data[container.StartByte:container.EndByte]
 
-	style := index.ContainerBrace
-	if cfg != nil {
-		style = cfg.Container
-	}
-
-	switch style {
+	switch index.LangContainer(filePath) {
 	case index.ContainerIndent:
 		// Indentation-based (Python). Insert at end of container body.
 		containerIndent := detectIndentAt(data, container.StartByte)
@@ -385,9 +377,9 @@ func findContainerInsertionPoint(data []byte, container *index.SymbolInfo, cfg *
 
 	case index.ContainerKeyword:
 		// Keyword-delimited (Ruby, Lua). Find the last occurrence of the closing keyword.
-		closeToken := "end"
-		if cfg != nil && cfg.ContainerClose != "" {
-			closeToken = cfg.ContainerClose
+		closeToken := index.LangContainerClose(filePath)
+		if closeToken == "" {
+			closeToken = "end"
 		}
 		endIdx := strings.LastIndex(string(body), closeToken)
 		if endIdx < 0 {

@@ -1076,7 +1076,7 @@ func firstString(m map[string]any, keys ...string) string {
 // --- Level 3: Body tracking ---
 
 func (s *Session) TrackBodies(result map[string]any, cmd string) {
-	// Track top-level content — check both "content" (read results) and "body" (gather/refs)
+	// Track top-level content — check both "content" (read results) and "body" (gather)
 	if body := firstString(result, "content", "body"); body != "" {
 		file, _ := result["file"].(string)
 		name := ""
@@ -1124,7 +1124,7 @@ func (s *Session) StripSeenBodies(result map[string]any, cmd string) {
 	var skipped []string
 
 	switch cmd {
-	case "gather", "refs":
+	case "gather":
 		if body, ok := result["target_body"].(string); ok && body != "" {
 			if target, ok := result["target"].(map[string]any); ok {
 				file, _ := target["file"].(string)
@@ -1272,14 +1272,14 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 		}
 	}
 
-	// Level 2b: Content-hash session tracking for search/map/refs
+	// Level 2b: Content-hash session tracking for search/map
 	// Hash the visible payload and return "unchanged" if agent already has it.
-	if cmd == "search" || cmd == "map" || cmd == "refs" {
+	if cmd == "search" || cmd == "map" {
 		cacheKey := s.CacheKey(cmd, args, flags)
 		status, _ := s.CheckContent(cacheKey, text, false)
 		if status == "unchanged" {
 			s.stats.DeltaReads++
-			// Mark as unchanged but preserve the full body — search/map/refs
+			// Mark as unchanged but preserve the full body — search/map
 			// results are already budget-capped and agents need to re-reference
 			// results after context compression.
 			m["session"] = "unchanged"
@@ -1293,7 +1293,7 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 	}
 
 	// Level 3: Strip seen bodies from gather/search.
-	willStrip := cmd == "gather" || (cmd == "search" && FlagIsTruthy(flags, "body")) || (cmd == "refs" && FlagIsTruthy(flags, "body"))
+	willStrip := cmd == "gather" || (cmd == "search" && FlagIsTruthy(flags, "body"))
 	if cmdspec.IsBodyTrack(cmd) && !willStrip {
 		s.TrackBodies(m, cmd)
 	}
