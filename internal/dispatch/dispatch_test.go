@@ -185,10 +185,10 @@ func TestDispatchMulti_GlobalMutatingIsSequential(t *testing.T) {
 	output.SetRoot(db.Root())
 	ctx := context.Background()
 	defer db.Close()
-	// Mix of init (global-mutating) and read — should run sequentially
+	// Mix of undo (global-mutating) and read — should run sequentially
 	commands := []dispatch.MultiCmd{
 		{Cmd: "read", Args: []string{"a.go"}},
-		{Cmd: "rename", Args: []string{"nonexistent", "other"}},
+		{Cmd: "undo", Args: nil},
 		{Cmd: "read", Args: []string{"a.go"}},
 	}
 
@@ -196,10 +196,12 @@ func TestDispatchMulti_GlobalMutatingIsSequential(t *testing.T) {
 	if len(results) != 3 {
 		t.Fatalf("expected 3 results, got %d", len(results))
 	}
-	for i, r := range results {
-		if !r.OK {
-			t.Errorf("result %d (%s): expected ok=true, got error=%q", i, commands[i].Cmd, r.Error)
-		}
+	// undo may error (nothing to undo), but the point is sequencing
+	if !results[0].OK {
+		t.Errorf("result 0 (read): expected ok=true, got error=%q", results[0].Error)
+	}
+	if !results[2].OK {
+		t.Errorf("result 2 (read): expected ok=true, got error=%q", results[2].Error)
 	}
 }
 
@@ -437,19 +439,7 @@ func TestFlagNormalization_DryRunUnderscore(t *testing.T) {
 		t.Fatalf("edit dry_run modified file!\nexpected: %q\ngot:     %q", original, string(data))
 	}
 
-	// Test rename with dry_run (underscore)
-	_, err = dispatch.Dispatch(ctx, db, "rename", []string{"hello", "goodbye"}, map[string]any{
-		"dry_run": true,
-	})
-	if err != nil {
-		t.Fatalf("rename with dry_run: %v", err)
-	}
-	data, _ = os.ReadFile(goFile)
-	if string(data) != original {
-		t.Fatalf("rename dry_run modified file!\nexpected: %q\ngot:     %q", original, string(data))
-	}
-
-	// Test edit with dry_run (underscore)
+	// Test edit with dry_run (underscore) — second edit
 	_, err = dispatch.Dispatch(ctx, db, "edit", []string{"main.go"}, map[string]any{
 		"old_text": "func hello()",
 		"new_text": "func goodbye()",
@@ -597,42 +587,6 @@ func world() {
 		t.Errorf("signatures content (%d) should be smaller than full content (%d)", len(content), len(fullContent))
 	}
 }
-
-func TestSearchEmptyPatternReturnsError(t *testing.T) {
-	tmp := t.TempDir()
-	goFile := filepath.Join(tmp, "main.go")
-	if err := os.WriteFile(goFile, []byte("package main\n\nfunc hello() {}\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	db := index.NewOnDemand(tmp)
-	output.SetRoot(db.Root())
-	ctx := context.Background()
-	defer db.Close()
-	// Symbol search with empty pattern
-	_, err := dispatch.Dispatch(ctx, db, "search", []string{""}, nil)
-	if err == nil {
-		t.Fatal("expected error for empty search pattern, got nil")
-	}
-	if !strings.Contains(err.Error(), "non-empty") {
-		t.Fatalf("expected error about non-empty pattern, got: %v", err)
-	}
-
-	// Text search with empty pattern
-	_, err = dispatch.Dispatch(ctx, db, "search", []string{""}, map[string]any{"text": true})
-	if err == nil {
-		t.Fatal("expected error for empty text search pattern, got nil")
-	}
-	if !strings.Contains(err.Error(), "non-empty") {
-		t.Fatalf("expected error about non-empty pattern, got: %v", err)
-	}
-
-	// No args at all
-	_, err = dispatch.Dispatch(ctx, db, "search", []string{}, nil)
-	if err == nil {
-		t.Fatal("expected error for missing search pattern, got nil")
-	}
-}
-
 
 func TestSearchLimit(t *testing.T) {
 	tmp := t.TempDir()
@@ -1161,42 +1115,6 @@ func TestEditEmptyNewTextRequiresEditMode(t *testing.T) {
 	}
 }
 
-func TestRenameDryRunIncludesDiffs(t *testing.T) {
-	tmp := t.TempDir()
-	goFile := filepath.Join(tmp, "main.go")
-	os.WriteFile(goFile, []byte("package main\n\nfunc OldName() {}\n\nfunc caller() { OldName() }\n"), 0644)
-	db := index.NewOnDemand(tmp)
-	defer db.Close()
-	ctx := context.Background()
-	output.SetRoot(db.Root())
-
-	result, err := dispatch.Dispatch(ctx, db, "rename", []string{"OldName", "NewName"}, map[string]any{
-		"dry_run": true,
-	})
-	if err != nil {
-		t.Fatalf("rename dry-run: %v", err)
-	}
-	raw, _ := json.Marshal(result)
-	var rr output.RenameResult
-	json.Unmarshal(raw, &rr)
-
-	if rr.Status != "dry_run" {
-		t.Errorf("expected dry_run, got %s", rr.Status)
-	}
-	if len(rr.Diffs) == 0 {
-		t.Fatal("dry-run rename should include diffs")
-	}
-	if !strings.Contains(rr.Diffs[0].Diff, "OldName") || !strings.Contains(rr.Diffs[0].Diff, "NewName") {
-		t.Errorf("diff should show old and new names:\n%s", rr.Diffs[0].Diff)
-	}
-
-	// Verify file was NOT modified (dry-run)
-	data, _ := os.ReadFile(goFile)
-	if strings.Contains(string(data), "NewName") {
-		t.Error("dry-run should not modify the file")
-	}
-}
-
 // TestSourceCacheReducesReads verifies that WithSourceCache prevents redundant reads.
 func TestSourceCacheReducesReads(t *testing.T) {
 	tmp := t.TempDir()
@@ -1258,55 +1176,6 @@ func TestReadSymbol_SignaturesOnFunction_ReturnsError(t *testing.T) {
 }
 
 // --- Default budget on search/map ---
-
-func TestSearch_DefaultBudgetApplied(t *testing.T) {
-	tmp := t.TempDir()
-	// Create enough files to exceed 2000 tokens if unbounded
-	for i := 0; i < 50; i++ {
-		name := fmt.Sprintf("file%d.go", i)
-		content := fmt.Sprintf("package main\n\nfunc Handler%d() {\n\t// handler implementation %d\n}\n", i, i)
-		os.WriteFile(filepath.Join(tmp, name), []byte(content), 0644)
-	}
-
-	db := index.NewOnDemand(tmp)
-	ctx := context.Background()
-	defer db.Close()
-	output.SetRoot(db.Root())
-
-	// Search without --budget or --full: should apply default cap
-	result, err := dispatch.Dispatch(ctx, db, "search", []string{"Handler"}, map[string]any{})
-	if err != nil {
-		t.Fatalf("search: %v", err)
-	}
-
-	data, _ := json.Marshal(result)
-	if len(data) > 20000 {
-		t.Errorf("search without budget should be capped, got %d bytes", len(data))
-	}
-}
-
-func TestSearch_FullBypassesDefaultBudget(t *testing.T) {
-	tmp := t.TempDir()
-	for i := 0; i < 10; i++ {
-		name := fmt.Sprintf("file%d.go", i)
-		content := fmt.Sprintf("package main\n\nfunc Handler%d() {}\n", i)
-		os.WriteFile(filepath.Join(tmp, name), []byte(content), 0644)
-	}
-
-	db := index.NewOnDemand(tmp)
-	ctx := context.Background()
-	defer db.Close()
-	output.SetRoot(db.Root())
-
-	// With --full, no default budget
-	result, err := dispatch.Dispatch(ctx, db, "search", []string{"Handler"}, map[string]any{"full": true})
-	if err != nil {
-		t.Fatalf("search --full: %v", err)
-	}
-	if result == nil {
-		t.Fatal("expected non-nil result")
-	}
-}
 
 func TestRead_DefaultBudgetCap(t *testing.T) {
 	tmp := t.TempDir()

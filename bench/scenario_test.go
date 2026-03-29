@@ -209,29 +209,6 @@ func TestScenarioDispatch(t *testing.T) {
 		t.Logf("read_symbol: %dB name=%s", len(out), result.Symbol)
 	})
 
-	t.Run("search_context", func(t *testing.T) {
-		var s ScenarioSearch
-		if err := scenario.GetScenario("search_context", &s); err != nil {
-			t.Fatal(err)
-		}
-		out, err := dispatchJSON(ctx, db, "search", []string{s.Pattern}, map[string]any{
-			"text":   true,
-			"budget": s.Budget,
-		})
-		if err != nil {
-			t.Fatalf("dispatch: %v", err)
-		}
-		var result struct {
-			Matches      []json.RawMessage `json:"matches"`
-			TotalMatches int               `json:"total_matches"`
-		}
-		json.Unmarshal(out, &result)
-		if result.TotalMatches == 0 {
-			t.Errorf("search for %q should find matches", s.Pattern)
-		}
-		t.Logf("search_context: %dB matches=%d", len(out), result.TotalMatches)
-	})
-
 	t.Run("orient_map", func(t *testing.T) {
 		var s ScenarioMap
 		if err := scenario.GetScenario("orient_map", &s); err != nil {
@@ -356,33 +333,6 @@ func TestScenarioDispatch(t *testing.T) {
 			t.Errorf("edit_in_symbol should be dry_run, got %q", result.Status)
 		}
 		t.Logf("edit_in_symbol: %dB file=%s", len(out), result.File)
-	})
-
-	t.Run("rename_symbol", func(t *testing.T) {
-		var s ScenarioRename
-		if err := scenario.GetScenario("rename_symbol", &s); err != nil {
-			t.Fatal(err)
-		}
-		out, err := dispatchJSON(ctx, db, "rename", []string{s.OldName, s.NewName}, map[string]any{
-			"dry_run": true,
-		})
-		if err != nil {
-			t.Fatalf("dispatch: %v", err)
-		}
-		var result struct {
-			OldName     string `json:"old_name"`
-			NewName     string `json:"new_name"`
-			Occurrences int    `json:"occurrences"`
-			Status      string `json:"status"`
-		}
-		json.Unmarshal(out, &result)
-		if result.Status != "dry_run" {
-			t.Errorf("rename should be dry_run, got %q", result.Status)
-		}
-		if result.Occurrences == 0 {
-			t.Error("rename should find occurrences")
-		}
-		t.Logf("rename_symbol: %dB %s->%s occurrences=%d", len(out), result.OldName, result.NewName, result.Occurrences)
 	})
 
 	t.Run("read_lines", func(t *testing.T) {

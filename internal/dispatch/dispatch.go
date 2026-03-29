@@ -13,7 +13,6 @@ import (
 	"github.com/jordw/edr/internal/edit"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
-	"github.com/jordw/edr/internal/search"
 )
 
 var setRootOnce sync.Once
@@ -70,13 +69,9 @@ func Dispatch(ctx context.Context, db index.SymbolStore, cmd string, args []stri
 		} else {
 			result, err = runSmartEdit(ctx, db, root, args, flags)
 		}
+	// --- Internal: used by edit routing and auto-verify ---
 	case "write":
 		result, err = runWriteUnified(ctx, db, root, args, flags)
-	// --- Internal commands (still work, not promoted) ---
-	case "search":
-		result, err = runSearchUnified(ctx, db, args, flags)
-	case "rename":
-		result, err = runRename(ctx, db, root, args, flags)
 	case "verify":
 		result, err = runVerify(ctx, db, root, args, flags)
 	default:
@@ -267,6 +262,78 @@ func runWriteUnified(ctx context.Context, db index.SymbolStore, root string, arg
 //	map                                → repo-map
 //	map dir/                           → repo-map scoped to dir
 //	map file.go                        → symbols
+const defaultMapBudget = 4000
+
+func runRepoMap(ctx context.Context, db index.SymbolStore, flags map[string]any) (any, error) {
+	var opts []index.RepoMapOption
+	if dir := flagString(flags, "dir", ""); dir != "" {
+		opts = append(opts, index.WithDir(dir))
+	}
+	if glob := flagString(flags, "glob", ""); glob != "" {
+		opts = append(opts, index.WithGlob(glob))
+	}
+	if symType := flagString(flags, "type", ""); symType != "" {
+		opts = append(opts, index.WithSymbolType(symType))
+	}
+	if grep := flagString(flags, "grep", ""); grep != "" {
+		opts = append(opts, index.WithGrep(grep))
+	}
+	if lang := flagString(flags, "lang", ""); lang != "" {
+		opts = append(opts, index.WithLang(lang))
+	}
+	if search := flagString(flags, "search", ""); search != "" {
+		opts = append(opts, index.WithSearch(search))
+	}
+	if !flagBool(flags, "locals", false) {
+		opts = append(opts, index.WithHideLocals())
+	}
+	budget := flagInt(flags, "budget", 0)
+	if budget == 0 && !flagBool(flags, "full", false) {
+		budget = defaultMapBudget
+	}
+	if budget > 0 {
+		opts = append(opts, index.WithBudget(budget))
+	}
+	_, stats, err := index.RepoMap(ctx, db, opts...)
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]any{
+		"files":     stats.TotalFiles,
+		"symbols":   stats.TotalSymbols,
+		"content":   stats.Files,
+		"truncated": stats.Truncated,
+	}
+	if stats.TotalFiles == 0 && stats.TotalSymbols == 0 {
+		grep := flagString(flags, "grep", "")
+		dir := flagString(flags, "dir", "")
+		lang := flagString(flags, "lang", "")
+		symType := flagString(flags, "type", "")
+		if grep != "" || dir != "" || lang != "" || symType != "" {
+			parts := []string{}
+			if grep != "" { parts = append(parts, "--grep "+grep) }
+			if dir != "" { parts = append(parts, "--dir "+dir) }
+			if lang != "" { parts = append(parts, "--lang "+lang) }
+			if symType != "" { parts = append(parts, "--type "+symType) }
+			result["hint"] = "no symbols matched filters: " + strings.Join(parts, ", ")
+		}
+	}
+	if stats.Truncated {
+		result["shown_files"] = stats.ShownFiles
+		result["shown_symbols"] = stats.ShownSymbols
+		result["hint"] = "use --dir, --type, --lang, or --grep to narrow scope"
+		if stats.BudgetUsed > 0 {
+			result["budget_used"] = stats.BudgetUsed
+		}
+		if len(stats.DirSummary) > 0 {
+			result["content"] = nil
+			result["dirs"] = stats.DirSummary
+			result["hint"] = "repo too large for full map; use --dir <name> to drill into a directory"
+		}
+	}
+	return result, nil
+}
+
 func runMapUnified(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) > 0 {
 		// If the arg is a directory, treat it as --dir for repo-map
@@ -286,58 +353,6 @@ func runMapUnified(ctx context.Context, db index.SymbolStore, root string, args 
 	return runRepoMap(ctx, db, flags)
 }
 
-// runSearchUnified routes to symbol search or text search based on flags.
-//
-//	search pattern                     → symbol search
-//	search pattern --text              → text search
-//	search pattern --regex             → text search (auto-detected)
-//	search pattern --include "*.go"    → text search (auto-detected)
-func runSearchUnified(ctx context.Context, db index.SymbolStore, args []string, flags map[string]any) (any, error) {
-	// --lines: parse line range and set start_line/end_line for text search filtering
-	if linesSpec := flagString(flags, "lines", ""); linesSpec != "" {
-		if start, end, err := parseColonRange(linesSpec); err == nil {
-			flags["start_line"] = start
-			flags["end_line"] = end
-		}
-	}
-
-	// --in implies text search scoped to a symbol body
-	if inSpec := flagString(flags, "in", ""); inSpec != "" {
-		return runSearchInSymbol(ctx, db, args, flags, inSpec)
-	}
-
-	isText := flagBool(flags, "text", false) ||
-		flagBool(flags, "regex", false) ||
-		flagString(flags, "include", "") != "" || len(flagStringSlice(flags, "include")) > 0 ||
-		flagString(flags, "exclude", "") != "" || len(flagStringSlice(flags, "exclude")) > 0 ||
-		flagInt(flags, "context", 0) > 0 ||
-		flagInt(flags, "start_line", 0) > 0
-
-	if isText {
-		return runSearchText(ctx, db, args, flags)
-	}
-	result, err := runSearch(ctx, db, args, flags)
-	if err != nil {
-		return nil, err
-	}
-	// Auto-fallback: if symbol search returned nothing, retry as text search
-	if sr, ok := result.(*search.SearchResult); ok && len(sr.Matches) == 0 {
-		textResult, textErr := runSearchText(ctx, db, args, flags)
-		if textErr != nil {
-			return result, nil // return empty symbol result on text error
-		}
-		// If text search found something, return it with a hint
-		if m, ok := textResult.(map[string]any); ok {
-			if n, _ := m["total_matches"].(int); n > 0 {
-				m["hint"] = fmt.Sprintf("no literal matches; auto-retried with regex (%d matches)", n)
-				return m, nil
-			}
-		}
-	}
-	return result, nil
-}
-
-// runExploreUnified routes to expand or gather based on flags.
 // MultiCmd represents a single command in a multi-command batch.
 type MultiCmd struct {
 	Cmd   string         `json:"cmd"`

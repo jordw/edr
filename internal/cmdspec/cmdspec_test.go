@@ -57,8 +57,7 @@ func TestBatchKeysNonEmpty(t *testing.T) {
 		"DoBatchKeys":     DoBatchKeys,
 		"ReadBatchKeys":   ReadBatchKeys,
 		"EditBatchKeys":   EditBatchKeys,
-		"WriteBatchKeys":  WriteBatchKeys,
-	} {
+			} {
 		keys := fn()
 		if len(keys) == 0 {
 			t.Errorf("%s returned empty set", name)
@@ -74,10 +73,9 @@ func TestSessionBehaviorFlags(t *testing.T) {
 		deltaRead bool
 		bodyTrack bool
 	}{
-		{"read", false, true, true},
+		{"focus", false, true, true},
 		{"edit", true, false, false},
-		{"search", false, false, true},
-		{"map", false, false, false},
+		{"orient", false, false, false},
 		{"write", false, false, false},
 	}
 	for _, tt := range tests {

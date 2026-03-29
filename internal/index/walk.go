@@ -92,6 +92,7 @@ type repoMapConfig struct {
 	symbolType string // filter to this symbol type
 	grep       string // only include symbols whose name contains this
 	lang       string // filter to files of this language (e.g. "go", "python")
+	search     string // filter to symbols whose body contains this text
 	hideLocals bool   // hide symbols nested inside functions/methods
 	budget     int    // approximate token budget (0 = unlimited)
 }
@@ -127,6 +128,11 @@ func WithHideLocals() RepoMapOption {
 // WithLang filters repo-map to files of the given language.
 func WithLang(lang string) RepoMapOption {
 	return func(c *repoMapConfig) { c.lang = strings.ToLower(lang) }
+}
+
+// WithSearch filters repo-map to symbols whose body contains the given text.
+func WithSearch(pattern string) RepoMapOption {
+	return func(c *repoMapConfig) { c.search = pattern }
 }
 
 // WithBudget sets an approximate token budget for map output.
@@ -319,6 +325,68 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 				byFile[file] = filtered
 			}
 		}
+	}
+
+	// Body-search filter: keep only symbols whose source lines contain the search text.
+	if cfg.search != "" {
+		searchLower := strings.ToLower(cfg.search)
+		caseSensitive := false
+		for _, r := range cfg.search {
+			if r >= 'A' && r <= 'Z' {
+				caseSensitive = true
+				break
+			}
+		}
+		for file, syms := range byFile {
+			data, err := CachedReadFile(ctx, file)
+			if err != nil {
+				delete(byFile, file)
+				continue
+			}
+			lines := strings.Split(string(data), "\n")
+			filtered := syms[:0]
+			for _, s := range syms {
+				start := int(s.StartLine) - 1
+				end := int(s.EndLine)
+				if start < 0 {
+					start = 0
+				}
+				if end > len(lines) {
+					end = len(lines)
+				}
+				found := false
+				for _, line := range lines[start:end] {
+					if caseSensitive {
+						if strings.Contains(line, cfg.search) {
+							found = true
+							break
+						}
+					} else {
+						if strings.Contains(strings.ToLower(line), searchLower) {
+							found = true
+							break
+						}
+					}
+				}
+				if found {
+					filtered = append(filtered, s)
+				}
+			}
+			if len(filtered) == 0 {
+				delete(byFile, file)
+			} else {
+				byFile[file] = filtered
+			}
+		}
+		// Rebuild fileOrder to exclude files with no matching symbols.
+		n := 0
+		for _, f := range fileOrder {
+			if len(byFile[f]) > 0 {
+				fileOrder[n] = f
+				n++
+			}
+		}
+		fileOrder = fileOrder[:n]
 	}
 
 	// Sort files for budget-friendly output: code first, non-test before test, shallower first, alpha

@@ -152,11 +152,9 @@ type doRename struct {
 
 // Batch known-key sets — derived from the canonical registry in cmdspec.
 var (
-	doKnownKeys       = cmdspec.DoBatchKeys()
-	doEditKnownKeys   = cmdspec.EditBatchKeys()
-	doWriteKnownKeys  = cmdspec.WriteBatchKeys()
-	doRenameKnownKeys = cmdspec.RenameBatchKeys()
-	doReadKnownKeys   = cmdspec.ReadBatchKeys()
+	doKnownKeys     = cmdspec.DoBatchKeys()
+	doEditKnownKeys = cmdspec.EditBatchKeys()
+	doReadKnownKeys = cmdspec.ReadBatchKeys()
 )
 
 // checkSubObjectFields validates fields in JSON sub-objects and returns warnings.
@@ -207,8 +205,7 @@ func parseDo(raw json.RawMessage) (doParams, []string, error) {
 		}
 		for section, known := range map[string]map[string]bool{
 			"reads": doReadKnownKeys,
-			"edits": doEditKnownKeys, "writes": doWriteKnownKeys,
-			"renames": doRenameKnownKeys,
+			"edits": doEditKnownKeys,
 		} {
 			if rd, ok := rawMap[section]; ok {
 				warnings = append(warnings, checkSubObjectFields(rd, section, known)...)

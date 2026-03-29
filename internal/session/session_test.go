@@ -881,8 +881,8 @@ func TestPostProcess_EditLargeDiff(t *testing.T) {
 func TestPostProcess_DeltaReadUnchanged(t *testing.T) {
 	s := New()
 	text := `{"content":"hello","file":"f.go","hash":"abc","lines":[1,5]}`
-	s.PostProcess("read", []string{"f.go"}, map[string]any{}, nil, text)
-	result := s.PostProcess("read", []string{"f.go"}, map[string]any{}, nil, text)
+	s.PostProcess("focus", []string{"f.go"}, map[string]any{}, nil, text)
+	result := s.PostProcess("focus", []string{"f.go"}, map[string]any{}, nil, text)
 	if !strings.Contains(result, "unchanged") {
 		t.Error("re-read should return unchanged")
 	}
@@ -1002,8 +1002,8 @@ func TestFlagIsTruthy_NonBool(t *testing.T) {
 // --- Command category maps ---
 
 func TestCommandMaps_Coverage(t *testing.T) {
-	if !ReadCommands["read"] {
-		t.Error("read should be in ReadCommands")
+	if !ReadCommands["focus"] {
+		t.Error("focus should be in ReadCommands")
 	}
 	if !EditCommands["edit"] {
 		t.Error("edit should be in EditCommands")
@@ -1011,11 +1011,11 @@ func TestCommandMaps_Coverage(t *testing.T) {
 	if !DiffEditCommands["edit"] {
 		t.Error("edit should be in DiffEditCommands")
 	}
-	if !DeltaReadCommands["read"] {
-		t.Error("read should be in DeltaReadCommands")
+	if !DeltaReadCommands["focus"] {
+		t.Error("focus should be in DeltaReadCommands")
 	}
-	if !BodyCommands["read"] {
-		t.Error("read should be in BodyCommands")
+	if !BodyCommands["focus"] {
+		t.Error("focus should be in BodyCommands")
 	}
 }
 

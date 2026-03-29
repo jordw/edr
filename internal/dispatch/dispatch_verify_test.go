@@ -52,10 +52,10 @@ func TestGoReverseImporters(t *testing.T) {
 	// Use the real repo root — goReverseImporters shells out to `go list`.
 	root := findRepoRoot(t)
 
-	t.Run("finds importers of internal/search", func(t *testing.T) {
-		edited := map[string]bool{"./internal/search": true}
+	t.Run("finds importers of internal/edit", func(t *testing.T) {
+		edited := map[string]bool{"./internal/edit": true}
 		importers := goReverseImporters(root, edited)
-		// internal/dispatch imports internal/search
+		// internal/dispatch imports internal/edit
 		found := false
 		for _, pkg := range importers {
 			if pkg == "./internal/dispatch" {
@@ -64,7 +64,7 @@ func TestGoReverseImporters(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("expected ./internal/dispatch in importers of ./internal/search, got %v", importers)
+			t.Errorf("expected ./internal/dispatch in importers of ./internal/edit, got %v", importers)
 		}
 	})
 
@@ -85,13 +85,13 @@ func TestGoReverseImporters(t *testing.T) {
 	})
 
 	t.Run("scope includes importers", func(t *testing.T) {
-		flags := map[string]any{"files": []string{"internal/search/search.go"}}
+		flags := map[string]any{"files": []string{"internal/edit/edit.go"}}
 		scope := goVerifyScope(root, flags)
 		if !contains(scope, "./internal/dispatch") {
-			t.Errorf("verify scope should include ./internal/dispatch (importer of internal/search), got %q", scope)
+			t.Errorf("verify scope should include ./internal/dispatch (importer of internal/edit), got %q", scope)
 		}
-		if !contains(scope, "./internal/search") {
-			t.Errorf("verify scope should include ./internal/search (edited package), got %q", scope)
+		if !contains(scope, "./internal/edit") {
+			t.Errorf("verify scope should include ./internal/edit (edited package), got %q", scope)
 		}
 	})
 }

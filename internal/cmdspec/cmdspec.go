@@ -94,6 +94,7 @@ var orientFlags = []FlagSpec{
 	{Name: "type", Type: FlagString, Default: "", Desc: "Filter by symbol type"},
 	{Name: "grep", Type: FlagString, Default: "", Desc: "Filter by name pattern"},
 	{Name: "lang", Type: FlagString, Default: "", Desc: "Filter by language (e.g. go, python, javascript)"},
+	{Name: "search", Type: FlagString, Default: "", Desc: "Filter to symbols whose body contains this text"},
 }
 
 var Registry = []*Spec{
@@ -140,20 +141,9 @@ var Registry = []*Spec{
 			{Name: "no_verify", Type: FlagBool, Default: false, Desc: "Skip auto-verify after edit"},
 		},
 	},
-	// --- Aliases for backward compatibility (hidden from --help) ---
+	// --- Internal commands (dispatch-only, no CLI surface) ---
 	{
-		Name: "map", Desc: "Alias for orient.",
-		Category: CatRead, MinArgs: 0, MaxArgs: 1, Internal: true,
-		Flags: orientFlags,
-	},
-	{
-		Name: "read", Desc: "Alias for focus.",
-		Category: CatRead, MinArgs: 1, MaxArgs: -1, FileScoped: true, Internal: true,
-		DeltaRead: true, BodyTrack: true,
-		Flags: focusFlags,
-	},
-	{
-		Name: "write", Desc: "Alias for edit --content.",
+		Name: "write", Desc: "Internal: used by edit --content routing.",
 		Category: CatWrite, MinArgs: 1, MaxArgs: 1, StdinKey: "content", FileScoped: true, Internal: true,
 		Flags: []FlagSpec{
 			{Name: "mkdir", Type: FlagBool, Default: false, Desc: "Create parent dirs"},
@@ -165,40 +155,13 @@ var Registry = []*Spec{
 		},
 	},
 	{
-		Name: "search", Desc: "Search symbols or text. Auto-detects mode from flags.",
-		Category: CatRead, MinArgs: 1, MaxArgs: 1, Internal: true,
-		BodyTrack: true,
+		Name: "verify", Desc: "Internal: used by edit auto-verify.",
+		Category: CatMeta, MinArgs: 0, MaxArgs: 0, Internal: true,
 		Flags: []FlagSpec{
-			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens (default 2000)"},
-			{Name: "full", Type: FlagBool, Default: false, Desc: "Return full results (no default budget cap)"},
-			{Name: "text", Type: FlagBool, Default: false, Desc: "Text search mode"},
-			{Name: "include", Type: FlagStringSlice, Default: []string(nil), Desc: "File glob(s) to include"},
-			{Name: "exclude", Type: FlagStringSlice, Default: []string(nil), Desc: "File glob(s) to exclude"},
-			{Name: "context", Type: FlagInt, Default: 0, Desc: "Lines of context"},
-			{Name: "limit", Type: FlagInt, Default: 0, Desc: "Max number of results to return"},
-			{Name: "regex", Type: FlagBool, Default: false, Desc: "Use regex matching"},
-			{Name: "body", Type: FlagBool, Default: true, Desc: "Include symbol body in results (use --no-body to suppress)"},
-			{Name: "no_group", Type: FlagBool, Default: false, Desc: "Disable file grouping in text results"},
-			{Name: "in", Type: FlagString, Default: "", Desc: "Search within a symbol body (file:Symbol) or line range (file:N-M)"},
-			{Name: "lines", Type: FlagString, Default: "", Desc: "Line range (e.g. 4200:4260)"},
-		},
-	},
-	{
-		Name: "rename", Desc: "Text-based find-and-replace across repo files. --dry-run to preview.",
-		Category: CatGlobalMutate, MinArgs: 2, MaxArgs: 2, Internal: true,
-		Flags: []FlagSpec{
-			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
-			{Name: "word", Type: FlagBool, Default: false, Desc: "Whole-word matching only"},
-			{Name: "include", Type: FlagStringSlice, Default: []string(nil), Desc: "File glob(s) to include"},
-			{Name: "exclude", Type: FlagStringSlice, Default: []string(nil), Desc: "File glob(s) to exclude"},
-			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens (default 2000 for --dry-run)"},
-		},
-	},
-	{
-		Name: "reset", Desc: "Clean slate: clear session and checkpoints.",
-		Category: CatGlobalMutate, MinArgs: 0, MaxArgs: 0, Internal: true,
-		Flags: []FlagSpec{
-			{Name: "session", Type: FlagBool, Default: false, Desc: "Clear session only (same as default)"},
+			{Name: "command", Type: FlagString, Default: "", Desc: "Custom command"},
+			{Name: "level", Type: FlagString, Default: "", Desc: "Verification level: build (default) or test"},
+			{Name: "test", Type: FlagBool, Default: false, Desc: "Shorthand for --level test"},
+			{Name: "timeout", Type: FlagInt, Default: 0, Desc: "Timeout in seconds"},
 		},
 	},
 	{
@@ -206,16 +169,6 @@ var Registry = []*Spec{
 		Category: CatGlobalMutate, MinArgs: 0, MaxArgs: 0,
 		Flags: []FlagSpec{
 			{Name: "no_save", Type: FlagBool, Default: false, Desc: "Skip pre-restore safety checkpoint"},
-		},
-	},
-	{
-		Name: "verify", Desc: "Run build/typecheck or tests. Auto-detects go/npm/cargo.",
-		Category: CatMeta, MinArgs: 0, MaxArgs: 0, Internal: true,
-		Flags: []FlagSpec{
-			{Name: "command", Type: FlagString, Default: "", Desc: "Custom command (auto-detect if omitted)"},
-			{Name: "level", Type: FlagString, Default: "", Desc: "Verification level: build (default) or test"},
-			{Name: "test", Type: FlagBool, Default: false, Desc: "Shorthand for --level test"},
-			{Name: "timeout", Type: FlagInt, Default: 0, Desc: "Timeout in seconds"},
 		},
 	},
 	{
@@ -364,9 +317,9 @@ func DoBatchKeys() map[string]bool {
 	}
 }
 
-// ReadBatchKeys returns valid keys for doRead batch objects.
+// ReadBatchKeys returns valid keys for doRead/focus batch objects.
 func ReadBatchKeys() map[string]bool {
-	m := flagNames("read")
+	m := flagNames("focus")
 	// Structural args used in batch JSON (not CLI flags).
 	m["file"] = true
 	m["symbol"] = true
@@ -386,20 +339,6 @@ func EditBatchKeys() map[string]bool {
 	return m
 }
 
-// WriteBatchKeys returns valid keys for doWrite batch objects.
-func WriteBatchKeys() map[string]bool {
-	m := flagNames("write")
-	m["file"] = true
-	return m
-}
-
-// RenameBatchKeys returns valid keys for doRename batch objects.
-func RenameBatchKeys() map[string]bool {
-	m := flagNames("rename")
-	m["old_name"] = true
-	m["new_name"] = true
-	return m
-}
 
 
 // --- Cobra flag registration ---

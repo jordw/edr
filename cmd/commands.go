@@ -27,14 +27,6 @@ func init() {
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(undoCmd)
 	rootCmd.AddCommand(setupCmd)
-	// Internal/hidden (still work, not in --help)
-	rootCmd.AddCommand(mapCmd)    // alias for orient
-	rootCmd.AddCommand(readCmd)   // alias for focus
-	rootCmd.AddCommand(writeCmd)  // merged into edit
-	rootCmd.AddCommand(searchCmd)
-	rootCmd.AddCommand(renameCmd)
-	rootCmd.AddCommand(verifyCmd)
-	rootCmd.AddCommand(resetCmd)
 }
 
 
@@ -303,47 +295,20 @@ func init() {
 	}
 }
 
-var readCmd = &cobra.Command{
-	Use:    "read <file>[:<symbol>] [<file>...] [flags]",
-	Short:  ToolDesc["read"],
-	Args:   cobra.MinimumNArgs(1),
-	RunE:   func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "focus", args) },
-	Hidden: true,
-}
-
-func init() {
-	cmdspec.RegisterFlags(readCmd.Flags(), "read")
-	if f := readCmd.Flags().Lookup("expand"); f != nil {
-		f.NoOptDefVal = "deps"
-	}
-}
-
-var writeCmd = &cobra.Command{
-	Use:    "write <file>",
-	Short:  ToolDesc["write"],
-	Args:   cobra.MinimumNArgs(1),
-	Hidden: true,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return dispatchCmdWithStdin(cmd, "write", args, "content")
-	},
-}
-
-func init() { cmdspec.RegisterFlags(writeCmd.Flags(), "write") }
-
 var editCmd = &cobra.Command{
 	Use:   "edit [file[:symbol]]",
 	Short: ToolDesc["edit"],
 	Args: func(cmd *cobra.Command, args []string) error {
-		// --where replaces the file argument — allow 0 args
 		if cmd.Flags().Changed("where") && len(args) == 0 {
 			return nil
 		}
 		if len(args) >= 1 && len(args) <= 2 {
 			return nil
 		}
-		for _, a := range args {
-			if a == "edit" {
-				return fmt.Errorf("multiple edits: use batch syntax instead: edr -e file1 --old ... --new ... -e file2 --old ... --new ...")
+		// If --content is set, this is write mode — need exactly 1 file arg
+		if cmd.Flags().Changed("content") || cmd.Flags().Changed("inside") || cmd.Flags().Changed("after") {
+			if len(args) == 1 {
+				return nil
 			}
 		}
 		return fmt.Errorf("accepts between 1 and 2 arg(s), received %d", len(args))
@@ -354,122 +319,6 @@ var editCmd = &cobra.Command{
 }
 
 func init() { cmdspec.RegisterFlags(editCmd.Flags(), "edit") }
-
-var mapCmd = &cobra.Command{
-	Use:    "map [file]",
-	Short:  ToolDesc["map"],
-	Args:   cobra.MaximumNArgs(1),
-	RunE:   func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "orient", args) },
-	Hidden: true,
-}
-
-func init() { cmdspec.RegisterFlags(mapCmd.Flags(), "map") }
-
-var searchCmd = &cobra.Command{
-	Use:    "search <pattern>",
-	Short:  ToolDesc["search"],
-	Args:   cobra.ExactArgs(1),
-	RunE:   func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "search", args) },
-	Hidden: true,
-}
-
-func init() { cmdspec.RegisterFlags(searchCmd.Flags(), "search") }
-
-var renameCmd = &cobra.Command{
-	Use:    "rename <old-name> <new-name>",
-	Short:  ToolDesc["rename"],
-	Args:   cobra.ExactArgs(2),
-	RunE:   func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "rename", args) },
-	Hidden: true,
-}
-
-func init() { cmdspec.RegisterFlags(renameCmd.Flags(), "rename") }
-
-func init() {
-	cmdspec.RegisterFlags(resetCmd.Flags(), "reset")
-	resetCmd.Flags().String("cpuprofile", "", "Write CPU profile to file")
-	resetCmd.Flags().MarkHidden("cpuprofile")
-}
-
-var resetCmd = &cobra.Command{
-	Use:     "reset",
-	Aliases: []string{},
-	Short:   ToolDesc["reset"],
-	Hidden:  true,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		root := getRoot(cmd)
-		edrDir := index.HomeEdrDir(root)
-		result := map[string]any{"status": "reset"}
-
-		// Clear session state
-		if err := os.MkdirAll(filepath.Join(edrDir, "sessions"), 0700); err != nil {
-			return err
-		}
-		id := session.GenerateID()
-		sess := session.New()
-		path := filepath.Join(edrDir, "sessions", id+".json")
-		if err := sess.SaveToFile(path); err != nil {
-			return err
-		}
-		session.WriteSessionMapping(filepath.Join(edrDir, "sessions"), id)
-		result["session"] = id
-
-		// Clear checkpoints
-		os.RemoveAll(filepath.Join(edrDir, "checkpoints"))
-		cleanEdrDir(edrDir)
-
-		env := output.NewEnvelope("reset")
-		env.AddOp("r0", "reset", result)
-		env.ComputeOK()
-		output.PrintEnvelope(env)
-		return nil
-	},
-}
-
-var verifyCmd = &cobra.Command{
-	Use:    "verify",
-	Short:  ToolDesc["verify"],
-	Hidden: true,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		flags := extractFlags(cmd)
-
-		root := getRoot(cmd)
-		absRoot, err := filepath.Abs(root)
-		if err != nil {
-			return err
-		}
-		output.SetRoot(absRoot)
-
-		edrDir := index.HomeEdrDir(absRoot)
-		sess, saveSess := session.LoadSession(edrDir, absRoot)
-		defer saveSess()
-
-		env := output.NewEnvelope("verify")
-
-		result, dispErr := dispatch.DispatchVerify(context.Background(), absRoot, args, flags)
-		if dispErr != nil {
-			env.SetVerify(map[string]any{"status": "failed", "error": dispErr.Error()})
-		} else {
-			env.SetVerify(result)
-		}
-
-		// Record verify in session
-		if sess != nil {
-			if vm, ok := env.Verify.(map[string]any); ok {
-				if status, ok := vm["status"].(string); ok && status != "skipped" {
-					sess.RecordVerify(status)
-					recordOp(sess, "verify", args, flags, vm, true)
-				}
-			}
-		}
-
-		env.ComputeOK()
-		output.PrintEnvelope(env)
-		return nil
-	},
-}
-
-func init() { cmdspec.RegisterFlags(verifyCmd.Flags(), "verify") }
 
 var statusCmd = &cobra.Command{
 	Use:     "status",

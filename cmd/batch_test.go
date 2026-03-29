@@ -1000,20 +1000,6 @@ func TestDoStructsMatchCmdspec(t *testing.T) {
 	}
 	checkStructFieldsFiltered(t, "doEdit", doEditKnownKeys, editFields)
 
-	// doWrite fields
-	writeFields := map[string]bool{
-		"file": true, "content": true, "mkdir": true, "after": true,
-		"inside": true, "append": true, "dry_run": true,
-	}
-	checkStructFieldsFiltered(t, "doWrite", doWriteKnownKeys, writeFields)
-
-	// doRename fields
-	renameFields := map[string]bool{
-		"old_name": true, "new_name": true, "dry_run": true,
-		"word": true, "include": true, "exclude": true,
-		"budget": true,
-	}
-	checkStructFieldsFiltered(t, "doRename", doRenameKnownKeys, renameFields)
 }
 
 func TestHandleDo_SkipsPostEditReadsAndVerifyOnEditFailure(t *testing.T) {

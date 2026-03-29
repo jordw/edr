@@ -403,6 +403,26 @@ func SearchText(ctx context.Context, db index.SymbolStore, pattern string, budge
 		return nil
 	})
 
+	// Pre-compute byte slices for whole-file pre-filtering.
+	// This avoids strings.Split + per-line matching on non-matching files.
+	var patternBytes, lowerPatternBytes []byte
+	var orTermBytes, orTermLowerBytes [][]byte
+	if len(orTerms) > 0 {
+		for _, t := range orTerms {
+			orTermBytes = append(orTermBytes, []byte(t))
+		}
+	} else if len(orTermsLower) > 0 {
+		for _, t := range orTermsLower {
+			orTermLowerBytes = append(orTermLowerBytes, []byte(t))
+		}
+	} else if re == nil {
+		if caseSensitive {
+			patternBytes = []byte(pattern)
+		} else {
+			lowerPatternBytes = []byte(lowerPattern)
+		}
+	}
+
 	// Phase 2: Search files in parallel with bounded workers.
 	type fileMatches struct {
 		matches []output.Match
@@ -449,6 +469,46 @@ func SearchText(ctx context.Context, db index.SymbolStore, pattern string, budge
 				if bytes.Contains(data[:checkLen], []byte{0}) {
 					continue
 				}
+
+				// Fast pre-filter: reject files that cannot match without
+				// allocating strings or splitting into lines.
+				if re != nil {
+					if !re.Match(data) {
+						continue
+					}
+				} else if len(orTermBytes) > 0 {
+					found := false
+					for _, tb := range orTermBytes {
+						if bytes.Contains(data, tb) {
+							found = true
+							break
+						}
+					}
+					if !found {
+						continue
+					}
+				} else if len(orTermLowerBytes) > 0 {
+					lowerData := bytes.ToLower(data)
+					found := false
+					for _, tb := range orTermLowerBytes {
+						if bytes.Contains(lowerData, tb) {
+							found = true
+							break
+						}
+					}
+					if !found {
+						continue
+					}
+				} else if caseSensitive {
+					if !bytes.Contains(data, patternBytes) {
+						continue
+					}
+				} else {
+					if !bytes.Contains(bytes.ToLower(data), lowerPatternBytes) {
+						continue
+					}
+				}
+
 				rel, _ := filepath.Rel(root, file)
 				allLines := strings.Split(string(data), "\n")
 

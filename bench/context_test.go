@@ -126,28 +126,6 @@ func TestResponseSizeRegression(t *testing.T) {
 			flags:    map[string]any{"lines": "1:30"},
 			maxBytes: 1200, // actual ~884B
 		},
-		// --- Search gates ---
-		{
-			name:     "search with budget",
-			cmd:      "search",
-			args:     []string{"execute"},
-			flags:    map[string]any{"body": true, "budget": 500},
-			maxBytes: 3000, // actual ~2222B
-		},
-		{
-			name:     "find files",
-			cmd:      "search",
-			args:     []string{"**/*.py"},
-			flags:    nil,
-			maxBytes: 1500, // actual ~66B
-		},
-		{
-			name:     "search in symbol",
-			cmd:      "search",
-			args:     []string{"running"},
-			flags:    map[string]any{"text": true, "in": "lib/scheduler.py:Scheduler"},
-			maxBytes: 800, // actual ~573B
-		},
 		// --- Map gates ---
 		{
 			name:     "map with budget",
@@ -227,22 +205,6 @@ func TestResponseSizeRegression(t *testing.T) {
 			args:     []string{"lib/scheduler.py"},
 			flags:    map[string]any{"append": true, "content": "# appended", "dry_run": true},
 			maxBytes: 500, // actual ~280B
-		},
-		// --- Rename gates ---
-		{
-			name:     "rename dry-run",
-			cmd:      "rename",
-			args:     []string{"HandlerFunc", "TaskHandlerFunc"},
-			flags:    map[string]any{"dry_run": true},
-			maxBytes: 3500, // actual ~2816B
-		},
-		// --- Verify gates ---
-		{
-			name:     "verify",
-			cmd:      "verify",
-			args:     nil,
-			flags:    nil,
-			maxBytes: 300, // actual ~92B
 		},
 	}
 
