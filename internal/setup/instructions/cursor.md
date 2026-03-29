@@ -9,14 +9,13 @@ Why: context-efficient output (skeletons, deltas, token budgets) vs dumping raw 
 
 Only fall back to built-in tools if `edr` itself won't compile/run.
 
-Run shell commands via `edr delta -- cmd`. Run `edr status` between tasks or after failures.
+Run `edr status` between tasks or after failures.
 
 ## Batch — tool calls are expensive, plan and combine
 
-`-r` read, `-s` search, `-m` map, `-q` query (refs/prepare), `-e` edit, `-w` write. Modifier flags follow each op. Plan what you need, then combine into one call for the greatest speedup.
+`-r` read, `-s` search, `-m` map, `-e` edit, `-w` write. Modifier flags follow each op. Plan what you need, then combine into one call for the greatest speedup.
 
 `edr -r f.go --sig -r g.go:Func --expand -s "pattern" --text -m --dir cmd/`
-`edr -q refs Sym --impact -q prepare f.go:Sym` (batch refs/prepare)
 `edr -r f.go:Sym -e f.go --old "x" --new "y" -r f.go:Sym` (post-edit read)
 `edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"` (multi-file)
 `edr -w f.go --content "..." --mkdir`, `-V` verify (auto after edits)
@@ -26,9 +25,6 @@ Run shell commands via `edr delta -- cmd`. Run `edr status` between tasks or aft
 
 ### Search modifiers (after `-s`)
 `--text`, `--regex`, `--context N`, `--in f.go:Sym`, `--include "*.go"`, `--limit N`
-
-### Query modifiers (after `-q`)
-`--impact`, `--callers`, `--deps`, `--chain Sym`, `--depth N`, `--signatures`, `--body`, `--budget N`
 
 ### Edit modifiers (after `-e`)
 `--old "x" --new "y"`, `--where Sym` (resolves file), `--in Sym` (scope)
@@ -40,9 +36,6 @@ Quoting: use heredocs for quotes/backslashes: `--old "$(cat <<'EOF'`...`EOF`)"`
 
 ## Standalone commands
 - `edr map` — symbol overview. `--dir`, `--lang`, `--grep`, `--budget` (`map --dir path` for directories; read is file-only)
-- `edr prepare file:Sym` — pre-edit context: body, callers, deps (batchable via `-q prepare`)
-- `edr refs Sym --impact` — find callers, transitive impact (batchable via `-q refs`)
-- `edr rename Old New --dry-run` | `edr rename --text "old" "new"` — `--word`, `--include`
+- `edr rename "old" "new" --dry-run` — `--word`, `--include`
 - `edr verify` | `edr verify --test` | `edr verify --command "cmd"`
-- `edr delta -- cmd` — diff vs last run. `--reset`, `--full`
 - `edr status` | `edr undo` | `edr reset --session`

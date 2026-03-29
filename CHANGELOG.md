@@ -1,11 +1,33 @@
 # Changelog
 
+## v0.3.0 — 2026-03-29
+
+### Breaking changes
+
+- **Tree-sitter removed.** Symbol extraction now uses pure-Go regex patterns (`internal/index/regex.go`). No CGO, no C compiler required. Binary size drops from ~37MB to ~6MB.
+- **`refs` command removed.** Use `edr search` with `--text` for finding references.
+- **`prepare` command removed.** Use `edr read` with `--expand` for pre-edit context.
+- **`delta` command removed.** Run shell commands directly; use `edr status` for session state.
+- **`-q` batch flag removed.** Query mode for refs/prepare is no longer needed.
+- **`rename --text` flag removed.** Rename is now always text-based (the default and only mode).
+
+### Languages
+
+- **7 language families supported** — Go, Python, TypeScript/JavaScript, Rust, Java, Ruby, C/C++. Regex-based extraction covers common declaration patterns.
+- Removed: PHP, Zig, Lua, Bash, C#, Kotlin, Swift, Scala (regex patterns not yet written for these).
+
+### Improvements
+
+- **Pure Go build.** No CGO, no C compiler, no vendored grammar sources. `go install` just works.
+- **~6MB binary** — down from ~37MB with tree-sitter grammars.
+- **Simpler architecture.** `internal/index/` no longer depends on tree-sitter bindings. `regex.go` replaces `parser.go` for symbol extraction.
+
 ## v0.2.1 — 2026-03-22
 
 ### New commands
 
 - **`edr status`** — session dashboard with op log, build state, external change detection, and pattern analysis. Replaces the old `next`/`status` commands.
-- **`edr delta`** — command wrapper with diff-based output dedup. Only shows what changed between runs. `--reset` clears the baseline.
+- **`edr delta`** — command wrapper with diff-based output dedup. *(Removed in v0.3.0.)*
 - **`edr undo`** — revert the last edit/write. Every mutation is auto-checkpointed onto a stack (cap 20).
 
 ### New edit capabilities
@@ -23,12 +45,11 @@
 
 ### Languages
 
-- **Swift and Scala added** — 18 languages now supported.
+- **Swift and Scala added** — 18 languages supported. *(Reduced to 7 language families in v0.3.0.)*
 
 ### Performance
 
-- **Tree cache** — LRU cache for parsed tree-sitter trees. Symbol reads ~9x faster on repeated files.
-- **Immediate reindexing** — edits and writes reindex under a writer lock instead of lazily. No more stale index after mutations.
+- **Tree cache** — LRU cache for parsed trees. *(Replaced by regex-based parsing in v0.3.0.)*
 - **Honest benchmarks** — baselines now model a skilled agent using range reads, not naive whole-file reads.
 
 ### Improvements
@@ -53,13 +74,11 @@
 
 ### Breaking changes
 
-- **12 data/markup grammars removed** — CSS, Dockerfile, Elixir, HCL/Terraform, HTML, JSON, Markdown, Protobuf, Scala, SQL, TOML, YAML. These formats don't benefit from symbol-based navigation. Files with these extensions still work via plain file read.
+- **12 data/markup grammars removed** — CSS, Dockerfile, Elixir, HCL/Terraform, HTML, JSON, Markdown, Protobuf, Scala, SQL, TOML, YAML. *(All tree-sitter grammars removed in v0.3.0.)*
 
 ### Improvements
 
-- **Binary size reduced 16%** — 44M to 37M by removing grammars that added noise rather than navigation value.
-- **Grammar directory reduced 24%** — 196M to 149M of vendored C source.
-- **16 languages supported** — Go, Python, JS/JSX, TS/TSX, C/H, C++, Rust, Java, Ruby, PHP, Zig, Lua, Bash, C#, Kotlin.
+- **Binary size reduced 16%** — 44M to 37M. *(Further reduced to ~6MB in v0.3.0 by removing tree-sitter entirely.)*
 
 ## v0.1.0 — 2026-03-09
 
@@ -71,12 +90,12 @@ Initial open source release.
 - **Symbol-aware reads** — read specific functions/classes instead of entire files
 - **Progressive disclosure** — `--signatures` (API only, 75-86% smaller), `--depth` (collapse nesting levels)
 - **Structured search** — symbol search with scoring and body snippets, text search with grouping
-- **Semantic references** — import-aware `refs` with transitive impact analysis (Go, Python, JS, TS)
+- **Semantic references** — import-aware `refs` with transitive impact analysis. *(Removed in v0.3.0.)*
 - **Smart edits** — old_text/new_text, symbol replacement, line-range, regex, move, atomic multi-file batches
 - **Write inside containers** — add fields/methods to classes/structs without reading the file first
-- **Cross-file rename** — import-aware, scoped, with dry-run preview
+- **Cross-file rename** — text-based, scoped, with dry-run preview
 - **Session optimizations** — body dedup for search results
 - **Budget control** — cap any response to N tokens
 - **Session tracing** — `bench-session` scores session efficiency
-- **13 languages** — Go, Python, JS/JSX, TS/TSX, Rust, Java, C, C++, Ruby, PHP, Zig, Lua, Bash
+- **13 languages** — Go, Python, JS/JSX, TS/TSX, Rust, Java, C, C++, Ruby, PHP, Zig, Lua, Bash. *(Reduced to 7 families in v0.3.0.)*
 - **Benchmarks** — 91-98% context savings across 6 real-world repos vs. raw file tools

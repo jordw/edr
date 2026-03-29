@@ -269,7 +269,7 @@ footer {
   </div>
   <div class="pillar">
     <h3>No repeated work</h3>
-    <p>edr tracks what the agent has seen. Re-reads and re-runs return only what changed. Zero config.</p>
+    <p>edr tracks what the agent has seen. Re-reads return only what changed. Zero config.</p>
   </div>
 </div>
 
@@ -283,13 +283,13 @@ footer {
 <!-- Example -->
 <section class="example">
   <h2>Example</h2>
-  <p>Read a function, find its callers, edit it:</p>
+  <p>Read a function, search for usage, edit it:</p>
 <pre><code><span class="comment"># Without edr: grep to find it, read the range, grep for callers, read each caller</span>
 <span class="comment"># 5+ tool calls, ~25KB of context</span>
 
 <span class="comment"># With edr:</span>
 edr <span class="flag">-r</span> src/scheduler.py:run               <span class="comment"># just the function (not the file)</span>
-edr <span class="flag">-q</span> refs run <span class="flag">--callers</span>                  <span class="comment"># callers, import-resolved</span>
+edr <span class="flag">-s</span> "run" <span class="flag">--text</span> <span class="flag">--include</span> "*.py"      <span class="comment"># find usage across project</span>
 edr <span class="flag">-e</span> src/scheduler.py \
     <span class="flag">--old</span> "def run(self):" \
     <span class="flag">--new</span> "def run(self, retries=3):"      <span class="comment"># verifies build</span></code></pre>
@@ -304,16 +304,13 @@ edr <span class="flag">-r</span> src/scheduler.py:Scheduler <span class="flag">-
 
 <span class="comment"># 2. Edit two files, auto-verifies build</span>
 edr <span class="flag">-e</span> src/scheduler.py <span class="flag">--old</span> "def run(self):" <span class="flag">--new</span> "def run(self, retries=3):" \
-    <span class="flag">-e</span> src/config.py <span class="flag">--old</span> '"timeout": 30' <span class="flag">--new</span> '"timeout": 30, "retries": 3'
-
-<span class="comment"># 3. Re-run tests - only the diff comes back</span>
-edr delta -- pytest</code></pre>
+    <span class="flag">-e</span> src/config.py <span class="flag">--old</span> '"timeout": 30' <span class="flag">--new</span> '"timeout": 30, "retries": 3'</code></pre>
 </section>
 
 <!-- Benchmarks -->
 <section>
   <h2>Benchmarks</h2>
-  <p>9 scenarios (read a symbol, find refs, orient in codebase, edit a function, etc.) against real repos. We measure tool response bytes — fewer bytes means less noise for the model to reason over, faster responses, and more accurate decisions.</p>
+  <p>9 scenarios (read a symbol, orient in codebase, edit a function, etc.) against real repos. We measure tool response bytes — fewer bytes means less noise for the model to reason over, faster responses, and more accurate decisions.</p>
   <div class="table-wrap">
   <table>
     <thead>
@@ -330,7 +327,7 @@ edr delta -- pytest</code></pre>
     </tbody>
   </table>
   </div>
-  <p><strong>Median reduction: 83%</strong> across repos. edr loses on plain text search (structured JSON adds overhead vs raw grep; see breakdown below), but wins everywhere else. The biggest wins are on structured operations (refs, map, signatures); multi-file reads show modest savings since both sides return full content. Call counts are summed across all 9 scenarios; each edr scenario is 1 call.</p>
+  <p><strong>Median reduction: 83%</strong> across repos. edr loses on plain text search (structured JSON adds overhead vs raw grep; see breakdown below), but wins everywhere else. The biggest wins are on structured operations (map, signatures); multi-file reads show modest savings since both sides return full content. Call counts are summed across all 9 scenarios; each edr scenario is 1 call.</p>
 
   <details>
     <summary>Per-scenario breakdown (urfave/cli)</summary>
@@ -342,13 +339,13 @@ edr delta -- pytest</code></pre>
       <tbody>
         <tr><td>Understand a class API</td><td>13,019B (whole file)</td><td>1,486B (<code>--signatures</code>)</td><td class="pct">89%</td></tr>
         <tr><td>Read a specific function</td><td>3,026B / 2 calls (grep + range read)</td><td>1,182B (symbol read)</td><td class="pct">61%</td></tr>
-        <tr><td>Find references</td><td>9,086B / 4 calls (grep + 3 range reads)</td><td>179B (<code>refs</code>)</td><td class="pct">98%</td></tr>
+        <tr><td>Find references</td><td>9,086B / 4 calls (grep + 3 range reads)</td><td>179B (search)</td><td class="pct">98%</td></tr>
         <tr><td>Search with context</td><td>614B (grep -C3)</td><td>1,027B (structured)</td><td class="pct-neg">-67%</td></tr>
         <tr><td>Orient in codebase</td><td>52,470B / 4 calls (glob + 3 reads)</td><td>393B (<code>map</code>)</td><td class="pct">99%</td></tr>
         <tr><td>Edit a function</td><td>1,403B / 3 calls (grep + range + edit)</td><td>394B (batch)</td><td class="pct">72%</td></tr>
         <tr><td>Add method to a class</td><td>5,393B / 3 calls (grep + range + write)</td><td>249B (<code>--inside</code>)</td><td class="pct">95%</td></tr>
         <tr><td>Multi-file read</td><td>39,397B / 3 calls</td><td>22,028B (batched)</td><td class="pct">44%</td></tr>
-        <tr><td>Explore a symbol</td><td>25,006B / 4 calls (grep + 3 range reads)</td><td>555B</td><td class="pct">98%</td></tr>
+        <tr><td>Explore a symbol</td><td>25,006B / 4 calls (grep + 3 range reads)</td><td>555B (<code>--expand</code>)</td><td class="pct">98%</td></tr>
       </tbody>
       <tfoot>
         <tr><th>Total</th><th>149,414B / 25 calls</th><th>27,493B / 9 calls</th><th class="pct">82%</th></tr>
@@ -389,11 +386,8 @@ edr <span class="flag">-w</span> f.go <span class="flag">--content</span> "..." 
     <thead><tr><th>Command</th><th>Description</th></tr></thead>
     <tbody>
       <tr><td>map</td><td><code>edr map</code>, <code>edr map --dir src/ --type function --lang go --grep pat</code></td></tr>
-      <tr><td>prepare</td><td><code>edr prepare Symbol</code> — body, callers, deps, tests, hash in one call</td></tr>
-      <tr><td>refs</td><td><code>edr refs Symbol</code>, <code>--impact</code>, <code>--callers</code>, <code>--deps</code>, <code>--chain target</code></td></tr>
-      <tr><td>rename</td><td><code>edr rename Old New --dry-run</code>, <code>edr rename --text "old" "new" --word</code></td></tr>
+      <tr><td>rename</td><td><code>edr rename "old" "new" --dry-run</code>, <code>edr rename "old" "new" --word --include "*.go"</code></td></tr>
       <tr><td>verify</td><td><code>edr verify</code>, <code>edr verify --test</code>, <code>edr verify --command "cmd"</code></td></tr>
-      <tr><td>delta</td><td><code>edr delta -- make test</code> — shows only what changed. <code>--reset</code>, <code>--full</code></td></tr>
       <tr><td>status</td><td><code>edr status</code>, <code>edr status --focus "goal"</code></td></tr>
       <tr><td>undo</td><td>Revert last edit/write. Every mutation is auto-checkpointed.</td></tr>
       <tr><td>reset</td><td><code>edr reset</code>, <code>--session</code></td></tr>
@@ -410,32 +404,25 @@ edr <span class="flag">-w</span> f.go <span class="flag">--content</span> "..." 
   <p style="color: var(--fg); font-size: 0.9rem; margin-bottom: 0.25rem;"><strong>Symbol parsing</strong></p>
   <ul class="lang-list">
     <li>Go</li><li>Python</li><li>JavaScript</li><li>TypeScript</li><li>Rust</li>
-    <li>Java</li><li>C</li><li>C++</li><li>Ruby</li><li>PHP</li><li>Swift</li><li>Scala</li>
-    <li>Zig</li><li>Lua</li><li>Bash</li><li>C#</li><li>Kotlin</li>
-  </ul>
-  <p style="color: var(--fg); font-size: 0.9rem; margin-bottom: 0.25rem;"><strong>Import-aware refs</strong></p>
-  <ul class="lang-list">
-    <li>Go</li><li>Python</li><li>JavaScript</li><li>TypeScript</li>
-    <li>Java</li><li>Kotlin</li><li>Scala</li><li>C#</li><li>PHP</li><li>Swift</li>
+    <li>Java</li><li>C</li><li>C++</li><li>Ruby</li>
   </ul>
 </section>
 
 <!-- How it works -->
 <section>
   <h2>How it works</h2>
-  <p>edr parses files on demand with <a href="https://tree-sitter.github.io/tree-sitter/">tree-sitter</a> — no pre-built index, no setup step, no staleness.</p>
-  <p><strong>Symbol-level operations.</strong> Read one function instead of a 400-line file — the agent sees exactly what it needs and makes better decisions. Get a class API with <code>--signatures</code> to understand structure before diving in. Find callers with <code>edr refs --impact</code> before refactoring. Scope edits with <code>--in Symbol</code> so they can't match the wrong code. Edits auto-verify the build.</p>
-  <p><strong>Batching.</strong> <code>-r</code>, <code>-s</code>, <code>-m</code>, <code>-q</code>, <code>-e</code>, <code>-w</code> combine reads, searches, maps, queries, edits, and writes in one CLI call. Fewer round-trips means faster task completion.</p>
-  <p><strong>Sessions.</strong> edr tracks what the agent has seen and only returns what changed. Second read of an unchanged file: zero output. <code>edr delta -- make test</code> after a fix: only the new failures.</p>
+  <p>edr parses files on demand with pure-Go regex-based symbol extraction — no pre-built index, no setup step, no staleness, no CGO dependency.</p>
+  <p><strong>Symbol-level operations.</strong> Read one function instead of a 400-line file — the agent sees exactly what it needs and makes better decisions. Get a class API with <code>--signatures</code> to understand structure before diving in. Scope edits with <code>--in Symbol</code> so they can't match the wrong code. Edits auto-verify the build.</p>
+  <p><strong>Batching.</strong> <code>-r</code>, <code>-s</code>, <code>-m</code>, <code>-e</code>, <code>-w</code> combine reads, searches, maps, edits, and writes in one CLI call. Fewer round-trips means faster task completion.</p>
+  <p><strong>Sessions.</strong> edr tracks what the agent has seen and only returns what changed. Second read of an unchanged file: zero output.</p>
 </section>
 
 <!-- Limitations -->
 <section>
   <h2>Limitations</h2>
   <ul style="list-style: none; padding: 0;">
-    <li style="margin-bottom: 0.75rem;"><strong>Tree-sitter, not LSP.</strong> Fast, no build step, works on broken code, zero config. Tradeoff: no type information. Refs may produce false positives across packages.</li>
+    <li style="margin-bottom: 0.75rem;"><strong>Regex-based, not LSP.</strong> Fast, no build step, works on broken code, zero config. Tradeoff: no type information, no AST. Symbol extraction uses regex patterns tuned per language.</li>
     <li style="margin-bottom: 0.75rem;"><strong>macOS and Linux only.</strong> Windows is not planned.</li>
-    <li style="margin-bottom: 0.75rem;"><strong>C/C++ compiler required</strong> when building from source. Homebrew and the install script use pre-built binaries.</li>
     <li><strong>No index step.</strong> Files are parsed on demand — no setup delay, no staleness.</li>
   </ul>
 </section>
