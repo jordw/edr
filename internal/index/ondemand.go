@@ -71,8 +71,7 @@ func (o *OnDemand) parseFile(absPath string) (*cachedFile, error) {
 	}
 	o.mu.RUnlock()
 
-	lang := GetLangConfig(absPath)
-	if lang == nil {
+	if !RegexSupported(absPath) {
 		// Not a parseable file — return empty result
 		return &cachedFile{mtime: mtime}, nil
 	}
@@ -82,8 +81,8 @@ func (o *OnDemand) parseFile(absPath string) (*cachedFile, error) {
 		return nil, err
 	}
 
-	// Use light parse (no ref extraction) — on-demand does text-based ref matching.
-	syms, imports := ParseFileLight(absPath, src, lang)
+	syms := RegexParse(absPath, src)
+	var imports []ImportInfo // regex parser doesn't extract imports
 
 	h := sha256.Sum256(src)
 
