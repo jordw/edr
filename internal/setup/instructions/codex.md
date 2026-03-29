@@ -30,13 +30,22 @@ Run `edr status` between tasks or after failures.
 `--sig` (file/container only), `--skeleton`, `--full`, `--expand[=deps]`, `--symbols`, `--lines 10:50`, `--budget N`
 
 ### Orient modifiers (after `-o`)
-`--dir`, `--lang`, `--grep`, `--glob`, `--type`, `--budget N`
+`--dir`, `--lang`, `--grep`, `--glob`, `--type`, `--search`, `--budget N`
 
 ### Edit modifiers (after `-e`)
 `--old "x" --new "y"`, `--where Sym` (resolves file), `--in Sym` (scope)
 `--content "..."`, `--inside Class`, `--after Sym`, `--append`, `--mkdir`
 `--all`, `--delete`, `--dry-run`, `--fuzzy`, `--read-back`, `--no-verify`
-Quoting: use heredocs for quotes/backslashes: `--old "$(cat <<'EOF'`...`EOF`)"`
+
+### Quoting for edits
+Always use heredocs for --old/--new to avoid shell quoting errors:
+`edr edit f.go --old "$(cat <<'EOF'
+old code
+EOF
+)" --new "$(cat <<'EOF'
+new code
+EOF
+)"`
 
 ## Standalone commands
 - `edr status` | `edr undo` | `edr setup`
