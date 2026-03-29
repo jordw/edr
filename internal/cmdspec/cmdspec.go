@@ -74,71 +74,99 @@ type Spec struct {
 }
 
 // Registry is the canonical list of all edr commands.
+// focusFlags are shared between "focus" and its "read" alias.
+var focusFlags = []FlagSpec{
+	{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens"},
+	{Name: "signatures", Alias: "sig", Type: FlagBool, Default: false, Desc: "Signatures only (75-86% fewer tokens)"},
+	{Name: "skeleton", Type: FlagBool, Default: false, Desc: "Skeleton view: blocks collapsed"},
+	{Name: "lines", Type: FlagString, Default: "", Desc: "Line range (e.g. 10:50)"},
+	{Name: "full", Type: FlagBool, Default: false, Desc: "Force full content (skip session delta)"},
+	{Name: "symbols", Type: FlagBool, Default: false, Desc: "Include symbol list in read result"},
+	{Name: "expand", Type: FlagString, Default: "", Desc: "Include related signatures: deps (default), callers, or both"},
+}
+
+// orientFlags are shared between "orient" and its "map" alias.
+var orientFlags = []FlagSpec{
+	{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens (default 2000)"},
+	{Name: "full", Type: FlagBool, Default: false, Desc: "Return full results (no default budget cap)"},
+	{Name: "dir", Type: FlagString, Default: "", Desc: "Filter by directory"},
+	{Name: "glob", Type: FlagString, Default: "", Desc: "Filter by file glob"},
+	{Name: "type", Type: FlagString, Default: "", Desc: "Filter by symbol type"},
+	{Name: "grep", Type: FlagString, Default: "", Desc: "Filter by name pattern"},
+	{Name: "lang", Type: FlagString, Default: "", Desc: "Filter by language (e.g. go, python, javascript)"},
+}
+
 var Registry = []*Spec{
+	// --- Primary commands (shown in --help) ---
 	{
-		Name: "read", Desc: "Read file or symbol. Use file:symbol for targeted reads.",
+		Name: "orient", Desc: "Structural overview of repo or directory. Filters: dir, glob, type, grep.",
+		Category: CatRead, MinArgs: 0, MaxArgs: 1,
+		Flags: orientFlags,
+	},
+	{
+		Name: "focus", Desc: "Read file or symbol with context. Use file:symbol for targeted reads.",
 		Category: CatRead, MinArgs: 1, MaxArgs: -1, FileScoped: true,
 		DeltaRead: true, BodyTrack: true,
-		Flags: []FlagSpec{
-			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens"},
-			{Name: "signatures", Alias: "sig", Type: FlagBool, Default: false, Desc: "Signatures only (75-86% fewer tokens)"},
-			{Name: "skeleton", Type: FlagBool, Default: false, Desc: "Skeleton view: blocks collapsed"},
-			{Name: "lines", Type: FlagString, Default: "", Desc: "Line range (e.g. 10:50)"},
-			{Name: "full", Type: FlagBool, Default: false, Desc: "Force full content (skip session delta)"},
-			{Name: "symbols", Type: FlagBool, Default: false, Desc: "Include symbol list in read result"},
-			{Name: "expand", Type: FlagString, Default: "", Desc: "Include related signatures: deps (default), callers, or both"},
-		},
+		Flags: focusFlags,
 	},
 	{
-		Name: "write", Desc: "Write file. Modes: plain write, --inside container, --after symbol.",
-		Category: CatWrite, MinArgs: 1, MaxArgs: 1, StdinKey: "content", FileScoped: true,
-		Flags: []FlagSpec{
-			{Name: "mkdir", Type: FlagBool, Default: false, Desc: "Create parent dirs"},
-			{Name: "after", Type: FlagString, Default: "", Desc: "Place after this symbol"},
-			{Name: "inside", Type: FlagString, Default: "", Desc: "Insert inside container"},
-			{Name: "content", Type: FlagString, Default: "", Desc: "Content to write (alternative to stdin)"},
-			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
-						{Name: "append", Type: FlagBool, Default: false, Desc: "Append to file"},
-		},
-	},
-	{
-		Name: "edit", Desc: "Edit by text match, symbol replacement, line range, or symbol query (--where).",
+		Name: "edit", Desc: "Edit, write, or create files. Auto-verifies build after changes.",
 		Category: CatWrite, MinArgs: 0, MaxArgs: 2, StdinKey: "new_text", FileScoped: true,
 		DiffEdit: true,
 		Flags: []FlagSpec{
-			{Name: "start_line", Type: FlagInt, Default: 0, Desc: "Start line"},
-			{Name: "end_line", Type: FlagInt, Default: 0, Desc: "End line"},
+			// Text edit flags
 			{Name: "old_text", Type: FlagString, Default: "", Desc: "Text to find", Alias: "old"},
 			{Name: "new_text", Type: FlagString, Default: "", Desc: "Replacement text", Alias: "new"},
 			{Name: "all", Type: FlagBool, Default: false, Desc: "Replace all matches"},
 			{Name: "in", Type: FlagString, Default: "", Desc: "Scope text match to within a symbol body (file:Symbol)"},
 			{Name: "where", Type: FlagString, Default: "", Desc: "Symbol query — resolves file and scopes edit automatically"},
-			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
+			{Name: "delete", Type: FlagBool, Default: false, Desc: "Delete matched text or symbol"},
+			{Name: "fuzzy", Type: FlagBool, Default: false, Desc: "Allow whitespace/indentation-only mismatches"},
+			{Name: "lines", Type: FlagString, Default: "", Desc: "Line range as start:end"},
+			{Name: "start_line", Type: FlagInt, Default: 0, Desc: "Start line"},
+			{Name: "end_line", Type: FlagInt, Default: 0, Desc: "End line"},
+			{Name: "insert_at", Type: FlagInt, Default: 0, Desc: "Insert new text before line N"},
+			{Name: "move_after", Type: FlagString, Default: "", Desc: "Move symbol after another symbol"},
 			{Name: "expect_hash", Alias: "hash", Type: FlagString, Default: "", Desc: "Reject edit if file hash doesn't match"},
-			{Name: "delete", Type: FlagBool, Default: false, Desc: "Delete matched text or symbol (equivalent to --new-text \"\")"},
-			{Name: "lines", Type: FlagString, Default: "", Desc: "Line range as start:end (shorthand for --start-line/--end-line)"},
-			{Name: "insert_at", Type: FlagInt, Default: 0, Desc: "Insert new text before line N (zero-width insertion)"},
-			{Name: "fuzzy", Type: FlagBool, Default: false, Desc: "Allow whitespace/indentation-only mismatches (cannot combine with --all)"},
-			{Name: "move_after", Type: FlagString, Default: "", Desc: "Move symbol after another symbol (same file only)"},
-			{Name: "read_back", Type: FlagBool, Default: true, Desc: "Include updated context around the edit in the response"},
+			{Name: "read_back", Type: FlagBool, Default: true, Desc: "Include updated context in response"},
+			// Write/create flags (when no --old, acts as write)
+			{Name: "content", Type: FlagString, Default: "", Desc: "Content to write (creates or overwrites file)"},
+			{Name: "inside", Type: FlagString, Default: "", Desc: "Insert inside container"},
+			{Name: "after", Type: FlagString, Default: "", Desc: "Place after this symbol"},
+			{Name: "append", Type: FlagBool, Default: false, Desc: "Append to file"},
+			{Name: "mkdir", Type: FlagBool, Default: false, Desc: "Create parent dirs"},
+			// Shared
+			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
+			{Name: "no_verify", Type: FlagBool, Default: false, Desc: "Skip auto-verify after edit"},
 		},
 	},
+	// --- Aliases for backward compatibility (hidden from --help) ---
 	{
-		Name: "map", Desc: "Symbol map of repo or file. Filters: dir, glob, type, grep.",
-		Category: CatRead, MinArgs: 0, MaxArgs: 1,
+		Name: "map", Desc: "Alias for orient.",
+		Category: CatRead, MinArgs: 0, MaxArgs: 1, Internal: true,
+		Flags: orientFlags,
+	},
+	{
+		Name: "read", Desc: "Alias for focus.",
+		Category: CatRead, MinArgs: 1, MaxArgs: -1, FileScoped: true, Internal: true,
+		DeltaRead: true, BodyTrack: true,
+		Flags: focusFlags,
+	},
+	{
+		Name: "write", Desc: "Alias for edit --content.",
+		Category: CatWrite, MinArgs: 1, MaxArgs: 1, StdinKey: "content", FileScoped: true, Internal: true,
 		Flags: []FlagSpec{
-			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens (default 2000)"},
-			{Name: "full", Type: FlagBool, Default: false, Desc: "Return full results (no default budget cap)"},
-			{Name: "dir", Type: FlagString, Default: "", Desc: "Filter by directory"},
-			{Name: "glob", Type: FlagString, Default: "", Desc: "Filter by file glob"},
-			{Name: "type", Type: FlagString, Default: "", Desc: "Filter by symbol type"},
-			{Name: "grep", Type: FlagString, Default: "", Desc: "Filter by name pattern"},
-			{Name: "lang", Type: FlagString, Default: "", Desc: "Filter by language (e.g. go, python, javascript)"},
+			{Name: "mkdir", Type: FlagBool, Default: false, Desc: "Create parent dirs"},
+			{Name: "after", Type: FlagString, Default: "", Desc: "Place after this symbol"},
+			{Name: "inside", Type: FlagString, Default: "", Desc: "Insert inside container"},
+			{Name: "content", Type: FlagString, Default: "", Desc: "Content to write"},
+			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
+			{Name: "append", Type: FlagBool, Default: false, Desc: "Append to file"},
 		},
 	},
 	{
 		Name: "search", Desc: "Search symbols or text. Auto-detects mode from flags.",
-		Category: CatRead, MinArgs: 1, MaxArgs: 1,
+		Category: CatRead, MinArgs: 1, MaxArgs: 1, Internal: true,
 		BodyTrack: true,
 		Flags: []FlagSpec{
 			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens (default 2000)"},
@@ -157,7 +185,7 @@ var Registry = []*Spec{
 	},
 	{
 		Name: "rename", Desc: "Text-based find-and-replace across repo files. --dry-run to preview.",
-		Category: CatGlobalMutate, MinArgs: 2, MaxArgs: 2,
+		Category: CatGlobalMutate, MinArgs: 2, MaxArgs: 2, Internal: true,
 		Flags: []FlagSpec{
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
 			{Name: "word", Type: FlagBool, Default: false, Desc: "Whole-word matching only"},
@@ -168,7 +196,7 @@ var Registry = []*Spec{
 	},
 	{
 		Name: "reset", Desc: "Clean slate: clear session and checkpoints.",
-		Category: CatGlobalMutate, MinArgs: 0, MaxArgs: 0,
+		Category: CatGlobalMutate, MinArgs: 0, MaxArgs: 0, Internal: true,
 		Flags: []FlagSpec{
 			{Name: "session", Type: FlagBool, Default: false, Desc: "Clear session only (same as default)"},
 		},
@@ -182,7 +210,7 @@ var Registry = []*Spec{
 	},
 	{
 		Name: "verify", Desc: "Run build/typecheck or tests. Auto-detects go/npm/cargo.",
-		Category: CatMeta, MinArgs: 0, MaxArgs: 0,
+		Category: CatMeta, MinArgs: 0, MaxArgs: 0, Internal: true,
 		Flags: []FlagSpec{
 			{Name: "command", Type: FlagString, Default: "", Desc: "Custom command (auto-detect if omitted)"},
 			{Name: "level", Type: FlagString, Default: "", Desc: "Verification level: build (default) or test"},

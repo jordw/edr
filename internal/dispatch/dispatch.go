@@ -58,15 +58,21 @@ func Dispatch(ctx context.Context, db index.SymbolStore, cmd string, args []stri
 	var err error
 
 	switch cmd {
-	// --- Unified commands ---
-	case "read":
+	// --- Primary commands ---
+	case "orient", "map":
+		result, err = runMapUnified(ctx, db, root, args, flags)
+	case "focus", "read":
 		result, err = runReadUnified(ctx, db, root, args, flags)
+	case "edit":
+		// If --content is set without --old, this is a write/create operation.
+		if flagString(flags, "content", "") != "" && flagString(flags, "old_text", "") == "" {
+			result, err = runWriteUnified(ctx, db, root, args, flags)
+		} else {
+			result, err = runSmartEdit(ctx, db, root, args, flags)
+		}
 	case "write":
 		result, err = runWriteUnified(ctx, db, root, args, flags)
-	case "edit":
-		result, err = runSmartEdit(ctx, db, root, args, flags)
-	case "map":
-		result, err = runMapUnified(ctx, db, root, args, flags)
+	// --- Internal commands (still work, not promoted) ---
 	case "search":
 		result, err = runSearchUnified(ctx, db, args, flags)
 	case "rename":

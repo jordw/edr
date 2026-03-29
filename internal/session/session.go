@@ -1274,7 +1274,7 @@ func (s *Session) PostProcess(cmd string, args []string, flags map[string]any, r
 
 	// Level 2b: Content-hash session tracking for search/map
 	// Hash the visible payload and return "unchanged" if agent already has it.
-	if cmd == "search" || cmd == "map" {
+	if cmd == "search" || cmd == "map" || cmd == "orient" {
 		cacheKey := s.CacheKey(cmd, args, flags)
 		status, _ := s.CheckContent(cacheKey, text, false)
 		if status == "unchanged" {

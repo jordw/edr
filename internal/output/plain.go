@@ -76,7 +76,7 @@ func printPlain(e *Envelope) {
 
 		opType, _ := op["type"].(string)
 		switch opType {
-		case "read", "prepare":
+		case "focus", "read", "prepare":
 			plainRead(w, op)
 		case "search":
 			plainSearch(w, op)
@@ -84,10 +84,8 @@ func printPlain(e *Envelope) {
 			plainEdit(w, op)
 		case "rename":
 			plainRename(w, op)
-		case "map":
+		case "orient", "map":
 			plainMap(w, op)
-		case "refs":
-			plainRefs(w, op)
 		case "reset":
 			plainReset(w, op)
 		case "status":

@@ -28,6 +28,8 @@ func TestOpenerAlignment(t *testing.T) {
 		varName string
 		cmdName string
 	}{
+		{"orientCmd", "orient"},
+		{"focusCmd", "focus"},
 		{"readCmd", "read"},
 		{"mapCmd", "map"},
 		{"searchCmd", "search"},

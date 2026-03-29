@@ -994,6 +994,9 @@ func TestDoStructsMatchCmdspec(t *testing.T) {
 		"start_line": true, "end_line": true, "all": true, "in": true,
 		"where": true, "dry_run": true, "expect_hash": true, "delete": true,
 		"insert_at": true, "fuzzy": true, "lines": true, "move_after": true, "read_back": true,
+		// Write/create flags (merged from write)
+		"content": true, "inside": true, "after": true, "append": true,
+		"mkdir": true, "no_verify": true,
 	}
 	checkStructFieldsFiltered(t, "doEdit", doEditKnownKeys, editFields)
 

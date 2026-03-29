@@ -106,21 +106,28 @@ type doQuery struct {
 }
 
 type doEdit struct {
-	File       string `json:"file"`
-	OldText    string `json:"old_text,omitempty"`
-	NewText    string `json:"new_text,omitempty"`
-	Symbol     string `json:"symbol,omitempty"`
-	StartLine  *int   `json:"start_line,omitempty"`
-	EndLine    *int   `json:"end_line,omitempty"`
-	All        *bool  `json:"all,omitempty"`
-	In         string `json:"in,omitempty"`
-	Where      string `json:"where,omitempty"`
-	DryRun     *bool  `json:"dry_run,omitempty"`
-	ExpectHash string `json:"expect_hash,omitempty"`
-	Delete     *bool  `json:"delete,omitempty"`
-	InsertAt   *int   `json:"insert_at,omitempty"`
-	Fuzzy      *bool  `json:"fuzzy,omitempty"`
-	ReadBack   *bool  `json:"read_back,omitempty"`
+	File       string  `json:"file"`
+	OldText    string  `json:"old_text,omitempty"`
+	NewText    string  `json:"new_text,omitempty"`
+	Symbol     string  `json:"symbol,omitempty"`
+	StartLine  *int    `json:"start_line,omitempty"`
+	EndLine    *int    `json:"end_line,omitempty"`
+	All        *bool   `json:"all,omitempty"`
+	In         string  `json:"in,omitempty"`
+	Where      string  `json:"where,omitempty"`
+	DryRun     *bool   `json:"dry_run,omitempty"`
+	ExpectHash string  `json:"expect_hash,omitempty"`
+	Delete     *bool   `json:"delete,omitempty"`
+	InsertAt   *int    `json:"insert_at,omitempty"`
+	Fuzzy      *bool   `json:"fuzzy,omitempty"`
+	ReadBack   *bool   `json:"read_back,omitempty"`
+	// Write/create flags (when no OldText, acts as write)
+	Content    string  `json:"content,omitempty"`
+	Inside     *string `json:"inside,omitempty"`
+	After      *string `json:"after,omitempty"`
+	Append     *bool   `json:"append,omitempty"`
+	Mkdir      *bool   `json:"mkdir,omitempty"`
+	NoVerify   *bool   `json:"no_verify,omitempty"`
 }
 
 type doWrite struct {

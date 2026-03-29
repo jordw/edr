@@ -20,17 +20,21 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(readCmd)
-	rootCmd.AddCommand(writeCmd)
+	// Primary commands
+	rootCmd.AddCommand(orientCmd)
+	rootCmd.AddCommand(focusCmd)
 	rootCmd.AddCommand(editCmd)
-	rootCmd.AddCommand(mapCmd)
+	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(undoCmd)
+	rootCmd.AddCommand(setupCmd)
+	// Internal/hidden (still work, not in --help)
+	rootCmd.AddCommand(mapCmd)    // alias for orient
+	rootCmd.AddCommand(readCmd)   // alias for focus
+	rootCmd.AddCommand(writeCmd)  // merged into edit
 	rootCmd.AddCommand(searchCmd)
 	rootCmd.AddCommand(renameCmd)
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(resetCmd)
-	rootCmd.AddCommand(setupCmd)
-	rootCmd.AddCommand(statusCmd)
-	rootCmd.AddCommand(undoCmd)
 }
 
 
@@ -276,25 +280,49 @@ func resultStatus(result any) (string, bool) {
 // Commands
 // =====================================================================
 
-var readCmd = &cobra.Command{
-	Use:   "read <file>[:<symbol>] [<file>...] [flags]",
-	Short: ToolDesc["read"],
+var orientCmd = &cobra.Command{
+	Use:   "orient [path]",
+	Short: ToolDesc["orient"],
+	Args:  cobra.MaximumNArgs(1),
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "orient", args) },
+}
+
+func init() { cmdspec.RegisterFlags(orientCmd.Flags(), "orient") }
+
+var focusCmd = &cobra.Command{
+	Use:   "focus <file>[:<symbol>] [<file>...] [flags]",
+	Short: ToolDesc["focus"],
 	Args:  cobra.MinimumNArgs(1),
-	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "read", args) },
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "focus", args) },
+}
+
+func init() {
+	cmdspec.RegisterFlags(focusCmd.Flags(), "focus")
+	if f := focusCmd.Flags().Lookup("expand"); f != nil {
+		f.NoOptDefVal = "deps"
+	}
+}
+
+var readCmd = &cobra.Command{
+	Use:    "read <file>[:<symbol>] [<file>...] [flags]",
+	Short:  ToolDesc["read"],
+	Args:   cobra.MinimumNArgs(1),
+	RunE:   func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "focus", args) },
+	Hidden: true,
 }
 
 func init() {
 	cmdspec.RegisterFlags(readCmd.Flags(), "read")
-	// Allow bare --expand (no value) to default to "deps"
 	if f := readCmd.Flags().Lookup("expand"); f != nil {
 		f.NoOptDefVal = "deps"
 	}
 }
 
 var writeCmd = &cobra.Command{
-	Use:   "write <file>",
-	Short: ToolDesc["write"],
-	Args:  cobra.MinimumNArgs(1),
+	Use:    "write <file>",
+	Short:  ToolDesc["write"],
+	Args:   cobra.MinimumNArgs(1),
+	Hidden: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return dispatchCmdWithStdin(cmd, "write", args, "content")
 	},
@@ -328,28 +356,31 @@ var editCmd = &cobra.Command{
 func init() { cmdspec.RegisterFlags(editCmd.Flags(), "edit") }
 
 var mapCmd = &cobra.Command{
-	Use:   "map [file]",
-	Short: ToolDesc["map"],
-	Args:  cobra.MaximumNArgs(1),
-	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "map", args) },
+	Use:    "map [file]",
+	Short:  ToolDesc["map"],
+	Args:   cobra.MaximumNArgs(1),
+	RunE:   func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "orient", args) },
+	Hidden: true,
 }
 
 func init() { cmdspec.RegisterFlags(mapCmd.Flags(), "map") }
 
 var searchCmd = &cobra.Command{
-	Use:   "search <pattern>",
-	Short: ToolDesc["search"],
-	Args:  cobra.ExactArgs(1),
-	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "search", args) },
+	Use:    "search <pattern>",
+	Short:  ToolDesc["search"],
+	Args:   cobra.ExactArgs(1),
+	RunE:   func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "search", args) },
+	Hidden: true,
 }
 
 func init() { cmdspec.RegisterFlags(searchCmd.Flags(), "search") }
 
 var renameCmd = &cobra.Command{
-	Use:   "rename <old-name> <new-name>",
-	Short: ToolDesc["rename"],
-	Args:  cobra.ExactArgs(2),
-	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "rename", args) },
+	Use:    "rename <old-name> <new-name>",
+	Short:  ToolDesc["rename"],
+	Args:   cobra.ExactArgs(2),
+	RunE:   func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "rename", args) },
+	Hidden: true,
 }
 
 func init() { cmdspec.RegisterFlags(renameCmd.Flags(), "rename") }
@@ -364,6 +395,7 @@ var resetCmd = &cobra.Command{
 	Use:     "reset",
 	Aliases: []string{},
 	Short:   ToolDesc["reset"],
+	Hidden:  true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := getRoot(cmd)
 		edrDir := index.HomeEdrDir(root)
@@ -395,8 +427,9 @@ var resetCmd = &cobra.Command{
 }
 
 var verifyCmd = &cobra.Command{
-	Use:   "verify",
-	Short: ToolDesc["verify"],
+	Use:    "verify",
+	Short:  ToolDesc["verify"],
+	Hidden: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		flags := extractFlags(cmd)
 
@@ -785,7 +818,7 @@ func classifyErrorMsg(msg string) string {
 // the assumption in the session, and removes the internal field before any
 // serialization can leak it.
 func extractAndStripSignature(sess *session.Session, cmdName string, args []string, result any) {
-	if cmdName != "read" {
+	if cmdName != "read" && cmdName != "focus" {
 		return
 	}
 	m, ok := result.(map[string]any)
@@ -831,7 +864,7 @@ func recordOp(sess *session.Session, cmdName string, args []string, flags map[st
 	}
 
 	// Update assumption op ID now that we have the real one
-	if cmdName == "read" && symbol != "" {
+	if (cmdName == "read" || cmdName == "focus") && symbol != "" {
 		key := file + ":" + symbol
 		ops := sess.GetRecentOps(1)
 		if len(ops) > 0 {
