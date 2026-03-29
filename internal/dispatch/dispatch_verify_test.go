@@ -96,6 +96,26 @@ func TestGoReverseImporters(t *testing.T) {
 	})
 }
 
+func TestGoModTakesPriorityOverMakefile(t *testing.T) {
+	root := t.TempDir()
+	// Create both go.mod and Makefile — Go should win.
+	os.WriteFile(filepath.Join(root, "go.mod"), []byte("module test\ngo 1.21\n"), 0644)
+	os.WriteFile(filepath.Join(root, "Makefile"), []byte("test:\n\techo makefile-test\n"), 0644)
+	// Create a valid Go file so "go test" has something to compile.
+	os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\nfunc main() {}\n"), 0644)
+
+	flags := map[string]any{"test": true}
+	result, err := DispatchVerify(t.Context(), root, nil, flags)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := result.(map[string]any)
+	cmd, _ := m["command"].(string)
+	if !contains(cmd, "go test") {
+		t.Errorf("with both go.mod and Makefile, expected go test command, got %q", cmd)
+	}
+}
+
 func TestVerifyTimeoutMapsToFailed(t *testing.T) {
 	root := t.TempDir()
 	// Create a go.mod so auto-detect picks Go

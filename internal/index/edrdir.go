@@ -36,7 +36,7 @@ func HomeEdrDir(repoRoot string) string {
 	dir := filepath.Join(base, "repos", key)
 	os.MkdirAll(dir, 0700)
 
-	// Write a breadcrumb so users can identify which repo a dir belongs to
+	// Write breadcrumb for human identification of repo dirs
 	breadcrumb := filepath.Join(dir, "root.txt")
 	if _, err := os.Stat(breadcrumb); err != nil {
 		os.WriteFile(breadcrumb, []byte(abs+"\n"), 0600)

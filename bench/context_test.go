@@ -241,7 +241,7 @@ func TestResponseSizeRegression(t *testing.T) {
 			cmd:      "refs",
 			args:     []string{"_execute_task"},
 			flags:    map[string]any{"impact": true},
-			maxBytes: 500, // actual ~262B
+			maxBytes: 1500, // actual ~1349B (BFS depth 3 finds transitive callers)
 		},
 		{
 			name:     "explore gather",

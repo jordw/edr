@@ -14,7 +14,7 @@ import (
 )
 
 // DispatchVerify runs verification without requiring a DB or index.
-// This avoids creating .edr as a side effect on unindexed repos.
+// Runs verification without requiring a symbol store.
 func DispatchVerify(ctx context.Context, root string, args []string, flags map[string]any) (any, error) {
 	return runVerify(ctx, nil, root, args, flags)
 }
@@ -110,7 +110,7 @@ func verifyOutputTail(output string, maxLines int) string {
 
 // detectMakefile checks for a Makefile and probes for test/check targets.
 // Returns a make command or "" if no Makefile found.
-// loadVerifyConfig reads .edr/config.json for a persistent verify command.
+// loadVerifyConfig reads config.json from the edr data directory.
 // Supports {"verify": "cmd"} or {"verify": {"build": "cmd", "test": "cmd"}}.
 func loadVerifyConfig(edrDir, level string) string {
 	data, err := os.ReadFile(filepath.Join(edrDir, "config.json"))

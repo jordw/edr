@@ -3,7 +3,7 @@
 // and body dedup — the same logic for CLI and batch.
 //
 // Sessions are identified by the EDR_SESSION env var. When set, session state
-// is persisted to .edr/sessions/<id>.json between calls. When unset, sessions
+// is persisted to ~/.edr/repos/<key>/sessions/<id>.json between calls. When unset, sessions
 // are ephemeral (in-memory only, no persistence). Batch responses include a
 // hint when no session is active so agents know to set one up.
 package session

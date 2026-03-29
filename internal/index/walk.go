@@ -54,7 +54,7 @@ func WalkRepoFiles(root string, fn func(path string) error) error {
 // shouldIgnoreDir returns true if a directory should be skipped.
 // Uses .gitignore when available, falls back to DefaultIgnore.
 func shouldIgnoreDir(name, path, root string, gitignore *GitIgnoreMatcher) bool {
-	// Always skip .git and .edr
+	// Always skip .git and .claude
 	for _, ign := range alwaysIgnore {
 		if name == ign {
 			return true

@@ -1019,7 +1019,7 @@ func TestSpec_VerifyWithoutIndex(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\nfunc main() {}\n"), 0644)
 	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n\ngo 1.21\n"), 0644)
 
-	// verify should work without .edr index.
+	// verify should work without a symbol index.
 	result, _, _, exit := specRun(t, binary, dir, nil, "verify")
 	if exit != 0 {
 		t.Fatalf("verify without index: exit %d", exit)
@@ -1028,9 +1028,9 @@ func TestSpec_VerifyWithoutIndex(t *testing.T) {
 		t.Fatal("expected verify line")
 	}
 
-	// verify should NOT create .edr directory.
+	// verify should NOT create .edr/ in the repo.
 	if _, err := os.Stat(filepath.Join(dir, ".edr")); err == nil {
-		t.Error("verify should not create .edr directory")
+		t.Error("verify should not create .edr/ in the repo")
 	}
 }
 

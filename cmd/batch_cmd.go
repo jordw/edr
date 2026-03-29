@@ -36,7 +36,7 @@ Modifier flags apply to the preceding operation. Verify runs automatically
 when edits are present (use --no-verify to skip).
 
 When EDR_SESSION is set, session optimizations (delta reads, body dedup)
-persist across calls via .edr/sessions/<id>.json.
+persist across calls via ~/.edr/repos/<key>/sessions/<id>.json.
 
 Examples:
   edr -r cmd/root.go --signatures -s "handleRequest"
@@ -926,7 +926,7 @@ func runBatch(args []string) error {
 		return fmt.Errorf("marshal batch: %w", err)
 	}
 
-	// Resolve root — discover repo root by walking up for .edr/.git
+	// Resolve root — discover repo root by walking up for .git
 	root := state.root
 	if root == "" {
 		wd, _ := os.Getwd()

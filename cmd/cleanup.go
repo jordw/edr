@@ -11,7 +11,7 @@ import (
 
 const cleanupInterval = 1 * time.Hour
 
-// cleanEdrDir removes stale files from the .edr directory:
+// cleanEdrDir removes stale files from the edr data directory:
 // - Session JSON files older than 7 days
 // - PPID mapping files for dead processes
 // - Run baseline (.last) files older than 7 days

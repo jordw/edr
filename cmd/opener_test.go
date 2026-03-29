@@ -101,7 +101,7 @@ func TestOpenerAlignment(t *testing.T) {
 
 	// resetCmd handles session/checkpoint clearing directly (no dispatch needed)
 
-	// --- verifyCmd must use DispatchVerify (no DB, no .edr side effects) ---
+	// --- verifyCmd must use DispatchVerify (no DB, no side effects) ---
 	t.Run("verifyCmd_uses_DispatchVerify", func(t *testing.T) {
 		body := extractRunE("verifyCmd")
 		if body == "" {

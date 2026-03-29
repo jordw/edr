@@ -42,15 +42,6 @@ func BenchmarkParseRepo(b *testing.B) {
 		ctx := context.Background()
 		// Force a full parse of all files
 		db.AllSymbols(ctx)
-		// Report total parsed files
-		dbPath := filepath.Join(tmp, ".edr", "index.db")
-		if info, err := os.Stat(dbPath); err == nil {
-			b.ReportMetric(float64(info.Size()/1024), "db_size_kb")
-		}
-		walPath := dbPath + "-wal"
-		if info, err := os.Stat(walPath); err == nil {
-			b.ReportMetric(float64(info.Size()/1024), "wal_size_kb")
-		}
 		db.Close()
 	}
 }
