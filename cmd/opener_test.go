@@ -11,10 +11,8 @@ import (
 // the correct DB opener. This prevents regressions when new commands are added.
 //
 // Categories:
-//   - Strict (openDBStrict): read, search, map, rename — via dispatchCmd
-//   - Strict+stdin:          write, edit — via dispatchCmdWithStdin (also uses openDBStrict)
-// (no index step needed — on-demand parsing)
-//   - No index:              verify — uses index.OpenDB directly
+//   - Strict (openDBStrict): orient, focus — via dispatchCmd
+//   - Strict+stdin:          edit — via dispatchCmdWithStdin (also uses openDBStrict)
 //   - Own opener:            setup — manages its own DB in setup.go
 func TestOpenerAlignment(t *testing.T) {
 	src, err := os.ReadFile("commands.go")
@@ -30,10 +28,6 @@ func TestOpenerAlignment(t *testing.T) {
 	}{
 		{"orientCmd", "orient"},
 		{"focusCmd", "focus"},
-		{"readCmd", "read"},
-		{"mapCmd", "map"},
-		{"searchCmd", "search"},
-		{"renameCmd", "rename"},
 	}
 
 	// Commands that must use dispatchCmdWithStdin (also calls openDBStrict internally)
@@ -41,7 +35,6 @@ func TestOpenerAlignment(t *testing.T) {
 		varName string
 		cmdName string
 	}{
-		{"writeCmd", "write"},
 		{"editCmd", "edit"},
 	}
 
@@ -99,32 +92,6 @@ func TestOpenerAlignment(t *testing.T) {
 		})
 	}
 
-	// resetCmd handles session/checkpoint clearing directly (no dispatch needed)
-
-	// --- verifyCmd must use DispatchVerify (no DB, no side effects) ---
-	t.Run("verifyCmd_uses_DispatchVerify", func(t *testing.T) {
-		body := extractRunE("verifyCmd")
-		if body == "" {
-			t.Fatalf("could not extract RunE body for verifyCmd")
-		}
-		if !strings.Contains(body, "dispatch.DispatchVerify(") {
-			t.Errorf("verifyCmd should call dispatch.DispatchVerify, but RunE body is: %s", strings.TrimSpace(body))
-		}
-		// Must not open any DB
-		if strings.Contains(body, "index.OpenDB(") {
-			t.Errorf("verifyCmd should not call index.OpenDB")
-		}
-		if strings.Contains(body, "openDBStrict(") {
-			t.Errorf("verifyCmd should not call openDBStrict")
-		}
-		if strings.Contains(body, "openDBAndIndex(") {
-			t.Errorf("verifyCmd should not call openDBAndIndex")
-		}
-		if strings.Contains(body, "dispatchCmd(") {
-			t.Errorf("verifyCmd should not use dispatchCmd")
-		}
-	})
-
 	// --- setupCmd must be in setup.go, not using any shared dispatcher ---
 	t.Run("setupCmd_in_setup_go", func(t *testing.T) {
 		setupSrc, err := os.ReadFile("setup.go")
@@ -157,13 +124,10 @@ func TestOpenerAlignment(t *testing.T) {
 		for _, tc := range dispatchCmdWithStdinCommands {
 			tested[tc.varName] = true
 		}
-		tested["resetCmd"] = true
-		tested["verifyCmd"] = true
 		tested["setupCmd"] = true
-		tested["runCmd"] = true
 		tested["statusCmd"] = true
-		tested["sessionCmd"] = true // hidden compat command
 		tested["undoCmd"] = true
+		tested["sessionCmd"] = true
 
 		for _, m := range matches {
 			cmdVar := m[1]

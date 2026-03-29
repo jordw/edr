@@ -282,8 +282,8 @@ func TestPostProcess_DeltaRead_Unchanged(t *testing.T) {
 	sess := session.New()
 	text := `{"file":"f.go","lines":[1,10],"content":"hello","hash":"abc"}`
 
-	sess.PostProcess("read", []string{"f.go"}, map[string]any{}, nil, text)
-	result := sess.PostProcess("read", []string{"f.go"}, map[string]any{}, nil, text)
+	sess.PostProcess("focus", []string{"f.go"}, map[string]any{}, nil, text)
+	result := sess.PostProcess("focus", []string{"f.go"}, map[string]any{}, nil, text)
 	if !strings.Contains(result, "unchanged") {
 		t.Errorf("should be unchanged, got: %s", result)
 	}

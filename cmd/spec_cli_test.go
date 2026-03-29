@@ -323,11 +323,11 @@ func TestSpec_ReadTransport(t *testing.T) {
 		wantSym  string
 		wantFile string
 	}{
-		{"file read", []string{"read", "hello.go"}, "", "hello.go"},
-		{"symbol read", []string{"read", "hello.go:helper"}, "helper", "hello.go"},
-		{"line range", []string{"read", "hello.go", "--lines", "1:3"}, "", "hello.go"},
-		{"signatures", []string{"read", "hello.go", "--signatures"}, "", "hello.go"},
-		{"skeleton", []string{"read", "hello.go", "--skeleton"}, "", "hello.go"},
+		{"file read", []string{"focus", "hello.go"}, "", "hello.go"},
+		{"symbol read", []string{"focus", "hello.go:helper"}, "helper", "hello.go"},
+		{"line range", []string{"focus", "hello.go", "--lines", "1:3"}, "", "hello.go"},
+		{"signatures", []string{"focus", "hello.go", "--signatures"}, "", "hello.go"},
+		{"skeleton", []string{"focus", "hello.go", "--skeleton"}, "", "hello.go"},
 	}
 
 	for _, tt := range tests {
@@ -373,62 +373,11 @@ func TestSpec_ReadContentNotNumbered(t *testing.T) {
 		"hello.go": "package main\n\nfunc main() {}\n",
 	})
 
-	result, _, _, _ := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "read", "hello.go")
+	result, _, _, _ := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "focus", "hello.go")
 	body := result.Ops[0].Body
 	// Body should NOT have line-number prefixes like "  1\t".
 	if matched, _ := regexp.MatchString(`(?m)^\s*\d+\t`, body); matched {
 		t.Error("read body contains line-number prefixes")
-	}
-}
-
-func TestSpec_SearchTransport(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"hello.go": "package main\n\nfunc main() {}\n\nfunc helper() int { return 42 }\n",
-	})
-
-	tests := []struct {
-		name string
-		args []string
-	}{
-		{"symbol search", []string{"search", "main"}},
-		{"text search", []string{"search", "func", "--text"}},
-		{"text search in file", []string{"search", "return", "--text", "--include", "*.go"}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, tt.args...)
-			if exit != 0 {
-				t.Fatalf("exit %d", exit)
-			}
-			if len(result.Ops) != 1 {
-				t.Fatalf("expected 1 op, got %d", len(result.Ops))
-			}
-			h := result.Ops[0].Header
-
-			// Search must have n.
-			if h["n"] == nil {
-				t.Error("missing n in search header")
-			}
-		})
-	}
-}
-
-func TestSpec_SearchZeroIsSuccess(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"hello.go": "package main\n",
-	})
-
-	result, _, _, exit := specRun(t, binary, dir, nil, "search", "zzz_nonexistent_zzz")
-	if exit != 0 {
-		t.Errorf("zero-result search should exit 0, got %d", exit)
-	}
-	if len(result.Ops) != 1 {
-		t.Fatalf("expected 1 op, got %d", len(result.Ops))
-	}
-	n, _ := result.Ops[0].Header["n"].(float64)
-	if n != 0 {
-		t.Errorf("expected n=0, got %v", n)
 	}
 }
 
@@ -437,7 +386,7 @@ func TestSpec_MapTransport(t *testing.T) {
 		"hello.go": "package main\n\nfunc main() {}\n",
 	})
 
-	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "map")
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "orient")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -529,7 +478,7 @@ func TestSpec_WriteTransport(t *testing.T) {
 	})
 
 	result, _, _, exit := specRun(t, binary, dir, nil,
-		"write", "new.go", "--content", "package main\n")
+		"edit", "new.go", "--content", "package main\n")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -556,8 +505,8 @@ func TestSpec_FailureShape(t *testing.T) {
 		args   []string
 		wantEC string
 	}{
-		{"file not found", []string{"read", "nope.go"}, "file_not_found"},
-		{"symbol not found", []string{"read", "hello.go:Nope"}, "not_found"},
+		{"file not found", []string{"focus", "nope.go"}, "file_not_found"},
+		{"symbol not found", []string{"focus", "hello.go:Nope"}, "not_found"},
 		{"edit file not found", []string{"edit", "nope.go", "--old-text", "x", "--new-text", "y"}, "file_not_found"},
 		{"outside repo edit", []string{"edit", "/etc/passwd", "--old-text", "x", "--new-text", "y"}, "outside_repo"},
 	}
@@ -607,11 +556,9 @@ func TestSpec_ExitCodes(t *testing.T) {
 		args     []string
 		wantExit int
 	}{
-		{"read success", []string{"read", "hello.go"}, 0},
-		{"map success", []string{"map"}, 0},
-		{"search success", []string{"search", "main"}, 0},
-		{"search zero results", []string{"search", "zzz_nonexistent"}, 0},
-		{"read failure", []string{"read", "nope.go"}, 0},
+		{"focus success", []string{"focus", "hello.go"}, 0},
+		{"orient success", []string{"orient"}, 0},
+		{"focus failure", []string{"focus", "nope.go"}, 0},
 		{"edit failure", []string{"edit", "nope.go", "--old-text", "x", "--new-text", "y"}, 0},
 		{"refs failure", []string{"refs", "zzz_nonexistent"}, 0},
 		{"dry-run success", []string{"edit", "hello.go", "--old-text", "package main", "--new-text", "package test", "--dry-run"}, 0},
@@ -632,7 +579,7 @@ func TestSpec_StderrSilentByDefault(t *testing.T) {
 		"hello.go": "package main\n\nfunc main() {}\n",
 	})
 
-	_, _, stderr, _ := specRun(t, binary, dir, nil, "read", "hello.go")
+	_, _, stderr, _ := specRun(t, binary, dir, nil, "focus", "hello.go")
 	if stderr != "" {
 		t.Errorf("stderr should be empty without --verbose, got: %q", stderr)
 	}
@@ -651,7 +598,7 @@ func TestSpec_ContextExternalChanges(t *testing.T) {
 	sessEnv := []string{"EDR_SESSION=" + sessID}
 
 	// 1. Read a file to record mtime in session
-	_, _, _, exit1 := specRun(t, binary, dir, sessEnv, "read", "hello.go")
+	_, _, _, exit1 := specRun(t, binary, dir, sessEnv, "focus", "hello.go")
 	if exit1 != 0 {
 		t.Fatalf("first read exit %d", exit1)
 	}
@@ -737,19 +684,19 @@ func TestSpec_BatchMixedOps(t *testing.T) {
 	})
 
 	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-		"-r", "hello.go", "--sig", "-s", "main")
+		"-r", "hello.go", "--sig", "-m")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
 	if len(result.Ops) != 2 {
 		t.Fatalf("expected 2 ops, got %d", len(result.Ops))
 	}
-	// First op is a read, second is a search.
+	// First op is a read, second is a map/orient.
 	if result.Ops[0].Header["file"] == nil {
 		t.Error("first op (read) missing file")
 	}
-	if result.Ops[1].Header["n"] == nil {
-		t.Error("second op (search) missing n")
+	if result.Ops[1].Header["files"] == nil {
+		t.Error("second op (orient) missing files")
 	}
 }
 
@@ -798,23 +745,13 @@ func TestSpec_Parity(t *testing.T) {
 	}{
 		{
 			"read",
-			[]string{"read", "hello.go"},
+			[]string{"focus", "hello.go"},
 			[]string{"-r", "hello.go"},
 		},
 		{
 			"read signatures",
-			[]string{"read", "hello.go", "--signatures"},
+			[]string{"focus", "hello.go", "--signatures"},
 			[]string{"-r", "hello.go", "--sig"},
-		},
-		{
-			"search symbol",
-			[]string{"search", "main"},
-			[]string{"-s", "main"},
-		},
-		{
-			"search text",
-			[]string{"search", "main", "--text"},
-			[]string{"-s", "main", "--text"},
 		},
 		{
 			"edit dry-run",
@@ -892,7 +829,7 @@ func TestSpec_SessionDedup(t *testing.T) {
 	env := []string{"EDR_SESSION=" + sess}
 
 	// First read: session=new.
-	r1, _, _, _ := specRun(t, binary, dir, env, "read", "hello.go")
+	r1, _, _, _ := specRun(t, binary, dir, env, "focus", "hello.go")
 	if s, _ := r1.Ops[0].Header["session"].(string); s != "" && s != "new" {
 		t.Errorf("first read session = %q, want new or empty", s)
 	}
@@ -901,7 +838,7 @@ func TestSpec_SessionDedup(t *testing.T) {
 	}
 
 	// Second read: session=unchanged.
-	r2, _, _, _ := specRun(t, binary, dir, env, "read", "hello.go")
+	r2, _, _, _ := specRun(t, binary, dir, env, "focus", "hello.go")
 	if s, _ := r2.Ops[0].Header["session"].(string); s != "unchanged" {
 		t.Errorf("second read session = %q, want unchanged", s)
 	}
@@ -915,18 +852,18 @@ func TestSpec_ExplicitSessionRequired(t *testing.T) {
 	// With an explicit session, second call returns unchanged.
 	sess := nextSession()
 	env := []string{"EDR_SESSION=" + sess}
-	r1, _, _, _ := specRun(t, binary, dir, env, "read", "hello.go")
+	r1, _, _, _ := specRun(t, binary, dir, env, "focus", "hello.go")
 	if r1.Ops[0].Body == "" {
 		t.Error("first read should have body")
 	}
-	r2, _, _, _ := specRun(t, binary, dir, env, "read", "hello.go")
+	r2, _, _, _ := specRun(t, binary, dir, env, "focus", "hello.go")
 	if s, _ := r2.Ops[0].Header["session"].(string); s != "unchanged" {
 		t.Errorf("second read with same session should be unchanged, got %q", s)
 	}
 
 	// With a different session, body returns again.
 	env2 := []string{"EDR_SESSION=" + nextSession()}
-	r3, _, _, _ := specRun(t, binary, dir, env2, "read", "hello.go")
+	r3, _, _, _ := specRun(t, binary, dir, env2, "focus", "hello.go")
 	if r3.Ops[0].Body == "" {
 		t.Error("new session should return full body")
 	}
@@ -973,47 +910,6 @@ func TestSpec_VerifySkippedOnDryRun(t *testing.T) {
 	}
 }
 
-func TestSpec_VerifyStandalone(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"hello.go": "package main\n\nfunc main() {}\n",
-		"go.mod":   "module test\n\ngo 1.21\n",
-	})
-
-	result, _, _, exit := specRun(t, binary, dir, nil, "verify")
-	if exit != 0 {
-		t.Fatalf("exit %d", exit)
-	}
-	// Standalone verify emits a verify header.
-	if result.Verify == nil {
-		t.Fatal("verify command should emit verify line")
-	}
-	if result.Verify["verify"] != "passed" {
-		t.Errorf("verify = %v, want passed", result.Verify["verify"])
-	}
-}
-
-func TestSpec_VerifyWithoutIndex(t *testing.T) {
-	binary := buildBinary(t)
-	dir := t.TempDir()
-	dir, _ = filepath.EvalSymlinks(dir)
-	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\nfunc main() {}\n"), 0644)
-	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n\ngo 1.21\n"), 0644)
-
-	// verify should work without a symbol index.
-	result, _, _, exit := specRun(t, binary, dir, nil, "verify")
-	if exit != 0 {
-		t.Fatalf("verify without index: exit %d", exit)
-	}
-	if result.Verify == nil {
-		t.Fatal("expected verify line")
-	}
-
-	// verify should NOT create .edr/ in the repo.
-	if _, err := os.Stat(filepath.Join(dir, ".edr")); err == nil {
-		t.Error("verify should not create .edr/ in the repo")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Auto-index on first use
 // ---------------------------------------------------------------------------
@@ -1024,22 +920,16 @@ func TestSpec_AutoIndex(t *testing.T) {
 	dir, _ = filepath.EvalSymlinks(dir)
 	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\nfunc main() {}\n"), 0644)
 
-	// read should work without any setup.
-	_, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "read", "hello.go")
+	// focus should work without any setup.
+	_, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "focus", "hello.go")
 	if exit != 0 {
-		t.Errorf("read: exit %d, want 0", exit)
+		t.Errorf("focus: exit %d, want 0", exit)
 	}
 
-	// map should work.
-	_, _, _, exit = specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "map")
+	// orient should work.
+	_, _, _, exit = specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "orient")
 	if exit != 0 {
-		t.Errorf("map: exit %d, want 0", exit)
-	}
-
-	// search should work.
-	_, _, _, exit = specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "search", "main")
-	if exit != 0 {
-		t.Errorf("search: exit %d, want 0", exit)
+		t.Errorf("orient: exit %d, want 0", exit)
 	}
 }
 
@@ -1050,54 +940,9 @@ func TestSpec_AutoIndexSilent(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\nfunc main() {}\n"), 0644)
 
 	// Auto-index should not emit stderr.
-	_, _, stderr, _ := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "read", "hello.go")
+	_, _, stderr, _ := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "focus", "hello.go")
 	if stderr != "" {
 		t.Errorf("should be silent, got stderr: %q", stderr)
-	}
-}
-// ---------------------------------------------------------------------------
-// Search determinism
-// ---------------------------------------------------------------------------
-
-func TestSpec_SearchDeterminism(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"a.go": "package main\n\nfunc A() {}\n",
-		"b.go": "package main\n\nfunc B() {}\n",
-		"c.go": "package main\n\nfunc C() {}\n",
-	})
-
-	var outputs []string
-	for i := 0; i < 3; i++ {
-		_, stdout, _, _ := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "search", "func", "--text")
-		outputs = append(outputs, stdout)
-	}
-
-	for i := 1; i < len(outputs); i++ {
-		if outputs[i] != outputs[0] {
-			t.Errorf("search output not deterministic:\n  run 0: %q\n  run %d: %q", outputs[0], i, outputs[i])
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Rename
-// ---------------------------------------------------------------------------
-
-func TestSpec_RenameTransport(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"hello.go": "package main\n\nfunc OldName() int { return 42 }\n\nfunc main() { OldName() }\n",
-	})
-
-	result, _, _, exit := specRun(t, binary, dir, nil, "rename", "OldName", "NewName", "--dry-run")
-	if exit != 0 {
-		t.Fatalf("exit %d", exit)
-	}
-	if len(result.Ops) != 1 {
-		t.Fatalf("expected 1 op, got %d", len(result.Ops))
-	}
-	h := result.Ops[0].Header
-	if h["status"] != "dry_run" {
-		t.Errorf("status = %v, want dry_run", h["status"])
 	}
 }
 
@@ -1112,7 +957,7 @@ func TestSpec_ReadBudget(t *testing.T) {
 
 	// With a small budget, output should be truncated.
 	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-		"read", "big.go", "--budget", "50")
+		"focus", "big.go", "--budget", "50")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -1122,33 +967,13 @@ func TestSpec_ReadBudget(t *testing.T) {
 	}
 }
 
-func TestSpec_SearchBudget(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"a.go": "package main\n\nfunc A1() {}\nfunc A2() {}\nfunc A3() {}\nfunc A4() {}\nfunc A5() {}\n",
-	})
-
-	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-		"search", "A", "--budget", "10")
-	if exit != 0 {
-		t.Fatalf("exit %d", exit)
-	}
-	h := result.Ops[0].Header
-	if h["n"] == nil {
-		t.Error("search should always have n")
-	}
-	// budget_used should appear when truncated.
-	if h["trunc"] == true && h["budget_used"] == nil {
-		t.Error("truncated search should report budget_used")
-	}
-}
-
 func TestSpec_MapBudget(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{
 		"a.go": "package main\n\n" + strings.Repeat("func F() {}\n", 50),
 	})
 
 	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-		"map", "--budget", "20")
+		"orient", "--budget", "20")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -1375,7 +1200,7 @@ func TestSpec_WriteAppend(t *testing.T) {
 	})
 
 	result, _, _, exit := specRun(t, binary, dir, nil,
-		"write", "hello.go", "--append", "--content", "\nfunc appended() {}\n")
+		"edit", "hello.go", "--append", "--content", "\nfunc appended() {}\n")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -1396,7 +1221,7 @@ func TestSpec_WriteInside(t *testing.T) {
 	})
 
 	result, _, _, exit := specRun(t, binary, dir, nil,
-		"write", "hello.go", "--inside", "Config", "--content", "\tAge int\n")
+		"edit", "hello.go", "--inside", "Config", "--content", "\tAge int\n")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -1417,7 +1242,7 @@ func TestSpec_WriteAfter(t *testing.T) {
 	})
 
 	result, _, _, exit := specRun(t, binary, dir, nil,
-		"write", "hello.go", "--after", "existing", "--content", "func added() {}\n")
+		"edit", "hello.go", "--after", "existing", "--content", "func added() {}\n")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -1441,7 +1266,7 @@ func TestSpec_WriteDryRun(t *testing.T) {
 	})
 
 	result, _, _, exit := specRun(t, binary, dir, nil,
-		"write", "hello.go", "--append", "--content", "// addition\n", "--dry-run")
+		"edit", "hello.go", "--append", "--content", "// addition\n", "--dry-run")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -1471,7 +1296,7 @@ func TestSpec_EditStaleReadRejects(t *testing.T) {
 
 	// Read the file to establish session state.
 	t.Log("about to read")
-	specRun(t, binary, dir, env, "read", "hello.go")
+	specRun(t, binary, dir, env, "focus", "hello.go")
 	t.Log("read done, modifying file")
 
 	// Modify the file externally.
@@ -1489,154 +1314,6 @@ func TestSpec_EditStaleReadRejects(t *testing.T) {
 	}
 	if ec, _ := header["ec"].(string); ec != "hash_mismatch" {
 		t.Errorf("ec = %q, want hash_mismatch", ec)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Refs modes
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Rename apply
-// ---------------------------------------------------------------------------
-
-func TestSpec_RenameApply(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"hello.go": "package main\n\nfunc OldFunc() int { return 42 }\n\nfunc main() { OldFunc() }\n",
-	})
-
-	result, _, _, exit := specRun(t, binary, dir, nil, "rename", "OldFunc", "NewFunc")
-	if exit != 0 {
-		t.Fatalf("exit %d", exit)
-	}
-	h := result.Ops[0].Header
-	if h["status"] != "applied" {
-		t.Errorf("status = %v, want applied", h["status"])
-	}
-
-	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
-	s := string(content)
-	if strings.Contains(s, "OldFunc") {
-		t.Error("OldFunc should be renamed")
-	}
-	if !strings.Contains(s, "NewFunc") {
-		t.Error("NewFunc should appear after rename")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Rename --text
-// ---------------------------------------------------------------------------
-
-func TestSpec_RenameTextDryRun(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"hello.go":   "package main\n\nconst Name = \"verify\"\n\nfunc verify() {}\n",
-		"other.go":   "package main\n\n// verify runs verification.\nfunc run() { verify() }\n",
-		"readme.txt": "This tool can verify things.\n",
-	})
-
-	result, body, _, exit := specRun(t, binary, dir, nil, "rename", "--dry-run", "verify", "check")
-	if exit != 0 {
-		t.Fatalf("exit %d", exit)
-	}
-	h := result.Ops[0].Header
-	if h["status"] != "dry_run" {
-		t.Errorf("status = %v, want dry_run", h["status"])
-	}
-	occ, _ := h["n"].(float64)
-	if occ < 3 {
-		t.Errorf("expected at least 3 occurrences, got %v", occ)
-	}
-	if !strings.Contains(body, "verify") {
-		t.Error("dry-run body should show preview lines")
-	}
-	// File should be unchanged after dry-run
-	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
-	if strings.Contains(string(content), "check") {
-		t.Error("dry-run should not modify files")
-	}
-}
-
-func TestSpec_RenameTextApply(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"hello.go": "package main\n\nconst Name = \"oldstr\"\n\nfunc oldstr() { println(\"oldstr\") }\n",
-		"other.go": "package main\n\nfunc run() { oldstr() }\n",
-	})
-
-	result, _, _, exit := specRun(t, binary, dir, nil, "rename", "oldstr", "newstr")
-	if exit != 0 {
-		t.Fatalf("exit %d", exit)
-	}
-	h := result.Ops[0].Header
-	if h["status"] != "applied" {
-		t.Errorf("status = %v, want applied", h["status"])
-	}
-	occ, _ := h["n"].(float64)
-	if occ < 3 {
-		t.Errorf("expected at least 3 occurrences, got %v", occ)
-	}
-
-	for _, f := range []string{"hello.go", "other.go"} {
-		content, _ := os.ReadFile(filepath.Join(dir, f))
-		s := string(content)
-		if strings.Contains(s, "oldstr") {
-			t.Errorf("%s still contains oldstr", f)
-		}
-		if !strings.Contains(s, "newstr") {
-			t.Errorf("%s should contain newstr", f)
-		}
-	}
-}
-
-func TestSpec_RenameTextWord(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"hello.go": "package main\n\nfunc foo() {}\nfunc foobar() {}\nfunc call() { foo(); foobar() }\n",
-	})
-
-	result, _, _, exit := specRun(t, binary, dir, nil, "rename", "--word", "--dry-run", "foo", "baz")
-	if exit != 0 {
-		t.Fatalf("exit %d", exit)
-	}
-	h := result.Ops[0].Header
-	occ, _ := h["n"].(float64)
-	// Should match "foo" but not "foobar" -- 2 occurrences: definition + call
-	if occ != 2 {
-		t.Errorf("expected 2 word-boundary occurrences, got %v", occ)
-	}
-}
-
-func TestSpec_RenameTextIncludeExclude(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"main.go":      "package main\n\nfunc target() {}\n",
-		"main_test.go": "package main\n\nfunc TestTarget() { target() }\n",
-	})
-
-	// With --exclude *_test.go, should only hit main.go
-	result, _, _, exit := specRun(t, binary, dir, nil, "rename", "--dry-run", "--exclude", "*_test.go", "target", "replaced")
-	if exit != 0 {
-		t.Fatalf("exit %d", exit)
-	}
-	h := result.Ops[0].Header
-	files, _ := h["files_changed"].([]any)
-	for _, f := range files {
-		if strings.Contains(f.(string), "_test.go") {
-			t.Errorf("--exclude should have filtered test files, got %v", f)
-		}
-	}
-}
-
-func TestSpec_RenameTextNoop(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"hello.go": "package main\n\nfunc main() {}\n",
-	})
-
-	result, _, _, exit := specRun(t, binary, dir, nil, "rename", "nonexistent", "replacement")
-	if exit != 0 {
-		t.Fatalf("exit %d", exit)
-	}
-	h := result.Ops[0].Header
-	if h["status"] != "noop" {
-		t.Errorf("status = %v, want noop", h["status"])
 	}
 }
 
@@ -1828,7 +1505,7 @@ func TestSpec_PathsAreRepoRelative(t *testing.T) {
 	})
 
 	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-		"read", "sub/hello.go")
+		"focus", "sub/hello.go")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -1955,7 +1632,7 @@ func TestSpec_SessionNew(t *testing.T) {
 
 	// A subsequent read with that session should work.
 	if id != "" {
-		r, _, _, rx := specRun(t, binary, dir, []string{"EDR_SESSION=" + id}, "read", "hello.go")
+		r, _, _, rx := specRun(t, binary, dir, []string{"EDR_SESSION=" + id}, "focus", "hello.go")
 		if rx != 0 {
 			t.Fatalf("read with new session: exit %d", rx)
 		}
@@ -2125,47 +1802,6 @@ func TestSpec_EditFuzzyIndicatesMatch(t *testing.T) {
 	}
 }
 
-func TestSpec_RenameDryRunPreview(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"hello.go": "package main\n\nfunc OldName() int { return 42 }\n\nfunc main() { OldName() }\n",
-	})
-
-	// Spec: rename --dry-run SHOULD provide enough preview detail.
-	result, _, _, exit := specRun(t, binary, dir, nil, "rename", "OldName", "NewName", "--dry-run")
-	if exit != 0 {
-		t.Fatalf("exit %d", exit)
-	}
-	h := result.Ops[0].Header
-	if h["status"] != "dry_run" {
-		t.Errorf("status = %v, want dry_run", h["status"])
-	}
-	// Body should contain preview information (diff or occurrence list).
-	if result.Ops[0].Body == "" {
-		t.Error("SHOULD: rename --dry-run should include preview detail in body")
-	}
-}
-
-func TestSpec_VerifySkipsUnknownScope(t *testing.T) {
-	binary := buildBinary(t)
-	dir := t.TempDir()
-	dir, _ = filepath.EvalSymlinks(dir)
-	// A repo with no recognizable build system.
-	os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hello\n"), 0644)
-
-	// Spec: if edr cannot determine a truthful scope, it SHOULD skip verify.
-	result, _, _, exit := specRun(t, binary, dir, nil, "verify")
-	if exit != 0 {
-		t.Fatalf("exit %d", exit)
-	}
-	if result.Verify == nil {
-		t.Fatal("expected verify line")
-	}
-	v, _ := result.Verify["verify"].(string)
-	if v != "skipped" {
-		t.Errorf("verify with no build system should be skipped, got %q", v)
-	}
-}
-
 func TestSpec_ShorthandWorksInStandalone(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{
 		"hello.go": "package main\n\nfunc main() {}\n\nfunc helper() int { return 42 }\n",
@@ -2174,7 +1810,7 @@ func TestSpec_ShorthandWorksInStandalone(t *testing.T) {
 	// Spec: if a shorthand works in batch, it MAY work in standalone.
 	// --sig is a shorthand for --signatures.
 	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-		"read", "hello.go", "--sig")
+		"focus", "hello.go", "--sig")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2202,7 +1838,7 @@ func TestSpec_StaleFileAutoRefresh(t *testing.T) {
 	// Spec: stale file state SHOULD be refreshed automatically.
 	// Reading the new file should work on-demand.
 	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-		"read", "new.go")
+		"focus", "new.go")
 	if exit != 0 {
 		t.Fatalf("reading new file on-demand: exit %d", exit)
 	}
@@ -2293,22 +1929,23 @@ func TestSpec_StatusBuildState(t *testing.T) {
 	})
 	sessEnv := []string{"EDR_SESSION=test-build"}
 
-	// Verify
-	_, vStdout, _, exit := specRun(t, binary, dir, sessEnv, "verify")
+	// Edit triggers auto-verify
+	_, vStdout, _, exit := specRun(t, binary, dir, sessEnv, "edit", "main.go",
+		"--old-text", `println("hi")`, "--new-text", `println("hello")`)
 	if exit != 0 {
-		t.Fatalf("verify failed: %s", vStdout)
+		t.Fatalf("edit failed: %s", vStdout)
 	}
 
-	// Next should show build: passed or skipped
+	// Status should show build state from auto-verify
 	result, nStdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
 	header := result.Ops[0].Header
 	build, _ := header["build"].(string)
-	// verify may skip on repos without go.mod — accept both passed and no build state
+	// auto-verify may skip on repos without go.mod — accept both passed and no build state
 	if build != "" && build != "passed" {
-		t.Errorf("expected build=passed or empty, got %q\nverify: %s\nnext: %s", build, vStdout, nStdout)
+		t.Errorf("expected build=passed or empty, got %q\nverify: %s\nstatus: %s", build, vStdout, nStdout)
 	}
 }
 
@@ -2319,7 +1956,7 @@ func TestSpec_StatusStaleAssumption(t *testing.T) {
 	sessEnv := []string{"EDR_SESSION=test-stale"}
 
 	// Read hello (records assumption)
-	_, _, _, exit := specRun(t, binary, dir, sessEnv, "read", "main.go:hello")
+	_, _, _, exit := specRun(t, binary, dir, sessEnv, "focus", "main.go:hello")
 	if exit != 0 {
 		t.Fatal("read failed")
 	}
@@ -2455,73 +2092,6 @@ func TestSpec_UndoNoCheckpoint(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// edr reset — CLI spec tests
-// ---------------------------------------------------------------------------
-
-func TestSpec_ResetFull(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
-	})
-	sessEnv := []string{"EDR_SESSION=test-reset-full"}
-
-	// Create some session state: read a symbol, create a checkpoint
-	_, _, _, exit := specRun(t, binary, dir, sessEnv, "read", "main.go:hello")
-	if exit != 0 {
-		t.Fatal("read failed")
-	}
-	_, _, _, exit = specRun(t, binary, dir, sessEnv, "edit", "main.go",
-		"--old-text", `println("hi")`, "--new-text", `println("hello")`)
-	if exit != 0 {
-		t.Fatal("edit failed")
-	}
-	_, _, _, exit = specRun(t, binary, dir, sessEnv, "checkpoint")
-	if exit != 0 {
-		t.Fatal("checkpoint failed")
-	}
-
-	// Full reset
-	result, _, _, exit := specRun(t, binary, dir, sessEnv, "reset")
-	if exit != 0 {
-		t.Fatalf("reset exit %d", exit)
-	}
-	// Should have a status in the reset output
-	foundStatus := false
-	for _, op := range result.Ops {
-		if op.Header["status"] == "ok" || op.Header["status"] == "reset" {
-			foundStatus = true
-			break
-		}
-	}
-	if !foundStatus {
-		t.Error("expected status ok/reset in reset output")
-	}
-}
-
-func TestSpec_ResetSession(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
-	})
-	sessEnv := []string{"EDR_SESSION=test-reset-sess"}
-
-	// Create session state
-	_, _, _, exit := specRun(t, binary, dir, sessEnv, "read", "main.go:hello")
-	if exit != 0 {
-		t.Fatal("read failed")
-	}
-
-	// reset --session
-	result, _, _, exit := specRun(t, binary, dir, sessEnv, "reset", "--session")
-	if exit != 0 {
-		t.Fatalf("reset --session exit %d", exit)
-	}
-	header := result.Ops[0].Header
-	sessID, _ := header["session"].(string)
-	if sessID == "" {
-		t.Error("expected session ID in reset output")
-	}
-}
-
 func TestSpec_EditWhere(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{
 		"hello.go": "package main\n\nfunc handleAuth(token string) string {\n\treturn \"auth:\" + token\n}\n\nfunc handleRequest(token string) string {\n\treturn \"req:\" + token\n}\n",
@@ -2650,7 +2220,7 @@ func TestSpec_AutoSkeleton(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{"big.go": sb.String()})
 
 	t.Run("large file gets auto-skeleton", func(t *testing.T) {
-		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "read", "big.go")
+		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "focus", "big.go")
 		if exit != 0 {
 			t.Fatalf("exit %d", exit)
 		}
@@ -2665,7 +2235,7 @@ func TestSpec_AutoSkeleton(t *testing.T) {
 	})
 
 	t.Run("--full bypasses auto-skeleton", func(t *testing.T) {
-		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "read", "big.go", "--full")
+		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "focus", "big.go", "--full")
 		if exit != 0 {
 			t.Fatalf("exit %d", exit)
 		}
@@ -2677,7 +2247,7 @@ func TestSpec_AutoSkeleton(t *testing.T) {
 
 	t.Run("small file is not skeletonized", func(t *testing.T) {
 		small, dir2 := specRepo(t, map[string]string{"small.go": "package main\n\nfunc main() {}\n"})
-		r, _, _, exit := specRun(t, small, dir2, []string{"EDR_SESSION=" + nextSession()}, "read", "small.go")
+		r, _, _, exit := specRun(t, small, dir2, []string{"EDR_SESSION=" + nextSession()}, "focus", "small.go")
 		if exit != 0 {
 			t.Fatalf("exit %d", exit)
 		}
@@ -2688,7 +2258,7 @@ func TestSpec_AutoSkeleton(t *testing.T) {
 	})
 
 	t.Run("line range bypasses auto-skeleton", func(t *testing.T) {
-		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "read", "big.go", "--lines", "1:10")
+		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()}, "focus", "big.go", "--lines", "1:10")
 		if exit != 0 {
 			t.Fatalf("exit %d", exit)
 		}
@@ -2780,7 +2350,7 @@ func TestSpec_ReadExpand(t *testing.T) {
 
 	t.Run("expand deps", func(t *testing.T) {
 		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-			"read", "main.go:compute", "--expand")
+			"focus", "main.go:compute", "--expand")
 		if exit != 0 {
 			t.Fatalf("exit %d", exit)
 		}
@@ -2797,7 +2367,7 @@ func TestSpec_ReadExpand(t *testing.T) {
 
 	t.Run("expand callers", func(t *testing.T) {
 		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-			"read", "lib.go:add", "--expand=callers")
+			"focus", "lib.go:add", "--expand=callers")
 		if exit != 0 {
 			t.Fatalf("exit %d", exit)
 		}
@@ -2812,46 +2382,3 @@ func TestSpec_ReadExpand(t *testing.T) {
 // prepare command
 // ---------------------------------------------------------------------------
 
-func TestSpec_SearchEscapedPatterns(t *testing.T) {
-	binary, dir := specRepo(t, map[string]string{
-		"types.go": "package main\n\nvar x map[string]int\nvar y interface{}\n\nfunc db.helper() {}\n",
-		"funcs.go": "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(x)\n}\n",
-	})
-
-	tests := []struct {
-		name    string
-		pattern string
-		wantN   bool // expect at least 1 match
-	}{
-		{"escaped brackets", `map\[string\]`, true},
-		{"escaped dot", `fmt\.Println`, true},
-		{"unescaped brackets", `map[string]`, true},
-		{"unescaped dot", `fmt.Println`, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, _, _, exit := specRun(t, binary, dir,
-				[]string{"EDR_SESSION=" + nextSession()},
-				"search", tt.pattern, "--text")
-			if exit != 0 {
-				t.Fatalf("exit %d", exit)
-			}
-			h := result.Ops[0].Header
-			n := int(anyFloat(h["n"]))
-			if tt.wantN && n == 0 {
-				t.Errorf("pattern %q: expected matches, got 0", tt.pattern)
-			}
-		})
-	}
-}
-
-func anyFloat(v any) float64 {
-	switch x := v.(type) {
-	case float64:
-		return x
-	case int:
-		return float64(x)
-	}
-	return 0
-}

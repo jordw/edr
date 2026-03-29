@@ -1,6 +1,7 @@
 package index
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,8 +10,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // alwaysIgnore contains directories that are always skipped regardless of .gitignore.
@@ -208,6 +211,7 @@ type MapSymbolEntry struct {
 	Kind    string `json:"kind"`
 	Line    int    `json:"line"`
 	EndLine int    `json:"end_line,omitempty"`
+	Matches int    `json:"matches,omitempty"`
 }
 
 func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string, RepoMapStats, error) {
@@ -328,8 +332,12 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 	}
 
 	// Body-search filter: keep only symbols whose source lines contain the search text.
+	// Reads and filters files in parallel for speed.
+	var searchCounts map[string]int // "file\x00symbol" → match count (only when --search)
 	if cfg.search != "" {
 		searchLower := strings.ToLower(cfg.search)
+		searchBytes := []byte(cfg.search)
+		searchLowerBytes := []byte(searchLower)
 		caseSensitive := false
 		for _, r := range cfg.search {
 			if r >= 'A' && r <= 'Z' {
@@ -337,46 +345,100 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 				break
 			}
 		}
-		for file, syms := range byFile {
-			data, err := CachedReadFile(ctx, file)
-			if err != nil {
-				delete(byFile, file)
-				continue
-			}
-			lines := strings.Split(string(data), "\n")
-			filtered := syms[:0]
-			for _, s := range syms {
-				start := int(s.StartLine) - 1
-				end := int(s.EndLine)
-				if start < 0 {
-					start = 0
-				}
-				if end > len(lines) {
-					end = len(lines)
-				}
-				found := false
-				for _, line := range lines[start:end] {
+
+		type symbolMatch struct {
+			sym   SymbolInfo
+			count int
+		}
+		type fileResult struct {
+			file    string
+			matches []symbolMatch
+		}
+
+		fileCh := make(chan string, len(byFile))
+		resultCh := make(chan fileResult, len(byFile))
+		nWorkers := runtime.NumCPU()
+		if nWorkers > len(byFile) {
+			nWorkers = len(byFile)
+		}
+		if nWorkers < 1 {
+			nWorkers = 1
+		}
+
+		for f := range byFile {
+			fileCh <- f
+		}
+		close(fileCh)
+
+		var wg sync.WaitGroup
+		for w := 0; w < nWorkers; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for file := range fileCh {
+					data, err := CachedReadFile(ctx, file)
+					if err != nil {
+						continue
+					}
+					// Whole-file pre-filter: skip files that cannot match.
 					if caseSensitive {
-						if strings.Contains(line, cfg.search) {
-							found = true
-							break
+						if !bytes.Contains(data, searchBytes) {
+							continue
 						}
 					} else {
-						if strings.Contains(strings.ToLower(line), searchLower) {
-							found = true
-							break
+						if !bytes.Contains(bytes.ToLower(data), searchLowerBytes) {
+							continue
 						}
 					}
+					lines := strings.Split(string(data), "\n")
+					syms := byFile[file]
+					var matched []symbolMatch
+					for _, s := range syms {
+						start := int(s.StartLine) - 1
+						end := int(s.EndLine)
+						if start < 0 {
+							start = 0
+						}
+						if end > len(lines) {
+							end = len(lines)
+						}
+						count := 0
+						for _, line := range lines[start:end] {
+							if caseSensitive {
+								if strings.Contains(line, cfg.search) {
+									count++
+								}
+							} else {
+								if strings.Contains(strings.ToLower(line), searchLower) {
+									count++
+								}
+							}
+						}
+						if count > 0 {
+							matched = append(matched, symbolMatch{s, count})
+						}
+					}
+					if len(matched) > 0 {
+						resultCh <- fileResult{file, matched}
+					}
 				}
-				if found {
-					filtered = append(filtered, s)
-				}
+			}()
+		}
+		wg.Wait()
+		close(resultCh)
+
+		// Rebuild byFile from parallel results and collect match counts.
+		searchCounts = map[string]int{} // "file\x00symbol" → count
+		for f := range byFile {
+			delete(byFile, f)
+		}
+		for fr := range resultCh {
+			var syms []SymbolInfo
+			for _, m := range fr.matches {
+				syms = append(syms, m.sym)
+				searchCounts[fr.file+"\x00"+m.sym.Name] = m.count
 			}
-			if len(filtered) == 0 {
-				delete(byFile, file)
-			} else {
-				byFile[file] = filtered
-			}
+			byFile[fr.file] = syms
 		}
 		// Rebuild fileOrder to exclude files with no matching symbols.
 		n := 0
@@ -428,6 +490,12 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 		}
 		fmt.Fprintf(&b, "\n%s\n", rel)
 		for _, sym := range syms {
+			if searchCounts != nil {
+				if c := searchCounts[file+"\x00"+sym.Name]; c > 0 {
+					fmt.Fprintf(&b, "  %s %s [%d-%d] (%d matches)\n", sym.Type, sym.Name, sym.StartLine, sym.EndLine, c)
+					continue
+				}
+			}
 			fmt.Fprintf(&b, "  %s %s [%d-%d]\n", sym.Type, sym.Name, sym.StartLine, sym.EndLine)
 		}
 		filesRendered++
@@ -471,12 +539,16 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 		}
 		entry := MapFileEntry{File: rel}
 		for _, s := range syms {
-			entry.Symbols = append(entry.Symbols, MapSymbolEntry{
+			me := MapSymbolEntry{
 				Name:    s.Name,
 				Kind:    s.Type,
 				Line:    int(s.StartLine),
 				EndLine: int(s.EndLine),
-			})
+			}
+			if searchCounts != nil {
+				me.Matches = searchCounts[file+"\x00"+s.Name]
+			}
+			entry.Symbols = append(entry.Symbols, me)
 		}
 		mapFiles = append(mapFiles, entry)
 	}

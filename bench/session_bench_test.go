@@ -49,18 +49,9 @@ func TestSessionMultiLang(t *testing.T) {
 	// Phase 1: Orientation — map the repo, find files, read signatures
 	// This is how an agent starts: get the lay of the land.
 	t.Run("orient/map_repo", func(t *testing.T) {
-		out := handleDoJSON(t, ctx, db, sess, "map", nil, map[string]any{"budget": 500})
+		out := handleDoJSON(t, ctx, db, sess, "orient", nil, map[string]any{"budget": 500})
 		assertJSONHas(t, out, "content")
 		assertJSONHas(t, out, "symbols")
-	})
-
-	t.Run("orient/find_all_langs", func(t *testing.T) {
-		for _, pat := range []string{"**/*.go", "**/*.py", "**/*.rs", "**/*.c", "**/*.java", "**/*.rb", "**/*.js", "**/*.tsx"} {
-			out := handleDoJSON(t, ctx, db, sess, "search", []string{pat}, nil)
-			if len(out) < 10 {
-				t.Errorf("search %s returned too few bytes: %d", pat, len(out))
-			}
-		}
 	})
 
 	// Phase 2: Multi-language reads — signatures, full, depth
@@ -85,7 +76,7 @@ func TestSessionMultiLang(t *testing.T) {
 
 	t.Run("read/signatures_multi_lang", func(t *testing.T) {
 		for _, c := range containers {
-			out := handleDoJSON(t, ctx, db, sess, "read", []string{c.spec}, map[string]any{"signatures": true})
+			out := handleDoJSON(t, ctx, db, sess, "focus", []string{c.spec}, map[string]any{"signatures": true})
 			if len(out) == 0 {
 				t.Errorf("[%s] %s: empty response", c.lang, c.spec)
 			}
@@ -109,7 +100,7 @@ func TestSessionMultiLang(t *testing.T) {
 
 	t.Run("read/full_symbols_multi_lang", func(t *testing.T) {
 		for _, r := range fullReads {
-			out := handleDoJSON(t, ctx, db, sess, "read", []string{r.spec}, nil)
+			out := handleDoJSON(t, ctx, db, sess, "focus", []string{r.spec}, nil)
 			if len(out) == 0 {
 				t.Errorf("[%s] %s: empty response", r.lang, r.spec)
 			}
@@ -121,7 +112,7 @@ func TestSessionMultiLang(t *testing.T) {
 	// File reads return a deduped stub with "unchanged":true.
 	t.Run("read/delta_unchanged", func(t *testing.T) {
 		for _, r := range fullReads {
-			out := handleDoJSON(t, ctx, db, sess, "read", []string{r.spec}, nil)
+			out := handleDoJSON(t, ctx, db, sess, "focus", []string{r.spec}, nil)
 			var m map[string]any
 			json.Unmarshal(out, &m)
 			if _, ok := m["unchanged"]; ok {
@@ -136,31 +127,6 @@ func TestSessionMultiLang(t *testing.T) {
 			t.Errorf("[%s] %s: expected delta, unchanged, or session:unchanged, got %d bytes", r.lang, r.spec, len(out))
 		}
 	})
-
-	// Phase 4: Search across the codebase
-	t.Run("search/symbol_cross_lang", func(t *testing.T) {
-		// "enqueue" exists in Go, Rust, C, JS
-		out := handleDoJSON(t, ctx, db, sess, "search", []string{"enqueue"}, map[string]any{"body": true, "budget": 500})
-		assertJSONHas(t, out, "matches")
-	})
-
-	t.Run("search/text_cross_lang", func(t *testing.T) {
-		// "retry" is a concept in every language's code
-		// Text search defaults to grouped output (key is "files", not "matches")
-		out := handleDoJSON(t, ctx, db, sess, "search", []string{"retry"}, map[string]any{"text": true, "budget": 300})
-		assertJSONHas(t, out, "files")
-	})
-
-	t.Run("search/body_dedup", func(t *testing.T) {
-		// Second search for "enqueue" with body should trigger body dedup
-		out := handleDoJSON(t, ctx, db, sess, "search", []string{"enqueue"}, map[string]any{"body": true, "budget": 500})
-		var m map[string]any
-		json.Unmarshal(out, &m)
-		if skipped, ok := m["skipped_bodies"]; ok {
-			t.Logf("body dedup skipped: %v", skipped)
-		}
-	})
-
 	// Phase 6: Edits across multiple languages (dry-run to keep testdata clean)
 	edits := []struct {
 		file    string
@@ -293,12 +259,12 @@ func TestSessionMultiLang(t *testing.T) {
 	// Phase 9: DispatchMulti — batch reads from multiple languages
 	t.Run("batch/multi_lang_reads", func(t *testing.T) {
 		cmds := []dispatch.MultiCmd{
-			{Cmd: "read", Args: []string{"lib/scheduler.py:Scheduler"}, Flags: map[string]any{"signatures": true}},
-			{Cmd: "read", Args: []string{"lib/task_queue.rs:TaskQueue"}, Flags: map[string]any{"signatures": true}},
-			{Cmd: "read", Args: []string{"lib/TaskProcessor.java:TaskProcessor"}, Flags: map[string]any{"signatures": true}},
-			{Cmd: "read", Args: []string{"internal/queue.go:TaskQueue"}, Flags: map[string]any{"signatures": true}},
-			{Cmd: "read", Args: []string{"web/api.js:TaskAPIClient"}, Flags: map[string]any{"signatures": true}},
-			{Cmd: "read", Args: []string{"lib/config.rb:PluginRegistry"}, Flags: map[string]any{"signatures": true}},
+			{Cmd: "focus", Args: []string{"lib/scheduler.py:Scheduler"}, Flags: map[string]any{"signatures": true}},
+			{Cmd: "focus", Args: []string{"lib/task_queue.rs:TaskQueue"}, Flags: map[string]any{"signatures": true}},
+			{Cmd: "focus", Args: []string{"lib/TaskProcessor.java:TaskProcessor"}, Flags: map[string]any{"signatures": true}},
+			{Cmd: "focus", Args: []string{"internal/queue.go:TaskQueue"}, Flags: map[string]any{"signatures": true}},
+			{Cmd: "focus", Args: []string{"web/api.js:TaskAPIClient"}, Flags: map[string]any{"signatures": true}},
+			{Cmd: "focus", Args: []string{"lib/config.rb:PluginRegistry"}, Flags: map[string]any{"signatures": true}},
 		}
 		results := dispatch.DispatchMulti(ctx, db, cmds)
 		for i, r := range results {
@@ -321,7 +287,7 @@ func TestSessionMultiLang(t *testing.T) {
 			{"lib/TaskProcessor.java", "processWithRetry", "Java"},
 		}
 		for _, s := range specs {
-			out := handleDoJSON(t, ctx, db, sess, "read", []string{s.file, s.symbol}, map[string]any{"depth": 2})
+			out := handleDoJSON(t, ctx, db, sess, "focus", []string{s.file, s.symbol}, map[string]any{"depth": 2})
 			if len(out) == 0 {
 				t.Errorf("[%s] depth-2 %s:%s: empty", s.lang, s.file, s.symbol)
 			}
@@ -347,7 +313,7 @@ func BenchmarkSessionWorkflow(b *testing.B) {
 		totalBytes := 0
 
 		// Orient
-		out, _ := dispatchJSON(ctx, db, "map", nil, map[string]any{"budget": 500})
+		out, _ := dispatchJSON(ctx, db, "orient", nil, map[string]any{"budget": 500})
 		totalBytes += len(out)
 
 		// Read signatures from 6 languages
@@ -359,9 +325,9 @@ func BenchmarkSessionWorkflow(b *testing.B) {
 			"web/api.js:TaskAPIClient",
 			"lib/config.rb:PluginRegistry",
 		} {
-			result, _ := dispatch.Dispatch(ctx, db, "read", []string{spec}, map[string]any{"signatures": true})
+			result, _ := dispatch.Dispatch(ctx, db, "focus", []string{spec}, map[string]any{"signatures": true})
 			data, _ := json.Marshal(result)
-			text := sess.PostProcess("read", []string{spec}, map[string]any{"signatures": true}, result, string(data))
+			text := sess.PostProcess("focus", []string{spec}, map[string]any{"signatures": true}, result, string(data))
 			totalBytes += len(text)
 		}
 
@@ -372,9 +338,9 @@ func BenchmarkSessionWorkflow(b *testing.B) {
 			"lib/task_queue.rs:enqueue",
 			"lib/TaskProcessor.java:processWithRetry",
 		} {
-			result, _ := dispatch.Dispatch(ctx, db, "read", []string{spec}, nil)
+			result, _ := dispatch.Dispatch(ctx, db, "focus", []string{spec}, nil)
 			data, _ := json.Marshal(result)
-			text := sess.PostProcess("read", []string{spec}, nil, result, string(data))
+			text := sess.PostProcess("focus", []string{spec}, nil, result, string(data))
 			totalBytes += len(text)
 		}
 
@@ -383,9 +349,9 @@ func BenchmarkSessionWorkflow(b *testing.B) {
 			"lib/scheduler.py:_execute_task",
 			"internal/queue.go:Enqueue",
 		} {
-			result, _ := dispatch.Dispatch(ctx, db, "read", []string{spec}, nil)
+			result, _ := dispatch.Dispatch(ctx, db, "focus", []string{spec}, nil)
 			data, _ := json.Marshal(result)
-			text := sess.PostProcess("read", []string{spec}, nil, result, string(data))
+			text := sess.PostProcess("focus", []string{spec}, nil, result, string(data))
 			totalBytes += len(text)
 		}
 

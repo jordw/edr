@@ -8,9 +8,9 @@ import (
 )
 
 func TestReadSymbolsFlagRegistered(t *testing.T) {
-	spec := cmdspec.ByName("read")
+	spec := cmdspec.ByName("focus")
 	if spec == nil {
-		t.Fatal("read command not found in registry")
+		t.Fatal("focus command not found in registry")
 	}
 	found := false
 	for _, f := range spec.Flags {
@@ -20,7 +20,7 @@ func TestReadSymbolsFlagRegistered(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("--symbols flag should be registered on the read command")
+		t.Error("--symbols flag should be registered on the focus command")
 	}
 }
 

@@ -303,6 +303,206 @@ func TestRegexGo_RepoAccuracy(t *testing.T) {
 	}
 }
 
+
+func TestRegexCSharp_Basic(t *testing.T) {
+	src := `using System;
+
+namespace MyApp.Services
+{
+    public sealed class UserService : IUserService
+    {
+        private readonly IDatabase _db;
+
+        public UserService(IDatabase db)
+        {
+            _db = db;
+        }
+
+        public async Task<User> GetUserAsync(int id)
+        {
+            return await _db.FindAsync(id);
+        }
+
+        public static UserService Create() => new UserService(new Database());
+    }
+
+    public interface IUserService
+    {
+        Task<User> GetUserAsync(int id);
+    }
+
+    public record UserDto(string Name, int Age);
+}
+`
+	syms := RegexParse("Service.cs", []byte(src))
+	names := map[string]string{}
+	for _, s := range syms {
+		names[s.Name] = s.Type
+	}
+	for _, want := range []string{"MyApp.Services", "UserService", "IUserService", "UserDto", "GetUserAsync"} {
+		if _, ok := names[want]; !ok {
+			t.Errorf("missing: %s (got %v)", want, names)
+		}
+	}
+	// Constructor
+	found := false
+	for _, s := range syms {
+		if s.Name == "UserService" && s.Type == "method" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("missing constructor UserService(...)")
+	}
+}
+
+func TestRegexKotlin_Basic(t *testing.T) {
+	src := `package com.example
+
+data class User(val name: String, val age: Int)
+
+sealed class Result<out T> {
+    data class Success<T>(val data: T) : Result<T>()
+    data class Error(val message: String) : Result<Nothing>()
+}
+
+interface Repository {
+    suspend fun findById(id: Int): User?
+}
+
+class UserRepository(private val db: Database) : Repository {
+    override suspend fun findById(id: Int): User? {
+        return db.query(id)
+    }
+
+    fun findAll(): List<User> {
+        return db.queryAll()
+    }
+}
+`
+	syms := RegexParse("User.kt", []byte(src))
+	names := map[string]string{}
+	for _, s := range syms {
+		names[s.Name] = s.Type
+	}
+	for _, want := range []string{"User", "Result", "Repository", "UserRepository", "findById", "findAll"} {
+		if _, ok := names[want]; !ok {
+			t.Errorf("missing: %s (got %v)", want, names)
+		}
+	}
+}
+
+func TestRegexSwift_Basic(t *testing.T) {
+	src := `import Foundation
+
+protocol Fetchable {
+    func fetch(id: Int) async throws -> Data
+}
+
+public final class APIClient: Fetchable {
+    private let session: URLSession
+
+    public init(session: URLSession = .shared) {
+        self.session = session
+    }
+
+    public func fetch(id: Int) async throws -> Data {
+        let url = URL(string: "https://api.example.com/\(id)")!
+        let (data, _) = try await session.data(from: url)
+        return data
+    }
+
+    static func create() -> APIClient {
+        return APIClient()
+    }
+}
+
+struct Config {
+    let timeout: TimeInterval
+    let retries: Int
+}
+
+enum Status {
+    case active
+    case inactive
+    case error(String)
+}
+
+extension APIClient {
+    func healthCheck() async -> Bool {
+        return true
+    }
+}
+`
+	syms := RegexParse("API.swift", []byte(src))
+	names := map[string]string{}
+	for _, s := range syms {
+		names[s.Name] = s.Type
+	}
+	for _, want := range []string{"Fetchable", "APIClient", "Config", "Status", "init", "fetch", "create", "healthCheck"} {
+		if _, ok := names[want]; !ok {
+			t.Errorf("missing: %s (got %v)", want, names)
+		}
+	}
+}
+
+func TestRegexPHP_Basic(t *testing.T) {
+	src := `<?php
+
+namespace App\Services;
+
+abstract class BaseService
+{
+    abstract protected function validate($data): bool;
+}
+
+interface UserServiceInterface
+{
+    public function getUser(int $id): ?User;
+}
+
+final class UserService extends BaseService implements UserServiceInterface
+{
+    private $db;
+
+    public function __construct(Database $db)
+    {
+        $this->db = $db;
+    }
+
+    public function getUser(int $id): ?User
+    {
+        return $this->db->find($id);
+    }
+
+    protected function validate($data): bool
+    {
+        return !empty($data);
+    }
+
+    public static function create(): self
+    {
+        return new self(new Database());
+    }
+}
+
+function helper(): string
+{
+    return "hello";
+}
+`
+	syms := RegexParse("UserService.php", []byte(src))
+	names := map[string]string{}
+	for _, s := range syms {
+		names[s.Name] = s.Type
+	}
+	for _, want := range []string{"BaseService", "UserServiceInterface", "UserService", "__construct", "getUser", "validate", "create", "helper"} {
+		if _, ok := names[want]; !ok {
+			t.Errorf("missing: %s (got %v)", want, names)
+		}
+	}
+}
+
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil

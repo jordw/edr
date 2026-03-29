@@ -404,7 +404,10 @@ func plainMap(w *os.File, op Op) {
 				kind, _ := sm["kind"].(string)
 				line := anyInt(sm["line"])
 				endLine := anyInt(sm["end_line"])
-				if endLine > 0 {
+				matches := anyInt(sm["matches"])
+				if endLine > 0 && matches > 0 {
+					fmt.Fprintf(w, "%s:%d-%d: %s %s (%d matches)\n", file, line, endLine, kind, name, matches)
+				} else if endLine > 0 {
 					fmt.Fprintf(w, "%s:%d-%d: %s %s\n", file, line, endLine, kind, name)
 				} else {
 					fmt.Fprintf(w, "%s:%d: %s %s\n", file, line, kind, name)

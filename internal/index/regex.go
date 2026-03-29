@@ -132,6 +132,53 @@ var regexC = &regexLang{
 	},
 }
 
+var regexCSharp = &regexLang{
+	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "csharp",
+	patterns: []regexPattern{
+		// class, struct, interface, enum, record
+		{regexp.MustCompile(`^\s*(?:public|private|protected|internal)?\s*(?:static\s+)?(?:abstract\s+)?(?:sealed\s+)?(?:partial\s+)?(?:class|struct|interface|enum|record)\s+(\w+)`), "class", 1},
+		// namespace
+		{regexp.MustCompile(`^\s*namespace\s+([\w.]+)`), "class", 1},
+		// Constructors: visibility + UpperCaseName(
+		{regexp.MustCompile(`^\s*(?:public|private|protected|internal)\s+([A-Z]\w*)\s*\(`), "method", 1},
+		// Methods: have a return type before the name
+		{regexp.MustCompile(`^\s*(?:public|private|protected|internal)?\s*(?:static\s+)?(?:abstract\s+)?(?:virtual\s+)?(?:override\s+)?(?:async\s+)?(?:\w+(?:<[^>]*>)?(?:\[\]|\?)*)\s+(\w+)\s*\(`), "method", 1},
+	},
+}
+
+var regexKotlin = &regexLang{
+	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "kotlin",
+	patterns: []regexPattern{
+		// class, interface, object, enum class, data class, sealed class
+		{regexp.MustCompile(`^\s*(?:public|private|protected|internal)?\s*(?:open\s+)?(?:abstract\s+)?(?:sealed\s+)?(?:data\s+)?(?:class|interface|object|enum)\s+(\w+)`), "class", 1},
+		// fun keyword — Kotlin's function declaration
+		{regexp.MustCompile(`^\s*(?:public|private|protected|internal)?\s*(?:open\s+)?(?:override\s+)?(?:suspend\s+)?fun\s+(?:<[^>]*>\s*)?(\w+)\s*\(`), "function", 1},
+	},
+}
+
+var regexSwift = &regexLang{
+	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "swift",
+	patterns: []regexPattern{
+		// class, struct, enum, protocol, extension
+		{regexp.MustCompile(`^\s*(?:public|private|fileprivate|internal|open)?\s*(?:final\s+)?(?:class|struct|enum|protocol)\s+(\w+)`), "class", 1},
+		{regexp.MustCompile(`^\s*extension\s+(\w+)`), "impl", 1},
+		// func — Swift's function/method declaration
+		{regexp.MustCompile(`^\s*(?:public|private|fileprivate|internal|open)?\s*(?:static\s+|class\s+)?(?:override\s+)?(?:mutating\s+)?func\s+(\w+)`), "function", 1},
+		// init
+		{regexp.MustCompile(`^\s*(?:public|private|fileprivate|internal|open)?\s*(?:convenience\s+)?(?:required\s+)?(init)\s*[\(]`), "method", 1},
+	},
+}
+
+var regexPHP = &regexLang{
+	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "php",
+	patterns: []regexPattern{
+		// class, interface, trait, enum
+		{regexp.MustCompile(`^\s*(?:abstract\s+)?(?:final\s+)?(?:class|interface|trait|enum)\s+(\w+)`), "class", 1},
+		// function keyword — PHP's function declaration
+		{regexp.MustCompile(`^\s*(?:public|private|protected)?\s*(?:static\s+)?function\s+(\w+)\s*\(`), "function", 1},
+	},
+}
+
 var regexByExt = map[string]*regexLang{
 	".go":   regexGo,
 	".py":   regexPython,
@@ -141,7 +188,11 @@ var regexByExt = map[string]*regexLang{
 	".java": regexJava,
 	".rb":   regexRuby,
 	".c":    regexC, ".h": regexC, ".cpp": regexC, ".cc": regexC, ".hpp": regexC, ".cxx": regexC, ".hxx": regexC, ".hh": regexC,
-	// TODO: add patterns for .cs, .kt, .php, .swift, .scala, .lua, .zig once validated.
+	".cs":    regexCSharp,
+	".kt":    regexKotlin, ".kts": regexKotlin,
+	".swift": regexSwift,
+	".php":   regexPHP,
+	// TODO: add patterns for .scala, .lua, .zig once validated.
 }
 
 // regexLangForFile returns the regex language for a file path, or nil.
