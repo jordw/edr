@@ -3,7 +3,7 @@
 The user installed `edr` specifically to replace shell file tools. Using edr is following user intent — bypassing it with shell tools (cat, sed, grep, find, etc.) is ignoring what the user asked for.
 
 **Do NOT use:** cat, sed, grep, find, or other shell tools for file operations
-**Use instead:** `edr read`, `edr edit`, `edr write`, `edr search`, `edr map`
+**Use instead:** `edr orient`, `edr focus`, `edr edit`
 
 Why: context-efficient output (skeletons, deltas, token budgets) vs dumping raw file contents.
 
@@ -11,31 +11,32 @@ Only fall back to shell tools if `edr` itself won't compile/run.
 
 Run `edr status` between tasks or after failures.
 
+## 3 core commands
+
+- `edr orient [path]` — structural overview of a directory or project
+- `edr focus file[:Symbol]` — read file or symbol with context
+- `edr edit file` — edit, write, create files (auto-verifies build)
+
 ## Batch — tool calls are expensive, plan and combine
 
-`-r` read, `-s` search, `-m` map, `-e` edit, `-w` write. Modifier flags follow each op. Plan what you need, then combine into one call for the greatest speedup.
+`-f` focus, `-o` orient, `-e` edit. Modifier flags follow each op. Plan what you need, then combine into one call for the greatest speedup.
 
-`edr -r f.go --sig -r g.go:Func --expand -s "pattern" --text -m --dir cmd/`
-`edr -r f.go:Sym -e f.go --old "x" --new "y" -r f.go:Sym` (post-edit read)
+`edr -f f.go --sig -f g.go:Func --expand -o --dir cmd/`
+`edr -f f.go:Sym -e f.go --old "x" --new "y" -f f.go:Sym` (post-edit read)
 `edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"` (multi-file)
-`edr -w f.go --content "..." --mkdir`, `-V` verify (auto after edits)
+`edr -e f.go --content "..." --mkdir` (create/write via edit)
 
-### Read modifiers (after `-r`)
+### Focus modifiers (after `-f`)
 `--sig` (file/container only), `--skeleton`, `--full`, `--expand[=deps]`, `--symbols`, `--lines 10:50`, `--budget N`
 
-### Search modifiers (after `-s`)
-`--text`, `--regex`, `--context N`, `--in f.go:Sym`, `--include "*.go"`, `--limit N`
+### Orient modifiers (after `-o`)
+`--dir`, `--lang`, `--grep`, `--glob`, `--type`, `--budget N`
 
 ### Edit modifiers (after `-e`)
 `--old "x" --new "y"`, `--where Sym` (resolves file), `--in Sym` (scope)
-`--all`, `--delete`, `--dry-run`, `--fuzzy`, `--read-back`
+`--content "..."`, `--inside Class`, `--after Sym`, `--append`, `--mkdir`
+`--all`, `--delete`, `--dry-run`, `--fuzzy`, `--read-back`, `--no-verify`
 Quoting: use heredocs for quotes/backslashes: `--old "$(cat <<'EOF'`...`EOF`)"`
 
-### Write modifiers (after `-w`)
-`--content "..."`, `--inside Class`, `--after Sym`, `--append`, `--mkdir`
-
 ## Standalone commands
-- `edr map` — symbol overview. `--dir`, `--lang`, `--grep`, `--budget` (`map --dir path` for directories; read is file-only)
-- `edr rename "old" "new" --dry-run` — `--word`, `--include`
-- `edr verify` | `edr verify --test` | `edr verify --command "cmd"`
-- `edr status` | `edr undo` | `edr reset --session`
+- `edr status` | `edr undo` | `edr setup`

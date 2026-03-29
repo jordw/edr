@@ -4,8 +4,8 @@
 
 **edr makes coding agents faster and more accurate.** It replaces built-in file tools with symbol-aware operations, batched calls, and session tracking — so agents find the right code on the first try, make fewer mistakes, and finish tasks in less time.
 
-- **Precise reads.** Read one function instead of the file around it. Agents see structure, not noise.
-- **Fewer round-trips.** Batch reads, searches, edits, and writes into one call. Less orchestration, more progress.
+- **Precise reads.** Focus on one function instead of the file around it. Agents see structure, not noise.
+- **Fewer round-trips.** Batch focus, orient, and edit into one call. Less orchestration, more progress.
 - **No repeated work.** Re-reads return only what changed. Zero config.
 
 Works with any agent that can run shell commands. Fully local, no telemetry.
@@ -45,28 +45,28 @@ git clone https://github.com/jordw/edr.git && ./edr/setup.sh
 
 ## Example
 
-Read a function, search for usage, edit it:
+Focus on a function, orient in the project, edit it:
 
 ```bash
 # Without edr: grep to find it, read the range, grep for callers, read each caller
 # 5+ tool calls, ~25KB of context
 
 # With edr: 3 calls, ~3KB
-edr -r src/scheduler.py:run               # just the function (not the file)
-edr -s "run" --text --include "*.py"      # find usage across project
-edr -e src/scheduler.py \
+edr focus src/scheduler.py:run             # just the function (not the file)
+edr orient --dir src/                      # structural overview
+edr edit src/scheduler.py \
     --old "def run(self):" \
-    --new "def run(self, retries=3):"      # verifies build
+    --new "def run(self, retries=3):"      # auto-verifies build
 ```
 
 **Batched:** gather everything in one call, mutate in one call:
 
 ```bash
-# 1. Read three APIs + search, one call
-edr -r src/scheduler.py:Scheduler --sig \
-    -r src/config.py:parse_config \
-    -r src/worker.py:Worker --sig \
-    -s "retry"
+# 1. Focus on three APIs + orient, one call
+edr -f src/scheduler.py:Scheduler --sig \
+    -f src/config.py:parse_config \
+    -f src/worker.py:Worker --sig \
+    -o --dir src/
 
 # 2. Edit two files, auto-verifies build
 edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):" \
@@ -77,59 +77,57 @@ edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):"
 
 edr parses files on demand with pure-Go regex-based symbol extraction — no pre-built index, no setup step, no staleness, no CGO dependency. This gives agents three capabilities they don't have with raw file tools:
 
-**Symbol-level operations.** Read one function instead of a 400-line file — the agent sees exactly what it needs, makes better decisions, and doesn't get confused by surrounding code. Get a class API with `--signatures` to understand structure before diving in. `--expand` includes dep signatures inline. Scope edits to a symbol with `--in Symbol` so they can't match the wrong code. Edits auto-verify the build (Go, Node, Rust, Make).
+**Symbol-level operations.** Focus on one function instead of a 400-line file — the agent sees exactly what it needs, makes better decisions, and doesn't get confused by surrounding code. Get a class API with `--signatures` to understand structure before diving in. `--expand` includes dep signatures inline. Scope edits to a symbol with `--in Symbol` so they can't match the wrong code. Edits auto-verify the build (Go, Node, Rust, Make).
 
-**Batching.** `-r`, `-s`, `-m`, `-e`, `-w` combine reads, searches, maps, edits, and writes in one CLI call. One call to gather context, one to apply mutations. Fewer round-trips means faster task completion.
+**Batching.** `-f`, `-o`, `-e` combine focus, orient, and edit in one CLI call. One call to gather context, one to apply mutations. Fewer round-trips means faster task completion.
 
 **Sessions.** edr tracks what the agent has already seen and only returns what changed. Second read of an unchanged file: zero output. Zero config.
 
 ## Commands
 
-**Batch flags** — the primary interface. `-r` read, `-s` search, `-m` map, `-e` edit, `-w` write. Modifier flags follow each op. Plan what you need, then combine into one call:
+### Primary commands
+
+| Command | Description |
+|---|---|
+| `orient [path]` | Structural overview of a directory or project (replaces `map`) |
+| `focus file[:Symbol]` | Read file or symbol with context (replaces `read`) |
+| `edit file` | Edit, write, create files + auto-verify (absorbs `write`) |
+| `status` | Session state, build state |
+| `undo` | Revert last edit/write (auto-checkpointed) |
+| `setup` | Install agent instructions |
+
+Old command names (`map`, `read`, `write`, `search`, `rename`, `verify`, `reset`) still work for backward compatibility.
+
+### Batch flags
+
+`-f` focus, `-o` orient, `-e` edit. Modifier flags follow each op. Plan what you need, then combine into one call:
 
 ```bash
-edr -r file[:Symbol]              # Read file or symbol
-edr -r file:Class --sig           # Signatures only (no bodies)
-edr -s "pattern"                  # Search symbols or text (--text)
-edr -m --dir src/                 # Symbol map of a directory
+edr -f file[:Symbol]              # Focus on file or symbol
+edr -f file:Class --sig           # Signatures only (no bodies)
+edr -o --dir src/                 # Structural overview of a directory
 edr -e file --old "x" --new "y"   # Edit with auto-verify
-edr -w file --inside Class        # Add method/field without reading
+edr -e file --content "..." --inside Class  # Write (via edit)
 ```
 
 Combine freely. One call to gather context, one to mutate:
 
 ```bash
-edr -r f.go --sig -r g.go:Func --expand -s "pattern" --text -m --dir cmd/
-edr -r f.go:Sym -e f.go --old "x" --new "y" -r f.go:Sym   # post-edit read
+edr -f f.go --sig -f g.go:Func --expand -o --dir cmd/
+edr -f f.go:Sym -e f.go --old "x" --new "y" -f f.go:Sym   # post-edit read
 edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"
-edr -w f.go --content "..." --mkdir
+edr -e f.go --content "..." --mkdir
 ```
+
+Aliases `-r` (focus), `-m` (orient), `-s` (search), `-w` (write) still work.
 
 ### Batch modifiers
 
-**Read** (after `-r`): `--sig`, `--skeleton`, `--full`, `--expand[=deps]`, `--symbols`, `--lines 10:50`, `--budget N`
+**Focus** (after `-f`): `--sig`, `--skeleton`, `--full`, `--expand[=deps]`, `--symbols`, `--lines 10:50`, `--budget N`
 
-**Search** (after `-s`): `--text`, `--regex`, `--context N`, `--in f.go:Sym`, `--include "*.go"`, `--limit N`
+**Orient** (after `-o`): `--dir`, `--lang`, `--grep`, `--glob`, `--type`, `--budget N`
 
-**Map** (after `-m`): `--dir`, `--lang`, `--grep`, `--glob`, `--type`, `--budget N`
-
-**Edit** (after `-e`): `--old "x" --new "y"`, `--where Sym` (resolves file), `--in Sym` (scope), `--all`, `--delete`, `--dry-run`, `--fuzzy`, `--read-back`, `@file` for metacharacters
-
-**Write** (after `-w`): `--content "..."`, `--inside Class`, `--after Sym`, `--append`, `--mkdir`
-
-**Verify**: `-V` (auto after edits). `--command "cmd"`, `--level test`
-
-### Standalone commands
-
-| Command | Example |
-|---|---|
-| `map` | `edr map`, `edr map --dir src/ --type function --lang go --grep pat` |
-| `rename` | `edr rename "old" "new" --dry-run`, `edr rename "old" "new" --word --include "*.go"` |
-| `verify` | `edr verify`, `edr verify --test`, `edr verify --command "cmd"` |
-| `status` | `edr status`, `edr status --focus "goal"` |
-| `undo` | `edr undo` — revert the last edit/write (auto-checkpointed) |
-| `reset` | `edr reset`, `--session` |
-| `setup` | `edr setup`, `edr setup --force` |
+**Edit** (after `-e`): `--old "x" --new "y"`, `--where Sym` (resolves file), `--in Sym` (scope), `--content "..."`, `--inside Class`, `--after Sym`, `--append`, `--mkdir`, `--all`, `--delete`, `--dry-run`, `--fuzzy`, `--read-back`, `--no-verify`, `@file` for metacharacters
 
 Output uses plain mode: one JSON header line followed by raw-text body.
 
@@ -149,7 +147,7 @@ edr reads and edits any text file. Symbol-aware features (symbol reads, `--signa
 
 9 scenarios (read a symbol, orient in codebase, edit a function, etc.) against real repos. We measure tool response bytes — fewer bytes means less noise for the model to reason over, faster responses, and more accurate decisions.
 
-The baseline models a skilled agent using Claude Code's built-in tools: `Grep` to find symbols before reading, `Read` with line ranges around grep matches (not whole files), `Edit`/`Write` confirmations. edr uses symbol reads, `--signatures`, `map`, and batch flags.
+The baseline models a skilled agent using Claude Code's built-in tools: `Grep` to find symbols before reading, `Read` with line ranges around grep matches (not whole files), `Edit`/`Write` confirmations. edr uses `focus` (symbol reads), `--signatures`, `orient`, and batch flags.
 
 | Repo | Lang | Files | Baseline | edr | Reduction |
 |---|---|---|---|---|---|

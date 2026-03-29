@@ -1903,7 +1903,7 @@ func TestSpec_InstructionQuality(t *testing.T) {
 	}
 
 	// Spec: instructions MUST teach key context-saving features.
-	for _, feature := range []string{"--sig", "--budget", "--skeleton", "map"} {
+	for _, feature := range []string{"--sig", "--budget", "--skeleton", "orient"} {
 		if !strings.Contains(instructions, feature) {
 			t.Errorf("instructions should teach %q", feature)
 		}

@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.4.0 — 2026-03-29
+
+### Breaking changes (surface only — old names still work)
+
+- **Command rename.** The primary command surface is now `orient`, `focus`, `edit`. Old names (`map`, `read`, `write`, `search`, `rename`, `verify`, `reset`) still work as hidden/backward-compatible aliases.
+- **Batch flags renamed.** `-f` focus (alias `-r`), `-o` orient (alias `-m`). `-e` edit now absorbs write operations (`--content`, `--inside`, `--after`, `--append`, `--mkdir`). `-s` search and `-w` write still work but are not promoted.
+- **`-q` query and `-V` verify flags removed from promoted surface.** Verify is now automatic after edits (`--no-verify` to skip).
+
+### Primary commands (shown in --help)
+
+- `orient [path]` — structural overview (replaces `map`)
+- `focus file[:Symbol]` — read file/symbol with context (replaces `read`)
+- `edit file` — edit, write, create files + auto-verify (absorbs `write`)
+- `status` — session state, build state
+- `undo` — revert last edit
+- `setup` — install agent instructions
+
+### Agent instructions rewritten
+
+All agent instruction files (`internal/setup/instructions/*.md`) rewritten for the orient/focus/edit surface. Instructions now lead with the 3 core commands and use new batch flags exclusively.
+
 ## v0.3.0 — 2026-03-29
 
 ### Breaking changes

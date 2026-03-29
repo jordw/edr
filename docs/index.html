@@ -283,24 +283,24 @@ footer {
 <!-- Example -->
 <section class="example">
   <h2>Example</h2>
-  <p>Read a function, search for usage, edit it:</p>
+  <p>Focus on a function, orient in the project, edit it:</p>
 <pre><code><span class="comment"># Without edr: grep to find it, read the range, grep for callers, read each caller</span>
 <span class="comment"># 5+ tool calls, ~25KB of context</span>
 
 <span class="comment"># With edr:</span>
-edr <span class="flag">-r</span> src/scheduler.py:run               <span class="comment"># just the function (not the file)</span>
-edr <span class="flag">-s</span> "run" <span class="flag">--text</span> <span class="flag">--include</span> "*.py"      <span class="comment"># find usage across project</span>
-edr <span class="flag">-e</span> src/scheduler.py \
+edr <span class="flag">focus</span> src/scheduler.py:run             <span class="comment"># just the function (not the file)</span>
+edr <span class="flag">orient</span> <span class="flag">--dir</span> src/                      <span class="comment"># structural overview</span>
+edr <span class="flag">edit</span> src/scheduler.py \
     <span class="flag">--old</span> "def run(self):" \
-    <span class="flag">--new</span> "def run(self, retries=3):"      <span class="comment"># verifies build</span></code></pre>
+    <span class="flag">--new</span> "def run(self, retries=3):"      <span class="comment"># auto-verifies build</span></code></pre>
   <p>3 calls, ~3KB.</p>
 
   <p style="margin-top: 1.5rem;"><strong>Batched:</strong> gather everything in one call, mutate in one call:</p>
-<pre><code><span class="comment"># 1. Read three APIs + search, one call</span>
-edr <span class="flag">-r</span> src/scheduler.py:Scheduler <span class="flag">--sig</span> \
-    <span class="flag">-r</span> src/config.py:parse_config \
-    <span class="flag">-r</span> src/worker.py:Worker <span class="flag">--sig</span> \
-    <span class="flag">-s</span> "retry"
+<pre><code><span class="comment"># 1. Focus on three APIs + orient, one call</span>
+edr <span class="flag">-f</span> src/scheduler.py:Scheduler <span class="flag">--sig</span> \
+    <span class="flag">-f</span> src/config.py:parse_config \
+    <span class="flag">-f</span> src/worker.py:Worker <span class="flag">--sig</span> \
+    <span class="flag">-o</span> <span class="flag">--dir</span> src/
 
 <span class="comment"># 2. Edit two files, auto-verifies build</span>
 edr <span class="flag">-e</span> src/scheduler.py <span class="flag">--old</span> "def run(self):" <span class="flag">--new</span> "def run(self, retries=3):" \
@@ -358,43 +358,42 @@ edr <span class="flag">-e</span> src/scheduler.py <span class="flag">--old</span
 <!-- Commands -->
 <section>
   <h2>Commands</h2>
-  <p><strong>Batch flags</strong> — the primary interface. <code>-r</code> read, <code>-s</code> search, <code>-m</code> map, <code>-e</code> edit, <code>-w</code> write. Modifier flags follow each op. Plan what you need, then combine into one call:</p>
-<pre><code>edr <span class="flag">-r</span> file[:Symbol]              <span class="comment"># Read file or symbol</span>
-edr <span class="flag">-r</span> file:Class <span class="flag">--sig</span>           <span class="comment"># Signatures only (no bodies)</span>
-edr <span class="flag">-s</span> "pattern"                  <span class="comment"># Search symbols or text (--text)</span>
-edr <span class="flag">-m</span> <span class="flag">--dir</span> src/                 <span class="comment"># Symbol map of a directory</span>
-edr <span class="flag">-e</span> file <span class="flag">--old</span> "x" <span class="flag">--new</span> "y"   <span class="comment"># Edit with auto-verify</span>
-edr <span class="flag">-w</span> file <span class="flag">--inside</span> Class        <span class="comment"># Add method/field without reading</span></code></pre>
 
-  <p>Combine freely. One call to gather context, one to mutate:</p>
-<pre><code>edr <span class="flag">-r</span> f.go <span class="flag">--sig</span> <span class="flag">-r</span> g.go:Func <span class="flag">--expand</span> <span class="flag">-s</span> "pattern" <span class="flag">--text</span> <span class="flag">-m</span> <span class="flag">--dir</span> cmd/
-edr <span class="flag">-r</span> f.go:Sym <span class="flag">-e</span> f.go <span class="flag">--old</span> "x" <span class="flag">--new</span> "y" <span class="flag">-r</span> f.go:Sym   <span class="comment"># post-edit read</span>
-edr <span class="flag">-e</span> f.go <span class="flag">--old</span> "a" <span class="flag">--new</span> "b" <span class="flag">-e</span> g.go <span class="flag">--old</span> "c" <span class="flag">--new</span> "d"
-edr <span class="flag">-w</span> f.go <span class="flag">--content</span> "..." <span class="flag">--mkdir</span></code></pre>
-
-  <h3 style="margin-top: 1.5rem; font-size: 1.1rem;">Batch modifiers</h3>
-  <p><strong>Read</strong> (after <code>-r</code>): <code>--sig</code>, <code>--skeleton</code>, <code>--full</code>, <code>--expand[=deps]</code>, <code>--symbols</code>, <code>--lines 10:50</code>, <code>--budget N</code></p>
-  <p><strong>Search</strong> (after <code>-s</code>): <code>--text</code>, <code>--regex</code>, <code>--context N</code>, <code>--in f.go:Sym</code>, <code>--include "*.go"</code>, <code>--limit N</code></p>
-  <p><strong>Map</strong> (after <code>-m</code>): <code>--dir</code>, <code>--lang</code>, <code>--grep</code>, <code>--glob</code>, <code>--type</code>, <code>--budget N</code></p>
-  <p><strong>Edit</strong> (after <code>-e</code>): <code>--old "x" --new "y"</code>, <code>--where Sym</code> (resolves file), <code>--in Sym</code> (scope), <code>--all</code>, <code>--delete</code>, <code>--dry-run</code>, <code>--fuzzy</code>, <code>--read-back</code>, <code>@file</code> for metacharacters</p>
-  <p><strong>Write</strong> (after <code>-w</code>): <code>--content "..."</code>, <code>--inside Class</code>, <code>--after Sym</code>, <code>--append</code>, <code>--mkdir</code></p>
-  <p><strong>Verify</strong>: <code>-V</code> (auto after edits). <code>--command "cmd"</code>, <code>--level test</code></p>
-
-  <h3 style="margin-top: 1.5rem; font-size: 1.1rem;">Standalone commands</h3>
+  <h3 style="font-size: 1.1rem;">Primary commands</h3>
   <div class="table-wrap">
   <table class="cmd-table">
     <thead><tr><th>Command</th><th>Description</th></tr></thead>
     <tbody>
-      <tr><td>map</td><td><code>edr map</code>, <code>edr map --dir src/ --type function --lang go --grep pat</code></td></tr>
-      <tr><td>rename</td><td><code>edr rename "old" "new" --dry-run</code>, <code>edr rename "old" "new" --word --include "*.go"</code></td></tr>
-      <tr><td>verify</td><td><code>edr verify</code>, <code>edr verify --test</code>, <code>edr verify --command "cmd"</code></td></tr>
-      <tr><td>status</td><td><code>edr status</code>, <code>edr status --focus "goal"</code></td></tr>
-      <tr><td>undo</td><td>Revert last edit/write. Every mutation is auto-checkpointed.</td></tr>
-      <tr><td>reset</td><td><code>edr reset</code>, <code>--session</code></td></tr>
-      <tr><td>setup</td><td><code>edr setup</code>, <code>edr setup --force</code></td></tr>
+      <tr><td>orient [path]</td><td>Structural overview of a directory or project</td></tr>
+      <tr><td>focus file[:Symbol]</td><td>Read file or symbol with context</td></tr>
+      <tr><td>edit file</td><td>Edit, write, create files + auto-verify</td></tr>
+      <tr><td>status</td><td>Session state, build state</td></tr>
+      <tr><td>undo</td><td>Revert last edit/write (auto-checkpointed)</td></tr>
+      <tr><td>setup</td><td>Install agent instructions</td></tr>
     </tbody>
   </table>
   </div>
+  <p>Old command names (<code>map</code>, <code>read</code>, <code>write</code>, <code>search</code>, <code>rename</code>, <code>verify</code>, <code>reset</code>) still work for backward compatibility.</p>
+
+  <h3 style="margin-top: 1.5rem; font-size: 1.1rem;">Batch flags</h3>
+  <p><code>-f</code> focus, <code>-o</code> orient, <code>-e</code> edit. Modifier flags follow each op. Plan what you need, then combine into one call:</p>
+<pre><code>edr <span class="flag">-f</span> file[:Symbol]              <span class="comment"># Focus on file or symbol</span>
+edr <span class="flag">-f</span> file:Class <span class="flag">--sig</span>           <span class="comment"># Signatures only (no bodies)</span>
+edr <span class="flag">-o</span> <span class="flag">--dir</span> src/                 <span class="comment"># Structural overview of a directory</span>
+edr <span class="flag">-e</span> file <span class="flag">--old</span> "x" <span class="flag">--new</span> "y"   <span class="comment"># Edit with auto-verify</span>
+edr <span class="flag">-e</span> file <span class="flag">--content</span> "..." <span class="flag">--inside</span> Class  <span class="comment"># Write (via edit)</span></code></pre>
+
+  <p>Combine freely. One call to gather context, one to mutate:</p>
+<pre><code>edr <span class="flag">-f</span> f.go <span class="flag">--sig</span> <span class="flag">-f</span> g.go:Func <span class="flag">--expand</span> <span class="flag">-o</span> <span class="flag">--dir</span> cmd/
+edr <span class="flag">-f</span> f.go:Sym <span class="flag">-e</span> f.go <span class="flag">--old</span> "x" <span class="flag">--new</span> "y" <span class="flag">-f</span> f.go:Sym   <span class="comment"># post-edit read</span>
+edr <span class="flag">-e</span> f.go <span class="flag">--old</span> "a" <span class="flag">--new</span> "b" <span class="flag">-e</span> g.go <span class="flag">--old</span> "c" <span class="flag">--new</span> "d"
+edr <span class="flag">-e</span> f.go <span class="flag">--content</span> "..." <span class="flag">--mkdir</span></code></pre>
+  <p>Aliases <code>-r</code> (focus), <code>-m</code> (orient), <code>-s</code> (search), <code>-w</code> (write) still work.</p>
+
+  <h3 style="margin-top: 1.5rem; font-size: 1.1rem;">Batch modifiers</h3>
+  <p><strong>Focus</strong> (after <code>-f</code>): <code>--sig</code>, <code>--skeleton</code>, <code>--full</code>, <code>--expand[=deps]</code>, <code>--symbols</code>, <code>--lines 10:50</code>, <code>--budget N</code></p>
+  <p><strong>Orient</strong> (after <code>-o</code>): <code>--dir</code>, <code>--lang</code>, <code>--grep</code>, <code>--glob</code>, <code>--type</code>, <code>--budget N</code></p>
+  <p><strong>Edit</strong> (after <code>-e</code>): <code>--old "x" --new "y"</code>, <code>--where Sym</code> (resolves file), <code>--in Sym</code> (scope), <code>--content "..."</code>, <code>--inside Class</code>, <code>--after Sym</code>, <code>--append</code>, <code>--mkdir</code>, <code>--all</code>, <code>--delete</code>, <code>--dry-run</code>, <code>--fuzzy</code>, <code>--read-back</code>, <code>--no-verify</code>, <code>@file</code> for metacharacters</p>
 </section>
 
 <!-- Languages -->
@@ -413,7 +412,7 @@ edr <span class="flag">-w</span> f.go <span class="flag">--content</span> "..." 
   <h2>How it works</h2>
   <p>edr parses files on demand with pure-Go regex-based symbol extraction — no pre-built index, no setup step, no staleness, no CGO dependency.</p>
   <p><strong>Symbol-level operations.</strong> Read one function instead of a 400-line file — the agent sees exactly what it needs and makes better decisions. Get a class API with <code>--signatures</code> to understand structure before diving in. Scope edits with <code>--in Symbol</code> so they can't match the wrong code. Edits auto-verify the build.</p>
-  <p><strong>Batching.</strong> <code>-r</code>, <code>-s</code>, <code>-m</code>, <code>-e</code>, <code>-w</code> combine reads, searches, maps, edits, and writes in one CLI call. Fewer round-trips means faster task completion.</p>
+  <p><strong>Batching.</strong> <code>-f</code>, <code>-o</code>, <code>-e</code> combine focus, orient, and edit in one CLI call. Fewer round-trips means faster task completion.</p>
   <p><strong>Sessions.</strong> edr tracks what the agent has seen and only returns what changed. Second read of an unchanged file: zero output.</p>
 </section>
 
