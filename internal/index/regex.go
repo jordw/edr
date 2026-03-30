@@ -95,7 +95,7 @@ var regexTypeScript = &regexLang{
 		// Unmodified methods — require { at end of line
 		pat(regexp.MustCompile(`^\s+#?([\p{L}\p{N}_]+)\s*\([^)]*\)\s*(?::\s*[^{]*)?\{`), "method", 1),
 		// Arrow functions
-		pat(regexp.MustCompile(`^(?:export\s+)?(?:const|let|var)\s+([\p{L}\p{N}_]+)\s*(?::\s*[^=]+)?\s*=\s*(?:async\s+)?(?:function|\(|[a-zA-Z_][\p{L}\p{N}_]*\s*=>)`), "function", 1),
+		pat(regexp.MustCompile(`^(?:export\s+)?(?:const|let|var)\s+([\p{L}\p{N}_]+)\s*(?::\s*[^=]+)?\s*=\s*(?:async\s+)?(?:function|<[^>]*>\s*\(|\(|[a-zA-Z_][\p{L}\p{N}_]*\s*=>)`), "function", 1),
 		// Static arrow methods
 		pat(regexp.MustCompile(`^\s+(?:static\s+)?([\p{L}\p{N}_]+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[a-zA-Z_][\p{L}\p{N}_]*)\s*(?::\s*[^=]+)?\s*=>`), "method", 1),
 	},
@@ -489,8 +489,18 @@ func regexFindBraceEnd(lines []string, lineIdx int) int {
 			}
 
 			// String/template openers
-			if ch == '"' || ch == '\'' || ch == '`' {
+			if ch == '"' || ch == '`' {
 				inString = ch
+				continue
+			}
+			// Single quote: string in most languages, but lifetime in Rust ('static, 'a).
+			// Treat as string only if it looks like a char literal ('x') not a lifetime.
+			if ch == '\'' {
+				if j+2 < len(line) && line[j+2] == '\'' {
+					// Character literal like 'x' — skip the 3 bytes
+					j += 2
+				}
+				// Otherwise ignore (lifetime or unclosed quote at end of line)
 				continue
 			}
 
