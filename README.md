@@ -157,8 +157,6 @@ With edr, `focus file:Symbol` returns the function body plus what it calls. `edi
 | Batch (`-f ... -f ... -e ...`) | Multiple operations in one call |
 | Re-read unchanged file | `{unchanged: true}` (session dedup) |
 
-Proper comparative evals (same tasks, with and without edr, measuring tool calls and success rate) are planned but not yet available.
-
 ## License
 
 [MIT](LICENSE)
