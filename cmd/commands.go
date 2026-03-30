@@ -210,8 +210,9 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	// Auto-verify after successful mutations (parity with batch mode)
 	if cmdName == "edit" || cmdName == "write" {
 		dryRun, _ := flags["dry_run"].(bool)
+		noVerify, _ := flags["no_verify"].(bool)
 		status, _ := resultStatus(result)
-		if !dryRun && status == "applied" {
+		if !dryRun && !noVerify && status == "applied" {
 			verifyFlags := map[string]any{}
 			if len(args) > 0 {
 				verifyFlags["files"] = []string{args[0]}

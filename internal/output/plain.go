@@ -116,6 +116,9 @@ func printPlain(e *Envelope) {
 				if out, ok := m["output"].(string); ok && out != "" {
 					h["output"] = out
 				}
+				if ec, ok := m["error_context"]; ok {
+					h["error_context"] = ec
+				}
 			}
 			writeHeader(w, h)
 		}

@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -86,6 +88,13 @@ func runVerify(ctx context.Context, db index.SymbolStore, root string, args []st
 		}
 		// Include output tail so agents can see compiler errors / failing tests
 		result["output"] = verifyOutputTail(string(out), 40)
+
+		// Parse error locations and include symbol context
+		if db != nil {
+			if errCtx := extractErrorContext(ctx, db, root, string(out)); len(errCtx) > 0 {
+				result["error_context"] = errCtx
+			}
+		}
 	} else {
 		result["status"] = "passed"
 	}
@@ -106,6 +115,86 @@ func verifyOutputTail(output string, maxLines int) string {
 	}
 	return fmt.Sprintf("... (%d lines truncated)\n%s", len(lines)-maxLines,
 		strings.Join(lines[len(lines)-maxLines:], "\n"))
+}
+
+
+// errorLocation represents a parsed error from compiler output.
+type errorLocation struct {
+	File    string `json:"file"`
+	Line    int    `json:"line"`
+	Message string `json:"message"`
+	Symbol  string `json:"symbol,omitempty"`
+	Body    string `json:"body,omitempty"`
+}
+
+// errorLineRe matches common compiler error formats: file:line:col: message
+var errorLineRe = regexp.MustCompile(`^([^\s:]+\.\w+):(\d+)(?::\d+)?:\s*(.+)`)
+
+// extractErrorContext parses compiler output for file:line error locations,
+// finds the enclosing symbol at each location, and returns the symbol body.
+// This lets the agent jump straight to the broken code without a separate read.
+func extractErrorContext(ctx context.Context, db index.SymbolStore, root, output string) []errorLocation {
+	seen := make(map[string]bool) // dedupe by file:symbol
+	var results []errorLocation
+
+	for _, line := range strings.Split(output, "\n") {
+		m := errorLineRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		relFile := m[1]
+		lineNum, _ := strconv.Atoi(m[2])
+		message := m[3]
+		if lineNum <= 0 {
+			continue
+		}
+
+		// Resolve to absolute path
+		absFile := filepath.Join(root, relFile)
+		if _, err := os.Stat(absFile); err != nil {
+			continue
+		}
+
+		// Find the enclosing symbol
+		data, err := os.ReadFile(absFile)
+		if err != nil {
+			continue
+		}
+		syms := index.RegexParse(absFile, data)
+		var best *index.SymbolInfo
+		for i := range syms {
+			s := &syms[i]
+			if int(s.StartLine) <= lineNum && lineNum <= int(s.EndLine) {
+				if best == nil || s.StartLine >= best.StartLine {
+					best = s
+				}
+			}
+		}
+
+		loc := errorLocation{
+			File:    relFile,
+			Line:    lineNum,
+			Message: message,
+		}
+
+		if best != nil {
+			key := relFile + ":" + best.Name
+			if seen[key] {
+				continue // already included this symbol
+			}
+			seen[key] = true
+			loc.Symbol = best.Name
+			if int(best.EndByte) <= len(data) {
+				loc.Body = string(data[best.StartByte:best.EndByte])
+			}
+		}
+
+		results = append(results, loc)
+		if len(results) >= 3 {
+			break // cap at 3 error contexts to keep response bounded
+		}
+	}
+	return results
 }
 
 // detectMakefile checks for a Makefile and probes for test/check targets.
