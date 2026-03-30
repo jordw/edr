@@ -355,18 +355,11 @@ func BenchmarkSessionWorkflow(b *testing.B) {
 			totalBytes += len(text)
 		}
 
-		// Search
-		result, _ := dispatch.Dispatch(ctx, db, "search", []string{"enqueue"}, map[string]any{"body": true, "budget": 500})
-		data, _ := json.Marshal(result)
-		text := sess.PostProcess("search", []string{"enqueue"}, map[string]any{"body": true, "budget": 500}, result, string(data))
-		totalBytes += len(text)
-
-		// Edit + revert
-		result, _ = dispatch.Dispatch(ctx, db, "edit", []string{"lib/scheduler.py"}, map[string]any{
+		result, _ := dispatch.Dispatch(ctx, db, "edit", []string{"lib/scheduler.py"}, map[string]any{
 			"old_text": "self._running = True", "new_text": "self._running = False",
 		})
-		data, _ = json.Marshal(result)
-		text = sess.PostProcess("edit", []string{"lib/scheduler.py"}, nil, result, string(data))
+		data, _ := json.Marshal(result)
+		text := sess.PostProcess("edit", []string{"lib/scheduler.py"}, nil, result, string(data))
 		totalBytes += len(text)
 
 		b.StopTimer()

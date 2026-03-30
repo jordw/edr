@@ -104,30 +104,6 @@ func BenchmarkReadLines(b *testing.B) {
 }
 
 // ---------------------------------------------------------------------------
-// Search benchmarks
-// ---------------------------------------------------------------------------
-
-func BenchmarkSearchSymbol(b *testing.B) {
-	db, _ := setupRepo(b)
-	benchDispatch(b, db, "search", []string{"execute"}, nil)
-}
-
-func BenchmarkSearchSymbolBody(b *testing.B) {
-	db, _ := setupRepo(b)
-	benchDispatch(b, db, "search", []string{"execute"}, map[string]any{"body": true, "budget": 500})
-}
-
-func BenchmarkSearchText(b *testing.B) {
-	db, _ := setupRepo(b)
-	benchDispatch(b, db, "search", []string{"retry"}, map[string]any{"text": true, "budget": 300})
-}
-
-func BenchmarkSearchInSymbol(b *testing.B) {
-	db, _ := setupRepo(b)
-	benchDispatch(b, db, "search", []string{"running"}, map[string]any{"text": true, "in": "lib/scheduler.py:Scheduler"})
-}
-
-// ---------------------------------------------------------------------------
 // Map benchmarks
 // ---------------------------------------------------------------------------
 
@@ -220,63 +196,6 @@ func BenchmarkEditDeleteDryRun(b *testing.B) {
 }
 
 // ---------------------------------------------------------------------------
-// Explore / Refs benchmarks
-// ---------------------------------------------------------------------------
-
-func BenchmarkExplore(b *testing.B) {
-	db, _ := setupRepo(b)
-	benchDispatch(b, db, "refs", []string{"lib/scheduler.py", "_execute_task"}, map[string]any{
-		"body":    true,
-		"callers": true,
-		"deps":    true,
-	})
-}
-
-func BenchmarkExploreGather(b *testing.B) {
-	db, _ := setupRepo(b)
-	benchDispatch(b, db, "refs", []string{"_execute_task"}, map[string]any{
-		"gather": true,
-		"body":   true,
-		"budget": 1500,
-	})
-}
-
-func BenchmarkRefs(b *testing.B) {
-	db, _ := setupRepo(b)
-	benchDispatch(b, db, "refs", []string{"_execute_task"}, nil)
-}
-
-func BenchmarkRefsChain(b *testing.B) {
-	db, _ := setupRepo(b)
-	benchDispatch(b, db, "refs", []string{"Scheduler"}, map[string]any{"chain": "_execute_task"})
-}
-
-func BenchmarkRefsImpact(b *testing.B) {
-	db, _ := setupRepo(b)
-	benchDispatch(b, db, "refs", []string{"_execute_task"}, map[string]any{"impact": true})
-}
-
-// ---------------------------------------------------------------------------
-// Find benchmarks
-// ---------------------------------------------------------------------------
-
-func BenchmarkFind(b *testing.B) {
-	db, _ := setupRepo(b)
-	benchDispatch(b, db, "search", []string{"**/*.py"}, nil)
-}
-
-// ---------------------------------------------------------------------------
-// Rename benchmark
-// ---------------------------------------------------------------------------
-
-func BenchmarkRenameDryRun(b *testing.B) {
-	db, _ := setupRepo(b)
-	benchDispatch(b, db, "rename", []string{"HandlerFunc", "TaskHandlerFunc"}, map[string]any{
-		"dry_run": true,
-	})
-}
-
-// ---------------------------------------------------------------------------
 // DispatchMulti (batch) benchmark
 // ---------------------------------------------------------------------------
 
@@ -284,10 +203,9 @@ func BenchmarkDispatchMulti(b *testing.B) {
 	db, _ := setupRepo(b)
 	ctx := context.Background()
 	cmds := []dispatch.MultiCmd{
-		{Cmd: "read", Args: []string{"lib/scheduler.py:Scheduler"}, Flags: map[string]any{"signatures": true}},
-		{Cmd: "search", Args: []string{"execute"}, Flags: map[string]any{"body": true, "budget": 300}},
-		{Cmd: "map", Args: nil, Flags: map[string]any{"budget": 300}},
-		{Cmd: "refs", Args: []string{"_execute_task"}, Flags: nil},
+		{Cmd: "focus", Args: []string{"lib/scheduler.py:Scheduler"}, Flags: map[string]any{"signatures": true}},
+		{Cmd: "focus", Args: []string{"lib/scheduler.py:_execute_task"}, Flags: nil},
+		{Cmd: "orient", Args: nil, Flags: map[string]any{"budget": 300}},
 	}
 
 	b.ResetTimer()

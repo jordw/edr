@@ -143,43 +143,21 @@ edr reads and edits any text file. Symbol-aware features (symbol reads, `--signa
 - **macOS and Linux only.** Windows is not planned.
 - **Pure Go.** No CGO, no C compiler needed. Single ~6MB binary.
 
-## Benchmarks
+## How it compares
 
-9 scenarios (read a symbol, orient in codebase, edit a function, etc.) against real repos. We measure tool response bytes — fewer bytes means less noise for the model to reason over, faster responses, and more accurate decisions.
+Without edr, agents grep to find code, read line ranges, guess what's relevant, edit, then re-read to check. Each step is a separate tool call with context the agent has to filter.
 
-The baseline models a skilled agent using Claude Code's built-in tools: `Grep` to find symbols before reading, `Read` with line ranges around grep matches (not whole files), `Edit`/`Write` confirmations. edr uses `focus` (symbol reads), `--signatures`, `orient`, and batch flags.
+With edr, `focus file:Symbol` returns the function body plus what it calls. `edit` returns the updated code plus build errors with the broken function included. The agent makes fewer decisions about what to read because edr front-loads the right context.
 
-| Repo | Lang | Files | Baseline | edr | Reduction |
-|---|---|---|---|---|---|
-| [urfave/cli](https://github.com/urfave/cli) | Go | ~70 | 146KB / 25 calls | 27KB / 9 calls | **82%** |
-| [vitess/sqlparser](https://github.com/vitessio/vitess) | Go | ~70 | 459KB / 22 calls | 29KB / 9 calls | **94%** |
-| [vitess/vtgate](https://github.com/vitessio/vitess) | Go | ~490 | 433KB / 24 calls | 40KB / 9 calls | **91%** |
-| [pallets/click](https://github.com/pallets/click) | Python | ~17 | 180KB / 25 calls | 30KB / 9 calls | **83%** |
-| [rails/thor](https://github.com/rails/thor) | Ruby | ~35 | 157KB / 25 calls | 30KB / 9 calls | **81%** |
-| [reduxjs/redux-toolkit](https://github.com/reduxjs/redux-toolkit) | TS | ~190 | 112KB / 25 calls | 26KB / 9 calls | **77%** |
-| [django/django](https://github.com/django/django) | Python | ~880 | 1027KB / 25 calls | 40KB / 9 calls | **96%** |
+| Operation | What the agent gets |
+|---|---|
+| `focus file:Symbol` | Function body + dependency signatures (auto) |
+| `edit --old X --new Y` | Diff + updated function body + build result + error context (auto) |
+| `orient --dir src/` | Budget-controlled structural overview |
+| Batch (`-f ... -f ... -e ...`) | Multiple operations in one call |
+| Re-read unchanged file | `{unchanged: true}` (session dedup) |
 
-Median reduction: **83%**. edr loses on plain text search (structured JSON adds overhead vs raw grep), but wins everywhere else. Biggest gains on structured operations (map, signatures). Call counts are summed across all 9 scenarios; each edr scenario is 1 call.
-
-<details>
-<summary>Per-scenario breakdown (urfave/cli)</summary>
-
-| Scenario | Baseline | edr | Reduction |
-|---|---|---|---|
-| Understand a class API | 13,019B (whole file) | 1,486B (`--signatures`) | **89%** |
-| Read a specific function | 3,026B / 2 calls (grep + range read) | 1,182B (symbol read) | **61%** |
-| Find references | 9,086B / 4 calls (grep + 3 range reads) | 179B (search) | **98%** |
-| Search with context | 614B (grep -C3) | 1,027B (structured) | **-67%** |
-| Orient in codebase | 52,470B / 4 calls (glob + 3 reads) | 393B (`map`) | **99%** |
-| Edit a function | 1,403B / 3 calls (grep + range + edit) | 394B (batch) | **72%** |
-| Add method to a class | 5,393B / 3 calls (grep + range + write) | 249B (`--inside`) | **95%** |
-| Multi-file read | 39,397B / 3 calls | 22,028B (batched) | **44%** |
-| Explore a symbol | 25,006B / 4 calls (grep + 3 range reads) | 555B (`--expand`) | **98%** |
-| **Total** | **149,414B / 25 calls** | **27,493B / 9 calls** | **82%** |
-
-</details>
-
-Scenarios and methodology in [`bench/scenarios/`](bench/scenarios/). Reproduce: `bash bench/run_real_repo_benchmarks.sh` (~10 min). Regenerate tables: `bash bench/gen_readme_table.sh`.
+Proper comparative evals (same tasks, with and without edr, measuring tool calls and success rate) are planned but not yet available.
 
 ## License
 
