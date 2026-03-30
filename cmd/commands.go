@@ -334,6 +334,24 @@ var statusCmd = &cobra.Command{
 
 		flags := extractFlags(cmd)
 
+		// Handle --reset: clear session and checkpoints
+		if cmd.Flags().Changed("reset") {
+			id := session.GenerateID()
+			newSess := session.New()
+			path := filepath.Join(edrDir, "sessions", id+".json")
+			os.MkdirAll(filepath.Join(edrDir, "sessions"), 0700)
+			newSess.SaveToFile(path)
+			session.WriteSessionMapping(filepath.Join(edrDir, "sessions"), id)
+			os.RemoveAll(filepath.Join(edrDir, "checkpoints"))
+			cleanEdrDir(edrDir)
+			result := map[string]any{"status": "reset", "session": id}
+			env := output.NewEnvelope("status")
+			env.AddOp("s0", "reset", result)
+			env.ComputeOK()
+			output.PrintEnvelope(env)
+			return nil
+		}
+
 		// Handle --focus: set/clear focus string
 		if cmd.Flags().Changed("focus") {
 			focusVal, _ := flags["focus"].(string)

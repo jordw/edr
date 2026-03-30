@@ -83,6 +83,7 @@ var focusFlags = []FlagSpec{
 	{Name: "full", Type: FlagBool, Default: false, Desc: "Force full content (skip session delta)"},
 	{Name: "symbols", Type: FlagBool, Default: false, Desc: "Include symbol list in read result"},
 	{Name: "expand", Type: FlagString, Default: "", Desc: "Include related signatures: deps (default), callers, or both"},
+	{Name: "no_expand", Type: FlagBool, Default: false, Desc: "Suppress auto-expand of dep signatures"},
 }
 
 // orientFlags are shared between "orient" and its "map" alias.
@@ -176,6 +177,7 @@ var Registry = []*Spec{
 		Category: CatMeta, MinArgs: 0, MaxArgs: 0,
 		Flags: []FlagSpec{
 			{Name: "focus", Type: FlagString, Default: "", Desc: "Set session focus (empty string clears)"},
+			{Name: "reset", Type: FlagBool, Default: false, Desc: "Clear session and checkpoints"},
 		},
 	},
 	{

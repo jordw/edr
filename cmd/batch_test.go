@@ -984,7 +984,7 @@ func TestDoStructsMatchCmdspec(t *testing.T) {
 	// doRead fields (from JSON tags)
 	readFields := map[string]bool{
 		"file": true, "symbol": true, "budget": true, "signatures": true,
-		"skeleton": true, "lines": true, "depth": true, "start_line": true, "end_line": true, "symbols": true, "full": true, "expand": true,
+		"skeleton": true, "lines": true, "depth": true, "start_line": true, "end_line": true, "symbols": true, "full": true, "expand": true, "no_expand": true,
 	}
 	checkStructFieldsFiltered(t, "doRead", doReadKnownKeys, readFields)
 

@@ -63,6 +63,7 @@ type doRead struct {
 	EndLine    *int   `json:"end_line,omitempty"`
 	Symbols    *bool   `json:"symbols,omitempty"`
 	Expand     string  `json:"expand,omitempty"`
+	NoExpand   *bool   `json:"no_expand,omitempty"`
 	Full       *bool  `json:"full,omitempty"`
 }
 
