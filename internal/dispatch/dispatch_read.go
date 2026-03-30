@@ -373,8 +373,15 @@ func runReadSymbol(ctx context.Context, db index.SymbolStore, root string, args 
 		addSignatureToResult(sym, src, r)
 	}
 
-	// --expand: include related symbol signatures inline
-	if expandMode := flagString(flags, "expand", ""); expandMode != "" {
+	// Auto-expand: symbol reads include dep signatures by default.
+	// --expand overrides the mode (deps, callers, both).
+	// --no-expand or --expand="" suppresses.
+	expandMode := flagString(flags, "expand", "")
+	if expandMode == "" && !flagBool(flags, "no_expand", false) {
+		// Default: auto-include dep signatures for symbol reads
+		expandMode = "deps"
+	}
+	if expandMode != "" {
 		attachExpand(ctx, db, sym, expandMode, r)
 	}
 	return r, nil
