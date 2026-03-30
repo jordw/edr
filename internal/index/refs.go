@@ -126,27 +126,32 @@ func findDepsTextBased(ctx context.Context, db SymbolStore, sym *SymbolInfo) ([]
 		return nil, err
 	}
 
-	// Extract identifiers from the symbol body using text tokenization.
+	// Extract identifiers from the symbol body.
 	body := src[sym.StartByte:sym.EndByte]
 	idents := extractIdentifiers(string(body))
 
+	// Build name→symbols map from all symbols (one call, not N).
+	allSyms, err := db.AllSymbols(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byName := make(map[string][]SymbolInfo, len(allSyms)/2)
+	for _, s := range allSyms {
+		byName[s.Name] = append(byName[s.Name], s)
+	}
+
+	// Look up each identifier in the map — O(1) per lookup.
 	var deps []SymbolInfo
 	depSeen := make(map[string]bool)
 	for _, name := range idents {
 		if name == sym.Name || builtinNames[name] {
 			continue
 		}
-		matches, err := db.SearchSymbols(ctx, name)
-		if err != nil {
-			continue
-		}
-		for _, m := range matches {
-			if m.Name == name {
-				key := m.File + ":" + m.Name
-				if !depSeen[key] {
-					depSeen[key] = true
-					deps = append(deps, m)
-				}
+		for _, m := range byName[name] {
+			key := m.File + ":" + m.Name
+			if !depSeen[key] {
+				depSeen[key] = true
+				deps = append(deps, m)
 			}
 		}
 	}
