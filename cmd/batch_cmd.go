@@ -19,7 +19,8 @@ import (
 // IsBatchFlag returns true if arg is a batch operation flag.
 func IsBatchFlag(arg string) bool {
 	switch arg {
-	case "-r", "--read", "-s", "--search", "-e", "--edit", "-w", "--write",
+	case "-f", "--focus", "-o", "--orient",
+		"-r", "--read", "-s", "--search", "-e", "--edit", "-w", "--write",
 		"-m", "--map", "-q", "--query", "-V", "--verify", "--no-verify":
 		return true
 	}
@@ -272,7 +273,7 @@ func parseBatchArgs(args []string) (*batchState, error) {
 		switch arg {
 		// ── operations ──
 
-		case "-r", "--read":
+		case "-f", "--focus", "-r", "--read":
 			s.flush()
 			s.currentOp = opRead
 			val, err := nextArg(arg)
@@ -303,7 +304,7 @@ func parseBatchArgs(args []string) (*batchState, error) {
 				Pattern: sp(val),
 			}
 
-		case "-m", "--map":
+		case "-o", "--orient", "-m", "--map":
 			s.flush()
 			s.currentOp = opMap
 			// Map takes an optional file argument. Peek to see if next arg is a flag.
@@ -600,7 +601,7 @@ func parseBatchArgs(args []string) (*batchState, error) {
 
 		case "--dir":
 			if s.currentOp != opMap {
-				return nil, fmt.Errorf("--dir is only valid after -m")
+				return nil, fmt.Errorf("--dir is only valid after -o/-m")
 			}
 			val, err := nextArg(arg)
 			if err != nil {
@@ -610,7 +611,7 @@ func parseBatchArgs(args []string) (*batchState, error) {
 
 		case "--lang":
 			if s.currentOp != opMap {
-				return nil, fmt.Errorf("--lang is only valid after -m")
+				return nil, fmt.Errorf("--lang is only valid after -o/-m")
 			}
 			val, err := nextArg(arg)
 			if err != nil {
@@ -620,7 +621,7 @@ func parseBatchArgs(args []string) (*batchState, error) {
 
 		case "--grep":
 			if s.currentOp != opMap {
-				return nil, fmt.Errorf("--grep is only valid after -m")
+				return nil, fmt.Errorf("--grep is only valid after -o/-m")
 			}
 			val, err := nextArg(arg)
 			if err != nil {
@@ -630,7 +631,7 @@ func parseBatchArgs(args []string) (*batchState, error) {
 
 		case "--glob":
 			if s.currentOp != opMap {
-				return nil, fmt.Errorf("--glob is only valid after -m")
+				return nil, fmt.Errorf("--glob is only valid after -o/-m")
 			}
 			val, err := nextArg(arg)
 			if err != nil {
@@ -640,7 +641,7 @@ func parseBatchArgs(args []string) (*batchState, error) {
 
 		case "--type":
 			if s.currentOp != opMap {
-				return nil, fmt.Errorf("--type is only valid after -m")
+				return nil, fmt.Errorf("--type is only valid after -o/-m")
 			}
 			val, err := nextArg(arg)
 			if err != nil {
