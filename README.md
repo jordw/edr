@@ -139,7 +139,7 @@ edr reads and edits any text file. Symbol-aware features (symbol reads, `--signa
 
 ## Limitations
 
-- **Regex-based, not LSP.** Fast, no build step, works on broken code, zero config. The tradeoff: no type information, no AST. Symbol extraction uses regex patterns tuned per language. Accurate for common patterns; may miss exotic syntax.
+- **Structural navigation, not code analysis.** edr finds functions and classes by pattern, not by parsing or type-checking. This means it works instantly, on broken code, with zero config — but it does not have type information. It may miss unusual syntax (e.g. deeply nested anonymous functions).
 - **macOS and Linux only.** Windows is not planned.
 - **Pure Go.** No CGO, no C compiler needed. Single ~6MB binary.
 
