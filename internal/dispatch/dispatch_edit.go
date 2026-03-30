@@ -260,62 +260,71 @@ func attachReadBack(ctx context.Context, db index.SymbolStore, result any) (any,
 		return result, nil // best-effort
 	}
 
-	// If edited a symbol, read the updated symbol body
-	if symName, ok := m["symbol"].(string); ok && symName != "" {
-		sym, err := db.GetSymbol(ctx, file, symName)
-		if err == nil {
-			data, _ := os.ReadFile(file)
-			if data != nil && int(sym.EndByte) <= len(data) {
-				body := string(data[sym.StartByte:sym.EndByte])
-				m["read_back"] = map[string]any{
-					"symbol": symName,
-					"lines":  [2]int{int(sym.StartLine), int(sym.EndLine)},
-					"content": body,
-				}
-			}
-		}
-		return result, nil
-	}
-
-	// No symbol — extract edit location from diff and read surrounding lines
-	diff, _ := m["diff"].(string)
-	if diff == "" {
-		return result, nil
-	}
-	editLine := diffStartLine(diff)
-	if editLine <= 0 {
-		return result, nil
-	}
-
+	// Read the post-edit file and attach context around the edit.
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return result, nil
 	}
-	lines := strings.SplitAfter(string(data), "\n")
-	totalLines := len(lines)
 
-	start := editLine - 10
-	if start < 1 {
-		start = 1
+	// If we know which symbol was edited, return its full updated body.
+	if symName, ok := m["symbol"].(string); ok && symName != "" {
+		db.InvalidateFiles(ctx, []string{file})
+		sym, sErr := db.GetSymbol(ctx, file, symName)
+		if sErr == nil && int(sym.EndByte) <= len(data) {
+			m["read_back"] = map[string]any{
+				"symbol":  symName,
+				"lines":   [2]int{int(sym.StartLine), int(sym.EndLine)},
+				"content": string(data[sym.StartByte:sym.EndByte]),
+			}
+			return result, nil
+		}
 	}
-	end := editLine + 10
-	if end > totalLines {
-		end = totalLines
+
+	// Otherwise, find the symbol containing the edit location.
+	// Parse the post-edit file directly (fast, no cache issues).
+	diff, _ := m["diff"].(string)
+	editLine := diffStartLine(diff)
+	if editLine > 0 {
+		syms := index.RegexParse(file, data)
+		var best *index.SymbolInfo
+		for i := range syms {
+			s := &syms[i]
+			if int(s.StartLine) <= editLine && editLine <= int(s.EndLine) {
+				if best == nil || s.StartLine >= best.StartLine {
+					best = s
+				}
+			}
+		}
+		if best != nil && int(best.EndByte) <= len(data) {
+			m["read_back"] = map[string]any{
+				"symbol":  best.Name,
+				"lines":   [2]int{int(best.StartLine), int(best.EndLine)},
+				"content": string(data[best.StartByte:best.EndByte]),
+			}
+			return result, nil
+		}
 	}
-	body := strings.Join(lines[start-1:end], "")
-	m["read_back"] = map[string]any{
-		"lines":   [2]int{start, end},
-		"content": body,
+
+	// Fallback: return lines around the edit point
+	if editLine > 0 {
+		lines := strings.SplitAfter(string(data), "\n")
+		start := editLine - 5
+		if start < 1 { start = 1 }
+		end := editLine + 5
+		if end > len(lines) { end = len(lines) }
+		m["read_back"] = map[string]any{
+			"lines":   [2]int{start, end},
+			"content": strings.Join(lines[start-1:end], ""),
+		}
 	}
 	return result, nil
 }
-
 // diffStartLine extracts the new-file start line from a unified diff header.
 // Parses the @@ -a,b +c,d @@ line and returns c.
 func diffStartLine(diff string) int {
+	hunkStart := 0
 	for _, line := range strings.Split(diff, "\n") {
 		if strings.HasPrefix(line, "@@") {
-			// Find +N in the @@ header
 			idx := strings.Index(line, "+")
 			if idx < 0 {
 				continue
@@ -329,9 +338,15 @@ func diffStartLine(diff string) int {
 					break
 				}
 			}
-			if n > 0 {
-				return n
-			}
+			hunkStart = n
+			continue
+		}
+		// Find first actual change line (+ or -)
+		if hunkStart > 0 && (strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-")) {
+			return hunkStart
+		}
+		if hunkStart > 0 && (strings.HasPrefix(line, " ") || line == "") {
+			hunkStart++
 		}
 	}
 	return 0
