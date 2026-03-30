@@ -1,12 +1,12 @@
-# edr - faster, more accurate agents
+# edr - context-aware tools for coding agents
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**edr makes coding agents faster and more accurate.** It replaces built-in file tools with symbol-aware operations, batched calls, and session tracking — so agents find the right code on the first try, make fewer mistakes, and finish tasks in less time.
+**edr gives coding agents the right context at the right time.** When an agent reads a function, edr includes what it calls. When it edits, edr includes the updated code and build errors. When it re-reads something unchanged, edr says so in one line. The agent makes fewer wrong decisions because the context it needs is already in the response.
 
-- **Precise reads.** Focus on one function instead of the file around it. Agents see structure, not noise.
-- **Fewer round-trips.** Batch focus, orient, and edit into one call. Less orchestration, more progress.
-- **No repeated work.** Re-reads return only what changed. Zero config.
+- **Symbol-aware reads.** `focus file:Symbol` returns the function body plus dependency signatures — not the 400-line file around it.
+- **Self-describing edits.** `edit` returns the diff, the updated function, and the build result. No follow-up calls to check what happened.
+- **Session dedup.** Re-reads return `{unchanged}`. The agent never processes the same content twice.
 
 Works with any agent that can run shell commands. Fully local, no telemetry.
 
