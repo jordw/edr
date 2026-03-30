@@ -365,6 +365,9 @@ func BenchmarkVerify(b *testing.B) {
 // Agent workflow benchmark — multi-step edit cycle without session
 // ---------------------------------------------------------------------------
 
+// BenchmarkAgentEditCycle simulates a realistic agent edit workflow:
+// orient → focus (with auto-deps) → edit (with auto-readback).
+// This is the end-to-end time for one complete edit cycle.
 func BenchmarkAgentEditCycle(b *testing.B) {
 	db, tmp := setupRepo(b)
 	ctx := context.Background()
@@ -374,28 +377,19 @@ func BenchmarkAgentEditCycle(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		totalBytes := 0
-		// 1. Orient: map the repo
-		out, _ := dispatchJSON(ctx, db, "map", nil, map[string]any{"budget": 500})
+		// 1. Orient: understand the codebase
+		out, _ := dispatchJSON(ctx, db, "orient", nil, map[string]any{"budget": 500})
 		totalBytes += len(out)
-		// 2. Read signatures of target class
-		out, _ = dispatchJSON(ctx, db, "read", []string{"lib/scheduler.py:Scheduler"}, map[string]any{"signatures": true})
+		// 2. Focus on target (auto-includes dep signatures)
+		out, _ = dispatchJSON(ctx, db, "focus", []string{"lib/scheduler.py:_execute_task"}, nil)
 		totalBytes += len(out)
-		// 3. Read specific method
-		out, _ = dispatchJSON(ctx, db, "read", []string{"lib/scheduler.py:_execute_task"}, nil)
-		totalBytes += len(out)
-		// 4. Find refs to understand impact
-		out, _ = dispatchJSON(ctx, db, "refs", []string{"_execute_task"}, map[string]any{"impact": true})
-		totalBytes += len(out)
-		// 5. Edit (dry-run)
+		// 3. Edit with auto-readback (dry-run to keep benchmark repeatable)
 		out, _ = dispatchJSON(ctx, db, "edit", []string{"lib/scheduler.py"}, map[string]any{
 			"in":       "Scheduler",
 			"old_text": "self._running = True",
 			"new_text": "self._running = False",
 			"dry-run":  true,
 		})
-		totalBytes += len(out)
-		// 6. Verify
-		out, _ = dispatchJSON(ctx, db, "verify", nil, nil)
 		totalBytes += len(out)
 
 		b.ReportMetric(float64(totalBytes), "response_bytes")

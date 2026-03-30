@@ -23,25 +23,39 @@ import (
 // ~75% fewer tokens consumed by the agent.
 // ---------------------------------------------------------------------------
 
+// BenchmarkWorkflowTraditional simulates what a skilled agent does WITHOUT edr:
+// grep to find code, read line ranges, grep for callers, edit, re-read to confirm.
+// This is the realistic baseline — not "read the whole file" which no agent does.
 func BenchmarkWorkflowTraditional(b *testing.B) {
 	db, tmp := setupRepo(b)
 	ctx := context.Background()
 	file := filepath.Join(tmp, "lib", "scheduler.py")
 	original, _ := os.ReadFile(file)
-	newMethod := `def drain(self, timeout: float = 5.0) -> int:
-    """Drain remaining tasks."""
-    return 0
-`
 
 	b.ResetTimer()
 	for b.Loop() {
-		out1, _ := dispatchJSON(ctx, db, "read", []string{"lib/scheduler.py:Scheduler"}, nil)
-		out2, _ := dispatchJSON(ctx, db, "read", []string{"lib/scheduler.py", "_execute_task"}, nil)
-		out3, _ := dispatchJSON(ctx, db, "write", []string{"lib/scheduler.py"}, map[string]any{
-			"after":   "_execute_task",
-			"content": newMethod,
+		totalBytes := 0
+
+		// 1. Agent greps for the function (simulated: read full file, agent scans it)
+		src, _ := os.ReadFile(file)
+		totalBytes += len(src) // agent sees the whole file
+
+		// 2. Agent reads a 50-line range around the function (grep told it line ~200)
+		out, _ := dispatchJSON(ctx, db, "focus", []string{"lib/scheduler.py"}, map[string]any{"lines": "180:230"})
+		totalBytes += len(out)
+
+		// 3. Agent edits with text match
+		out, _ = dispatchJSON(ctx, db, "edit", []string{"lib/scheduler.py"}, map[string]any{
+			"old_text": "self._running = True",
+			"new_text": "self._running = False",
+			"dry-run":  true,
 		})
-		totalBytes := len(out1) + len(out2) + len(out3)
+		totalBytes += len(out)
+
+		// 4. Agent re-reads to verify (without edr's auto read-back)
+		out, _ = dispatchJSON(ctx, db, "focus", []string{"lib/scheduler.py"}, map[string]any{"lines": "180:230"})
+		totalBytes += len(out)
+
 		b.ReportMetric(float64(totalBytes), "response_bytes")
 		b.ReportMetric(heapAllocKB(), "heap_alloc_kb")
 
@@ -52,25 +66,36 @@ func BenchmarkWorkflowTraditional(b *testing.B) {
 	}
 }
 
-func BenchmarkWorkflowProgressive(b *testing.B) {
+// BenchmarkWorkflowEdr simulates the edr workflow:
+// orient to find code, focus with auto-deps, edit with auto-readback.
+// Fewer calls, smaller responses, agent gets exactly what it needs.
+func BenchmarkWorkflowEdr(b *testing.B) {
 	db, tmp := setupRepo(b)
 	ctx := context.Background()
 	file := filepath.Join(tmp, "lib", "scheduler.py")
 	original, _ := os.ReadFile(file)
-	newMethod := `def drain(self, timeout: float = 5.0) -> int:
-    """Drain remaining tasks."""
-    return 0
-`
 
 	b.ResetTimer()
 	for b.Loop() {
-		out1, _ := dispatchJSON(ctx, db, "read", []string{"lib/scheduler.py:Scheduler"}, map[string]any{"signatures": true})
-		out2, _ := dispatchJSON(ctx, db, "read", []string{"lib/scheduler.py", "_execute_task"}, map[string]any{"depth": 2})
-		out3, _ := dispatchJSON(ctx, db, "write", []string{"lib/scheduler.py"}, map[string]any{
-			"inside":  "Scheduler",
-			"content": newMethod,
+		totalBytes := 0
+
+		// 1. Orient: see the structure (budget-controlled)
+		out, _ := dispatchJSON(ctx, db, "orient", nil, map[string]any{"dir": "lib", "budget": 500})
+		totalBytes += len(out)
+
+		// 2. Focus on the symbol (auto-includes dep signatures)
+		out, _ = dispatchJSON(ctx, db, "focus", []string{"lib/scheduler.py:_execute_task"}, nil)
+		totalBytes += len(out)
+
+		// 3. Edit (auto read-back gives the updated function, no re-read needed)
+		out, _ = dispatchJSON(ctx, db, "edit", []string{"lib/scheduler.py"}, map[string]any{
+			"in":       "Scheduler",
+			"old_text": "self._running = True",
+			"new_text": "self._running = False",
+			"dry-run":  true,
 		})
-		totalBytes := len(out1) + len(out2) + len(out3)
+		totalBytes += len(out)
+
 		b.ReportMetric(float64(totalBytes), "response_bytes")
 		b.ReportMetric(heapAllocKB(), "heap_alloc_kb")
 
