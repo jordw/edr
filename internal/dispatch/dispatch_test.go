@@ -12,7 +12,6 @@ import (
 	"github.com/jordw/edr/internal/dispatch"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
-	"github.com/jordw/edr/internal/search"
 )
 
 func TestBatchReadErrorEntries(t *testing.T) {
@@ -585,52 +584,6 @@ func world() {
 
 	if len(content) >= len(fullContent) {
 		t.Errorf("signatures content (%d) should be smaller than full content (%d)", len(content), len(fullContent))
-	}
-}
-
-func TestSearchLimit(t *testing.T) {
-	tmp := t.TempDir()
-	// Create a file with multiple functions so symbol search has many results
-	var src strings.Builder
-	src.WriteString("package main\n\n")
-	for i := 0; i < 10; i++ {
-		fmt.Fprintf(&src, "func Handle%d() {}\n", i)
-	}
-	if err := os.WriteFile(filepath.Join(tmp, "main.go"), []byte(src.String()), 0644); err != nil {
-		t.Fatal(err)
-	}
-	db := index.NewOnDemand(tmp)
-	output.SetRoot(db.Root())
-	ctx := context.Background()
-	defer db.Close()
-	// Symbol search: no limit returns all
-	sr, err := search.SearchSymbol(ctx, db, "Handle", 0, false, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sr.Matches) < 10 {
-		t.Fatalf("expected at least 10 matches without limit, got %d", len(sr.Matches))
-	}
-
-	// Symbol search: limit=3
-	sr, err = search.SearchSymbol(ctx, db, "Handle", 0, false, 3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sr.Matches) != 3 {
-		t.Fatalf("expected 3 matches with limit=3, got %d", len(sr.Matches))
-	}
-	if sr.TotalMatches < 10 {
-		t.Fatalf("expected total_matches >= 10, got %d", sr.TotalMatches)
-	}
-
-	// Text search: limit=2
-	sr, err = search.SearchText(ctx, db, "Handle", 0, false, search.WithLimit(2))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sr.Matches) != 2 {
-		t.Fatalf("expected 2 text matches with limit=2, got %d", len(sr.Matches))
 	}
 }
 

@@ -4,46 +4,11 @@ package index
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"regexp"
 	"unicode"
 )
-
-// FindIdentifierOccurrences finds all occurrences of symbolName across
-// indexed files using text-based word matching. Returns exact byte ranges
-// suitable for rename operations. When semantic refs are available, scopes
-// the search to files that reference the symbol.
-func FindIdentifierOccurrences(ctx context.Context, db SymbolStore, symbolName string) ([]SymbolInfo, error) {
-	sym, err := db.ResolveSymbol(ctx, symbolName)
-	if err != nil {
-		var ambErr *AmbiguousSymbolError
-		if errors.As(err, &ambErr) {
-			if allCandidatesLackImports(ambErr.Candidates) {
-				return findReferencesTextBased(ctx, db, symbolName)
-			}
-			return nil, err
-		}
-		return findReferencesTextBased(ctx, db, symbolName)
-	}
-
-	// Always use text-based for now (imports not extracted by regex parser).
-	_ = sym
-	return findReferencesTextBased(ctx, db, symbolName)
-}
-
-// allCandidatesLackImports returns true if none of the candidates are in
-// languages with strong import resolution.
-func allCandidatesLackImports(candidates []SymbolInfo) bool {
-	strongLangs := map[string]bool{"go": true, "python": true, "javascript": true, "typescript": true}
-	for _, c := range candidates {
-		if strongLangs[LangID(c.File)] {
-			return false
-		}
-	}
-	return len(candidates) > 0
-}
 
 // findReferencesTextBased scans all repo files for whole-word matches of symbolName.
 func findReferencesTextBased(ctx context.Context, db SymbolStore, symbolName string) ([]SymbolInfo, error) {
