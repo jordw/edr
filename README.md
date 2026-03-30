@@ -96,7 +96,7 @@ edr parses files on demand with pure-Go regex-based symbol extraction — no pre
 | `undo` | Revert last edit/write (auto-checkpointed) |
 | `setup` | Install agent instructions |
 
-Old command names (`map`, `read`, `write`, `search`, `rename`, `verify`, `reset`) still work for backward compatibility.
+Old command names `map` and `read` still work as aliases for `orient` and `focus`.
 
 ### Batch flags
 
@@ -119,7 +119,7 @@ edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"
 edr -e f.go --content "..." --mkdir
 ```
 
-Aliases `-r` (focus), `-m` (orient), `-s` (search), `-w` (write) still work.
+Aliases `-r` (focus) and `-m` (orient) still work.
 
 ### Batch modifiers
 

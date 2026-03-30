@@ -309,50 +309,21 @@ edr <span class="flag">-e</span> src/scheduler.py <span class="flag">--old</span
 
 <!-- Benchmarks -->
 <section>
-  <h2>Benchmarks</h2>
-  <p>9 scenarios (read a symbol, orient in codebase, edit a function, etc.) against real repos. We measure tool response bytes — fewer bytes means less noise for the model to reason over, faster responses, and more accurate decisions.</p>
+    <h2>How it compares</h2>
+  <p>Without edr, agents grep to find code, read line ranges, guess what's relevant, edit, then re-read to check. Each step is a separate tool call with context the agent has to filter.</p>
+  <p>With edr, <code>focus file:Symbol</code> returns the function body plus what it calls. <code>edit</code> returns the updated code plus build errors with the broken function included. The agent makes fewer decisions about what to read because edr front-loads the right context.</p>
   <div class="table-wrap">
   <table>
-    <thead>
-      <tr><th>Repo</th><th>Lang</th><th>Files</th><th>Baseline</th><th>edr</th><th>Reduction</th></tr>
-    </thead>
+    <thead><tr><th>Operation</th><th>What the agent gets</th></tr></thead>
     <tbody>
-      <tr><td><a href="https://github.com/urfave/cli">urfave/cli</a></td><td>Go</td><td>~70</td><td>146KB / 25 calls</td><td>27KB / 9 calls</td><td class="pct">82%</td></tr>
-      <tr><td><a href="https://github.com/vitessio/vitess">vitess/sqlparser</a></td><td>Go</td><td>~70</td><td>459KB / 22 calls</td><td>29KB / 9 calls</td><td class="pct">94%</td></tr>
-      <tr><td><a href="https://github.com/vitessio/vitess">vitess/vtgate</a></td><td>Go</td><td>~490</td><td>433KB / 24 calls</td><td>40KB / 9 calls</td><td class="pct">91%</td></tr>
-      <tr><td><a href="https://github.com/pallets/click">pallets/click</a></td><td>Python</td><td>~17</td><td>180KB / 25 calls</td><td>30KB / 9 calls</td><td class="pct">83%</td></tr>
-      <tr><td><a href="https://github.com/rails/thor">rails/thor</a></td><td>Ruby</td><td>~35</td><td>157KB / 25 calls</td><td>30KB / 9 calls</td><td class="pct">81%</td></tr>
-      <tr><td><a href="https://github.com/reduxjs/redux-toolkit">reduxjs/redux-toolkit</a></td><td>TS</td><td>~190</td><td>112KB / 25 calls</td><td>26KB / 9 calls</td><td class="pct">77%</td></tr>
-      <tr><td><a href="https://github.com/django/django">django/django</a></td><td>Python</td><td>~880</td><td>1027KB / 25 calls</td><td>40KB / 9 calls</td><td class="pct">96%</td></tr>
+      <tr><td><code>focus file:Symbol</code></td><td>Function body + dependency signatures (auto)</td></tr>
+      <tr><td><code>edit --old X --new Y</code></td><td>Diff + updated function body + build result + error context (auto)</td></tr>
+      <tr><td><code>orient --dir src/</code></td><td>Budget-controlled structural overview</td></tr>
+      <tr><td>Batch (<code>-f ... -f ... -e ...</code>)</td><td>Multiple operations in one call</td></tr>
+      <tr><td>Re-read unchanged file</td><td><code>{unchanged: true}</code> (session dedup)</td></tr>
     </tbody>
   </table>
   </div>
-  <p><strong>Median reduction: 83%</strong> across repos. edr loses on plain text search (structured JSON adds overhead vs raw grep; see breakdown below), but wins everywhere else. The biggest wins are on structured operations (map, signatures); multi-file reads show modest savings since both sides return full content. Call counts are summed across all 9 scenarios; each edr scenario is 1 call.</p>
-
-  <details>
-    <summary>Per-scenario breakdown (urfave/cli)</summary>
-    <div class="table-wrap">
-    <table>
-      <thead>
-        <tr><th>Scenario</th><th>Baseline</th><th>edr</th><th>Reduction</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>Understand a class API</td><td>13,019B (whole file)</td><td>1,486B (<code>--signatures</code>)</td><td class="pct">89%</td></tr>
-        <tr><td>Read a specific function</td><td>3,026B / 2 calls (grep + range read)</td><td>1,182B (symbol read)</td><td class="pct">61%</td></tr>
-        <tr><td>Find references</td><td>9,086B / 4 calls (grep + 3 range reads)</td><td>179B (search)</td><td class="pct">98%</td></tr>
-        <tr><td>Search with context</td><td>614B (grep -C3)</td><td>1,027B (structured)</td><td class="pct-neg">-67%</td></tr>
-        <tr><td>Orient in codebase</td><td>52,470B / 4 calls (glob + 3 reads)</td><td>393B (<code>map</code>)</td><td class="pct">99%</td></tr>
-        <tr><td>Edit a function</td><td>1,403B / 3 calls (grep + range + edit)</td><td>394B (batch)</td><td class="pct">72%</td></tr>
-        <tr><td>Add method to a class</td><td>5,393B / 3 calls (grep + range + write)</td><td>249B (<code>--inside</code>)</td><td class="pct">95%</td></tr>
-        <tr><td>Multi-file read</td><td>39,397B / 3 calls</td><td>22,028B (batched)</td><td class="pct">44%</td></tr>
-        <tr><td>Explore a symbol</td><td>25,006B / 4 calls (grep + 3 range reads)</td><td>555B (<code>--expand</code>)</td><td class="pct">98%</td></tr>
-      </tbody>
-      <tfoot>
-        <tr><th>Total</th><th>149,414B / 25 calls</th><th>27,493B / 9 calls</th><th class="pct">82%</th></tr>
-      </tfoot>
-    </table>
-    </div>
-  </details>
 </section>
 
 <!-- Commands -->
@@ -373,7 +344,7 @@ edr <span class="flag">-e</span> src/scheduler.py <span class="flag">--old</span
     </tbody>
   </table>
   </div>
-  <p>Old command names (<code>map</code>, <code>read</code>, <code>write</code>, <code>search</code>, <code>rename</code>, <code>verify</code>, <code>reset</code>) still work for backward compatibility.</p>
+  <p>Old command names <code>map</code> and <code>read</code> still work as aliases for <code>orient</code> and <code>focus</code>.</p>
 
   <h3 style="margin-top: 1.5rem; font-size: 1.1rem;">Batch flags</h3>
   <p><code>-f</code> focus, <code>-o</code> orient, <code>-e</code> edit. Modifier flags follow each op. Plan what you need, then combine into one call:</p>
@@ -388,7 +359,7 @@ edr <span class="flag">-e</span> file <span class="flag">--content</span> "..." 
 edr <span class="flag">-f</span> f.go:Sym <span class="flag">-e</span> f.go <span class="flag">--old</span> "x" <span class="flag">--new</span> "y" <span class="flag">-f</span> f.go:Sym   <span class="comment"># post-edit read</span>
 edr <span class="flag">-e</span> f.go <span class="flag">--old</span> "a" <span class="flag">--new</span> "b" <span class="flag">-e</span> g.go <span class="flag">--old</span> "c" <span class="flag">--new</span> "d"
 edr <span class="flag">-e</span> f.go <span class="flag">--content</span> "..." <span class="flag">--mkdir</span></code></pre>
-  <p>Aliases <code>-r</code> (focus), <code>-m</code> (orient), <code>-s</code> (search), <code>-w</code> (write) still work.</p>
+  <p>Aliases <code>-r</code> (focus) and <code>-m</code> (orient) still work.</p>
 
   <h3 style="margin-top: 1.5rem; font-size: 1.1rem;">Batch modifiers</h3>
   <p><strong>Focus</strong> (after <code>-f</code>): <code>--sig</code>, <code>--skeleton</code>, <code>--full</code>, <code>--expand[=deps]</code>, <code>--symbols</code>, <code>--lines 10:50</code>, <code>--budget N</code></p>
