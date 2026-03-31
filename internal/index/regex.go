@@ -111,7 +111,7 @@ var regexTypeScript = &regexLang{
 		p(`^\s+(?:private|protected|public|static|abstract|override|readonly|async|get|set)\s+(?:(?:private|protected|public|static|abstract|override|readonly|async|get|set)\s+)*#?({ID}+)\s*(?:<[^>]*>)?\s*[\(:]`, "method", 1),
 		p(`^\s+(constructor)\s*\(`, "method", 1),
 		// Unmodified methods — require { at end of line
-		p(`^\s+#?({ID}+)\s*\([^)]*\)\s*(?::\s*[^{]*)?\{`, "method", 1),
+		p(`^\s+#?({ID}+)\s*(?:<[^>]*>)?\s*\(.*\)\s*(?::\s*[^{]*)?\{`, "method", 1),
 		// Arrow functions
 		p(`^(?:export\s+)?(?:const|let|var)\s+({ID}+)\s*(?::\s*[^=]+)?\s*=\s*(?:async\s+)?(?:function|<[^>]*>\s*\(|\(|[a-zA-Z_]{ID}*\s*=>)`, "function", 1),
 		// Static arrow methods
@@ -137,7 +137,7 @@ var regexJava = &regexLang{
 		// Constructors: visibility + UpperCaseName(  — no return type
 		p(`^\s*(?:public|private|protected)\s+([A-Z]{ID}*)\s*\(`, "method", 1),
 		// Methods: have a return type before the name
-		p(`^\s*(?:public|private|protected)?\s*(?:static\s+)?(?:abstract\s+)?(?:synchronized\s+)?(?:{ID}+(?:<[^>]*>)?(?:\[\])*)\s+({ID}+)\s*\(`, "method", 1),
+		p(`^\s*(?:public|private|protected)?\s*(?:static\s+)?(?:abstract\s+)?(?:synchronized\s+)?(?:{ID}+(?:<.*>)?(?:\[\])*)\s+({ID}+)\s*\(`, "method", 1),
 	},
 }
 
@@ -169,7 +169,7 @@ var regexCSharp = &regexLang{
 		// Constructors: visibility + UpperCaseName(
 		p(`^\s*(?:public|private|protected|internal)\s+([A-Z]{ID}*)\s*\(`, "method", 1),
 		// Methods: have a return type before the name
-		p(`^\s*(?:public|private|protected|internal)?\s*(?:static\s+)?(?:abstract\s+)?(?:virtual\s+)?(?:override\s+)?(?:async\s+)?(?:{ID}+(?:<[^>]*>)?(?:\[\]|\?)*)\s+({ID}+)\s*\(`, "method", 1),
+		p(`^\s*(?:public|private|protected|internal)?\s*(?:static\s+)?(?:abstract\s+)?(?:virtual\s+)?(?:override\s+)?(?:async\s+)?(?:{ID}+(?:<.*>)?(?:\[\]|\?)*)\s+({ID}+)\s*\(`, "method", 1),
 	},
 }
 

@@ -122,10 +122,19 @@ func (o *OnDemand) GetSymbol(ctx context.Context, file, name string) (*SymbolInf
 	if err != nil {
 		return nil, err
 	}
+	// When multiple symbols share a name (e.g. TS overloads), prefer the
+	// one with the largest span — that is the implementation, not a signature.
+	var best *SymbolInfo
 	for i := range cf.symbols {
 		if cf.symbols[i].Name == name {
-			return &cf.symbols[i], nil
+			s := &cf.symbols[i]
+			if best == nil || (s.EndLine-s.StartLine) > (best.EndLine-best.StartLine) {
+				best = s
+			}
 		}
+	}
+	if best != nil {
+		return best, nil
 	}
 	return nil, o.symbolNotFoundError(ctx, name, file)
 }
