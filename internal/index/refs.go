@@ -109,10 +109,14 @@ func findDepsTextBased(ctx context.Context, db SymbolStore, sym *SymbolInfo) ([]
 	var deps []SymbolInfo
 	depSeen := make(map[string]bool)
 	for _, name := range idents {
-		if name == sym.Name || builtinNames[name] {
+		if builtinNames[name] {
 			continue
 		}
 		for _, m := range byName[name] {
+			// Skip the symbol itself (same file + name + line)
+			if m.File == sym.File && m.Name == sym.Name && m.StartLine == sym.StartLine {
+				continue
+			}
 			key := m.File + ":" + m.Name
 			if !depSeen[key] {
 				depSeen[key] = true

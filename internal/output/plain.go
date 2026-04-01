@@ -682,9 +682,9 @@ func plainUndo(w *os.File, op Op) {
 			fmt.Fprintf(w, "  %s\n", f)
 		}
 	}
-	if kept := toStringSlice(op["new_files_kept"]); len(kept) > 0 {
-		fmt.Fprintln(w, "\nnew files kept:")
-		for _, f := range kept {
+	if removed := toStringSlice(op["new_files_removed"]); len(removed) > 0 {
+		fmt.Fprintln(w, "\nnew files removed:")
+		for _, f := range removed {
 			fmt.Fprintf(w, "  %s\n", f)
 		}
 	}
