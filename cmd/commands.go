@@ -455,8 +455,16 @@ var undoCmd = &cobra.Command{
 		if preRestoreID != "" {
 			result["safety_checkpoint"] = preRestoreID
 		}
-		if len(notRemoved) > 0 {
-			result["new_files_kept"] = notRemoved
+		// Remove files created after the checkpoint (they did not exist then)
+		var removed []string
+		for _, f := range notRemoved {
+			abs := filepath.Join(root, f)
+			if err := os.Remove(abs); err == nil {
+				removed = append(removed, f)
+			}
+		}
+		if len(removed) > 0 {
+			result["new_files_removed"] = removed
 		}
 
 		env := output.NewEnvelope("undo")
