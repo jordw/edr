@@ -122,13 +122,19 @@ func (o *OnDemand) GetSymbol(ctx context.Context, file, name string) (*SymbolInf
 	if err != nil {
 		return nil, err
 	}
-	// When multiple symbols share a name (e.g. TS overloads), prefer the
-	// one with the largest span — that is the implementation, not a signature.
+	// When multiple symbols share a name, prefer:
+	// 1. Definitions (struct/class/enum/type/interface) over impls/methods
+	// 2. Among same kind, the largest span (implementation over overload signature)
 	var best *SymbolInfo
 	for i := range cf.symbols {
 		if cf.symbols[i].Name == name {
 			s := &cf.symbols[i]
-			if best == nil || (s.EndLine-s.StartLine) > (best.EndLine-best.StartLine) {
+			if best == nil {
+				best = s
+			} else if isDefinitionType(s.Type) && !isDefinitionType(best.Type) {
+				best = s
+			} else if isDefinitionType(s.Type) == isDefinitionType(best.Type) &&
+				(s.EndLine-s.StartLine) > (best.EndLine-best.StartLine) {
 				best = s
 			}
 		}
@@ -138,6 +144,18 @@ func (o *OnDemand) GetSymbol(ctx context.Context, file, name string) (*SymbolInf
 	}
 	return nil, o.symbolNotFoundError(ctx, name, file)
 }
+
+
+// isDefinitionType returns true for symbol types that represent definitions
+// (struct, class, enum, type, interface) vs implementations (impl, method, function).
+func isDefinitionType(typ string) bool {
+	switch typ {
+	case "struct", "class", "enum", "type", "interface", "variable":
+		return true
+	}
+	return false
+}
+
 
 func (o *OnDemand) GetSymbolsByFile(ctx context.Context, file string) ([]SymbolInfo, error) {
 	cf, err := o.parseFile(o.absPath(file))

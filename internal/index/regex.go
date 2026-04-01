@@ -127,6 +127,7 @@ var regexRust = &regexLang{
 		p(`^(?:pub(?:\([^)]*\))?\s+)?enum\s+({ID}+)`, "type", 1),
 		p(`^(?:pub(?:\([^)]*\))?\s+)?trait\s+({ID}+)`, "interface", 1),
 		p(`^impl(?:<[^>]*>)?\s+(?:[\p{L}\p{N}_:]+\s+for\s+)?({ID}+)`, "impl", 1),
+		p(`^(?:pub(?:\([^)]*\))?\s+)?type\s+({ID}+)`, "type", 1),
 	},
 }
 
@@ -389,8 +390,20 @@ func regexHasBrace(lines []string, lineIdx int) bool {
 				return false
 			}
 		}
-		if strings.Contains(line, "{") {
-			return true
+		// Check for { outside of string literals.
+		// If line ends with ; it is a statement, not a block opener.
+		trimmedLine := strings.TrimSpace(line)
+		if strings.Contains(line, "{") && !strings.HasSuffix(trimmedLine, ";") {
+			// Skip { inside backtick template literals
+			if !strings.Contains(line, "`") {
+				return true
+			}
+			// Has backtick — check if { appears after the last backtick (outside string)
+			lastBacktick := strings.LastIndex(line, "`")
+			lastBrace := strings.LastIndex(line, "{")
+			if lastBrace > lastBacktick {
+				return true
+			}
 		}
 	}
 	return false
