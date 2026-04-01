@@ -164,7 +164,7 @@ var regexCSharp = &regexLang{
 	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "csharp",
 	patterns: []regexPattern{
 		// class, struct, interface, enum, record
-		p(`^\s*(?:public|private|protected|internal)?\s*(?:static\s+)?(?:abstract\s+)?(?:sealed\s+)?(?:partial\s+)?(?:class|struct|interface|enum|record)\s+({ID}+)`, "class", 1),
+		p(`^\s*(?:public|private|protected|internal)?\s*(?:static\s+)?(?:abstract\s+)?(?:sealed\s+)?(?:partial\s+)?(?:class|struct|interface|enum|record(?:\s+struct)?)\s+({ID}+)`, "class", 1),
 		// namespace
 		p(`^\s*namespace\s+([\p{L}\p{N}_.]+)`, "class", 1),
 		// Constructors: visibility + UpperCaseName(
