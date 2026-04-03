@@ -459,6 +459,7 @@ func regexFindNoBraceEnd(lines []string, lineIdx int) int {
 
 func regexFindBraceEnd(lines []string, lineIdx int) int {
 	depth := 0
+	sawBrace := false
 	inString := byte(0) // 0, '"', '\'', '`'
 	inRegex := false     // JS/TS regex literal /…/
 	inBlockComment := false
@@ -513,7 +514,10 @@ func regexFindBraceEnd(lines []string, lineIdx int) int {
 				}
 				// Regex literal heuristic: / after operator or at start of expression.
 				// If preceded by a brace/paren/operator/comma/semicolon/keyword-end, it's a regex.
-				if isRegexSlash(line, j) {
+				// Exception: /letter is JSX closing tag (</div>), not regex.
+				if j+1 < len(line) && line[j+1] >= 'A' && line[j+1] <= 'z' {
+					// JSX closing tag — skip
+				} else if isRegexSlash(line, j) {
 					inRegex = true
 					continue
 				}
@@ -538,12 +542,18 @@ func regexFindBraceEnd(lines []string, lineIdx int) int {
 			// Braces
 			if ch == '{' {
 				depth++
+				sawBrace = true
 			} else if ch == '}' {
 				depth--
-				if depth == 0 {
+				if depth == 0 && i > lineIdx {
 					return i + 1
 				}
 			}
+		}
+		// After processing the first line: if braces opened AND closed
+		// back to depth 0, the body is a single line (e.g. func f() {}).
+		if i == lineIdx && depth == 0 && sawBrace {
+			return i + 1
 		}
 	}
 	return 0
@@ -561,8 +571,7 @@ func isRegexSlash(line string, j int) bool {
 		}
 		// After these characters, / starts a regex
 		switch ch {
-		case '=', '(', '[', '{', ',', ';', '!', '&', '|', '?', ':', '~', '^', '+', '-', '*', '%', '<', '>', '\n':
-			return true
+		case '=', '(', '[', '{', ',', ';', '!', '&', '|', '?', ':', '~', '^', '+', '-', '*', '%', '<', '\n':			return true
 		}
 		// After identifier char or closing paren/bracket, it's division
 		return false
