@@ -1,4 +1,4 @@
-# edr — every tool call returns what the agent needs next
+# edr — code editing tools for agents
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
