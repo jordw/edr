@@ -106,6 +106,7 @@ type batchState struct {
 
 	root      string
 	stdinUsed bool
+	lastFile  string // carry-forward: last file used by any op
 }
 
 func (s *batchState) flush() {
@@ -269,6 +270,7 @@ func parseBatchArgs(args []string) (*batchState, error) {
 				return nil, err
 			}
 			file, sym := splitFileArg(val)
+			s.lastFile = file
 			r := doRead{File: file}
 			if sym != "" {
 				if start, end, err := parseLineRange(sym); err == nil {
@@ -329,16 +331,17 @@ func parseBatchArgs(args []string) (*batchState, error) {
 		case "-e", "--edit":
 			s.flush()
 			s.currentOp = opEdit
-			// Peek: if next arg is a flag (starts with --), this is a file-less edit
-			// (e.g. -e --where "symbol" ...). Don't consume the next arg as a file.
+			// Peek: if next arg is a flag (starts with --), this is a file-less edit.
+			// Use lastFile from the previous op (carry-forward).
 			if i+1 < len(args) && strings.HasPrefix(args[i+1], "--") {
-				s.currentEdit = doEdit{}
+				s.currentEdit = doEdit{File: s.lastFile}
 			} else {
 				val, err := nextArg(arg)
 				if err != nil {
 					return nil, err
 				}
 				file, sym := splitFileArg(val)
+				s.lastFile = file
 				s.currentEdit = doEdit{File: file, Symbol: sym}
 			}
 
