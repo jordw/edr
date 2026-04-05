@@ -59,8 +59,6 @@ jobs:
           go-version: "1.25"
 
       - name: Build release binary
-        env:
-          CGO_ENABLED: "1"
         run: |
           COMMIT="$(git rev-parse --short HEAD)"
           go build -ldflags "-s -w -X github.com/jordw/edr/cmd.Version=0.0.0-test -X github.com/jordw/edr/cmd.BuildHash=${COMMIT}" -o edr .
@@ -72,7 +70,7 @@ jobs:
       - name: Package archive
         run: |
           ARCHIVE="edr_0.0.0-test_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz"
-          tar -czf "$ARCHIVE" edr LICENSE README.md internal/grammars/NOTICE
+          tar -czf "$ARCHIVE" edr LICENSE README.md
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Verify archive contents
@@ -83,8 +81,6 @@ jobs:
           grep -q "^edr$" contents.txt || (echo "missing edr binary" && exit 1)
           grep -q "^LICENSE$" contents.txt || (echo "missing LICENSE" && exit 1)
           grep -q "^README.md$" contents.txt || (echo "missing README.md" && exit 1)
-          grep -q "^internal/grammars/NOTICE$" contents.txt || (echo "missing third-party notice" && exit 1)
-
       - name: Test install.sh against local archive
         run: |
           # Serve the archive over HTTP
@@ -122,7 +118,6 @@ jobs:
           test -f ~/.claude/CLAUDE.md || (echo "~/.claude/CLAUDE.md not created" && exit 1)
           grep -q "edr" ~/.claude/CLAUDE.md || (echo "CLAUDE.md missing edr instructions" && exit 1)
           grep -q "edr-instructions hash:" ~/.claude/CLAUDE.md || (echo "CLAUDE.md missing hash marker" && exit 1)
-          grep -q ".edr/" /tmp/install-target/.gitignore || (echo ".gitignore missing .edr/" && exit 1)
           echo "install.sh + setup test passed"
 
           kill $SERVER_PID 2>/dev/null || true
@@ -152,15 +147,13 @@ jobs:
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           edr --version
-          edr init --root /tmp/target
+          edr setup --skip-index /tmp/target
 
       - name: Verify setup.sh injected global instructions
         run: |
           test -f ~/.claude/CLAUDE.md || (echo "~/.claude/CLAUDE.md not created by setup.sh" && exit 1)
           grep -q "edr" ~/.claude/CLAUDE.md || (echo "CLAUDE.md missing edr instructions" && exit 1)
           grep -q "edr-instructions hash:" ~/.claude/CLAUDE.md || (echo "CLAUDE.md missing hash marker" && exit 1)
-          grep -q ".edr/" /tmp/target/.gitignore || (echo ".gitignore missing .edr/" && exit 1)
-
       - name: Verify outdated detection
         run: |
           export PATH="$HOME/.local/bin:$PATH"
