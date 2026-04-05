@@ -690,8 +690,6 @@ func plainUndo(w *os.File, op Op) {
 	}
 }
 
-// Header helpers — reduce boilerplate in plain* functions.
-
 // hStr copies a string field from op to header, optionally renaming.
 func hStr(h map[string]any, hKey string, op Op, opKey string) {
 	if v, ok := op[opKey].(string); ok && v != "" {

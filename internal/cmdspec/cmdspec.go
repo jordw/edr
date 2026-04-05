@@ -201,6 +201,7 @@ var Registry = []*Spec{
 			{Name: "uninstall", Type: FlagBool, Default: false, Desc: "Remove edr instructions from all global configs"},
 		},
 	},
+	// --- Trigram index management ---
 }
 
 // --- Lookup ---

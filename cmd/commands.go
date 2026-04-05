@@ -292,6 +292,8 @@ var focusCmd = &cobra.Command{
 
 func init() {
 	cmdspec.RegisterFlags(focusCmd.Flags(), "focus")
+	// Allow bare --expand (no value) to default to "deps".
+	// Users must use --expand=both (not --expand both) for other modes.
 	if f := focusCmd.Flags().Lookup("expand"); f != nil {
 		f.NoOptDefVal = "deps"
 	}

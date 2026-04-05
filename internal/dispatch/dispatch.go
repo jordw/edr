@@ -736,7 +736,7 @@ func flagBool(flags map[string]any, key string, defaultVal bool) bool {
 // suggestCommand returns the closest known command if within edit distance 2, or "".
 func suggestCommand(input string) string {
 	best := ""
-	bestDist := 3 // only suggest if distance <= 2
+	bestDist := 3
 	for _, cmd := range cmdspec.Names() {
 		d := cmdspec.Levenshtein(input, cmd)
 		if d < bestDist {
@@ -746,4 +746,3 @@ func suggestCommand(input string) string {
 	}
 	return best
 }
-

@@ -143,12 +143,18 @@ func runSmartEditInner(ctx context.Context, db index.SymbolStore, root string, a
 		if len(args) < 1 {
 			return nil, fmt.Errorf("edit with --old_text requires a file argument")
 		}
-		file, err := db.ResolvePath(args[0])
+		// Support file:Symbol syntax — split and use symbol as implicit --in
+		fileArg := args[0]
+		inSpec := flagString(flags, "in", "")
+		if parts := splitFileSymbol(fileArg); parts != nil && inSpec == "" {
+			fileArg = parts[0]
+			inSpec = fileArg + ":" + parts[1]
+		}
+		file, err := db.ResolvePath(fileArg)
 		if err != nil {
 			return nil, err
 		}
-		// --in: scope text matching to within a symbol body
-		if inSpec := flagString(flags, "in", ""); inSpec != "" {
+		if inSpec != "" {
 			return smartEditMatchInSymbol(ctx, db, file, oldText, newText, flags, inSpec, dryRun)
 		}
 		return smartEditMatch(ctx, db, file, oldText, newText, flags, dryRun)
