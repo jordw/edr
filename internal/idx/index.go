@@ -99,7 +99,7 @@ func BuildIncremental(root, edrDir string, paths []string, gitMtime int64) (int,
 	if err := atomicWrite(jnlPath, data); err != nil {
 		return 0, err
 	}
-	return len(paths), nil
+	return int(d.Header.NumFiles), nil
 }
 
 // Query returns candidate file paths (relative to root) that might contain
@@ -674,11 +674,24 @@ func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(pat
 	go func() { wg.Wait(); close(resultCh) }()
 
 	// Collect results — only successfully indexed files get IDs.
-	var files []FileEntry
-	triMap := make(map[Trigram][]uint32)
+	// Sort by path for deterministic file table order across runs.
+	type collected struct {
+		entry FileEntry
+		tris  []Trigram
+	}
+	var results []collected
 	for r := range resultCh {
-		fileID := uint32(len(files))
-		files = append(files, r.entry)
+		results = append(results, collected{entry: r.entry, tris: r.tris})
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].entry.Path < results[j].entry.Path
+	})
+
+	files := make([]FileEntry, len(results))
+	triMap := make(map[Trigram][]uint32)
+	for i, r := range results {
+		files[i] = r.entry
+		fileID := uint32(i)
 		for _, t := range r.tris {
 			triMap[t] = append(triMap[t], fileID)
 		}
