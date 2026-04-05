@@ -115,8 +115,13 @@ func TestCreateCheckpoint_SkipsMissingFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cp.Files) != 0 {
-		t.Errorf("expected 0 file snapshots for missing file, got %d", len(cp.Files))
+	// Missing files are now recorded with nil content (new file markers)
+	// so that restore can delete them if they were created after the checkpoint.
+	if len(cp.Files) != 1 {
+		t.Errorf("expected 1 file snapshot (nil content marker), got %d", len(cp.Files))
+	}
+	if len(cp.Files) == 1 && cp.Files[0].Content != nil {
+		t.Errorf("expected nil content for missing file, got %d bytes", len(cp.Files[0].Content))
 	}
 }
 

@@ -109,13 +109,17 @@ func (s *Session) buildCheckpoint(id, label, repoRoot string, dirtyFiles []strin
 		lastOpID = s.OpLog[len(s.OpLog)-1].OpID
 	}
 
-	// Snapshot files
+	// Snapshot files. For files that do not exist yet (will be created by
+	// the upcoming edit), record them with nil content so restore knows to
+	// delete them.
 	var files []FileSnapshot
 	for _, rel := range dirtyFiles {
 		abs := filepath.Join(repoRoot, rel)
 		content, err := os.ReadFile(abs)
 		if err != nil {
-			continue // skip files that can't be read (deleted, etc.)
+			// File does not exist — record with nil content (new file marker)
+			files = append(files, FileSnapshot{Path: rel, Content: nil})
+			continue
 		}
 		files = append(files, FileSnapshot{Path: rel, Content: content})
 	}
@@ -167,11 +171,18 @@ func (s *Session) RestoreCheckpoint(sessDir, repoRoot, cpID string, saveCurrentF
 		s.mu.Unlock()
 	}
 
-	// Restore files
+	// Restore files. Files with nil content didn't exist at checkpoint time
+	// — delete them to undo the creation.
 	cpFileSet := make(map[string]bool, len(cp.Files))
 	for _, f := range cp.Files {
 		cpFileSet[f.Path] = true
 		abs := filepath.Join(repoRoot, f.Path)
+		if f.Content == nil {
+			// File didn't exist at checkpoint time — delete it
+			os.Remove(abs)
+			restored = append(restored, f.Path)
+			continue
+		}
 		if err := atomicWrite(abs, f.Content); err != nil {
 			return restored, nil, preRestoreID, fmt.Errorf("restore %s: %w", f.Path, err)
 		}

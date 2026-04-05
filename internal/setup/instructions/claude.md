@@ -49,3 +49,5 @@ EOF
 
 ## Standalone commands
 - `edr status` | `edr undo` | `edr setup`
+- `edr files "pattern"` — find files containing text (trigram-accelerated)
+- `edr index` — build or inspect the search index
