@@ -27,7 +27,12 @@ func runSmartEditInner(ctx context.Context, db index.SymbolStore, root string, a
 
 	// Pre-check: if --expect-hash is set, validate file hash before any edit
 	if expectHash := flagString(flags, "expect_hash", ""); expectHash != "" && len(args) >= 1 {
-		file, err := db.ResolvePath(args[0])
+		// Strip :Symbol suffix — args[0] may be file:Symbol
+		hashArg := args[0]
+		if parts := splitFileSymbol(hashArg); parts != nil {
+			hashArg = parts[0]
+		}
+		file, err := db.ResolvePath(hashArg)
 		if err != nil {
 			return nil, err
 		}

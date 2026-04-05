@@ -85,6 +85,8 @@ edr parses files on demand with pure-Go regex-based symbol extraction — no pre
 
 **Sessions.** edr tracks what the agent has already seen and only returns what changed. Second read of an unchanged file: zero output. Zero config.
 
+**Search index.** `edr files "pattern"` finds files containing text. A trigram index builds in the background and accelerates case-sensitive queries — 20-30x faster than scanning on large repos. No setup required; `edr index` forces a full build if needed.
+
 ## Commands
 
 ### Primary commands
@@ -96,6 +98,8 @@ edr parses files on demand with pure-Go regex-based symbol extraction — no pre
 | `edit file` | Edit, write, create files. `--verify` to check build. |
 | `status` | Session state, build state |
 | `undo` | Revert last edit/write (auto-checkpointed) |
+| `files "pattern"` | Find files containing text (trigram-accelerated) |
+| `index` | Build or inspect the search index |
 | `setup` | Install agent instructions |
 
 Old command names `map` and `read` still work as aliases for `orient` and `focus`.
