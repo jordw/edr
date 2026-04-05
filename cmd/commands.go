@@ -31,12 +31,14 @@ func init() {
 	rootCmd.AddCommand(filesCmd)
 }
 
-
 // dispatchCmd is the common pattern: open DB, dispatch, wrap in envelope, print.
 // Loads a file-backed session when EDR_SESSION is set.
 func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	root := getRoot(cmd)
 	flags := extractFlags(cmd)
+	if cmdName == "focus" && cmd.Flags().Changed("expand") {
+		args = normalizeExpandArgs(args, flags)
+	}
 	if err := resolveAtFiles(root, flags); err != nil {
 		return err
 	}
@@ -106,6 +108,20 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 
 	output.PrintEnvelope(env)
 	return nil
+}
+
+func normalizeExpandArgs(args []string, flags map[string]any) []string {
+	if len(args) < 2 {
+		return args
+	}
+	mode := args[len(args)-1]
+	switch mode {
+	case "deps", "callers", "both":
+		flags["expand"] = mode
+		return args[:len(args)-1]
+	default:
+		return args
+	}
 }
 
 // dispatchCmdWithStdin is like dispatchCmd but reads stdin into a flag first.
@@ -294,8 +310,9 @@ var focusCmd = &cobra.Command{
 
 func init() {
 	cmdspec.RegisterFlags(focusCmd.Flags(), "focus")
-	// --expand requires a value: deps, callers, or both.
-	// Auto-expand (deps only, cross-file, capped) happens without the flag.
+	if expand := focusCmd.Flags().Lookup("expand"); expand != nil {
+		expand.NoOptDefVal = "deps"
+	}
 }
 
 var editCmd = &cobra.Command{
@@ -494,6 +511,8 @@ var filesCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "files", args) },
 }
+
+func init() { cmdspec.RegisterFlags(filesCmd.Flags(), "files") }
 
 // buildNextResult constructs the result map for `edr next`.
 func buildNextResult(sess *session.Session, db index.SymbolStore, root, edrDir string) map[string]any {
@@ -713,7 +732,6 @@ func classifyErrorMsg(msg string) string {
 	}
 }
 
-
 // extractAndStripSignature extracts _signature from a dispatch result, records
 // the assumption in the session, and removes the internal field before any
 // serialization can leak it.
@@ -837,4 +855,3 @@ func classifyOp(cmd string, flags map[string]any, result any, ok bool) (action, 
 		return cmd, cmd
 	}
 }
-

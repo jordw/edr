@@ -98,6 +98,11 @@ var orientFlags = []FlagSpec{
 	{Name: "search", Type: FlagString, Default: "", Desc: "Filter to symbols whose body contains this text"},
 }
 
+var filesFlags = []FlagSpec{
+	{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens (default 2000)"},
+	{Name: "full", Type: FlagBool, Default: false, Desc: "Return full results (no default budget cap)"},
+}
+
 var Registry = []*Spec{
 	// --- Primary commands (shown in --help) ---
 	{
@@ -212,6 +217,7 @@ var Registry = []*Spec{
 	{
 		Name: "files", Desc: "Find files containing a text pattern (trigram-accelerated).",
 		Category: CatRead, MinArgs: 1, MaxArgs: 1,
+		Flags: filesFlags,
 	},
 }
 
@@ -353,8 +359,6 @@ func EditBatchKeys() map[string]bool {
 	m["symbol"] = true
 	return m
 }
-
-
 
 // --- Cobra flag registration ---
 

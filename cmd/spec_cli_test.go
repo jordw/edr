@@ -6,10 +6,11 @@
 // shared test helpers.
 //
 // The only parser used is parseOps(), which understands the spec transport:
-//   line 1: JSON header
-//   body:   raw text until "---" or EOF
-//   repeat for batch
-//   optional final {"verify":…} line
+//
+//	line 1: JSON header
+//	body:   raw text until "---" or EOF
+//	repeat for batch
+//	optional final {"verify":…} line
 package cmd_test
 
 import (
@@ -293,7 +294,7 @@ func TestSpec_HelpCanonicalFlags(t *testing.T) {
 	// Per-command help must use canonical long-form flag names, not shorthand.
 	commands := map[string][]string{
 		"focus": {"--sig "},
-		"edit": {`--old "`, `--new "`},
+		"edit":  {`--old "`, `--new "`},
 	}
 
 	for cmd, badForms := range commands {
@@ -2204,7 +2205,6 @@ func TestSpec_EditWhereBatch(t *testing.T) {
 	}
 }
 
-
 // ---------------------------------------------------------------------------
 // Auto-skeleton for large files
 // ---------------------------------------------------------------------------
@@ -2343,7 +2343,7 @@ func TestSpec_EditReadBack(t *testing.T) {
 
 func TestSpec_ReadExpand(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{
-		"lib.go": "package main\n\nfunc add(a, b int) int { return a + b }\n\nfunc mul(a, b int) int { return a * b }\n",
+		"lib.go":  "package main\n\nfunc add(a, b int) int { return a + b }\n\nfunc mul(a, b int) int { return a * b }\n",
 		"main.go": "package main\n\nimport \"fmt\"\n\nfunc compute() int {\n\tx := add(1, 2)\n\ty := mul(3, 4)\n\tfmt.Println(x, y)\n\treturn x + y\n}\n",
 	})
 
@@ -2373,6 +2373,18 @@ func TestSpec_ReadExpand(t *testing.T) {
 		body := r.Ops[0].Body
 		if !strings.Contains(body, "--- callers ---") {
 			t.Error("should have callers section")
+		}
+	})
+
+	t.Run("bare expand defaults to deps", func(t *testing.T) {
+		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+			"focus", "main.go:compute", "--expand")
+		if exit != 0 {
+			t.Fatalf("exit %d", exit)
+		}
+		body := r.Ops[0].Body
+		if !strings.Contains(body, "--- deps ---") {
+			t.Error("bare --expand should default to deps")
 		}
 	})
 }
@@ -2453,5 +2465,50 @@ func TestSpec_FilesCommand(t *testing.T) {
 			t.Errorf("expected 1 match for Hello after index, got %d", n)
 		}
 	})
-}
 
+	t.Run("default budget truncates large result sets", func(t *testing.T) {
+		many := map[string]string{}
+		for i := 0; i < 600; i++ {
+			many[fmt.Sprintf("dir/file_%03d.go", i)] = "package main\n// common_pattern\n"
+		}
+		binary, dir := specRepo(t, many)
+		r, _, _, exit := specRun(t, binary, dir, nil, "files", "common_pattern")
+		if exit != 0 {
+			t.Fatalf("exit %d", exit)
+		}
+		h := r.Ops[0].Header
+		if h["trunc"] != true {
+			t.Fatalf("expected truncation header, got %v", h)
+		}
+		if h["budget_used"] == nil {
+			t.Fatalf("expected budget_used in header, got %v", h)
+		}
+		if int(h["n"].(float64)) != 600 {
+			t.Fatalf("expected full match count in header, got %v", h["n"])
+		}
+		lines := strings.Split(strings.TrimSpace(r.Ops[0].Body), "\n")
+		if len(lines) >= 600 {
+			t.Fatalf("expected truncated body, got %d lines", len(lines))
+		}
+	})
+
+	t.Run("full disables truncation", func(t *testing.T) {
+		many := map[string]string{}
+		for i := 0; i < 200; i++ {
+			many[fmt.Sprintf("dir/full_%03d.go", i)] = "package main\n// full_pattern\n"
+		}
+		binary, dir := specRepo(t, many)
+		r, _, _, exit := specRun(t, binary, dir, nil, "files", "full_pattern", "--full")
+		if exit != 0 {
+			t.Fatalf("exit %d", exit)
+		}
+		h := r.Ops[0].Header
+		if h["trunc"] != nil {
+			t.Fatalf("expected untruncated header, got %v", h)
+		}
+		lines := strings.Split(strings.TrimSpace(r.Ops[0].Body), "\n")
+		if len(lines) != 200 {
+			t.Fatalf("expected all matches in body, got %d", len(lines))
+		}
+	})
+}

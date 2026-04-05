@@ -266,7 +266,7 @@ func runWriteUnified(ctx context.Context, db index.SymbolStore, root string, arg
 //	map                                → repo-map
 //	map dir/                           → repo-map scoped to dir
 //	map file.go                        → symbols
-const defaultMapBudget = 4000
+const defaultMapBudget = 2000
 
 func runRepoMap(ctx context.Context, db index.SymbolStore, flags map[string]any) (any, error) {
 	var opts []index.RepoMapOption
@@ -315,10 +315,18 @@ func runRepoMap(ctx context.Context, db index.SymbolStore, flags map[string]any)
 		symType := flagString(flags, "type", "")
 		if grep != "" || dir != "" || lang != "" || symType != "" {
 			parts := []string{}
-			if grep != "" { parts = append(parts, "--grep "+grep) }
-			if dir != "" { parts = append(parts, "--dir "+dir) }
-			if lang != "" { parts = append(parts, "--lang "+lang) }
-			if symType != "" { parts = append(parts, "--type "+symType) }
+			if grep != "" {
+				parts = append(parts, "--grep "+grep)
+			}
+			if dir != "" {
+				parts = append(parts, "--dir "+dir)
+			}
+			if lang != "" {
+				parts = append(parts, "--lang "+lang)
+			}
+			if symType != "" {
+				parts = append(parts, "--type "+symType)
+			}
 			result["hint"] = "no symbols matched filters: " + strings.Join(parts, ", ")
 		}
 	}
