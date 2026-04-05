@@ -41,7 +41,15 @@ func gitHead() string {
 var rootCmd = &cobra.Command{
 	Use:           "edr",
 	Short:         "The editor for agents",
-	Long:          "Context-preserving code navigation and editing tool optimized for LLM agents.",
+	Long: `Code editing tools for agents.
+
+Batch mode (primary interface):
+  edr -f file[:Symbol]              Focus on file or symbol
+  edr -o [--dir path]               Orient: structural overview
+  edr -e file --old X --new Y       Edit file
+  edr -f file:Sym -e --old X --new Y   Focus then edit (one call)
+
+Standalone commands are listed below.`,
 	Version:       Version,
 	SilenceUsage:  true,
 	SilenceErrors: true,
