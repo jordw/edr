@@ -206,16 +206,7 @@ func GetStatus(repoRoot, edrDir string) Status {
 // IncrementalTick rebuilds the index if .git/index has changed.
 // Reuses trigrams from unchanged files. Time-capped at ~1s so the agent
 // never blocks; partial progress is saved and the next tick continues.
-// Rate-limited to once per 5 seconds.
 func IncrementalTick(root, edrDir string, walkFn func(root string, fn func(path string) error) error) {
-	marker := filepath.Join(edrDir, "trigram.tick")
-	if info, err := os.Stat(marker); err == nil {
-		if time.Since(info.ModTime()) < 5*time.Second {
-			return
-		}
-	}
-	os.WriteFile(marker, nil, 0600)
-
 	if !Staleness(root, edrDir) {
 		return
 	}
