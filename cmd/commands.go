@@ -368,7 +368,7 @@ var statusCmd = &cobra.Command{
 			defer db.Close()
 		}
 
-		result := buildNextResult(sess, db, root)
+		result := buildNextResult(sess, db, root, edrDir)
 		env := output.NewEnvelope("status")
 		env.AddOp("s0", "status", result)
 		env.ComputeOK()
@@ -496,9 +496,15 @@ var filesCmd = &cobra.Command{
 }
 
 // buildNextResult constructs the result map for `edr next`.
-func buildNextResult(sess *session.Session, db index.SymbolStore, root string) map[string]any {
+func buildNextResult(sess *session.Session, db index.SymbolStore, root, edrDir string) map[string]any {
 	result := map[string]any{}
 
+	// Undo availability
+	sessDir := filepath.Join(edrDir, "sessions")
+	cpID := session.LatestAutoCheckpoint(sessDir)
+	if cpID != "" {
+		result["undo_available"] = true
+	}
 	// Focus
 	if focus := sess.GetFocus(); focus != "" {
 		result["focus"] = focus

@@ -615,6 +615,11 @@ func plainNext(w *os.File, op Op) {
 		h["fix"] = len(fix)
 	}
 
+	// Add undo availability
+	if v, ok := op["undo_available"].(bool); ok && v {
+		h["undo_available"] = true
+	}
+
 	// Add external changes count to header
 	if ext, ok := op["external_changes"].([]any); ok && len(ext) > 0 {
 		h["external_changes"] = len(ext)
