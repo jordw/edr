@@ -752,9 +752,6 @@ func plainIndex(w *os.File, op Op) {
 	if v, ok := op["stale"].(bool); ok && v {
 		h["stale"] = true
 	}
-	if v := anyInt(op["journals"]); v > 0 {
-		h["journals"] = v
-	}
 	writeHeader(w, h)
 }
 

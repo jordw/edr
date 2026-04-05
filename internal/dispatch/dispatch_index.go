@@ -28,7 +28,6 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 			result["files_indexed"] = s.Files
 			result["files_total"] = total
 			result["trigrams"] = s.Trigrams
-			result["journals"] = s.Journals
 			result["size_bytes"] = s.SizeBytes
 			result["stale"] = s.Stale
 			if total > 0 {
