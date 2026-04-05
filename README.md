@@ -1,12 +1,14 @@
-# edr - context-aware tools for coding agents
+# edr — every tool call returns what the agent needs next
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**edr gives coding agents the right context at the right time.** When an agent reads a function, edr includes what it calls. When it edits, edr includes the updated code and build errors. When it re-reads something unchanged, edr says so in one line. The agent makes fewer wrong decisions because the context it needs is already in the response.
+**edr replaces built-in file tools with ones that front-load context.** Read a function — get its body plus what it calls. Edit code — get the updated function back. Orient in a codebase — get structure, not a file listing. Each response includes what the agent needs for its next decision, not just what it asked for.
 
-- **Symbol-aware reads.** `focus file:Symbol` returns the function body plus dependency signatures — not the 400-line file around it.
-- **Self-describing edits.** `edit` returns the diff, the updated function, and the build result. No follow-up calls to check what happened.
-- **Session dedup.** Re-reads return `{unchanged}`. The agent never processes the same content twice.
+- **`focus file:Symbol`** — function body + dependency signatures. Not the 400-line file around it.
+- **`edit --old X --new Y`** — diff + updated function + build errors (with `--verify`).
+- **`orient`** — budget-controlled structural overview. Symbols, not filenames.
+- **Batch** — `edr -f file:Sym -e --old X --new Y` reads then edits in one call.
+- **Sessions** — re-reads return `{unchanged}`. The agent never processes the same content twice.
 
 Works with any agent that can run shell commands. Fully local, no telemetry.
 
@@ -56,7 +58,7 @@ edr focus src/scheduler.py:run             # just the function (not the file)
 edr orient --dir src/                      # structural overview
 edr edit src/scheduler.py \
     --old "def run(self):" \
-    --new "def run(self, retries=3):"      # auto-verifies build
+    --new "def run(self, retries=3):" --verify
 ```
 
 **Batched:** gather everything in one call, mutate in one call:
@@ -68,7 +70,7 @@ edr -f src/scheduler.py:Scheduler --sig \
     -f src/worker.py:Worker --sig \
     -o --dir src/
 
-# 2. Edit two files, auto-verifies build
+# 2. Edit two files, verify at the end
 edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):" \
     -e src/config.py --old '"timeout": 30' --new '"timeout": 30, "retries": 3'
 ```
@@ -77,7 +79,7 @@ edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):"
 
 edr parses files on demand with pure-Go regex-based symbol extraction — no pre-built index, no setup step, no staleness, no CGO dependency. This gives agents three capabilities they don't have with raw file tools:
 
-**Symbol-level operations.** Focus on one function instead of a 400-line file — the agent sees exactly what it needs, makes better decisions, and doesn't get confused by surrounding code. Get a class API with `--signatures` to understand structure before diving in. `--expand` includes dep signatures inline. Scope edits to a symbol with `--in Symbol` so they can't match the wrong code. Edits auto-verify the build (Go, Node, Rust, Make).
+**Symbol-level operations.** Focus on one function instead of a 400-line file — the agent sees exactly what it needs, makes better decisions, and doesn't get confused by surrounding code. Get a class API with `--signatures` to understand structure before diving in. `--expand` includes dep signatures inline. Scope edits to a symbol with `--in Symbol` so they can't match the wrong code. Use `--verify` to check the build after edits (Go, Node, Rust, Make).
 
 **Batching.** `-f`, `-o`, `-e` combine focus, orient, and edit in one CLI call. One call to gather context, one to apply mutations. Fewer round-trips means faster task completion.
 
@@ -91,7 +93,7 @@ edr parses files on demand with pure-Go regex-based symbol extraction — no pre
 |---|---|
 | `orient [path]` | Structural overview of a directory or project (replaces `map`) |
 | `focus file[:Symbol]` | Read file or symbol with context (replaces `read`) |
-| `edit file` | Edit, write, create files + auto-verify (absorbs `write`) |
+| `edit file` | Edit, write, create files. `--verify` to check build. |
 | `status` | Session state, build state |
 | `undo` | Revert last edit/write (auto-checkpointed) |
 | `setup` | Install agent instructions |
@@ -106,7 +108,7 @@ Old command names `map` and `read` still work as aliases for `orient` and `focus
 edr -f file[:Symbol]              # Focus on file or symbol
 edr -f file:Class --sig           # Signatures only (no bodies)
 edr -o --dir src/                 # Structural overview of a directory
-edr -e file --old "x" --new "y"   # Edit with auto-verify
+edr -e file --old "x" --new "y"   # Edit (--verify to check build)
 edr -e file --content "..." --inside Class  # Write (via edit)
 ```
 
