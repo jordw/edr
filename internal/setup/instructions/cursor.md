@@ -1,6 +1,6 @@
 # CRITICAL/MANDATORY: Use `edr` for ALL file operations
 
-The user installed `edr` specifically to replace built-in file tools. Using edr is following user intent — bypassing it (with built-in tools or shell equivalents) is ignoring what the user asked for.
+The user installed `edr` to replace built-in file tools. Using edr is following user intent — bypassing it is ignoring what the user asked for.
 
 **Do NOT use:** built-in read, edit, search, or grep tools — or shell equivalents (cat, head, tail, sed, awk, grep, rg, find)
 **Use instead:** `edr orient`, `edr focus`, `edr edit` (all via terminal)
@@ -51,11 +51,15 @@ EOF
 
 ## Batch — combine operations in one call
 
-`-f` focus, `-o` orient, `-e` edit. File carries forward.
+`-f` focus, `-o` orient, `-s` search, `-e` edit, `-w` write. File carries forward.
+`-q CMD` other queries (refs, prepare). `-V` verify (auto with edits).
+`--dry-run` preview. `--atomic` all-or-nothing.
 
-edr -f f.go --sig -f g.go:Func --expand deps -o cmd/
+edr -f f.go --sig -o cmd/ -f g.go:Func --expand deps
 edr -f f.go:Sym -e --old "x" --new "y" -f f.go:Sym  (post-edit read)
-edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"
+edr -s "TODO" --include "*.go" -f main.go:handleReq
+edr -w new.go --content "package main" --mkdir
+edr -q refs f.go:Func --callers --budget 30
 
 ## Other commands
 - `edr status` | `edr undo` | `edr setup`

@@ -30,19 +30,7 @@ func IsBatchFlag(arg string) bool {
 var batchCmd = &cobra.Command{
 	Use:   "batch",
 	Short: "Execute batched operations",
-	Long: `Execute multiple operations in a single batch. Operations are specified
-as ordered flags: -r (read), -s (search), -m (map), -e (edit), -w (write), -V (verify).
-
-Modifier flags apply to the preceding operation. Verify runs automatically
-when edits are present (use --no-verify to skip).
-
-When EDR_SESSION is set, session optimizations (delta reads, body dedup)
-persist across calls via ~/.edr/repos/<key>/sessions/<id>.json.
-
-Examples:
-  edr -r cmd/root.go --signatures -s "handleRequest"
-  edr -e cmd/root.go --old-text "oldFunc" --new-text "newFunc"
-  edr -r file.go:Symbol --signatures -e file.go --old-text "x" --new-text "y" -V`,
+	Long:  batchHelpText(),
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Handle --help/-h since DisableFlagParsing swallows it
@@ -1040,6 +1028,159 @@ func countSearchResults(env *output.Envelope) int {
 	return total
 }
 
+// batchHelpText generates a structured help string from batchFlagOps and cmdspec.
+func batchHelpText() string {
+	var b strings.Builder
+
+	b.WriteString(`Execute multiple operations in a single batch.
+
+Operations:
+  -f, --focus  FILE[:SYM]    Read file or symbol
+  -o, --orient [DIR]         Structural overview
+  -s, --search PATTERN       Search for text/symbols
+  -e, --edit   FILE[:SYM]    Edit file (file carries forward from previous op)
+  -w, --write  FILE          Write/create file
+  -q, --query  CMD [TARGET]  Run query command (refs, prepare)
+  -V, --verify               Build check (auto when edits present)
+
+Modifier flags apply to the preceding operation.
+Use --no-verify to skip auto-verify.
+
+`)
+
+	// Build a combined description map: canonical name → desc, alias → desc.
+	descs := make(map[string]string)
+	for _, spec := range cmdspec.Registry {
+		for _, f := range spec.Flags {
+			cliName := strings.ReplaceAll(f.Name, "_", "-")
+			if _, exists := descs[cliName]; !exists {
+				descs[cliName] = f.Desc
+			}
+			if f.Alias != "" {
+				alias := strings.ReplaceAll(f.Alias, "_", "-")
+				if _, exists := descs[alias]; !exists {
+					descs[alias] = f.Desc
+				}
+			}
+		}
+	}
+	// Batch-only flags not in cmdspec registry.
+	batchDescs := map[string]string{
+		"context":        "Lines of context around matches",
+		"include":        "Include files matching glob",
+		"exclude":        "Exclude files matching glob",
+		"limit":          "Max results",
+		"no-body":        "Omit body from results",
+		"no-group":       "Don't group results by file",
+		"regex":          "Treat pattern as regex",
+		"text":           "Plain text search (not symbol)",
+		"callers":        "Show callers of symbol",
+		"chain":          "Follow call chain expression",
+		"deps":           "Show dependencies",
+		"depth":          "Expansion depth",
+		"impact":         "Show impact analysis",
+		"read-after-edit": "Auto-focus files after edits",
+		"root":           "Repository root directory",
+		"verbose":        "Emit diagnostics to stderr",
+		"delete":         "Delete matched text or symbol",
+		"fuzzy":          "Allow whitespace mismatches",
+		"hash":           "Reject edit if file hash mismatch",
+		"refresh-hash":   "On hash mismatch, retry once",
+		"insert-at":      "Insert new text before line N",
+		"no-verify":      "Skip auto-verify on edits",
+		"atomic":         "All-or-nothing edits",
+	}
+	for k, v := range batchDescs {
+		descs[k] = v
+	}
+
+	// Build op → sorted flags from batchFlagOps.
+	type opInfo struct {
+		key   string
+		title string
+	}
+	ops := []opInfo{
+		{"-r", "Focus (-f)"},
+		{"-m", "Orient (-o)"},
+		{"-s", "Search (-s)"},
+		{"-e", "Edit (-e)"},
+		{"-w", "Write (-w)"},
+		{"-q", "Query (-q)"},
+		{"--verify", "Verify"},
+		{"global", "Global"},
+	}
+
+	for _, op := range ops {
+		var flags []string
+		for flag, opList := range batchFlagOps {
+			for _, o := range opList {
+				if o == op.key {
+					flags = append(flags, flag)
+					break
+				}
+			}
+		}
+		if len(flags) == 0 {
+			continue
+		}
+
+		// Deduplicate: resolve each flag to its canonical name,
+		// keep only the shortest CLI form per canonical name.
+		canonical := make(map[string]string) // canonical → shortest flag
+		for _, f := range flags {
+			bare := strings.TrimLeft(f, "-")
+			canon := cmdspec.CanonicalFlagName(bare)
+			if canon == "" {
+				canon = bare
+			}
+			if prev, exists := canonical[canon]; !exists || len(f) < len(prev) {
+				canonical[canon] = f
+			}
+		}
+		// Collect and sort unique flags.
+		unique := make([]string, 0, len(canonical))
+		for _, f := range canonical {
+			unique = append(unique, f)
+		}
+		for i := 0; i < len(unique); i++ {
+			for j := i + 1; j < len(unique); j++ {
+				if unique[i] > unique[j] {
+					unique[i], unique[j] = unique[j], unique[i]
+				}
+			}
+		}
+
+		fmt.Fprintf(&b, "  %s:\n", op.title)
+		for _, f := range unique {
+			bare := strings.TrimLeft(f, "-")
+			desc := descs[bare]
+			if desc == "" {
+				// Try canonical name.
+				canon := cmdspec.CanonicalFlagName(bare)
+				if canon != "" {
+					desc = descs[canon]
+				}
+			}
+			if desc != "" {
+				fmt.Fprintf(&b, "    %-18s %s\n", f, desc)
+			} else {
+				fmt.Fprintf(&b, "    %s\n", f)
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString(`Examples:
+  edr -f cmd/root.go --sig -s "handleRequest"
+  edr -e cmd/root.go --old "oldFunc" --new "newFunc" -V
+  edr -f file.go:Sym -e --old "x" --new "y" -f file.go:Sym
+  edr -s "TODO" --include "*.go" --limit 10
+  edr -q refs file.go:Func --callers --budget 30
+  edr -w new.go --content "package main" --mkdir`)
+
+	return b.String()
+}
+
 // allBatchFlags returns every flag recognized by parseBatchArgs, grouped by
 // which operation(s) they belong to. Used for "did you mean" suggestions.
 var batchFlagOps = map[string][]string{
@@ -1073,9 +1214,17 @@ var batchFlagOps = map[string][]string{
 	"--append":          {"-w"},
 	"--dry-run":         {"-e"},
 	"--read-back":       {"-e"},
+	"--delete":          {"-e"},
+	"--fuzzy":           {"-e"},
+	"--hash":            {"-e"},
+	"--refresh-hash":    {"-e"},
+	"--insert-at":       {"-e"},
 	"--start-line":      {"-e"},
 	"--end-line":        {"-e"},
+	"--no-group":        {"-s"},
 	"--expand":          {"-r"},
+	"--no-verify":       {"global"},
+	"--atomic":          {"global"},
 	"--impact":          {"-q"},
 	"--callers":         {"-q"},
 	"--deps":            {"-q"},

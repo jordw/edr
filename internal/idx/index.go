@@ -253,12 +253,13 @@ func rebuildSmart(root, edrDir string, walkFn func(root string, fn func(path str
 		tris  []Trigram
 	}
 
-	var results []fileResult
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 8)
-	timedOut := false
-
+	// Phase 1: classify files as reusable or needing re-index.
+	// This is just stat calls — no file reads yet.
+	var reusable []fileResult
+	var needIndex []struct {
+		path  string
+		entry FileEntry
+	}
 	for _, p := range paths {
 		rel, _ := filepath.Rel(root, p)
 		if rel == "" {
@@ -273,45 +274,41 @@ func rebuildSmart(root, edrDir string, walkFn func(root string, fn func(path str
 			Mtime: info.ModTime().UnixNano(),
 			Size:  info.Size(),
 		}
-
-		// Reuse old trigrams if mtime unchanged
 		if oldEntry, ok := oldByPath[rel]; ok && oldEntry.Mtime == entry.Mtime {
 			if tris, ok := oldTris[rel]; ok {
-				mu.Lock()
-				results = append(results, fileResult{entry: entry, tris: tris})
-				mu.Unlock()
+				reusable = append(reusable, fileResult{entry: entry, tris: tris})
 				continue
 			}
 		}
+		needIndex = append(needIndex, struct {
+			path  string
+			entry FileEntry
+		}{path: p, entry: entry})
+	}
 
-		// Need to re-index — check time limit
+	// Phase 2: re-index changed files, checking deadline between each.
+	var indexed []fileResult
+	timedOut := false
+	for i := 0; i < len(needIndex); i++ {
 		if time.Now().After(deadline) {
 			timedOut = true
-			// Keep old trigrams if available (stale but better than nothing)
-			if tris, ok := oldTris[rel]; ok {
-				mu.Lock()
-				results = append(results, fileResult{entry: entry, tris: tris})
-				mu.Unlock()
+			for _, rem := range needIndex[i:] {
+				if tris, ok := oldTris[rem.entry.Path]; ok {
+					reusable = append(reusable, fileResult{entry: rem.entry, tris: tris})
+				}
 			}
+			break
+		}
+		f := needIndex[i]
+		data, err := os.ReadFile(f.path)
+		if err != nil || isBinary(data) {
 			continue
 		}
-
-		wg.Add(1)
-		go func(path string, entry FileEntry) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			data, err := os.ReadFile(path)
-			if err != nil || isBinary(data) {
-				return
-			}
-			tris := ExtractTrigrams(bytes.ToLower(data))
-			mu.Lock()
-			results = append(results, fileResult{entry: entry, tris: tris})
-			mu.Unlock()
-		}(p, entry)
+		tris := ExtractTrigrams(bytes.ToLower(data))
+		indexed = append(indexed, fileResult{entry: f.entry, tris: tris})
 	}
-	wg.Wait()
+
+	results := append(reusable, indexed...)
 
 	// Sort for deterministic output
 	sort.Slice(results, func(i, j int) bool {
@@ -340,9 +337,9 @@ func rebuildSmart(root, edrDir string, walkFn func(root string, fn func(path str
 		Postings: postings,
 	}
 
-	// If timed out, keep old git mtime so next tick retries the remaining files
-	if timedOut && old != nil {
-		d.Header.GitMtime = old.Header.GitMtime
+	// If timed out, zero the git mtime so next tick retries the remaining files
+	if timedOut {
+		d.Header.GitMtime = 0
 	}
 
 	atomicWrite(filepath.Join(edrDir, MainFile), d.Marshal())
