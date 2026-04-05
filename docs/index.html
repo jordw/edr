@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>edr - faster, more accurate agents</title>
-<meta name="description" content="Code tools for coding agents. Precise reads, fewer round-trips, no repeated work. Agents find the right code on the first try.">
-<meta property="og:title" content="edr - faster, more accurate agents">
-<meta property="og:description" content="Code tools for coding agents. Precise reads, fewer round-trips, no repeated work. Agents find the right code on the first try.">
+<title>edr — every tool call returns what the agent needs next</title>
+<meta name="description" content="File tools for coding agents that front-load context. Every tool call returns what the agent needs next.">
+<meta property="og:title" content="edr — every tool call returns what the agent needs next">
+<meta property="og:description" content="File tools for coding agents that front-load context. Read a function — get its body plus what it calls. Edit code — get the updated function back.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://github.com/jordw/edr">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%3E</text></svg>">
@@ -240,10 +240,10 @@ footer {
 <!-- Hero -->
 <div class="hero">
   <h1>edr</h1>
-  <p class="tagline">faster, more accurate agents</p>
+  <p class="tagline">every tool call returns what the agent needs next</p>
   <p class="pitch">
-    <strong>edr makes coding agents faster and more accurate.</strong>
-    Symbol-aware reads, batched calls, and session tracking — so agents find the right code on the first try, make fewer mistakes, and finish tasks in less time.
+    <strong>edr replaces built-in file tools with ones that front-load context.</strong>
+    Read a function — get its body plus what it calls. Edit code — get the updated function back. Orient in a codebase — get structure, not a file listing.
   </p>
   <div class="install-bar">
     <span class="prompt">$</span>
@@ -260,12 +260,12 @@ footer {
 <!-- Pillars -->
 <div class="pillars">
   <div class="pillar">
-    <h3>Precise reads</h3>
-    <p>Read one function instead of the file around it. Agents see structure, not noise — and make better decisions.</p>
+    <h3>Front-loaded context</h3>
+    <p>Read a function — get its body plus what it calls. Edit code — get the updated function back. Each response includes what the agent needs next.</p>
   </div>
   <div class="pillar">
-    <h3>Fewer round-trips</h3>
-    <p>Batch reads, searches, edits, and writes into one call. Less orchestration overhead, faster task completion.</p>
+    <h3>One call, not five</h3>
+    <p>Batch focus, orient, and edit into one call. The common pattern — read a symbol, edit it — is one command: <code>edr -f file:Sym -e --old X --new Y</code></p>
   </div>
   <div class="pillar">
     <h3>No repeated work</h3>
@@ -292,7 +292,7 @@ edr <span class="flag">focus</span> src/scheduler.py:run             <span class
 edr <span class="flag">orient</span> <span class="flag">--dir</span> src/                      <span class="comment"># structural overview</span>
 edr <span class="flag">edit</span> src/scheduler.py \
     <span class="flag">--old</span> "def run(self):" \
-    <span class="flag">--new</span> "def run(self, retries=3):"      <span class="comment"># auto-verifies build</span></code></pre>
+    <span class="flag">--new</span> "def run(self, retries=3):"      <span class="comment"># --verify to check build</span></code></pre>
   <p>3 calls, ~3KB.</p>
 
   <p style="margin-top: 1.5rem;"><strong>Batched:</strong> gather everything in one call, mutate in one call:</p>
@@ -302,7 +302,7 @@ edr <span class="flag">-f</span> src/scheduler.py:Scheduler <span class="flag">-
     <span class="flag">-f</span> src/worker.py:Worker <span class="flag">--sig</span> \
     <span class="flag">-o</span> <span class="flag">--dir</span> src/
 
-<span class="comment"># 2. Edit two files, auto-verifies build</span>
+<span class="comment"># 2. Edit two files, verify at the end</span>
 edr <span class="flag">-e</span> src/scheduler.py <span class="flag">--old</span> "def run(self):" <span class="flag">--new</span> "def run(self, retries=3):" \
     <span class="flag">-e</span> src/config.py <span class="flag">--old</span> '"timeout": 30' <span class="flag">--new</span> '"timeout": 30, "retries": 3'</code></pre>
 </section>
@@ -337,7 +337,7 @@ edr <span class="flag">-e</span> src/scheduler.py <span class="flag">--old</span
     <tbody>
       <tr><td>orient [path]</td><td>Structural overview of a directory or project</td></tr>
       <tr><td>focus file[:Symbol]</td><td>Read file or symbol with context</td></tr>
-      <tr><td>edit file</td><td>Edit, write, create files + auto-verify</td></tr>
+      <tr><td>edit file</td><td>Edit, write, create files. <code>--verify</code> to check build.</td></tr>
       <tr><td>status</td><td>Session state, build state</td></tr>
       <tr><td>undo</td><td>Revert last edit/write (auto-checkpointed)</td></tr>
       <tr><td>setup</td><td>Install agent instructions</td></tr>
@@ -351,7 +351,7 @@ edr <span class="flag">-e</span> src/scheduler.py <span class="flag">--old</span
 <pre><code>edr <span class="flag">-f</span> file[:Symbol]              <span class="comment"># Focus on file or symbol</span>
 edr <span class="flag">-f</span> file:Class <span class="flag">--sig</span>           <span class="comment"># Signatures only (no bodies)</span>
 edr <span class="flag">-o</span> <span class="flag">--dir</span> src/                 <span class="comment"># Structural overview of a directory</span>
-edr <span class="flag">-e</span> file <span class="flag">--old</span> "x" <span class="flag">--new</span> "y"   <span class="comment"># Edit with auto-verify</span>
+edr <span class="flag">-e</span> file <span class="flag">--old</span> "x" <span class="flag">--new</span> "y"   <span class="comment"># Edit (--verify to check build)</span>
 edr <span class="flag">-e</span> file <span class="flag">--content</span> "..." <span class="flag">--inside</span> Class  <span class="comment"># Write (via edit)</span></code></pre>
 
   <p>Combine freely. One call to gather context, one to mutate:</p>
@@ -382,7 +382,7 @@ edr <span class="flag">-e</span> f.go <span class="flag">--content</span> "..." 
 <section>
   <h2>How it works</h2>
   <p>edr parses files on demand with pure-Go regex-based symbol extraction — no pre-built index, no setup step, no staleness, no CGO dependency.</p>
-  <p><strong>Symbol-level operations.</strong> Read one function instead of a 400-line file — the agent sees exactly what it needs and makes better decisions. Get a class API with <code>--signatures</code> to understand structure before diving in. Scope edits with <code>--in Symbol</code> so they can't match the wrong code. Edits auto-verify the build.</p>
+  <p><strong>Symbol-level operations.</strong> Read one function instead of a 400-line file — the agent sees exactly what it needs and makes better decisions. Get a class API with <code>--signatures</code> to understand structure before diving in. Scope edits with <code>--in Symbol</code> so they can't match the wrong code. Use <code>--verify</code> to check the build after edits.</p>
   <p><strong>Batching.</strong> <code>-f</code>, <code>-o</code>, <code>-e</code> combine focus, orient, and edit in one CLI call. Fewer round-trips means faster task completion.</p>
   <p><strong>Sessions.</strong> edr tracks what the agent has seen and only returns what changed. Second read of an unchanged file: zero output.</p>
 </section>
