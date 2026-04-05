@@ -349,8 +349,8 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 		}
 
 		// Trigram pre-filter: skip files the index says can't match.
-		// Index stores lowercase trigrams, so we always query with the lowercase form.
-		if edrDir := HomeEdrDir(root); edrDir != "" {
+		// Only use the index if fresh — a partial index would miss files.
+		if edrDir := HomeEdrDir(root); edrDir != "" && !idx.Staleness(root, edrDir) {
 			queryTris := idx.QueryTrigrams(searchLower)
 			if candidates, ok := idx.Query(edrDir, queryTris); ok {
 				candidateSet := make(map[string]struct{}, len(candidates))

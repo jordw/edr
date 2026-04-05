@@ -46,7 +46,9 @@ var rootCmd = &cobra.Command{
 Batch mode (primary interface):
   edr -f file[:Symbol]              Focus on file or symbol
   edr -o [--dir path]               Orient: structural overview
+  edr -s pattern                    Search for text/symbols
   edr -e file --old X --new Y       Edit file
+  edr -w file --content X --mkdir   Write/create file
   edr -f file:Sym -e --old X --new Y   Focus then edit (one call)
 
 Standalone commands are listed below.`,

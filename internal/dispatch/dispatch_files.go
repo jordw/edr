@@ -40,27 +40,29 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 	searchBytes := []byte(pattern)
 	searchLower := []byte(strings.ToLower(pattern))
 
-	// Try trigram index — index stores lowercase trigrams, so always query lowercase.
-	// Trigrams narrow candidates; we verify with bytes.Contains for exact match.
+	// Try trigram index — only if fresh (complete). A stale/partial index
+	// would return incomplete results, so fall back to scan instead.
 	tris := idx.QueryTrigrams(strings.ToLower(pattern))
-	if candidates, ok := idx.Query(edrDir, tris); ok {
-		var verified []string
-		for _, rel := range candidates {
-			data, err := os.ReadFile(filepath.Join(root, rel))
-			if err != nil {
-				continue
-			}
-			if caseSensitive {
-				if bytes.Contains(data, searchBytes) {
-					verified = append(verified, rel)
+	if !idx.Staleness(root, edrDir) {
+		if candidates, ok := idx.Query(edrDir, tris); ok {
+			var verified []string
+			for _, rel := range candidates {
+				data, err := os.ReadFile(filepath.Join(root, rel))
+				if err != nil {
+					continue
 				}
-			} else {
-				if bytes.Contains(bytes.ToLower(data), searchLower) {
-					verified = append(verified, rel)
+				if caseSensitive {
+					if bytes.Contains(data, searchBytes) {
+						verified = append(verified, rel)
+					}
+				} else {
+					if bytes.Contains(bytes.ToLower(data), searchLower) {
+						verified = append(verified, rel)
+					}
 				}
 			}
+			return filesResult(pattern, verified, "index", budget), nil
 		}
-		return filesResult(pattern, verified, "index", budget), nil
 	}
 
 	// Fallback: walk repo and grep each file
