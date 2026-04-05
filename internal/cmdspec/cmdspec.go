@@ -95,7 +95,7 @@ var orientFlags = []FlagSpec{
 	{Name: "type", Type: FlagString, Default: "", Desc: "Filter by symbol type"},
 	{Name: "grep", Type: FlagString, Default: "", Desc: "Filter by name pattern"},
 	{Name: "lang", Type: FlagString, Default: "", Desc: "Filter by language (e.g. go, python, javascript)"},
-	{Name: "search", Type: FlagString, Default: "", Desc: "Filter to symbols whose body contains this text"},
+	{Name: "body", Type: FlagString, Default: "", Desc: "Filter to symbols whose body contains this text"},
 }
 
 var filesFlags = []FlagSpec{
@@ -106,7 +106,7 @@ var filesFlags = []FlagSpec{
 var Registry = []*Spec{
 	// --- Primary commands (shown in --help) ---
 	{
-		Name: "orient", Desc: "Structural overview of repo or directory. Filters: dir, glob, type, grep.",
+		Name: "orient", Desc: "Structural overview of repo or directory. Filters: grep, body, glob, type, lang.",
 		Category: CatRead, MinArgs: 0, MaxArgs: 1,
 		Flags: orientFlags,
 	},

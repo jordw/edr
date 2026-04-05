@@ -38,17 +38,17 @@ func setOptStr(flags map[string]any, key string, v *string) {
 
 // doParams holds the parsed params for batch operations.
 type doParams struct {
-	Reads          []doRead   `json:"reads"`
-	Queries        []doQuery  `json:"queries"`
-	Edits          []doEdit   `json:"edits"`
-	Writes         []doWrite  `json:"writes"`
-	Renames        []doRename `json:"renames"`
-	PostEditReads  []doRead   `json:"post_edit_reads,omitempty"` // reads that follow edits in CLI order
-	Budget         *int       `json:"budget"`
-	DryRun         *bool      `json:"dry_run"`
-	Verify         any        `json:"verify"`
-	ReadAfterEdit  *bool      `json:"read_after_edit,omitempty"`
-	Atomic         *bool      `json:"atomic,omitempty"`
+	Reads         []doRead   `json:"reads"`
+	Queries       []doQuery  `json:"queries"`
+	Edits         []doEdit   `json:"edits"`
+	Writes        []doWrite  `json:"writes"`
+	Renames       []doRename `json:"renames"`
+	PostEditReads []doRead   `json:"post_edit_reads,omitempty"` // reads that follow edits in CLI order
+	Budget        *int       `json:"budget"`
+	DryRun        *bool      `json:"dry_run"`
+	Verify        any        `json:"verify"`
+	ReadAfterEdit *bool      `json:"read_after_edit,omitempty"`
+	Atomic        *bool      `json:"atomic,omitempty"`
 }
 
 type doRead struct {
@@ -56,14 +56,14 @@ type doRead struct {
 	Symbol     string `json:"symbol,omitempty"`
 	Budget     *int   `json:"budget,omitempty"`
 	Signatures *bool  `json:"signatures,omitempty"`
-	Skeleton   *bool   `json:"skeleton,omitempty"`
+	Skeleton   *bool  `json:"skeleton,omitempty"`
 	Lines      string `json:"lines,omitempty"`
 	Depth      *int   `json:"depth,omitempty"`
 	StartLine  *int   `json:"start_line,omitempty"`
 	EndLine    *int   `json:"end_line,omitempty"`
-	Symbols    *bool   `json:"symbols,omitempty"`
-	Expand     string  `json:"expand,omitempty"`
-	NoExpand   *bool   `json:"no_expand,omitempty"`
+	Symbols    *bool  `json:"symbols,omitempty"`
+	Expand     string `json:"expand,omitempty"`
+	NoExpand   *bool  `json:"no_expand,omitempty"`
 	Full       *bool  `json:"full,omitempty"`
 }
 
@@ -97,40 +97,41 @@ type doQuery struct {
 	Chain      *string `json:"chain,omitempty"`
 	Depth      *int    `json:"depth,omitempty"`
 
-	// map
-	Dir    *string `json:"dir,omitempty"`
-	Glob   *string `json:"glob,omitempty"`
-	Type   *string `json:"type,omitempty"`
-	Grep   *string `json:"grep,omitempty"`
-	Lang   *string `json:"lang,omitempty"`
-	Locals *bool   `json:"locals,omitempty"`
+	// map / orient
+	BodySearch *string `json:"body_search,omitempty"` // --body: filter symbols whose body contains text
+	Dir        *string `json:"dir,omitempty"`
+	Glob       *string `json:"glob,omitempty"`
+	Type       *string `json:"type,omitempty"`
+	Grep       *string `json:"grep,omitempty"`
+	Lang       *string `json:"lang,omitempty"`
+	Locals     *bool   `json:"locals,omitempty"`
 }
 
 type doEdit struct {
-	File       string  `json:"file"`
-	OldText    string  `json:"old_text,omitempty"`
-	NewText    string  `json:"new_text,omitempty"`
-	Symbol     string  `json:"symbol,omitempty"`
-	StartLine  *int    `json:"start_line,omitempty"`
-	EndLine    *int    `json:"end_line,omitempty"`
-	All        *bool   `json:"all,omitempty"`
-	In         string  `json:"in,omitempty"`
-	Where      string  `json:"where,omitempty"`
-	DryRun     *bool   `json:"dry_run,omitempty"`
-	ExpectHash string  `json:"expect_hash,omitempty"`
+	File        string `json:"file"`
+	OldText     string `json:"old_text,omitempty"`
+	NewText     string `json:"new_text,omitempty"`
+	Symbol      string `json:"symbol,omitempty"`
+	StartLine   *int   `json:"start_line,omitempty"`
+	EndLine     *int   `json:"end_line,omitempty"`
+	All         *bool  `json:"all,omitempty"`
+	In          string `json:"in,omitempty"`
+	Where       string `json:"where,omitempty"`
+	DryRun      *bool  `json:"dry_run,omitempty"`
+	ExpectHash  string `json:"expect_hash,omitempty"`
 	RefreshHash *bool  `json:"refresh_hash,omitempty"`
-	Delete     *bool   `json:"delete,omitempty"`
-	InsertAt   *int    `json:"insert_at,omitempty"`
-	Fuzzy      *bool   `json:"fuzzy,omitempty"`
-	ReadBack   *bool   `json:"read_back,omitempty"`
+	Delete      *bool  `json:"delete,omitempty"`
+	InsertAt    *int   `json:"insert_at,omitempty"`
+	Fuzzy       *bool  `json:"fuzzy,omitempty"`
+	ReadBack    *bool  `json:"read_back,omitempty"`
 	// Write/create flags (when no OldText, acts as write)
-	Content    string  `json:"content,omitempty"`
-	Inside     *string `json:"inside,omitempty"`
-	After      *string `json:"after,omitempty"`
-	Append     *bool   `json:"append,omitempty"`
-	Mkdir      *bool   `json:"mkdir,omitempty"`
-	Verify     *bool   `json:"verify,omitempty"`
-	NoVerify   *bool   `json:"no_verify,omitempty"`
+	Content  string  `json:"content,omitempty"`
+	Inside   *string `json:"inside,omitempty"`
+	After    *string `json:"after,omitempty"`
+	Append   *bool   `json:"append,omitempty"`
+	Mkdir    *bool   `json:"mkdir,omitempty"`
+	Verify   *bool   `json:"verify,omitempty"`
+	NoVerify *bool   `json:"no_verify,omitempty"`
 }
 
 type doWrite struct {
@@ -297,6 +298,7 @@ func dispatchReads(ctx context.Context, db index.SymbolStore, sess *session.Sess
 	results := dispatch.DispatchMulti(ctx, db, cmds, budgetOpt...)
 	addMultiResultOps(env, sess, cmds, results, prefix)
 }
+
 // executeQueries dispatches query operations and adds results as ops on the envelope.
 // Follows the same normalize-then-build-then-dispatch pattern as executeReads.
 func executeQueries(ctx context.Context, db index.SymbolStore, sess *session.Session, env *output.Envelope, p *doParams) {
@@ -943,6 +945,9 @@ func queryToMultiCmd(q doQuery) dispatch.MultiCmd {
 		if q.Lang != nil && *q.Lang != "" {
 			flags["lang"] = *q.Lang
 		}
+		if q.BodySearch != nil && *q.BodySearch != "" {
+			flags["body"] = *q.BodySearch
+		}
 		if q.Locals != nil && *q.Locals {
 			flags["locals"] = true
 		}
@@ -1013,8 +1018,6 @@ func addMultiResultOps(env *output.Envelope, sess *session.Session, cmds []dispa
 	}
 }
 
-
-
 // suggestField finds the closest known field name by Levenshtein distance.
 func suggestField(input string, known map[string]bool) string {
 	best := ""
@@ -1028,4 +1031,3 @@ func suggestField(input string, known map[string]bool) string {
 	}
 	return best
 }
-

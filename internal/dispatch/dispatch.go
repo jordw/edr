@@ -285,8 +285,8 @@ func runRepoMap(ctx context.Context, db index.SymbolStore, flags map[string]any)
 	if lang := flagString(flags, "lang", ""); lang != "" {
 		opts = append(opts, index.WithLang(lang))
 	}
-	if search := flagString(flags, "search", ""); search != "" {
-		opts = append(opts, index.WithSearch(search))
+	if body := flagString(flags, "body", ""); body != "" {
+		opts = append(opts, index.WithSearch(body))
 	}
 	if !flagBool(flags, "locals", false) {
 		opts = append(opts, index.WithHideLocals())

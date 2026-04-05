@@ -11,31 +11,33 @@ Only fall back to built-in tools if `edr` itself won't compile/run.
 
 Run `edr status` between tasks or after failures.
 
-## 3 core commands
+## Find code — `edr orient`
 
-- `edr orient [path]` — structural overview of a directory or project
-- `edr focus file[:Symbol]` — read file or symbol with context
-- `edr edit file` — edit, write, create files (use --verify to check build)
+edr orient                                  # repo overview
+edr orient cmd/                             # directory structure
+edr orient --grep "TestSpec"                # symbols by name (regex)
+edr orient --body "http.Get"                # symbols whose body contains text
+edr orient cmd/ --lang go --type interface  # filter by language + type
+edr orient --glob "**/*_test.go"            # filter by file pattern
+edr orient cmd/ --budget 50                 # cap output size
 
-## Batch — tool calls are expensive, plan and combine
+## Read code — `edr focus`
 
-`-f` focus, `-o` orient, `-e` edit. Modifier flags follow each op. File carries forward, so `-f f.go:Sym -e --old` edits the same file. Plan what you need, then combine into one call for the greatest speedup.
+edr focus file.go                       # read file (smart budget)
+edr focus file.go:FuncName              # read specific symbol
+edr focus file.go --sig                 # signatures only (75-86% fewer tokens)
+edr focus file.go:Func --expand deps    # include dependency signatures
+edr focus file.go --skeleton            # collapsed blocks
+edr focus file.go --no-expand           # suppress auto-expand
 
-`edr -f f.go --sig -f g.go:Func --expand deps -o --dir cmd/`
-`edr -f f.go:Sym -e --old "x" --new "y" -f f.go:Sym` (post-edit read)
-`edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"` (multi-file)
-`edr -e f.go --content "..." --mkdir` (create/write via edit)
+## Change code — `edr edit`
 
-### Focus modifiers (after `-f`)
-`--sig` (file/container only), `--skeleton`, `--full`, `--expand deps|callers|both`, `--no-expand`, `--symbols`, `--lines 10:50`, `--budget N`
-
-### Orient modifiers (after `-o`)
-`--dir`, `--lang`, `--grep`, `--glob`, `--type`, `--search`, `--budget N`
-
-### Edit modifiers (after `-e`)
-`--old "x" --new "y"`, `--where Sym` (resolves file), `--in Sym` (scope)
-`--content "..."`, `--inside Class`, `--after Sym`, `--append`, `--mkdir`
-`--all`, `--delete`, `--dry-run`, `--fuzzy`, `--read-back`, `--verify`
+edr edit file.go --old "x" --new "y"              # find and replace
+edr edit file.go --old "x" --new "y" --in Func    # scoped to symbol
+edr edit file.go --old "x" --new "y" --all         # replace all matches
+edr edit file.go --content "..." --mkdir           # create file
+edr edit file.go --old "x" --new "y" --verify     # edit + build check
+edr edit --where Symbol --old "x" --new "y"        # auto-resolve file
 
 ### Quoting for edits
 Always use heredocs for --old/--new to avoid shell quoting errors:
@@ -47,7 +49,15 @@ new code
 EOF
 )"`
 
-## Standalone commands
+## Batch — combine operations in one call
+
+`-f` focus, `-o` orient, `-e` edit. File carries forward.
+
+edr -f f.go --sig -f g.go:Func --expand deps -o cmd/
+edr -f f.go:Sym -e --old "x" --new "y" -f f.go:Sym  (post-edit read)
+edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"
+
+## Other commands
 - `edr status` | `edr undo` | `edr setup`
-- `edr files "pattern"` — find files containing text (trigram-accelerated)
+- `edr files "pattern"` — find files by content (trigram-accelerated)
 - `edr index` — build or inspect the search index

@@ -460,10 +460,16 @@ func parseBatchArgs(args []string) (*batchState, error) {
 
 		case "--body":
 			switch s.currentOp {
+			case opMap:
+				val, err := nextArg(arg)
+				if err != nil {
+					return nil, err
+				}
+				s.currentQuery.BodySearch = sp(val)
 			case opSearch, opQuery:
 				s.currentQuery.Body = bp(true)
 			default:
-				return nil, fmt.Errorf("--body is only valid after -s or -q")
+				return nil, fmt.Errorf("--body is only valid after -o/-m, -s, or -q")
 			}
 
 		case "--no-body":
@@ -957,6 +963,7 @@ func runBatch(args []string) error {
 	output.PrintEnvelope(env)
 	return nil
 }
+
 // inferBatchCommand returns the command name for the envelope.
 // Single-type batches use the actual command name for parity with standalone.
 // Mixed batches use "batch".
@@ -1017,7 +1024,6 @@ func (e silentError) ExitCode() int {
 	return e.code
 }
 
-
 // countSearchResults counts total matches across search ops in the envelope.
 func countSearchResults(env *output.Envelope) int {
 	total := 0
@@ -1037,52 +1043,52 @@ func countSearchResults(env *output.Envelope) int {
 // allBatchFlags returns every flag recognized by parseBatchArgs, grouped by
 // which operation(s) they belong to. Used for "did you mean" suggestions.
 var batchFlagOps = map[string][]string{
-	"--sig":            {"-r", "-q"},
-	"--signatures":     {"-r", "-q"},
-	"--skeleton":       {"-r"},
-	"--depth":          {"-r", "-q"},
-	"--budget":         {"-r", "-s", "-m", "-q"},
-	"--lines":          {"-r", "-e"},
-	"--full":           {"-r", "-s", "-m", "-q"},
-	"--symbols":        {"-r"},
-	"--body":           {"-s", "-q"},
-	"--no-body":        {"-s", "-q"},
-	"--include":        {"-s"},
-	"--exclude":        {"-s"},
-	"--text":           {"-s"},
-	"--context":        {"-s"},
-	"--limit":          {"-s"},
-	"--in":             {"-s", "-e"},
-	"--where":          {"-e"},
-	"--regex":          {"-s"},
-	"--old":            {"-e"},
-	"--old-text":       {"-e"},
-	"--new":            {"-e", "-w"},
-	"--new-text":       {"-e", "-w"},
-	"--all":            {"-e"},
-	"--after":          {"-w"},
-	"--content":        {"-w"},
-	"--inside":         {"-w"},
-	"--mkdir":          {"-w"},
-	"--append":         {"-w"},
-	"--dry-run":        {"-e"},
-	"--read-back":      {"-e"},
-	"--start-line":     {"-e"},
-	"--end-line":       {"-e"},
-	"--expand":         {"-r"},
-	"--impact":         {"-q"},
-	"--callers":        {"-q"},
-	"--deps":           {"-q"},
-	"--chain":          {"-q"},
-	"--command":        {"--verify"},
-	"--dir":            {"-m"},
-	"--lang":           {"-m"},
-	"--grep":           {"-m"},
-	"--glob":           {"-m"},
-	"--type":           {"-m"},
+	"--sig":             {"-r", "-q"},
+	"--signatures":      {"-r", "-q"},
+	"--skeleton":        {"-r"},
+	"--depth":           {"-r", "-q"},
+	"--budget":          {"-r", "-s", "-m", "-q"},
+	"--lines":           {"-r", "-e"},
+	"--full":            {"-r", "-s", "-m", "-q"},
+	"--symbols":         {"-r"},
+	"--body":            {"-m", "-s", "-q"},
+	"--no-body":         {"-s", "-q"},
+	"--include":         {"-s"},
+	"--exclude":         {"-s"},
+	"--text":            {"-s"},
+	"--context":         {"-s"},
+	"--limit":           {"-s"},
+	"--in":              {"-s", "-e"},
+	"--where":           {"-e"},
+	"--regex":           {"-s"},
+	"--old":             {"-e"},
+	"--old-text":        {"-e"},
+	"--new":             {"-e", "-w"},
+	"--new-text":        {"-e", "-w"},
+	"--all":             {"-e"},
+	"--after":           {"-w"},
+	"--content":         {"-w"},
+	"--inside":          {"-w"},
+	"--mkdir":           {"-w"},
+	"--append":          {"-w"},
+	"--dry-run":         {"-e"},
+	"--read-back":       {"-e"},
+	"--start-line":      {"-e"},
+	"--end-line":        {"-e"},
+	"--expand":          {"-r"},
+	"--impact":          {"-q"},
+	"--callers":         {"-q"},
+	"--deps":            {"-q"},
+	"--chain":           {"-q"},
+	"--command":         {"--verify"},
+	"--dir":             {"-m"},
+	"--lang":            {"-m"},
+	"--grep":            {"-m"},
+	"--glob":            {"-m"},
+	"--type":            {"-m"},
 	"--read-after-edit": {"global"},
-	"--root":           {"global"},
-	"--verbose":        {"global"},
+	"--root":            {"global"},
+	"--verbose":         {"global"},
 }
 
 // suggestBatchFlag builds a helpful error for an unknown batch flag.
