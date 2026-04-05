@@ -112,7 +112,7 @@ var Registry = []*Spec{
 		Flags: focusFlags,
 	},
 	{
-		Name: "edit", Desc: "Edit, write, or create files. Auto-verifies build after changes.",
+		Name: "edit", Desc: "Edit, write, or create files. Use --verify to check build.",
 		Category: CatWrite, MinArgs: 0, MaxArgs: 2, StdinKey: "new_text", FileScoped: true,
 		DiffEdit: true,
 		Flags: []FlagSpec{
@@ -139,7 +139,8 @@ var Registry = []*Spec{
 			{Name: "mkdir", Type: FlagBool, Default: false, Desc: "Create parent dirs"},
 			// Shared
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
-			{Name: "no_verify", Type: FlagBool, Default: false, Desc: "Skip auto-verify after edit"},
+			{Name: "verify", Type: FlagBool, Default: false, Desc: "Run build verification after edit"},
+			{Name: "no_verify", Type: FlagBool, Default: false, Desc: "Deprecated: verify is now opt-in"},
 		},
 	},
 	// --- Internal commands (dispatch-only, no CLI surface) ---

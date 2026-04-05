@@ -128,6 +128,7 @@ type doEdit struct {
 	After      *string `json:"after,omitempty"`
 	Append     *bool   `json:"append,omitempty"`
 	Mkdir      *bool   `json:"mkdir,omitempty"`
+	Verify     *bool   `json:"verify,omitempty"`
 	NoVerify   *bool   `json:"no_verify,omitempty"`
 }
 

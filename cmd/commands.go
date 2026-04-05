@@ -207,12 +207,13 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 
 	env.AddOp(opID, cmdName, result)
 
-	// Auto-verify after successful mutations (parity with batch mode)
+	// Verify after edits only when explicitly requested (--verify / -V).
+	// Default is no verify — agents batch verify with the next read or explicitly.
 	if cmdName == "edit" || cmdName == "write" {
 		dryRun, _ := flags["dry_run"].(bool)
-		noVerify, _ := flags["no_verify"].(bool)
+		doVerify, _ := flags["verify"].(bool)
 		status, _ := resultStatus(result)
-		if !dryRun && !noVerify && status == "applied" {
+		if !dryRun && doVerify && status == "applied" {
 			verifyFlags := map[string]any{}
 			if len(args) > 0 {
 				verifyFlags["files"] = []string{args[0]}

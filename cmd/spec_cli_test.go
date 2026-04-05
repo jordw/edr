@@ -431,7 +431,7 @@ func TestSpec_EditApply(t *testing.T) {
 	})
 
 	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-		"edit", "hello.go", "--old-text", "package main", "--new-text", "package test")
+		"edit", "hello.go", "--old-text", "package main", "--new-text", "package test", "--verify")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -879,12 +879,12 @@ func TestSpec_VerifyAfterEdit(t *testing.T) {
 	})
 
 	result, _, _, exit := specRun(t, binary, dir, nil,
-		"edit", "hello.go", "--old-text", "func main() {}", "--new-text", "func main() { println(\"hi\") }")
+		"edit", "hello.go", "--old-text", "func main() {}", "--new-text", "func main() { println(\"hi\") }", "--verify")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
 	if result.Verify == nil {
-		t.Fatal("expected verify line after edit")
+		t.Fatal("expected verify line after edit --verify")
 	}
 	v := result.Verify["verify"].(string)
 	if v != "passed" && v != "failed" {
@@ -1327,7 +1327,7 @@ func TestSpec_BatchEditAutoVerify(t *testing.T) {
 	})
 
 	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-		"-e", "hello.go", "--old", "func main() {}", "--new", "func main() { println() }")
+		"-e", "hello.go", "--old", "func main() {}", "--new", "func main() { println() }", "-V")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -1337,9 +1337,9 @@ func TestSpec_BatchEditAutoVerify(t *testing.T) {
 	if result.Ops[0].Header["status"] != "applied" {
 		t.Errorf("status = %v, want applied", result.Ops[0].Header["status"])
 	}
-	// Batch with edits should auto-verify.
+	// Batch with -V should verify.
 	if result.Verify == nil {
-		t.Error("batch edit should auto-verify")
+		t.Error("batch edit with -V should verify")
 	}
 }
 
@@ -1351,7 +1351,7 @@ func TestSpec_VerifyFailedAfterAppliedEdit(t *testing.T) {
 
 	// Introduce a compile error.
 	result, _, _, exit := specRun(t, binary, dir, nil,
-		"edit", "hello.go", "--old-text", "func main() {}", "--new-text", "func main( {}")
+		"edit", "hello.go", "--old-text", "func main() {}", "--new-text", "func main( {}", "--verify")
 	// Verify failure is reported in JSON output, not via exit code.
 	// Exit 0 so the human's terminal doesn't look alarming.
 	if exit != 0 {

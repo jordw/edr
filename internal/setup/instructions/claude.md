@@ -35,7 +35,7 @@ Run `edr status` between tasks or after failures.
 ### Edit modifiers (after `-e`)
 `--old "x" --new "y"`, `--where Sym` (resolves file), `--in Sym` (scope)
 `--content "..."`, `--inside Class`, `--after Sym`, `--append`, `--mkdir`
-`--all`, `--delete`, `--dry-run`, `--fuzzy`, `--read-back`, `--no-verify`
+`--all`, `--delete`, `--dry-run`, `--fuzzy`, `--read-back`, `--verify`
 
 ### Quoting for edits
 Always use heredocs for --old/--new to avoid shell quoting errors:

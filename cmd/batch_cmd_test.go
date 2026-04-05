@@ -96,7 +96,7 @@ func TestBatchDryRunPostEditReadWarning(t *testing.T) {
 }
 
 func TestBatchParseLevelTimeout(t *testing.T) {
-	args := []string{"-e", "f.go", "--old", "a", "--new", "b", "--level", "test", "--timeout", "30"}
+	args := []string{"-e", "f.go", "--old", "a", "--new", "b", "-V", "--level", "test", "--timeout", "30"}
 	state, err := parseBatchArgs(args)
 	if err != nil {
 		t.Fatalf("parseBatchArgs: %v", err)

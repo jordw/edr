@@ -996,7 +996,7 @@ func TestDoStructsMatchCmdspec(t *testing.T) {
 		"insert_at": true, "fuzzy": true, "lines": true, "move_after": true, "read_back": true,
 		// Write/create flags (merged from write)
 		"content": true, "inside": true, "after": true, "append": true,
-		"mkdir": true, "no_verify": true,
+		"mkdir": true, "verify": true, "no_verify": true,
 	}
 	checkStructFieldsFiltered(t, "doEdit", doEditKnownKeys, editFields)
 
@@ -1464,9 +1464,9 @@ func TestBatchMode_QuietStderr(t *testing.T) {
 		t.Fatalf("parseBatchArgs: %v", err)
 	}
 	p := state.toParams()
-	// Auto-verify should be enabled for edits
-	if p.Verify == nil || p.Verify == false {
-		t.Error("expected auto-verify to be enabled for edits")
+	// Verify is opt-in — without -V, should be nil
+	if p.Verify != nil {
+		t.Error("expected no auto-verify without -V flag")
 	}
 }
 

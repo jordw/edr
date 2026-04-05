@@ -184,20 +184,8 @@ func (s *batchState) toParams() doParams {
 				p.Verify = true
 			}
 		}
-	} else if len(s.edits) > 0 {
-		if s.verifyLevel != "" || s.verifyTimeout > 0 {
-			vm := map[string]any{}
-			if s.verifyLevel != "" {
-				vm["level"] = s.verifyLevel
-			}
-			if s.verifyTimeout > 0 {
-				vm["timeout"] = s.verifyTimeout
-			}
-			p.Verify = vm
-		} else {
-			p.Verify = true
-		}
 	}
+	// No auto-verify in batch mode — use -V to opt in.
 
 	return p
 }
