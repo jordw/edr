@@ -29,6 +29,7 @@ func TestOpenerAlignment(t *testing.T) {
 		{"orientCmd", "orient"},
 		{"focusCmd", "focus"},
 		{"indexCmd", "index"},
+		{"filesCmd", "files"},
 	}
 
 	// Commands that must use dispatchCmdWithStdin (also calls openDBStrict internally)

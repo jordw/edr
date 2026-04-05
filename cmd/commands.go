@@ -28,6 +28,7 @@ func init() {
 	rootCmd.AddCommand(undoCmd)
 	rootCmd.AddCommand(setupCmd)
 	rootCmd.AddCommand(indexCmd)
+	rootCmd.AddCommand(filesCmd)
 }
 
 
@@ -486,6 +487,13 @@ var indexCmd = &cobra.Command{
 }
 
 func init() { cmdspec.RegisterFlags(indexCmd.Flags(), "index") }
+
+var filesCmd = &cobra.Command{
+	Use:   "files <pattern>",
+	Short: ToolDesc["files"],
+	Args:  cobra.ExactArgs(1),
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "files", args) },
+}
 
 // buildNextResult constructs the result map for `edr next`.
 func buildNextResult(sess *session.Session, db index.SymbolStore, root string) map[string]any {

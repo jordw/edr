@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -25,8 +25,14 @@ func BuildFull(root string, paths []string, gitMtime int64) *IndexData {
 	d := &IndexData{}
 	d.Header.GitMtime = gitMtime
 
-	files := make([]FileEntry, len(paths))
-	for i, p := range paths {
+	// Build file entries and trigram map in a single pass.
+	// Use append (not pre-allocate by index) to avoid ghost entries from stat failures.
+	type indexedFile struct {
+		entry FileEntry
+		data  []byte
+	}
+	var indexed []indexedFile
+	for _, p := range paths {
 		rel, _ := filepath.Rel(root, p)
 		if rel == "" {
 			rel = p
@@ -35,19 +41,6 @@ func BuildFull(root string, paths []string, gitMtime int64) *IndexData {
 		if err != nil {
 			continue
 		}
-		files[i] = FileEntry{
-			Path:  rel,
-			Mtime: info.ModTime().UnixNano(),
-			Size:  info.Size(),
-		}
-	}
-
-	d.Files = files
-	d.Header.NumFiles = uint32(len(files))
-
-	// Build trigram map: trigram → []fileID
-	triMap := make(map[Trigram][]uint32)
-	for i, p := range paths {
 		data, err := os.ReadFile(p)
 		if err != nil {
 			continue
@@ -55,13 +48,28 @@ func BuildFull(root string, paths []string, gitMtime int64) *IndexData {
 		if isBinary(data) {
 			continue
 		}
-		tris := ExtractTrigrams(data)
+		indexed = append(indexed, indexedFile{
+			entry: FileEntry{
+				Path:  rel,
+				Mtime: info.ModTime().UnixNano(),
+				Size:  info.Size(),
+			},
+			data: data,
+		})
+	}
+
+	files := make([]FileEntry, len(indexed))
+	triMap := make(map[Trigram][]uint32)
+	for i, f := range indexed {
+		files[i] = f.entry
 		fileID := uint32(i)
-		for _, t := range tris {
+		for _, t := range ExtractTrigrams(f.data) {
 			triMap[t] = append(triMap[t], fileID)
 		}
 	}
 
+	d.Files = files
+	d.Header.NumFiles = uint32(len(files))
 	d.Postings, d.Trigrams = BuildPostings(triMap)
 	d.Header.NumTrigrams = uint32(len(d.Trigrams))
 
@@ -310,12 +318,9 @@ func MaybeCompact(edrDir string, chance int) {
 // Compact merges main index + all journals → new main index. Deletes journals.
 func Compact(edrDir string) {
 	lockPath := filepath.Join(edrDir, LockFile)
-	// Acquire exclusive lock via O_CREATE|O_EXCL
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return // another process holds it
+	if !acquireLock(lockPath) {
+		return
 	}
-	f.Close()
 	defer os.Remove(lockPath)
 
 	indices := loadAllIndices(edrDir)
@@ -469,6 +474,49 @@ func gitIndexMtime(repoRoot string) int64 {
 		return 0
 	}
 	return info.ModTime().UnixNano()
+}
+
+// acquireLock tries to create a lockfile exclusively. If it already exists,
+// checks if the owning PID is still alive. Removes stale locks from crashed processes.
+func acquireLock(path string) bool {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err == nil {
+		// Got the lock — write our PID
+		fmt.Fprintf(f, "%d\n%d\n", os.Getpid(), time.Now().UnixNano())
+		f.Close()
+		return true
+	}
+	// Lock exists — check if owner is still alive
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var pid int
+	var ts int64
+	if n, _ := fmt.Sscanf(string(data), "%d\n%d\n", &pid, &ts); n == 2 {
+		// Stale if PID is dead or lock is older than 5 minutes
+		if !processAlive(pid) || time.Since(time.Unix(0, ts)) > 5*time.Minute {
+			os.Remove(path)
+			// Retry once
+			f, err = os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+			if err == nil {
+				fmt.Fprintf(f, "%d\n%d\n", os.Getpid(), time.Now().UnixNano())
+				f.Close()
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// processAlive checks if a process with the given PID exists.
+func processAlive(pid int) bool {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	// On Unix, FindProcess always succeeds. Signal 0 tests existence.
+	return p.Signal(syscall.Signal(0)) == nil
 }
 
 func atomicWrite(path string, data []byte) error {
@@ -642,18 +690,3 @@ func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(pat
 	return nil
 }
 
-func max(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-// CaseFoldTrigrams returns trigrams for a case-insensitive query.
-// It lowercases the query before extracting trigrams, which means the index
-// must also contain lowercase trigrams to support this. For now we index
-// raw bytes, so case-insensitive search falls back to full scan.
-// This is a future optimization hook.
-func CaseFoldTrigrams(query string) []Trigram {
-	return QueryTrigrams(strings.ToLower(query))
-}

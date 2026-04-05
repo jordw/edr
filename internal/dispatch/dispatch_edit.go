@@ -160,12 +160,15 @@ func runSmartEditInner(ctx context.Context, db index.SymbolStore, root string, a
 		return smartEditMatch(ctx, db, file, oldText, newText, flags, dryRun)
 	}
 
-	// Symbol mode
+	// Symbol mode: edit file Symbol or edit file:Symbol (delete/replace entire symbol)
 	if len(args) < 1 {
 		return nil, fmt.Errorf("edit requires: [file] <symbol>, or <file> with --old_text/--start_line/--end_line")
 	}
 	sym, err := resolveSymbolArgs(ctx, db, root, args)
 	if err != nil {
+		if flagBool(flags, "delete", false) {
+			return nil, fmt.Errorf("%w (use --old with --delete to delete text, or provide a symbol name as second arg)", err)
+		}
 		return nil, err
 	}
 	endByte := sym.EndByte

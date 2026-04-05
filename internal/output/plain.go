@@ -94,6 +94,8 @@ func printPlain(e *Envelope) {
 			plainUndo(w, op)
 		case "index":
 			plainIndex(w, op)
+		case "files":
+			plainFiles(w, op)
 		default:
 			writeHeader(w, op)
 		}
@@ -699,6 +701,23 @@ func plainUndo(w *os.File, op Op) {
 		fmt.Fprintln(w, "\nnew files removed:")
 		for _, f := range removed {
 			fmt.Fprintf(w, "  %s\n", f)
+		}
+	}
+}
+
+func plainFiles(w *os.File, op Op) {
+	h := map[string]any{}
+	if v := anyInt(op["n"]); v >= 0 {
+		h["n"] = v
+	}
+	if v, ok := op["source"].(string); ok {
+		h["source"] = v
+	}
+	writeHeader(w, h)
+	// Body: one file per line
+	if files := toStringSlice(op["files"]); len(files) > 0 {
+		for _, f := range files {
+			fmt.Fprintln(w, f)
 		}
 	}
 }

@@ -250,7 +250,7 @@ func TestSpec_HelpSurface(t *testing.T) {
 		t.Errorf("edr --help wrote to stderr: %q", stderr)
 	}
 
-	expected := []string{"edit", "focus", "index", "orient", "setup", "status", "undo"}
+	expected := []string{"edit", "files", "focus", "index", "orient", "setup", "status", "undo"}
 	cmdRe := regexp.MustCompile(`(?m)^\s{2}(\w+)\s`)
 	matches := cmdRe.FindAllStringSubmatch(stdout, -1)
 
@@ -272,7 +272,7 @@ func TestSpec_SubcommandHelp(t *testing.T) {
 	binary := buildBinary(t)
 	dir := t.TempDir()
 
-	commands := []string{"orient", "focus", "edit", "setup", "status", "undo", "index"}
+	commands := []string{"orient", "focus", "edit", "setup", "status", "undo", "index", "files"}
 	for _, cmd := range commands {
 		t.Run(cmd, func(t *testing.T) {
 			stdout, _, exit := specRunRaw(t, binary, dir, nil, cmd, "--help")
@@ -2349,7 +2349,7 @@ func TestSpec_ReadExpand(t *testing.T) {
 
 	t.Run("expand deps", func(t *testing.T) {
 		r, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-			"focus", "main.go:compute", "--expand")
+			"focus", "main.go:compute", "--expand", "deps")
 		if exit != 0 {
 			t.Fatalf("exit %d", exit)
 		}
@@ -2380,4 +2380,78 @@ func TestSpec_ReadExpand(t *testing.T) {
 // ---------------------------------------------------------------------------
 // prepare command
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// files command
+// ---------------------------------------------------------------------------
+
+func TestSpec_FilesCommand(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go":   "package main\nfunc Hello() { fmt.Println(\"hello world\") }",
+		"foo.go":     "package main\nfunc Foo() { return 42 }",
+		"bar.go":     "package main\nfunc Bar() { fmt.Println(\"hello\") }",
+		"readme.txt": "This is a readme file with some text.",
+	})
+
+	t.Run("case-sensitive match via scan", func(t *testing.T) {
+		r, _, _, exit := specRun(t, binary, dir, nil, "files", "Hello")
+		if exit != 0 {
+			t.Fatalf("exit %d", exit)
+		}
+		h := r.Ops[0].Header
+		n := int(h["n"].(float64))
+		if n != 1 {
+			t.Errorf("expected 1 match for Hello, got %d", n)
+		}
+		if !strings.Contains(r.Ops[0].Body, "hello.go") {
+			t.Error("expected hello.go in body")
+		}
+	})
+
+	t.Run("case-insensitive match", func(t *testing.T) {
+		r, _, _, exit := specRun(t, binary, dir, nil, "files", "hello")
+		if exit != 0 {
+			t.Fatalf("exit %d", exit)
+		}
+		h := r.Ops[0].Header
+		n := int(h["n"].(float64))
+		if n != 2 {
+			t.Errorf("expected 2 matches for hello (hello.go, bar.go), got %d", n)
+		}
+		if h["source"] != "scan" {
+			t.Errorf("case-insensitive should use scan, got %v", h["source"])
+		}
+	})
+
+	t.Run("no matches", func(t *testing.T) {
+		r, _, _, exit := specRun(t, binary, dir, nil, "files", "NONEXISTENT_PATTERN_XYZ")
+		if exit != 0 {
+			t.Fatalf("exit %d", exit)
+		}
+		h := r.Ops[0].Header
+		n := int(h["n"].(float64))
+		if n != 0 {
+			t.Errorf("expected 0 matches, got %d", n)
+		}
+	})
+
+	t.Run("after index build uses index", func(t *testing.T) {
+		_, _, _, exit := specRun(t, binary, dir, nil, "index")
+		if exit != 0 {
+			t.Fatalf("index build exit %d", exit)
+		}
+		r, _, _, exit := specRun(t, binary, dir, nil, "files", "Hello")
+		if exit != 0 {
+			t.Fatalf("exit %d", exit)
+		}
+		h := r.Ops[0].Header
+		if h["source"] != "index" {
+			t.Errorf("after index build, expected source=index, got %v", h["source"])
+		}
+		n := int(h["n"].(float64))
+		if n != 1 {
+			t.Errorf("expected 1 match for Hello after index, got %d", n)
+		}
+	})
+}
 

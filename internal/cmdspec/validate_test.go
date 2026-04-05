@@ -14,6 +14,7 @@ func TestPublicCommandSurface(t *testing.T) {
 		"orient": true, "focus": true, "edit": true,
 		"status": true, "undo": true, "setup": true,
 		"index": true,
+		"files": true,
 	}
 
 	for _, s := range Registry {

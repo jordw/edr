@@ -209,6 +209,10 @@ var Registry = []*Spec{
 			{Name: "status", Type: FlagBool, Default: false, Desc: "Show index stats without building"},
 		},
 	},
+	{
+		Name: "files", Desc: "Find files containing a text pattern (trigram-accelerated).",
+		Category: CatRead, MinArgs: 1, MaxArgs: 1,
+	},
 }
 
 // --- Lookup ---

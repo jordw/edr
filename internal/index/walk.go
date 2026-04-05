@@ -349,21 +349,20 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 		}
 
 		// Trigram pre-filter: skip files the index says can't match.
-		if edrDir := HomeEdrDir(root); edrDir != "" {
-			var queryTris []idx.Trigram
-			if caseSensitive {
-				queryTris = idx.QueryTrigrams(cfg.search)
-			} else {
-				queryTris = idx.QueryTrigrams(searchLower)
-			}
-			if candidates, ok := idx.Query(edrDir, queryTris); ok {
-				candidateSet := make(map[string]struct{}, len(candidates))
-				for _, c := range candidates {
-					candidateSet[filepath.Join(root, c)] = struct{}{}
-				}
-				for f := range byFile {
-					if _, ok := candidateSet[f]; !ok {
-						delete(byFile, f)
+		// Only for case-sensitive queries — the index stores raw bytes,
+		// so lowercase trigrams won't match mixed-case file content.
+		if caseSensitive {
+			if edrDir := HomeEdrDir(root); edrDir != "" {
+				queryTris := idx.QueryTrigrams(cfg.search)
+				if candidates, ok := idx.Query(edrDir, queryTris); ok {
+					candidateSet := make(map[string]struct{}, len(candidates))
+					for _, c := range candidates {
+						candidateSet[filepath.Join(root, c)] = struct{}{}
+					}
+					for f := range byFile {
+						if _, ok := candidateSet[f]; !ok {
+							delete(byFile, f)
+						}
 					}
 				}
 			}

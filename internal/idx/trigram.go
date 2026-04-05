@@ -6,16 +6,32 @@
 // body-search path). This eliminates reading files that can't possibly match.
 package idx
 
+import "sync"
+
 // ExtractTrigrams returns the set of unique trigrams in data.
 // A trigram is a contiguous 3-byte sequence. Returns nil for inputs < 3 bytes.
+// trigramBitset is a pooled 2MB bitset for trigram extraction.
+// Heap-allocated and pooled to avoid 2MB stack frames in goroutines.
+var trigramPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, (1<<24)/8)
+		return &b
+	},
+}
+
 func ExtractTrigrams(data []byte) []Trigram {
 	if len(data) < 3 {
 		return nil
 	}
 	// Use a flat array as a bitset: 256^3 = 16M bits = 2MB.
-	// This is the fastest approach for large files and avoids map overhead.
+	// Pooled on the heap to avoid stack growth in goroutines.
 	const size = (1 << 24) / 8
-	var seen [size]byte
+	bp := trigramPool.Get().(*[]byte)
+	seen := *bp
+	defer func() {
+		clear(seen)
+		trigramPool.Put(bp)
+	}()
 
 	for i := 0; i <= len(data)-3; i++ {
 		t := uint32(data[i])<<16 | uint32(data[i+1])<<8 | uint32(data[i+2])
