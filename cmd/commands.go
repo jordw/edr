@@ -27,6 +27,7 @@ func init() {
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(undoCmd)
 	rootCmd.AddCommand(setupCmd)
+	rootCmd.AddCommand(indexCmd)
 }
 
 
@@ -479,6 +480,15 @@ var undoCmd = &cobra.Command{
 }
 
 func init() { cmdspec.RegisterFlags(undoCmd.Flags(), "undo") }
+
+var indexCmd = &cobra.Command{
+	Use:   "index",
+	Short: ToolDesc["index"],
+	Args:  cobra.NoArgs,
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "index", args) },
+}
+
+func init() { cmdspec.RegisterFlags(indexCmd.Flags(), "index") }
 
 // buildNextResult constructs the result map for `edr next`.
 func buildNextResult(sess *session.Session, db index.SymbolStore, root string) map[string]any {

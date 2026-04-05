@@ -74,6 +74,8 @@ func Dispatch(ctx context.Context, db index.SymbolStore, cmd string, args []stri
 		result, err = runWriteUnified(ctx, db, root, args, flags)
 	case "verify":
 		result, err = runVerify(ctx, db, root, args, flags)
+	case "index":
+		result, err = runIndex(ctx, db, root, args, flags)
 	default:
 		if suggestion := suggestCommand(cmd); suggestion != "" {
 			return nil, fmt.Errorf("unknown command: %s (did you mean: %s?)", cmd, suggestion)

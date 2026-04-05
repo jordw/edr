@@ -202,6 +202,13 @@ var Registry = []*Spec{
 		},
 	},
 	// --- Trigram index management ---
+	{
+		Name: "index", Desc: "Build or inspect the trigram search index.",
+		Category: CatMeta, MinArgs: 0, MaxArgs: 0,
+		Flags: []FlagSpec{
+			{Name: "status", Type: FlagBool, Default: false, Desc: "Show index stats without building"},
+		},
+	},
 }
 
 // --- Lookup ---

@@ -13,6 +13,7 @@ func TestPublicCommandSurface(t *testing.T) {
 	expected := map[string]bool{
 		"orient": true, "focus": true, "edit": true,
 		"status": true, "undo": true, "setup": true,
+		"index": true,
 	}
 
 	for _, s := range Registry {
