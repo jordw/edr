@@ -348,18 +348,27 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 			}
 		}
 
-		// Trigram pre-filter: skip files the index says can't match.
-		// Only use the index if fresh — a partial index would miss files.
-		if edrDir := HomeEdrDir(root); edrDir != "" && !idx.Staleness(root, edrDir) {
+		// Trigram pre-filter: skip indexed files the index says can't match.
+		// Unindexed files are left in byFile for the full body-search below.
+		if edrDir := HomeEdrDir(root); edrDir != "" {
 			queryTris := idx.QueryTrigrams(searchLower)
-			if candidates, ok := idx.Query(edrDir, queryTris); ok {
-				candidateSet := make(map[string]struct{}, len(candidates))
-				for _, c := range candidates {
-					candidateSet[filepath.Join(root, c)] = struct{}{}
-				}
-				for f := range byFile {
-					if _, ok := candidateSet[f]; !ok {
-						delete(byFile, f)
+			indexed := idx.IndexedPaths(edrDir)
+			if indexed != nil {
+				if candidates, ok := idx.Query(edrDir, queryTris); ok {
+					candidateSet := make(map[string]struct{}, len(candidates))
+					for _, c := range candidates {
+						candidateSet[filepath.Join(root, c)] = struct{}{}
+					}
+					// Remove indexed files that the trigram index says can't match.
+					// Unindexed files stay — they'll be checked by body-search.
+					for f := range byFile {
+						rel, _ := filepath.Rel(root, f)
+						if _, isIndexed := indexed[rel]; !isIndexed {
+							continue // not indexed, keep for body-search
+						}
+						if _, isCandidate := candidateSet[f]; !isCandidate {
+							delete(byFile, f)
+						}
 					}
 				}
 			}

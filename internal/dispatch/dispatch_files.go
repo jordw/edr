@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/jordw/edr/internal/idx"
@@ -40,55 +41,63 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 	searchBytes := []byte(pattern)
 	searchLower := []byte(strings.ToLower(pattern))
 
-	// Try trigram index — only if fresh (complete). A stale/partial index
-	// would return incomplete results, so fall back to scan instead.
+	// Query trigram index for indexed files, scan unindexed files.
+	// This gives correct results even with a partial index.
+	var matches []string
+	source := "scan"
+
 	tris := idx.QueryTrigrams(strings.ToLower(pattern))
-	if !idx.Staleness(root, edrDir) {
+	indexed := idx.IndexedPaths(edrDir)
+
+	if indexed != nil && len(tris) > 0 {
+		// Get candidates from index, verify each
 		if candidates, ok := idx.Query(edrDir, tris); ok {
-			var verified []string
 			for _, rel := range candidates {
 				data, err := os.ReadFile(filepath.Join(root, rel))
 				if err != nil {
 					continue
 				}
-				if caseSensitive {
-					if bytes.Contains(data, searchBytes) {
-						verified = append(verified, rel)
-					}
-				} else {
-					if bytes.Contains(bytes.ToLower(data), searchLower) {
-						verified = append(verified, rel)
-					}
+				if fileMatches(data, searchBytes, searchLower, caseSensitive) {
+					matches = append(matches, rel)
 				}
 			}
-			return filesResult(pattern, verified, "index", budget), nil
+			source = "index"
 		}
 	}
 
-	// Fallback: walk repo and grep each file
-	var matches []string
+	// Scan files not covered by the index
 	index.WalkRepoFiles(root, func(path string) error {
+		rel, _ := filepath.Rel(root, path)
+		if rel == "" {
+			rel = path
+		}
+		if indexed != nil {
+			if _, ok := indexed[rel]; ok {
+				return nil // already handled by index
+			}
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil
 		}
-		var found bool
-		if caseSensitive {
-			found = bytes.Contains(data, searchBytes)
-		} else {
-			found = bytes.Contains(bytes.ToLower(data), searchLower)
-		}
-		if found {
-			if rel, err := filepath.Rel(root, path); err == nil {
-				matches = append(matches, rel)
-			} else {
-				matches = append(matches, path)
-			}
+		if fileMatches(data, searchBytes, searchLower, caseSensitive) {
+			matches = append(matches, rel)
 		}
 		return nil
 	})
 
-	return filesResult(pattern, matches, "scan", budget), nil
+	if indexed == nil {
+		source = "scan"
+	}
+	sort.Strings(matches)
+	return filesResult(pattern, matches, source, budget), nil
+}
+
+func fileMatches(data, searchBytes, searchLower []byte, caseSensitive bool) bool {
+	if caseSensitive {
+		return bytes.Contains(data, searchBytes)
+	}
+	return bytes.Contains(bytes.ToLower(data), searchLower)
 }
 
 func filesResult(pattern string, matches []string, source string, budget int) map[string]any {

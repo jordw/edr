@@ -440,6 +440,20 @@ func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(pat
 
 // --- Internal helpers ---
 
+// IndexedPaths returns the set of file paths in the index.
+// Returns nil if no index exists.
+func IndexedPaths(edrDir string) map[string]struct{} {
+	d := loadIndex(edrDir)
+	if d == nil {
+		return nil
+	}
+	m := make(map[string]struct{}, len(d.Files))
+	for _, f := range d.Files {
+		m[f.Path] = struct{}{}
+	}
+	return m
+}
+
 func loadIndex(edrDir string) *IndexData {
 	data, err := os.ReadFile(filepath.Join(edrDir, MainFile))
 	if err != nil {
