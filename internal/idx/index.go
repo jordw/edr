@@ -1,6 +1,7 @@
 package idx
 
 import (
+	"bytes"
 	"fmt"
 	"math/rand"
 	"os"
@@ -63,7 +64,9 @@ func BuildFull(root string, paths []string, gitMtime int64) *IndexData {
 	for i, f := range indexed {
 		files[i] = f.entry
 		fileID := uint32(i)
-		for _, t := range ExtractTrigrams(f.data) {
+		// Index lowercased content so both case-sensitive and case-insensitive
+		// queries can use the trigram index (queries also lowercase).
+		for _, t := range ExtractTrigrams(bytes.ToLower(f.data)) {
 			triMap[t] = append(triMap[t], fileID)
 		}
 	}
@@ -660,7 +663,7 @@ func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(pat
 			if err != nil || isBinary(data) {
 				return
 			}
-			tris := ExtractTrigrams(data)
+			tris := ExtractTrigrams(bytes.ToLower(data))
 			resultCh <- fileResult{entry: entry, tris: tris}
 
 			if progress != nil {

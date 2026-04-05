@@ -11,8 +11,10 @@ import (
 var magic = [8]byte{'E', 'D', 'R', 'T', 'R', 'I', 0, 0}
 
 const (
-	version1   = 1
-	headerSize = 8 + 4 + 4 + 4 + 8 + 8 + 8 // magic + version + numFiles + numTrigrams + gitMtime + fileTableOff + postingOff = 44
+	// version2: trigrams are extracted from lowercased file content,
+	// enabling case-insensitive queries. Version 1 used raw bytes.
+	currentVersion = 2
+	headerSize     = 8 + 4 + 4 + 4 + 8 + 8 + 8 // magic + version + numFiles + numTrigrams + gitMtime + fileTableOff + postingOff = 44
 )
 
 // Header is the fixed-size file header.
@@ -53,7 +55,7 @@ func (d *IndexData) Marshal() []byte {
 
 	// Header
 	buf.Write(magic[:])
-	binary.Write(&buf, binary.LittleEndian, uint32(version1))
+	binary.Write(&buf, binary.LittleEndian, uint32(currentVersion))
 	binary.Write(&buf, binary.LittleEndian, d.Header.NumFiles)
 	binary.Write(&buf, binary.LittleEndian, d.Header.NumTrigrams)
 	binary.Write(&buf, binary.LittleEndian, d.Header.GitMtime)
@@ -105,7 +107,7 @@ func Unmarshal(data []byte) (*IndexData, error) {
 
 	d := &IndexData{}
 	d.Header.Version = binary.LittleEndian.Uint32(data[8:12])
-	if d.Header.Version != version1 {
+	if d.Header.Version != currentVersion {
 		return nil, fmt.Errorf("unsupported trigram index version: %d", d.Header.Version)
 	}
 	d.Header.NumFiles = binary.LittleEndian.Uint32(data[12:16])

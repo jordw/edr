@@ -2430,8 +2430,8 @@ func TestSpec_FilesCommand(t *testing.T) {
 		if n != 2 {
 			t.Errorf("expected 2 matches for hello (hello.go, bar.go), got %d", n)
 		}
-		if h["source"] != "scan" {
-			t.Errorf("case-insensitive should use scan, got %v", h["source"])
+		if h["source"] != "index" {
+			t.Errorf("case-insensitive should use index (lowercase trigrams), got %v", h["source"])
 		}
 	})
 
@@ -2472,6 +2472,8 @@ func TestSpec_FilesCommand(t *testing.T) {
 			many[fmt.Sprintf("dir/file_%03d.go", i)] = "package main\n// common_pattern\n"
 		}
 		binary, dir := specRepo(t, many)
+		// Build index first so all 600 files are covered
+		specRun(t, binary, dir, nil, "index")
 		r, _, _, exit := specRun(t, binary, dir, nil, "files", "common_pattern")
 		if exit != 0 {
 			t.Fatalf("exit %d", exit)
@@ -2498,6 +2500,7 @@ func TestSpec_FilesCommand(t *testing.T) {
 			many[fmt.Sprintf("dir/full_%03d.go", i)] = "package main\n// full_pattern\n"
 		}
 		binary, dir := specRepo(t, many)
+		specRun(t, binary, dir, nil, "index")
 		r, _, _, exit := specRun(t, binary, dir, nil, "files", "full_pattern", "--full")
 		if exit != 0 {
 			t.Fatalf("exit %d", exit)

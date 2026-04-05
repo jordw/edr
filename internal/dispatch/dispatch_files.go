@@ -40,23 +40,27 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 	searchBytes := []byte(pattern)
 	searchLower := []byte(strings.ToLower(pattern))
 
-	// Try trigram index (case-sensitive only — index stores raw bytes)
-	// Trigrams narrow candidates; we still verify with bytes.Contains.
-	if caseSensitive {
-		tris := idx.QueryTrigrams(pattern)
-		if candidates, ok := idx.Query(edrDir, tris); ok {
-			var verified []string
-			for _, rel := range candidates {
-				data, err := os.ReadFile(filepath.Join(root, rel))
-				if err != nil {
-					continue
-				}
+	// Try trigram index — index stores lowercase trigrams, so always query lowercase.
+	// Trigrams narrow candidates; we verify with bytes.Contains for exact match.
+	tris := idx.QueryTrigrams(strings.ToLower(pattern))
+	if candidates, ok := idx.Query(edrDir, tris); ok {
+		var verified []string
+		for _, rel := range candidates {
+			data, err := os.ReadFile(filepath.Join(root, rel))
+			if err != nil {
+				continue
+			}
+			if caseSensitive {
 				if bytes.Contains(data, searchBytes) {
 					verified = append(verified, rel)
 				}
+			} else {
+				if bytes.Contains(bytes.ToLower(data), searchLower) {
+					verified = append(verified, rel)
+				}
 			}
-			return filesResult(pattern, verified, "index", budget), nil
 		}
+		return filesResult(pattern, verified, "index", budget), nil
 	}
 
 	// Fallback: walk repo and grep each file
