@@ -410,6 +410,10 @@ func (o *OnDemand) FindSemanticCallers(ctx context.Context, symbolName, symbolFi
 			if s.StartByte >= s.EndByte || int(s.EndByte) > len(cf.src) {
 				continue
 			}
+			// Skip the target symbol itself — its body contains its own name.
+			if s.File == symbolFile && s.Name == symbolName {
+				continue
+			}
 			if bytes.Contains(cf.src[s.StartByte:s.EndByte], nameBytes) {
 				callers = append(callers, s)
 			}

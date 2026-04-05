@@ -273,6 +273,12 @@ const defaultMapBudget = 2000
 func runRepoMap(ctx context.Context, db index.SymbolStore, flags map[string]any) (any, error) {
 	var opts []index.RepoMapOption
 	if dir := flagString(flags, "dir", ""); dir != "" {
+		// Normalize absolute paths to relative.
+		if filepath.IsAbs(dir) {
+			if rel, err := filepath.Rel(db.Root(), dir); err == nil {
+				dir = rel
+			}
+		}
 		opts = append(opts, index.WithDir(dir))
 	}
 	if glob := flagString(flags, "glob", ""); glob != "" {
@@ -362,7 +368,14 @@ func runMapUnified(ctx context.Context, db index.SymbolStore, root string, args 
 				flags = map[string]any{}
 			}
 			if flagString(flags, "dir", "") == "" {
-				flags["dir"] = args[0]
+				// Convert absolute paths to relative for WithDir.
+				dir := args[0]
+				if filepath.IsAbs(dir) {
+					if rel, err := filepath.Rel(root, resolved); err == nil {
+						dir = rel
+					}
+				}
+				flags["dir"] = dir
 			}
 			return runRepoMap(ctx, db, flags)
 		}

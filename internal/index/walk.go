@@ -116,8 +116,23 @@ func WithGlob(glob string) RepoMapOption {
 }
 
 // WithSymbolType filters repo-map to symbols of the given type.
+// normalizeSymbolType maps common abbreviations to canonical type names.
+var typeAliases = map[string]string{
+	"func": "function", "fn": "function",
+	"iface": "interface", "intf": "interface",
+	"var": "variable",
+	"class": "class", "struct": "struct", "method": "method",
+	"const": "constant",
+}
+
 func WithSymbolType(t string) RepoMapOption {
-	return func(c *repoMapConfig) { c.symbolType = t }
+	return func(c *repoMapConfig) {
+		if canonical, ok := typeAliases[t]; ok {
+			c.symbolType = canonical
+		} else {
+			c.symbolType = t
+		}
+	}
 }
 
 // WithGrep filters repo-map to symbols whose name contains the given string.
