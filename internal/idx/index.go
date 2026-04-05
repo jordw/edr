@@ -564,10 +564,10 @@ func isBinary(data []byte) bool {
 	return false
 }
 
-// IncrementalTick does a small amount of indexing work on each invocation.
-// It finds unindexed or stale files and indexes up to batchSize of them.
-// Returns the number of files indexed.
-func IncrementalTick(root, edrDir string, batchSize int, walkFn func(root string, fn func(path string) error) error) int {
+// IncrementalTick catches up the trigram index on each invocation.
+// Re-indexes all stale files and indexes all new files in one pass.
+// Rate-limited to once per 5 seconds to avoid redundant work.
+func IncrementalTick(root, edrDir string, walkFn func(root string, fn func(path string) error) error) int {
 	// Rate limit: check marker file
 	marker := filepath.Join(edrDir, "trigram.tick")
 	if info, err := os.Stat(marker); err == nil {
@@ -579,32 +579,25 @@ func IncrementalTick(root, edrDir string, batchSize int, walkFn func(root string
 
 	gitMt := gitIndexMtime(root)
 
-	// First: re-index stale files
+	// Re-index stale files
 	stale := StaleFiles(root, edrDir)
-	if len(stale) > batchSize {
-		stale = stale[:batchSize]
-	}
+	indexed := 0
 	if len(stale) > 0 {
 		n, _ := BuildIncremental(root, edrDir, stale, gitMt)
-		if n > 0 {
-			MaybeCompact(edrDir, 10)
-		}
-		return n
+		indexed += n
 	}
 
-	// Then: index new files
+	// Index new files
 	unindexed, err := UnindexedFiles(root, edrDir, walkFn)
-	if err != nil || len(unindexed) == 0 {
-		return 0
+	if err == nil && len(unindexed) > 0 {
+		n, _ := BuildIncremental(root, edrDir, unindexed, gitMt)
+		indexed += n
 	}
-	if len(unindexed) > batchSize {
-		unindexed = unindexed[:batchSize]
-	}
-	n, _ := BuildIncremental(root, edrDir, unindexed, gitMt)
-	if n > 0 {
+
+	if indexed > 0 {
 		MaybeCompact(edrDir, 10)
 	}
-	return n
+	return indexed
 }
 
 // BuildFullFromWalk builds a complete index by walking the repo.

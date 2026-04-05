@@ -138,7 +138,7 @@ func Verbose() bool { return verbose }
 func openStore(root string) (index.SymbolStore, error) {
 	output.SetRoot(root)
 	db := index.NewOnDemand(root)
-	idx.IncrementalTick(root, db.EdrDir(), 50, index.WalkRepoFiles)
+	idx.IncrementalTick(root, db.EdrDir(), index.WalkRepoFiles)
 	return db, nil
 }
 
