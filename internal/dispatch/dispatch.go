@@ -326,9 +326,10 @@ func runRepoMap(ctx context.Context, db index.SymbolStore, flags map[string]any)
 			result["budget_used"] = stats.BudgetUsed
 		}
 		if len(stats.DirSummary) > 0 {
-			result["content"] = nil
 			result["dirs"] = stats.DirSummary
 			result["hint"] = "repo too large for full map; use --dir <name> to drill into a directory"
+			// Keep content (individual symbols) alongside dir summary
+			// so the agent sees both structure and some symbols
 		}
 	}
 	return result, nil

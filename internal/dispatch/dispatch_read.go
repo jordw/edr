@@ -378,10 +378,9 @@ func runReadSymbol(ctx context.Context, db index.SymbolStore, root string, args 
 	// --no-expand or --expand="" suppresses.
 	expandMode := flagString(flags, "expand", "")
 	if expandMode == "" && !flagBool(flags, "no_expand", false) {
-		// Default: auto-include dep signatures for symbol reads
-		expandMode = "deps"
-	}
-	if expandMode != "" {
+		// Default: auto-include a compact set of dep signatures
+		attachAutoExpand(ctx, db, sym, r)
+	} else if expandMode != "" {
 		attachExpand(ctx, db, sym, expandMode, r)
 	}
 	return r, nil
@@ -625,4 +624,37 @@ func attachExpand(ctx context.Context, db index.SymbolStore, sym *index.SymbolIn
 		}
 	}
 }
+
+
+// attachAutoExpand adds a compact set of dep signatures for auto-expand.
+// Unlike explicit --expand which includes all deps, auto-expand:
+// - Only includes cross-file deps (same-file deps are visible in sig view)
+// - Caps at 5 deps to keep the response compact
+func attachAutoExpand(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo, result map[string]any) {
+	deps, err := index.FindDeps(ctx, db, sym)
+	if err != nil || len(deps) == 0 {
+		return
+	}
+
+	// Filter to cross-file deps only
+	var crossFile []index.SymbolInfo
+	for _, d := range deps {
+		if d.File != sym.File {
+			crossFile = append(crossFile, d)
+		}
+	}
+	if len(crossFile) == 0 {
+		return
+	}
+
+	// Cap at 5
+	if len(crossFile) > 5 {
+		crossFile = crossFile[:5]
+	}
+
+	if items := symbolsToSignatures(ctx, crossFile); len(items) > 0 {
+		result["deps"] = items
+	}
+}
+
 
