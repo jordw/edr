@@ -121,13 +121,14 @@ func Query(edrDir string, queryTrigrams []Trigram) ([]string, bool) {
 	for _, idx := range indices {
 		candidates := queryIndex(idx, queryTrigrams)
 		if candidates == nil {
-			// This index has no data for some trigram — it can't eliminate anything.
-			// Add all its files as candidates.
+			// Empty index (no trigram data) — can't filter, add all its files.
 			for _, f := range idx.Files {
 				allCandidates[f.Path] = struct{}{}
 			}
 			continue
 		}
+		// candidates may be empty (no matches in this index) — that's fine,
+		// we just don't add any files from it.
 		for _, id := range candidates {
 			if int(id) < len(idx.Files) {
 				allCandidates[idx.Files[id].Path] = struct{}{}
@@ -144,7 +145,9 @@ func Query(edrDir string, queryTrigrams []Trigram) ([]string, bool) {
 }
 
 // queryIndex returns the intersection of posting lists for the given trigrams
-// within a single index. Returns nil if any trigram is missing (can't filter).
+// within a single index. A missing trigram means no file in this index can
+// match, so we return an empty (non-nil) slice. Returns nil only when the
+// index has no trigram data at all (empty index).
 func queryIndex(d *IndexData, queryTrigrams []Trigram) []uint32 {
 	if len(d.Trigrams) == 0 {
 		return nil
@@ -155,9 +158,8 @@ func queryIndex(d *IndexData, queryTrigrams []Trigram) []uint32 {
 	for _, qt := range queryTrigrams {
 		te := findTrigram(d.Trigrams, qt)
 		if te == nil {
-			// Trigram not in this index — this index has nothing to say about it.
-			// Return nil to signal "no filtering possible from this index."
-			return nil
+			// Trigram absent — no file in this index contains all query trigrams.
+			return []uint32{}
 		}
 		ids := DecodePosting(d.Postings, te.Offset, te.Count)
 		lists = append(lists, ids)
@@ -294,16 +296,22 @@ func Merge(a, b *IndexData) *IndexData {
 // Staleness checks .git/index mtime against the stored value.
 // Returns true if the index may be stale.
 func Staleness(repoRoot, edrDir string) bool {
-	mainPath := filepath.Join(edrDir, MainFile)
-	data, err := os.ReadFile(mainPath)
-	if err != nil {
-		return true // no index = stale
+	// Check across all indices for the latest git mtime
+	var latest int64
+	for _, d := range loadAllIndices(edrDir) {
+		if d.Header.GitMtime > latest {
+			latest = d.Header.GitMtime
+		}
 	}
-	d, err := Unmarshal(data)
-	if err != nil {
-		return true
+	return staleness(repoRoot, latest)
+}
+
+// staleness compares a stored git mtime against the current .git/index mtime.
+func staleness(repoRoot string, storedMtime int64) bool {
+	if storedMtime == 0 {
+		return true // no index data
 	}
-	return gitIndexMtime(repoRoot) != d.Header.GitMtime
+	return gitIndexMtime(repoRoot) != storedMtime
 }
 
 // MaybeCompact probabilistically merges main + journals.
@@ -367,38 +375,50 @@ func GetStatus(repoRoot, edrDir string) Status {
 	s := Status{}
 	mainPath := filepath.Join(edrDir, MainFile)
 
-	// Main index
+	// Count files across all indices (main + journals) using deduplicated paths,
+	// matching what Query actually sees.
+	allFiles := make(map[string]struct{})
+	var latestGitMtime int64
+
 	if info, err := os.Stat(mainPath); err == nil {
 		s.Exists = true
 		s.SizeBytes = info.Size()
 		if data, err := os.ReadFile(mainPath); err == nil {
 			if d, err := Unmarshal(data); err == nil {
-				s.Files = int(d.Header.NumFiles)
 				s.Trigrams = int(d.Header.NumTrigrams)
-				s.GitMtime = d.Header.GitMtime
+				latestGitMtime = d.Header.GitMtime
+				for _, f := range d.Files {
+					allFiles[f.Path] = struct{}{}
+				}
 			}
 		}
 	}
 
-	// Journals
+	// Journals — always count their files (they may cover files not in main)
 	jnls, _ := filepath.Glob(filepath.Join(edrDir, JournalPfx+"*"+JournalSfx))
 	s.Journals = len(jnls)
 	for _, j := range jnls {
 		if info, err := os.Stat(j); err == nil {
 			s.SizeBytes += info.Size()
-			if !s.Exists {
-				// Count journal files too if no main index
-				if data, err := os.ReadFile(j); err == nil {
-					if d, err := Unmarshal(data); err == nil {
-						s.Files += int(d.Header.NumFiles)
-						s.Exists = true
+			if data, err := os.ReadFile(j); err == nil {
+				if d, err := Unmarshal(data); err == nil {
+					s.Exists = true
+					if d.Header.GitMtime > latestGitMtime {
+						latestGitMtime = d.Header.GitMtime
+					}
+					for _, f := range d.Files {
+						allFiles[f.Path] = struct{}{}
 					}
 				}
 			}
 		}
 	}
 
-	s.Stale = Staleness(repoRoot, edrDir)
+	s.Files = len(allFiles)
+	s.GitMtime = latestGitMtime
+
+	// Staleness: check across all indices, not just main
+	s.Stale = staleness(repoRoot, latestGitMtime)
 	return s
 }
 
@@ -589,10 +609,12 @@ func IncrementalTick(root, edrDir string, batchSize int, walkFn func(root string
 func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(path string) error) error, progress func(int, int)) error {
 	// Enumerate all files
 	var paths []string
-	walkFn(root, func(path string) error {
+	if err := walkFn(root, func(path string) error {
 		paths = append(paths, path)
 		return nil
-	})
+	}); err != nil {
+		return fmt.Errorf("walking repo: %w", err)
+	}
 
 	if len(paths) == 0 {
 		return nil
@@ -600,21 +622,20 @@ func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(pat
 
 	gitMt := gitIndexMtime(root)
 
-	// Build in parallel
+	// Read and extract trigrams in parallel. Each goroutine produces a result
+	// only for files that are successfully read and not binary.
 	type fileResult struct {
-		id   uint32
-		tris []Trigram
+		entry FileEntry
+		tris  []Trigram
 	}
 
-	results := make([]fileResult, len(paths))
-	files := make([]FileEntry, len(paths))
-
+	resultCh := make(chan fileResult, len(paths))
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 8) // limit concurrent reads
-	var indexed int
+	sem := make(chan struct{}, 8)
+	var done int
 	var mu sync.Mutex
 
-	for i, p := range paths {
+	for _, p := range paths {
 		rel, _ := filepath.Rel(root, p)
 		if rel == "" {
 			rel = p
@@ -623,14 +644,14 @@ func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(pat
 		if err != nil {
 			continue
 		}
-		files[i] = FileEntry{
+		entry := FileEntry{
 			Path:  rel,
 			Mtime: info.ModTime().UnixNano(),
 			Size:  info.Size(),
 		}
 
 		wg.Add(1)
-		go func(idx int, path string) {
+		go func(path string, entry FileEntry) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
@@ -640,23 +661,26 @@ func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(pat
 				return
 			}
 			tris := ExtractTrigrams(data)
-			results[idx] = fileResult{id: uint32(idx), tris: tris}
+			resultCh <- fileResult{entry: entry, tris: tris}
 
 			if progress != nil {
 				mu.Lock()
-				indexed++
-				progress(indexed, len(paths))
+				done++
+				progress(done, len(paths))
 				mu.Unlock()
 			}
-		}(i, p)
+		}(p, entry)
 	}
-	wg.Wait()
+	go func() { wg.Wait(); close(resultCh) }()
 
-	// Build trigram map
+	// Collect results — only successfully indexed files get IDs.
+	var files []FileEntry
 	triMap := make(map[Trigram][]uint32)
-	for _, r := range results {
+	for r := range resultCh {
+		fileID := uint32(len(files))
+		files = append(files, r.entry)
 		for _, t := range r.tris {
-			triMap[t] = append(triMap[t], r.id)
+			triMap[t] = append(triMap[t], fileID)
 		}
 	}
 
