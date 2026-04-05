@@ -285,11 +285,26 @@ func writeMatch(w *os.File, file string, m any) {
 	if !ok {
 		return
 	}
+
+	// Symbol match (may appear with or without outer file grouping)
+	if sym, ok := mm["symbol"].(map[string]any); ok {
+		f, _ := sym["file"].(string)
+		if f == "" {
+			f = file
+		}
+		name, _ := sym["name"].(string)
+		line := anyInt(sym["line"])
+		body, _ := mm["body"].(string)
+		fmt.Fprintf(w, "%s:%d: %s\n", f, line, name)
+		writeBody(w, body)
+		return
+	}
+
+	// Text search match
 	line := anyInt(mm["line"])
 	text, _ := mm["text"].(string)
 
 	if file != "" {
-		// Text search match — show snippet if context was requested
 		if snippet, ok := mm["snippet"].(string); ok && snippet != "" {
 			fmt.Fprintf(w, "%s:%d:\n", file, line)
 			writeBody(w, snippet)
@@ -297,14 +312,7 @@ func writeMatch(w *os.File, file string, m any) {
 			fmt.Fprintf(w, "%s:%d: %s\n", file, line, text)
 		}
 	} else {
-		// Symbol search
-		if sym, ok := mm["symbol"].(map[string]any); ok {
-			f, _ := sym["file"].(string)
-			name, _ := sym["name"].(string)
-			body, _ := mm["body"].(string)
-			fmt.Fprintf(w, "%s:%s\n", f, name)
-			writeBody(w, body)
-		}
+		fmt.Fprintf(w, "%d: %s\n", line, text)
 	}
 }
 

@@ -151,6 +151,23 @@ var Registry = []*Spec{
 	},
 	// --- Internal commands (dispatch-only, no CLI surface) ---
 	{
+		Name: "search", Desc: "Internal: symbol and text search, used by batch -s.",
+		Category: CatRead, MinArgs: 1, MaxArgs: 1, Internal: true,
+		BodyTrack: true,
+		Flags: []FlagSpec{
+			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response lines"},
+			{Name: "limit", Type: FlagInt, Default: 0, Desc: "Max results"},
+			{Name: "body", Type: FlagBool, Default: false, Desc: "Search symbol bodies"},
+			{Name: "text", Type: FlagBool, Default: false, Desc: "Plain text search"},
+			{Name: "regex", Type: FlagBool, Default: false, Desc: "Treat pattern as regex"},
+			{Name: "include", Type: FlagStringSlice, Default: nil, Desc: "Include files matching glob"},
+			{Name: "exclude", Type: FlagStringSlice, Default: nil, Desc: "Exclude files matching glob"},
+			{Name: "context", Type: FlagInt, Default: 0, Desc: "Lines of context around matches"},
+			{Name: "in", Type: FlagString, Default: "", Desc: "Scope search to file or file:symbol"},
+			{Name: "no_group", Type: FlagBool, Default: false, Desc: "Don't group results by file"},
+		},
+	},
+	{
 		Name: "write", Desc: "Internal: used by edit --content routing.",
 		Category: CatWrite, MinArgs: 1, MaxArgs: 1, StdinKey: "content", FileScoped: true, Internal: true,
 		Flags: []FlagSpec{
@@ -335,7 +352,9 @@ func DoBatchKeys() map[string]bool {
 	return map[string]bool{
 		"reads": true, "queries": true, "edits": true, "writes": true,
 		"renames": true, "budget": true, "dry_run": true, "verify": true,
-		"read_after_edit": true,
+		"read_after_edit": true, "atomic": true,
+		"post_edit_reads": true, "post_edit_queries": true,
+		"read_query_order": true, "post_edit_order": true,
 	}
 }
 

@@ -69,6 +69,8 @@ func Dispatch(ctx context.Context, db index.SymbolStore, cmd string, args []stri
 		} else {
 			result, err = runSmartEdit(ctx, db, root, args, flags)
 		}
+	case "search":
+		result, err = runSearchUnified(ctx, db, root, args, flags)
 	// --- Internal: used by edit routing and auto-verify ---
 	case "write":
 		result, err = runWriteUnified(ctx, db, root, args, flags)

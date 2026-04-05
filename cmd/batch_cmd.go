@@ -69,11 +69,16 @@ const (
 )
 
 type batchState struct {
-	reads         []doRead
-	queries       []doQuery
-	edits         []doEdit
-	writes        []doWrite
-	postEditReads []doRead // reads that follow edits/writes in CLI order
+	reads           []doRead
+	queries         []doQuery
+	edits           []doEdit
+	writes          []doWrite
+	postEditReads   []doRead  // reads that follow edits/writes in CLI order
+	postEditQueries []doQuery // queries that follow edits/writes in CLI order
+
+	// readQueryOrder tracks interleaved CLI order: "r0","q0","r1","q1",...
+	readQueryOrder []string
+	postEditOrder  []string
 
 	currentOp    batchOp
 	currentRead  doRead
@@ -102,20 +107,26 @@ func (s *batchState) flush() {
 	case opRead:
 		if s.currentRead.File != "" {
 			if s.seenMutation {
+				tag := fmt.Sprintf("r%d", len(s.postEditReads))
 				s.postEditReads = append(s.postEditReads, s.currentRead)
+				s.postEditOrder = append(s.postEditOrder, tag)
 			} else {
+				tag := fmt.Sprintf("r%d", len(s.reads))
 				s.reads = append(s.reads, s.currentRead)
+				s.readQueryOrder = append(s.readQueryOrder, tag)
 			}
 		}
 		s.currentRead = doRead{}
-	case opSearch:
-		s.queries = append(s.queries, s.currentQuery)
-		s.currentQuery = doQuery{}
-	case opMap:
-		s.queries = append(s.queries, s.currentQuery)
-		s.currentQuery = doQuery{}
-	case opQuery:
-		s.queries = append(s.queries, s.currentQuery)
+	case opSearch, opMap, opQuery:
+		if s.seenMutation {
+			tag := fmt.Sprintf("q%d", len(s.postEditQueries))
+			s.postEditQueries = append(s.postEditQueries, s.currentQuery)
+			s.postEditOrder = append(s.postEditOrder, tag)
+		} else {
+			tag := fmt.Sprintf("q%d", len(s.queries))
+			s.queries = append(s.queries, s.currentQuery)
+			s.readQueryOrder = append(s.readQueryOrder, tag)
+		}
 		s.currentQuery = doQuery{}
 	case opEdit:
 		if s.currentEdit.File != "" || s.currentEdit.Where != "" {
@@ -137,11 +148,14 @@ func (s *batchState) toParams() doParams {
 	s.flush()
 
 	p := doParams{
-		Reads:         s.reads,
-		Queries:       s.queries,
-		Edits:         s.edits,
-		Writes:        s.writes,
-		PostEditReads: s.postEditReads,
+		Reads:           s.reads,
+		Queries:         s.queries,
+		Edits:           s.edits,
+		Writes:          s.writes,
+		PostEditReads:   s.postEditReads,
+		PostEditQueries: s.postEditQueries,
+		ReadQueryOrder:  s.readQueryOrder,
+		PostEditOrder:   s.postEditOrder,
 	}
 
 	if s.dryRun {
@@ -964,7 +978,14 @@ func inferBatchCommand(p *doParams) string {
 	}
 	if len(p.Queries) > 0 {
 		types++
-		name = "search"
+		if len(p.Queries) == 1 {
+			name = p.Queries[0].Cmd
+			if name == "" {
+				name = "query"
+			}
+		} else {
+			name = "query"
+		}
 	}
 	if len(p.Edits) > 0 {
 		types++

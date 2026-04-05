@@ -38,17 +38,24 @@ func setOptStr(flags map[string]any, key string, v *string) {
 
 // doParams holds the parsed params for batch operations.
 type doParams struct {
-	Reads         []doRead   `json:"reads"`
-	Queries       []doQuery  `json:"queries"`
-	Edits         []doEdit   `json:"edits"`
-	Writes        []doWrite  `json:"writes"`
-	Renames       []doRename `json:"renames"`
-	PostEditReads []doRead   `json:"post_edit_reads,omitempty"` // reads that follow edits in CLI order
-	Budget        *int       `json:"budget"`
-	DryRun        *bool      `json:"dry_run"`
-	Verify        any        `json:"verify"`
-	ReadAfterEdit *bool      `json:"read_after_edit,omitempty"`
-	Atomic        *bool      `json:"atomic,omitempty"`
+	Reads           []doRead   `json:"reads"`
+	Queries         []doQuery  `json:"queries"`
+	Edits           []doEdit   `json:"edits"`
+	Writes          []doWrite  `json:"writes"`
+	Renames         []doRename `json:"renames"`
+	PostEditReads   []doRead   `json:"post_edit_reads,omitempty"`   // reads that follow edits in CLI order
+	PostEditQueries []doQuery  `json:"post_edit_queries,omitempty"` // queries that follow edits in CLI order
+	Budget          *int       `json:"budget"`
+	DryRun          *bool      `json:"dry_run"`
+	Verify          any        `json:"verify"`
+	ReadAfterEdit   *bool      `json:"read_after_edit,omitempty"`
+	Atomic          *bool      `json:"atomic,omitempty"`
+
+	// ReadQueryOrder preserves the interleaved CLI order of reads and queries.
+	// Each entry is "r<N>" for Reads[N] or "q<N>" for Queries[N].
+	// PostEditOrder is the same for post-edit reads and queries.
+	ReadQueryOrder []string `json:"read_query_order,omitempty"`
+	PostEditOrder  []string `json:"post_edit_order,omitempty"`
 }
 
 type doRead struct {
@@ -240,6 +247,72 @@ func parseDo(raw json.RawMessage) (doParams, []string, error) {
 	}
 
 	return p, warnings, nil
+}
+
+// executeReadsAndQueries dispatches reads and queries interleaved in CLI order.
+func executeReadsAndQueries(ctx context.Context, db index.SymbolStore, sess *session.Session, env *output.Envelope, p *doParams) {
+	dispatchInterleavedOps(ctx, db, sess, env, p.Reads, p.Queries, p.ReadQueryOrder, p.Budget, false)
+}
+
+// executePostEditReadsAndQueries dispatches post-edit reads and queries interleaved in CLI order.
+func executePostEditReadsAndQueries(ctx context.Context, db index.SymbolStore, sess *session.Session, env *output.Envelope, p *doParams) {
+	dispatchInterleavedOps(ctx, db, sess, env, p.PostEditReads, p.PostEditQueries, p.PostEditOrder, p.Budget, true)
+}
+
+// dispatchInterleavedOps merges reads and queries into a single DispatchMulti call,
+// preserving CLI order from the order tags.
+func dispatchInterleavedOps(ctx context.Context, db index.SymbolStore, sess *session.Session, env *output.Envelope, reads []doRead, queries []doQuery, order []string, budget *int, forceFullRead bool) {
+	// Distribute top-level budget to queries that lack individual budgets.
+	if budget != nil && len(queries) > 0 {
+		n := len(reads) + len(queries)
+		perOp := *budget * 2 / (n + 1)
+		if perOp > *budget {
+			perOp = *budget
+		}
+		if perOp < 50 {
+			perOp = 50
+		}
+		for i := range queries {
+			if queries[i].Budget == nil {
+				b := perOp
+				queries[i].Budget = &b
+			}
+		}
+	}
+
+	// Normalize queries.
+	for i := range queries {
+		normalizeQueryCmd(&queries[i])
+	}
+
+	// If no order tags, fall back to reads-then-queries (JSON API compat).
+	if len(order) == 0 {
+		for i := range reads {
+			order = append(order, fmt.Sprintf("r%d", i))
+		}
+		for i := range queries {
+			order = append(order, fmt.Sprintf("q%d", i))
+		}
+	}
+
+	// Build interleaved MultiCmd slice.
+	cmds := make([]dispatch.MultiCmd, len(order))
+	for i, tag := range order {
+		if tag[0] == 'r' {
+			idx, _ := strconv.Atoi(tag[1:])
+			cmds[i] = buildReadCmd(reads[idx], forceFullRead)
+		} else {
+			idx, _ := strconv.Atoi(tag[1:])
+			cmds[i] = queryToMultiCmd(queries[idx])
+		}
+	}
+
+	var budgetOpt []int
+	if budget != nil {
+		budgetOpt = []int{*budget}
+	}
+	results := dispatch.DispatchMulti(ctx, db, cmds, budgetOpt...)
+	addMultiResultOps(env, sess, cmds, results, "")
 }
 
 // executeReads dispatches read operations and adds results as ops on the envelope.
@@ -627,14 +700,9 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 		return nil
 	}
 
-	// 1. Reads
-	if hasReads {
-		executeReads(ctx, db, sess, env, &p)
-	}
-
-	// 2. Queries
-	if hasQueries {
-		executeQueries(ctx, db, sess, env, &p)
+	// 1. Reads and queries (interleaved in CLI order)
+	if hasReads || hasQueries {
+		executeReadsAndQueries(ctx, db, sess, env, &p)
 	}
 
 	// Auto-checkpoint before mutations (rolling cap of 3)
@@ -719,12 +787,13 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 		executeWrites(ctx, db, sess, env, &p, isDryRun)
 	}
 
-	// 5b. Post-edit reads (reads that followed edits in CLI order)
-	if !editsFailed && len(p.PostEditReads) > 0 {
+	// 5b. Post-edit reads and queries (ops that followed edits in CLI order)
+	hasPostEditOps := len(p.PostEditReads) > 0 || len(p.PostEditQueries) > 0
+	if !editsFailed && hasPostEditOps {
 		if isDryRun {
 			env.AddError("warning", "dry-run: post-edit reads show pre-edit state (edits were not applied)")
 		}
-		executePostEditReads(ctx, db, sess, env, &p)
+		executePostEditReadsAndQueries(ctx, db, sess, env, &p)
 	}
 
 	// 5c. Legacy --read-after-edit (auto-reads edited files with --signatures)
