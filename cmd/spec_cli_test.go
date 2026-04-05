@@ -1308,12 +1308,62 @@ func TestSpec_EditStaleReadRejects(t *testing.T) {
 	_ = exit
 	var header map[string]any
 	json.Unmarshal([]byte(strings.SplitN(stdout, "\n", 2)[0]), &header)
-	if header["ec"] == nil || header["ec"] != "hash_mismatch" {
-		// Stale-read protection not enforced for standalone edits yet.
-		t.Skip("stale-read protection not enforced: edit succeeded after external file modification")
-	}
 	if ec, _ := header["ec"].(string); ec != "hash_mismatch" {
 		t.Errorf("ec = %q, want hash_mismatch", ec)
+	}
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	if strings.Contains(string(content), "println()") {
+		t.Error("stale edit should not modify file")
+	}
+}
+
+func TestSpec_EditRefreshHashAllowsRetry(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	sess := nextSession()
+	env := []string{"EDR_SESSION=" + sess}
+
+	specRun(t, binary, dir, env, "focus", "hello.go")
+	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\n// changed\nfunc main() {}\n"), 0644)
+
+	result, _, _, exit := specRun(t, binary, dir, env,
+		"edit", "hello.go", "--old-text", "func main() {}", "--new-text", "func main() { println() }", "--refresh-hash")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if status, _ := result.Ops[0].Header["status"].(string); status != "applied" {
+		t.Fatalf("status = %v, want applied", result.Ops[0].Header["status"])
+	}
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	if !strings.Contains(string(content), "println()") {
+		t.Fatalf("refresh-hash edit did not apply: %s", content)
+	}
+}
+
+func TestSpec_BatchEditRefreshHashAllowsRetry(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {}\n",
+	})
+
+	sess := nextSession()
+	env := []string{"EDR_SESSION=" + sess}
+
+	specRun(t, binary, dir, env, "focus", "hello.go")
+	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n\n// changed\nfunc main() {}\n"), 0644)
+
+	result, _, _, exit := specRun(t, binary, dir, env,
+		"-e", "hello.go", "--old", "func main() {}", "--new", "func main() { println() }", "--refresh-hash")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if status, _ := result.Ops[0].Header["status"].(string); status != "applied" {
+		t.Fatalf("status = %v, want applied", result.Ops[0].Header["status"])
+	}
+	content, _ := os.ReadFile(filepath.Join(dir, "hello.go"))
+	if !strings.Contains(string(content), "println()") {
+		t.Fatalf("batch refresh-hash edit did not apply: %s", content)
 	}
 }
 

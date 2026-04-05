@@ -173,7 +173,6 @@ func TestEvictLRU(t *testing.T) {
 	}
 }
 
-
 func TestTrackBodies(t *testing.T) {
 	sess := session.New()
 	sess.TrackBodies(map[string]any{
@@ -992,7 +991,7 @@ func TestDoStructsMatchCmdspec(t *testing.T) {
 	editFields := map[string]bool{
 		"file": true, "old_text": true, "new_text": true, "symbol": true,
 		"start_line": true, "end_line": true, "all": true, "in": true,
-		"where": true, "dry_run": true, "expect_hash": true, "delete": true,
+		"where": true, "dry_run": true, "expect_hash": true, "refresh_hash": true, "delete": true,
 		"insert_at": true, "fuzzy": true, "lines": true, "move_after": true, "read_back": true,
 		// Write/create flags (merged from write)
 		"content": true, "inside": true, "after": true, "append": true,
@@ -1472,7 +1471,6 @@ func TestBatchMode_QuietStderr(t *testing.T) {
 
 // Task 5 tests are in internal/dispatch/dispatch_verify_test.go
 
-
 // --- Per-edit op correlation ---
 
 func TestHandleDo_MultiEditProducesPerEditOps(t *testing.T) {
@@ -1909,7 +1907,6 @@ func TestDetectCommandName(t *testing.T) {
 	}
 }
 
-
 func TestHandleDo_BatchEditErrorParity(t *testing.T) {
 	// Batch edit errors should not contain "edit:" prefix from multi-edit dispatcher.
 	// This verifies parity between batch and standalone error messages.
@@ -1972,4 +1969,3 @@ func TestHandleDo_CommandFieldNeverLeaksInternalNames(t *testing.T) {
 		}
 	}
 }
-

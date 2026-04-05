@@ -11,7 +11,6 @@ import (
 
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
-	"github.com/jordw/edr/internal/edit"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
@@ -190,21 +189,6 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	opID := cmdName[:1] + "0"
 
 	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
-	if err != nil && strings.Contains(err.Error(), "hash mismatch") && sess != nil && len(args) > 0 {
-		// Auto-refresh: external modification made the session hash stale.
-		// Re-read the file hash from disk and retry once.
-		target := args[0]
-		if idx := strings.Index(target, ":"); idx > 0 {
-			target = target[:idx]
-		}
-		if resolved, resolveErr := db.ResolvePath(target); resolveErr == nil {
-			if currentHash, hashErr := edit.FileHash(resolved); hashErr == nil {
-				sess.RefreshFileHash(target, currentHash)
-				flags["expect_hash"] = currentHash
-				result, err = dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
-			}
-		}
-	}
 	if err != nil {
 		addDispatchFailedOp(env, opID, cmdName, err)
 		env.ComputeOK()

@@ -135,6 +135,7 @@ var Registry = []*Spec{
 			{Name: "insert_at", Type: FlagInt, Default: 0, Desc: "Insert new text before line N"},
 			{Name: "move_after", Type: FlagString, Default: "", Desc: "Move symbol after another symbol"},
 			{Name: "expect_hash", Alias: "hash", Type: FlagString, Default: "", Desc: "Reject edit if file hash doesn't match"},
+			{Name: "refresh_hash", Type: FlagBool, Default: false, Desc: "On hash mismatch, refresh from disk and retry once"},
 			{Name: "read_back", Type: FlagBool, Default: true, Desc: "Include updated context in response"},
 			// Write/create flags (when no --old, acts as write)
 			{Name: "content", Type: FlagString, Default: "", Desc: "Content to write (creates or overwrites file)"},

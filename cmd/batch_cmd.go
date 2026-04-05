@@ -728,6 +728,13 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			s.currentEdit.ExpectHash = val
 
+		case "--refresh-hash", "--refresh_hash":
+			if s.currentOp != opEdit {
+				return nil, fmt.Errorf("--refresh-hash is only valid after -e")
+			}
+			t := true
+			s.currentEdit.RefreshHash = &t
+
 		case "--after":
 			if s.currentOp != opWrite {
 				return nil, fmt.Errorf("--after is only valid after -w")

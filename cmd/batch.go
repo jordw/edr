@@ -118,6 +118,7 @@ type doEdit struct {
 	Where      string  `json:"where,omitempty"`
 	DryRun     *bool   `json:"dry_run,omitempty"`
 	ExpectHash string  `json:"expect_hash,omitempty"`
+	RefreshHash *bool  `json:"refresh_hash,omitempty"`
 	Delete     *bool   `json:"delete,omitempty"`
 	InsertAt   *int    `json:"insert_at,omitempty"`
 	Fuzzy      *bool   `json:"fuzzy,omitempty"`
@@ -460,6 +461,7 @@ func executeEdits(ctx context.Context, db index.SymbolStore, sess *session.Sessi
 		if e.ExpectHash != "" {
 			flags["expect_hash"] = e.ExpectHash
 		}
+		setOptBool(flags, "refresh_hash", e.RefreshHash)
 		if dryRun {
 			flags["dry_run"] = true
 		}

@@ -17,10 +17,35 @@ func runSmartEdit(ctx context.Context, db index.SymbolStore, root string, args [
 
 	// Delegate to inner logic, then optionally attach read-back context.
 	result, err := runSmartEditInner(ctx, db, root, args, flags, dryRun)
+	if err != nil && strings.Contains(err.Error(), "hash mismatch") && flagBool(flags, "refresh_hash", false) {
+		if refreshed := refreshEditHash(db, args, flags); refreshed {
+			result, err = runSmartEditInner(ctx, db, root, args, flags, dryRun)
+		}
+	}
 	if err != nil || !readBack {
 		return result, err
 	}
 	return attachReadBack(ctx, db, result)
+}
+
+func refreshEditHash(db index.SymbolStore, args []string, flags map[string]any) bool {
+	if len(args) == 0 {
+		return false
+	}
+	target := args[0]
+	if parts := splitFileSymbol(target); parts != nil {
+		target = parts[0]
+	}
+	file, err := db.ResolvePath(target)
+	if err != nil {
+		return false
+	}
+	currentHash, err := edit.FileHash(file)
+	if err != nil || currentHash == "" {
+		return false
+	}
+	flags["expect_hash"] = currentHash
+	return true
 }
 
 func runSmartEditInner(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any, dryRun bool) (any, error) {
@@ -323,9 +348,13 @@ func attachReadBack(ctx context.Context, db index.SymbolStore, result any) (any,
 	if editLine > 0 {
 		lines := strings.SplitAfter(string(data), "\n")
 		start := editLine - 5
-		if start < 1 { start = 1 }
+		if start < 1 {
+			start = 1
+		}
 		end := editLine + 5
-		if end > len(lines) { end = len(lines) }
+		if end > len(lines) {
+			end = len(lines)
+		}
 		m["read_back"] = map[string]any{
 			"lines":   [2]int{start, end},
 			"content": strings.Join(lines[start-1:end], ""),
@@ -333,6 +362,7 @@ func attachReadBack(ctx context.Context, db index.SymbolStore, result any) (any,
 	}
 	return result, nil
 }
+
 // diffStartLine extracts the new-file start line from a unified diff header.
 // Parses the @@ -a,b +c,d @@ line and returns c.
 func diffStartLine(diff string) int {
@@ -402,7 +432,6 @@ func smartEditSpan(ctx context.Context, db index.SymbolStore, file string, start
 	}
 	return smartEditByteRange(ctx, db, file, startByte, endByte, replacement, label, dryRun)
 }
-
 
 // smartEditMoveAfter moves a source symbol after a target symbol within the same file.
 func smartEditMoveAfter(ctx context.Context, db index.SymbolStore, root string, args []string, targetName string, dryRun bool) (any, error) {
@@ -528,7 +557,6 @@ func smartEditInsertAt(ctx context.Context, db index.SymbolStore, file string, l
 	label := fmt.Sprintf("insert at line %d", lineNum)
 	return smartEditByteRange(ctx, db, file, insertByte, insertByte, text, label, dryRun)
 }
-
 
 // smartEditMatch applies an edit by finding and replacing text.
 func smartEditMatch(ctx context.Context, db index.SymbolStore, file, matchText, replacement string, flags map[string]any, dryRun bool) (any, error) {
@@ -765,9 +793,9 @@ type NotFoundError struct {
 }
 
 type nearMatchInfo struct {
-	Line        int    `json:"line"`
-	Kind        string `json:"kind"` // "whitespace", "indentation", "partial"
-	ActualText  string `json:"actual_text,omitempty"`
+	Line       int    `json:"line"`
+	Kind       string `json:"kind"` // "whitespace", "indentation", "partial"
+	ActualText string `json:"actual_text,omitempty"`
 }
 
 func (e *NotFoundError) Error() string {
@@ -996,4 +1024,3 @@ func ambiguousMatchError(content, relFile, matchText string, locs [][]int) error
 	return fmt.Errorf("ambiguous: old_text %q matched %d locations in %s (lines %s); provide more surrounding context to make it unique, or use all: true to replace all",
 		matchText, len(locs), relFile, strings.Join(lineStrs, ", "))
 }
-
