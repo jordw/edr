@@ -611,6 +611,10 @@ func attachExpand(ctx context.Context, db index.SymbolStore, sym *index.SymbolIn
 	if showDeps {
 		deps, err := index.FindDeps(ctx, db, sym)
 		if err == nil && len(deps) > 0 {
+			// Cap at 10 to keep response bounded on large repos
+			if len(deps) > 10 {
+				deps = deps[:10]
+			}
 			if items := symbolsToSignatures(ctx, deps); len(items) > 0 {
 				result["deps"] = items
 			}
@@ -619,6 +623,10 @@ func attachExpand(ctx context.Context, db index.SymbolStore, sym *index.SymbolIn
 
 	if showCallers {
 		callers := findCallersWithFallback(ctx, db, sym)
+		// Cap at 10
+		if len(callers) > 10 {
+			callers = callers[:10]
+		}
 		if items := symbolsToSignatures(ctx, callers); len(items) > 0 {
 			result["callers"] = items
 		}

@@ -9,6 +9,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/jordw/edr/internal/idx"
 	"regexp"
 	"runtime"
 	"sort"
@@ -343,6 +345,27 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 			if r >= 'A' && r <= 'Z' {
 				caseSensitive = true
 				break
+			}
+		}
+
+		// Trigram pre-filter: skip files the index says can't match.
+		if edrDir := HomeEdrDir(root); edrDir != "" {
+			var queryTris []idx.Trigram
+			if caseSensitive {
+				queryTris = idx.QueryTrigrams(cfg.search)
+			} else {
+				queryTris = idx.QueryTrigrams(searchLower)
+			}
+			if candidates, ok := idx.Query(edrDir, queryTris); ok {
+				candidateSet := make(map[string]struct{}, len(candidates))
+				for _, c := range candidates {
+					candidateSet[filepath.Join(root, c)] = struct{}{}
+				}
+				for f := range byFile {
+					if _, ok := candidateSet[f]; !ok {
+						delete(byFile, f)
+					}
+				}
 			}
 		}
 

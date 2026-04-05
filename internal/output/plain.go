@@ -92,6 +92,8 @@ func printPlain(e *Envelope) {
 			plainNext(w, op)
 		case "undo":
 			plainUndo(w, op)
+		case "index":
+			plainIndex(w, op)
 		default:
 			writeHeader(w, op)
 		}
@@ -196,6 +198,17 @@ func plainRead(w *os.File, op Op) {
 
 	content, _ := op["content"].(string)
 	writeBody(w, content)
+
+	// Render symbol list (from --symbols flag)
+	if symList, ok := toSliceOfMaps(op["symbols"]); ok && len(symList) > 0 {
+		fmt.Fprintln(w, "\n--- symbols ---")
+		for _, s := range symList {
+			name, _ := s["name"].(string)
+			typ, _ := s["type"].(string)
+			lines := s["lines"]
+			fmt.Fprintf(w, "%s %s %v\n", typ, name, lines)
+		}
+	}
 
 	// Render expanded deps/callers/tests as compact lists
 	for _, key := range []string{"deps", "callers"} {
@@ -688,6 +701,36 @@ func plainUndo(w *os.File, op Op) {
 			fmt.Fprintf(w, "  %s\n", f)
 		}
 	}
+}
+
+func plainIndex(w *os.File, op Op) {
+	h := map[string]any{}
+	hStr(h, "status", op, "status")
+	if v, ok := op["mode"].(string); ok {
+		h["mode"] = v
+	}
+	if v := anyInt(op["files_indexed"]); v > 0 {
+		h["files"] = v
+	}
+	if v := anyInt(op["files_total"]); v > 0 {
+		h["total"] = v
+	}
+	if v := anyInt(op["trigrams"]); v > 0 {
+		h["trigrams"] = v
+	}
+	if v := anyInt(op["size_bytes"]); v > 0 {
+		h["bytes"] = v
+	}
+	if v, ok := op["coverage"].(string); ok {
+		h["coverage"] = v
+	}
+	if v, ok := op["stale"].(bool); ok && v {
+		h["stale"] = true
+	}
+	if v := anyInt(op["journals"]); v > 0 {
+		h["journals"] = v
+	}
+	writeHeader(w, h)
 }
 
 // hStr copies a string field from op to header, optionally renaming.

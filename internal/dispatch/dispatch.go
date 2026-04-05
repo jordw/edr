@@ -339,7 +339,8 @@ func runRepoMap(ctx context.Context, db index.SymbolStore, flags map[string]any)
 
 func runMapUnified(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) > 0 {
-		// If the arg is a directory, treat it as --dir for repo-map
+		// If the arg is a directory, treat it as --dir for repo-map.
+		// Explicit --dir takes priority over positional arg.
 		resolved := args[0]
 		if !filepath.IsAbs(resolved) {
 			resolved = filepath.Join(root, resolved)
@@ -348,7 +349,9 @@ func runMapUnified(ctx context.Context, db index.SymbolStore, root string, args 
 			if flags == nil {
 				flags = map[string]any{}
 			}
-			flags["dir"] = args[0]
+			if flagString(flags, "dir", "") == "" {
+				flags["dir"] = args[0]
+			}
 			return runRepoMap(ctx, db, flags)
 		}
 		return runSymbols(ctx, db, root, args, flags)

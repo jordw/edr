@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/setup"
@@ -125,9 +126,12 @@ func init() {
 func Verbose() bool { return verbose }
 
 // openStore returns a SymbolStore for the given root.
+// Also does a small amount of incremental trigram indexing per invocation.
 func openStore(root string) (index.SymbolStore, error) {
 	output.SetRoot(root)
-	return index.NewOnDemand(root), nil
+	db := index.NewOnDemand(root)
+	idx.IncrementalTick(root, db.EdrDir(), 50, index.WalkRepoFiles)
+	return db, nil
 }
 
 
