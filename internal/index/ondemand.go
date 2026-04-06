@@ -549,30 +549,33 @@ func (o *OnDemand) parseCandidateFiles(ctx context.Context, text string) map[str
 		ch <- p
 	}
 
-	// Also parse unindexed files (they might contain the pattern)
-	textLower := []byte(strings.ToLower(text))
-	WalkRepoFiles(o.root, func(path string) error {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		rel, _ := filepath.Rel(o.root, path)
-		if _, isIndexed := indexed[rel]; isIndexed {
-			return nil // already handled above
-		}
-		if !RegexSupported(path) {
+	// Also parse unindexed files (they might contain the pattern).
+	// Skip when the index is complete — all files are already covered.
+	if !idx.IsComplete(o.root, o.edrDir) {
+		textLower := []byte(strings.ToLower(text))
+		WalkRepoFiles(o.root, func(path string) error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			rel, _ := filepath.Rel(o.root, path)
+			if _, isIndexed := indexed[rel]; isIndexed {
+				return nil // already handled above
+			}
+			if !RegexSupported(path) {
+				return nil
+			}
+			// Quick content check before expensive parse
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			if !bytes.Contains(bytes.ToLower(data), textLower) {
+				return nil
+			}
+			ch <- path
 			return nil
-		}
-		// Quick content check before expensive parse
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		if !bytes.Contains(bytes.ToLower(data), textLower) {
-			return nil
-		}
-		ch <- path
-		return nil
-	})
+		})
+	}
 
 	close(ch)
 	wg.Wait()

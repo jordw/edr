@@ -66,26 +66,29 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 		}
 	}
 
-	// Scan files not covered by the index
-	index.WalkRepoFiles(root, func(path string) error {
-		rel, _ := filepath.Rel(root, path)
-		if rel == "" {
-			rel = path
-		}
-		if indexed != nil {
-			if _, ok := indexed[rel]; ok {
-				return nil // already handled by index
+	// Scan files not covered by the index.
+	// Skip when the index is complete — all files are already covered.
+	if !idx.IsComplete(root, edrDir) {
+		index.WalkRepoFiles(root, func(path string) error {
+			rel, _ := filepath.Rel(root, path)
+			if rel == "" {
+				rel = path
 			}
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
+			if indexed != nil {
+				if _, ok := indexed[rel]; ok {
+					return nil // already handled by index
+				}
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			if fileMatches(data, searchBytes, searchLower, caseSensitive) {
+				matches = append(matches, rel)
+			}
 			return nil
-		}
-		if fileMatches(data, searchBytes, searchLower, caseSensitive) {
-			matches = append(matches, rel)
-		}
-		return nil
-	})
+		})
+	}
 
 	if indexed == nil {
 		source = "scan"

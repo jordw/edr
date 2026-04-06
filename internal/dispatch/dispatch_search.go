@@ -272,7 +272,12 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 		}
 	}
 
-	// Walk for unindexed files (or all files if no index/regex search)
+	// Walk for unindexed files (or all files if no index/regex search).
+	// Skip when the index is complete — all files are already covered.
+	complete := candidates != nil && idx.IsComplete(root, edrDir)
+	if complete {
+		// no walk needed
+	} else {
 	index.WalkRepoFiles(root, func(path string) error {
 		if atLimit() {
 			return filepath.SkipAll
@@ -293,6 +298,7 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 		searchFile(rel, path)
 		return nil
 	})
+	}
 
 	// Build result
 	result := map[string]any{

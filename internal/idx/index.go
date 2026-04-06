@@ -171,6 +171,16 @@ func Staleness(repoRoot, edrDir string) bool {
 	return gitIndexMtime(repoRoot) != d.Header.GitMtime
 }
 
+// IsComplete returns true if the index exists and is not stale, meaning
+// it covers all repo files and the unindexed-file walk can be skipped.
+func IsComplete(repoRoot, edrDir string) bool {
+	d := loadIndex(edrDir)
+	if d == nil {
+		return false
+	}
+	return d.Header.GitMtime != 0 && gitIndexMtime(repoRoot) == d.Header.GitMtime
+}
+
 // Status holds index stats for edr index --status.
 type Status struct {
 	Exists    bool
