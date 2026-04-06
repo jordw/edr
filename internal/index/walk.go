@@ -287,6 +287,19 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 		}
 	}
 
+	// Fast path: when no filters are active and the index is complete,
+	// use the index file list and parse lazily with early budget stop.
+	noFilters := sqlDir == "" && cfg.symbolType == "" && sqlName == "" &&
+		cfg.glob == "" && cfg.lang == "" && cfg.search == "" && grepRe == nil
+	budgetChars := cfg.budget * 4
+	if noFilters && budgetChars > 0 {
+		if edrDir := db.EdrDir(); edrDir != "" {
+			if result, stats, ok := repoMapLazy(ctx, db, root, edrDir, cfg, budgetChars); ok {
+				return result, stats, nil
+			}
+		}
+	}
+
 	symbols, err := db.FilteredSymbols(ctx, sqlDir, cfg.symbolType, sqlName)
 	if err != nil {
 		return "", RepoMapStats{}, err
@@ -548,7 +561,9 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 
 	// Build output with early-stop budget.
 	var b strings.Builder
-	budgetChars := cfg.budget * 4
+	if budgetChars == 0 {
+		budgetChars = cfg.budget * 4
+	}
 	truncated := false
 	filesRendered := 0
 	for _, file := range fileOrder {
@@ -704,6 +719,160 @@ var langExtensions = map[string][]string{
 }
 
 // matchesLang returns true if the file matches the given language.
+// repoMapLazy builds a repo map using the index file list and lazy parsing.
+// Parses files in render order (code first, shallow first) and stops when
+// the budget is filled. Returns (text, stats, true) on success, or ("", _, false)
+// if the index isn't available/complete.
+func repoMapLazy(ctx context.Context, db SymbolStore, root, edrDir string, cfg repoMapConfig, budgetChars int) (string, RepoMapStats, bool) {
+	if !idx.IsComplete(root, edrDir) {
+		return "", RepoMapStats{}, false
+	}
+	// Get file list from the index — avoids walking the filesystem.
+	indexed := idx.IndexedPaths(edrDir)
+	if indexed == nil {
+		return "", RepoMapStats{}, false
+	}
+
+	// Build sorted rel-path list using the same order as RepoMap.
+	relPaths := make([]string, 0, len(indexed))
+	for rel := range indexed {
+		if RegexSupported(filepath.Join(root, rel)) {
+			relPaths = append(relPaths, rel)
+		}
+	}
+	sort.SliceStable(relPaths, func(i, j int) bool {
+		ci := isCodeFile(relPaths[i])
+		cj := isCodeFile(relPaths[j])
+		if ci != cj {
+			return ci
+		}
+		ti := isTestOrBenchFile(relPaths[i])
+		tj := isTestOrBenchFile(relPaths[j])
+		if ti != tj {
+			return !ti
+		}
+		di := strings.Count(relPaths[i], string(filepath.Separator))
+		dj := strings.Count(relPaths[j], string(filepath.Separator))
+		if di != dj {
+			return di < dj
+		}
+		return relPaths[i] < relPaths[j]
+	})
+
+	totalFiles := len(relPaths)
+
+	// Parse and render files lazily until budget is filled.
+	var b strings.Builder
+	var mapFiles []MapFileEntry
+	filesRendered := 0
+	totalSymbols := 0
+
+	for _, rel := range relPaths {
+		abs := filepath.Join(root, rel)
+		src, err := os.ReadFile(abs)
+		if err != nil {
+			continue
+		}
+		syms := RegexParse(abs, src)
+
+		// Filter out locals
+		if cfg.hideLocals && len(syms) > 0 {
+			type span struct{ start, end uint32 }
+			var containerSpans []span
+			for _, s := range syms {
+				if s.StartLine >= s.EndLine {
+					continue
+				}
+				switch s.Type {
+				case "function", "method", "variable":
+					containerSpans = append(containerSpans, span{s.StartLine, s.EndLine})
+				}
+			}
+			filtered := syms[:0]
+			for _, s := range syms {
+				isLocal := false
+				for _, cs := range containerSpans {
+					if s.StartLine > cs.start && s.EndLine <= cs.end {
+						isLocal = true
+						break
+					}
+				}
+				if !isLocal {
+					filtered = append(filtered, s)
+				}
+			}
+			syms = filtered
+		}
+
+		if len(syms) == 0 {
+			continue
+		}
+		totalSymbols += len(syms)
+
+		entry := MapFileEntry{File: rel}
+		fmt.Fprintf(&b, "\n%s\n", rel)
+		for _, s := range syms {
+			fmt.Fprintf(&b, "  %s %s [%d-%d]\n", s.Type, s.Name, s.StartLine, s.EndLine)
+			entry.Symbols = append(entry.Symbols, MapSymbolEntry{
+				Name: s.Name, Kind: s.Type,
+				Line: int(s.StartLine), EndLine: int(s.EndLine),
+			})
+		}
+		mapFiles = append(mapFiles, entry)
+		filesRendered++
+
+		if b.Len() >= budgetChars {
+			break
+		}
+	}
+
+	// For totalFiles/totalSymbols in truncated case: we know totalFiles from index,
+	// but totalSymbols is approximate (only counted parsed files).
+	// Use index header for file count.
+	if h, err := idx.ReadHeader(edrDir); err == nil {
+		totalFiles = int(h.NumFiles)
+	}
+
+	truncated := filesRendered < totalFiles
+	budgetUsed := 0
+	if truncated {
+		budgetUsed = b.Len() / 4
+	}
+
+	// Dir summary for severely truncated results
+	var dirSummary []DirSummaryEntry
+	if truncated && filesRendered*5 < totalFiles {
+		dirFiles := map[string]int{}
+		for _, rel := range relPaths {
+			if !RegexSupported(filepath.Join(root, rel)) {
+				continue
+			}
+			dir := strings.SplitN(rel, string(filepath.Separator), 2)[0]
+			if !strings.Contains(rel, string(filepath.Separator)) {
+				dir = "."
+			}
+			dirFiles[dir]++
+		}
+		for dir, count := range dirFiles {
+			dirSummary = append(dirSummary, DirSummaryEntry{Dir: dir, Files: count})
+		}
+		sort.Slice(dirSummary, func(i, j int) bool {
+			return dirSummary[i].Files > dirSummary[j].Files
+		})
+	}
+
+	return b.String(), RepoMapStats{
+		Truncated:    truncated,
+		BudgetUsed:   budgetUsed,
+		ShownFiles:   filesRendered,
+		TotalFiles:   totalFiles,
+		ShownSymbols: totalSymbols,
+		TotalSymbols: totalSymbols, // approximate — only parsed files counted
+		Files:        mapFiles,
+		DirSummary:   dirSummary,
+	}, true
+}
+
 // hasRegexMeta returns true if the string contains regex metacharacters.
 func hasRegexMeta(s string) bool {
 	for _, c := range s {
