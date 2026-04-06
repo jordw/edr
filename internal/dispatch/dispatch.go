@@ -377,7 +377,14 @@ func runMapUnified(ctx context.Context, db index.SymbolStore, root string, args 
 						dir = rel
 					}
 				}
-				flags["dir"] = dir
+				// Normalize "." and "./" to empty — they mean repo root,
+				// same as no --dir, so they should hit the fast path.
+				if dir == "." || dir == "./" {
+					dir = ""
+				}
+				if dir != "" {
+					flags["dir"] = dir
+				}
 			}
 			return runRepoMap(ctx, db, flags)
 		}
