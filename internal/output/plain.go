@@ -614,6 +614,20 @@ func plainReset(w *os.File, op Op) {
 func plainNext(w *os.File, op Op) {
 	h := map[string]any{}
 	hStr(h, "root", op, "root")
+
+	// Add index summary to header
+	if idxInfo, ok := op["index"].(map[string]any); ok {
+		files := anyInt(idxInfo["files"])
+		complete, _ := idxInfo["complete"].(bool)
+		if complete {
+			h["index"] = fmt.Sprintf("%d files", files)
+		} else if files > 0 {
+			h["index"] = fmt.Sprintf("%d files (stale)", files)
+		} else {
+			h["index"] = "none"
+		}
+	}
+
 	hStr(h, "focus", op, "focus")
 
 	// Add build status to header

@@ -11,6 +11,7 @@ import (
 
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
+	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/session"
@@ -537,6 +538,17 @@ func buildNextResult(sess *session.Session, db index.SymbolStore, root, edrDir s
 
 	// Always show root so agents know which repo context they're in.
 	result["root"] = output.Rel(root)
+
+	// Index status — fast header-only read
+	if h, err := idx.ReadHeader(edrDir); err == nil {
+		idxInfo := map[string]any{
+			"files":    int(h.NumFiles),
+			"complete": idx.IsComplete(root, edrDir),
+		}
+		result["index"] = idxInfo
+	} else {
+		result["index"] = map[string]any{"files": 0, "complete": false}
+	}
 
 	// Undo availability
 	sessDir := filepath.Join(edrDir, "sessions")
