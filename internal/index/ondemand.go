@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+
+	"github.com/jordw/edr/internal/idx"
 )
 
 // OnDemand implements SymbolStore by parsing files with tree-sitter on demand.
@@ -19,8 +21,9 @@ type OnDemand struct {
 	root   string
 	edrDir string
 
-	mu    sync.RWMutex
-	cache map[string]*cachedFile // abs path -> parsed result
+	mu        sync.RWMutex
+	cache     map[string]*cachedFile // abs path -> parsed result
+	fileCount int                     // cached file count from Stats, -1 = unset
 }
 
 type cachedFile struct {
@@ -38,9 +41,10 @@ func NewOnDemand(root string) *OnDemand {
 	}
 	edrDir := HomeEdrDir(root)
 	return &OnDemand{
-		root:   root,
-		edrDir: edrDir,
-		cache:  make(map[string]*cachedFile),
+		root:      root,
+		edrDir:    edrDir,
+		cache:     make(map[string]*cachedFile),
+		fileCount: -1,
 	}
 }
 
@@ -299,7 +303,7 @@ func (o *OnDemand) parseDir(ctx context.Context, dir string) map[string]*cachedF
 }
 
 func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo, error) {
-	all := o.parseAll(ctx)
+	all := o.parseCandidateFiles(ctx, name)
 	var candidates []SymbolInfo
 	for _, cf := range all {
 		for _, s := range cf.symbols {
@@ -322,7 +326,7 @@ func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo,
 }
 
 func (o *OnDemand) SearchSymbols(ctx context.Context, pattern string, limit ...int) ([]SymbolInfo, error) {
-	all := o.parseAll(ctx)
+	all := o.parseCandidateFiles(ctx, pattern)
 	lim := 50
 	if len(limit) > 0 && limit[0] > 0 {
 		lim = limit[0]
@@ -366,6 +370,10 @@ func (o *OnDemand) FilteredSymbols(ctx context.Context, dir, symbolType, namePat
 	var parsed map[string]*cachedFile
 	if absDir != "" {
 		parsed = o.parseDir(ctx, absDir)
+	} else if namePattern != "" {
+		// Use trigram index to narrow candidate files: symbol names appear
+		// in source, so files not containing the pattern can't have matching symbols.
+		parsed = o.parseCandidateFiles(ctx, namePattern)
 	} else {
 		parsed = o.parseAll(ctx)
 	}
@@ -458,20 +466,117 @@ func (o *OnDemand) HasRefs(_ context.Context) bool {
 // --- Metadata ---
 
 func (o *OnDemand) Stats(ctx context.Context) (files int, symbols int, err error) {
-	var fileCount, symCount int
+	o.mu.RLock()
+	cached := o.fileCount
+	var symCount int
+	for _, cf := range o.cache {
+		symCount += len(cf.symbols)
+	}
+	o.mu.RUnlock()
+
+	if cached >= 0 {
+		return cached, symCount, nil
+	}
+
+	var fileCount int
 	WalkRepoFiles(o.root, func(path string) error {
 		if RegexSupported(path) {
 			fileCount++
 		}
 		return nil
 	})
-	// Only count symbols if we've parsed some files
-	o.mu.RLock()
-	for _, cf := range o.cache {
-		symCount += len(cf.symbols)
-	}
-	o.mu.RUnlock()
+	o.mu.Lock()
+	o.fileCount = fileCount
+	o.mu.Unlock()
 	return fileCount, symCount, nil
+}
+
+// parseCandidateFiles uses the trigram index to find files likely containing
+// the given text, then parses only those files. Falls back to parseAll when
+// no index is available.
+func (o *OnDemand) parseCandidateFiles(ctx context.Context, text string) map[string]*cachedFile {
+	tris := idx.QueryTrigrams(strings.ToLower(text))
+	indexed := idx.IndexedPaths(o.edrDir)
+
+	var candidatePaths []string
+	if indexed != nil && len(tris) > 0 {
+		if paths, ok := idx.Query(o.edrDir, tris); ok {
+			for _, rel := range paths {
+				abs := filepath.Join(o.root, rel)
+				if RegexSupported(abs) {
+					candidatePaths = append(candidatePaths, abs)
+				}
+			}
+		}
+	}
+
+	// If no index or no trigrams, fall back to full parse.
+	if indexed == nil || len(tris) == 0 {
+		return o.parseAll(ctx)
+	}
+
+	// Parse candidates in parallel, plus walk for unindexed files.
+	results := make(map[string]*cachedFile, len(candidatePaths))
+	var mu sync.Mutex
+	workers := runtime.NumCPU()
+	if workers > 8 {
+		workers = 8
+	}
+	ch := make(chan string, workers*4)
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for path := range ch {
+				if ctx.Err() != nil {
+					return
+				}
+				cf, err := o.parseFile(path)
+				if err != nil || cf == nil {
+					continue
+				}
+				mu.Lock()
+				results[path] = cf
+				mu.Unlock()
+			}
+		}()
+	}
+
+	// Feed indexed candidates
+	for _, p := range candidatePaths {
+		ch <- p
+	}
+
+	// Also parse unindexed files (they might contain the pattern)
+	textLower := []byte(strings.ToLower(text))
+	WalkRepoFiles(o.root, func(path string) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		rel, _ := filepath.Rel(o.root, path)
+		if _, isIndexed := indexed[rel]; isIndexed {
+			return nil // already handled above
+		}
+		if !RegexSupported(path) {
+			return nil
+		}
+		// Quick content check before expensive parse
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		if !bytes.Contains(bytes.ToLower(data), textLower) {
+			return nil
+		}
+		ch <- path
+		return nil
+	})
+
+	close(ch)
+	wg.Wait()
+	return results
 }
 
 // FileCountExceeds returns true if the repo has more than n parseable files.
