@@ -397,11 +397,9 @@ func TestQueryToMultiCmd_Refs(t *testing.T) {
 		Depth:  &depth,
 	}
 	mc := queryToMultiCmd(q)
-	if mc.Cmd != "refs" {
-		t.Errorf("cmd = %q, want refs", mc.Cmd)
-	}
-	if mc.Flags["impact"] != true {
-		t.Error("impact should be true")
+	// refs is now routed to focus --expand
+	if mc.Cmd != "focus" {
+		t.Errorf("cmd = %q, want focus (refs routes to focus)", mc.Cmd)
 	}
 	if mc.Flags["depth"] != 2 {
 		t.Errorf("depth = %v, want 2", mc.Flags["depth"])

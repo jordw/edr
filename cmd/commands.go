@@ -140,7 +140,12 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 			break
 		}
 	}
-	if !hasContent {
+	// Handle --content - (read from stdin)
+	if v, ok := flags["content"].(string); ok && v == "-" {
+		if err := readStdinToFlags(flags, "content"); err != nil {
+			return err
+		}
+	} else if !hasContent {
 		if err := readStdinToFlags(flags, stdinKey); err != nil {
 			return err
 		}

@@ -317,7 +317,7 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			spec := cmdspec.ByName(cmdName)
 			if spec == nil || spec.Category != cmdspec.CatRead {
-				return nil, fmt.Errorf("-q: %q is not a valid query command (use refs, prepare, search, map, read)", cmdName)
+				return nil, fmt.Errorf("-q: %q is not a valid query command (use search, map, read)", cmdName)
 			}
 			s.currentQuery = doQuery{Cmd: cmdName}
 			// Consume the target argument (file:symbol) if present
@@ -1061,12 +1061,10 @@ Operations:
   -s, --search PATTERN       Search for text/symbols
   -e, --edit   FILE[:SYM]    Edit file (file carries forward from previous op)
   -w, --write  FILE          Write/create file
-  -q, --query  CMD [TARGET]  Run query command (refs, prepare)
-  -V, --verify               Build check (auto when edits present)
+  -q, --query  CMD [TARGET]  Run query command (search, map, read)
+  -V, --verify               Build check (opt-in, use -V to enable)
 
 Modifier flags apply to the preceding operation.
-Use --no-verify to skip auto-verify.
-
 `)
 
 	// Build a combined description map: canonical name → desc, alias → desc.
@@ -1196,7 +1194,7 @@ Use --no-verify to skip auto-verify.
   edr -e cmd/root.go --old "oldFunc" --new "newFunc" -V
   edr -f file.go:Sym -e --old "x" --new "y" -f file.go:Sym
   edr -s "TODO" --include "*.go" --limit 10
-  edr -q refs file.go:Func --callers --budget 30
+  edr --focus file.go:Func --expand callers
   edr -w new.go --content "package main" --mkdir`)
 
 	return b.String()

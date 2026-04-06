@@ -412,7 +412,7 @@ func executeQueries(ctx context.Context, db index.SymbolStore, sess *session.Ses
 			allCmds[i] = dispatch.MultiCmd{}
 			allResults[i] = dispatch.MultiResult{
 				OK:    false,
-				Error: `query requires a "cmd" field (search, map, refs, read, diff)`,
+				Error: `query requires a "cmd" field (search, map, read)`,
 			}
 		} else {
 			allCmds[i] = queryToMultiCmd(q)
@@ -857,19 +857,10 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 }
 
 // inferQueryCmd determines the public command from populated fields when cmd is omitted.
-// Only returns public command names: search, refs, map, read.
+// Returns public command names: search, map, read.
 func inferQueryCmd(q doQuery) string {
 	if q.Pattern != nil && *q.Pattern != "" {
 		return "search"
-	}
-	if (q.Callers != nil && *q.Callers) || (q.Deps != nil && *q.Deps) {
-		return "refs"
-	}
-	if q.Impact != nil && *q.Impact {
-		return "refs"
-	}
-	if q.Chain != nil && *q.Chain != "" {
-		return "refs"
 	}
 	if (q.Dir != nil && *q.Dir != "") || (q.Grep != nil && *q.Grep != "") || (q.Locals != nil && *q.Locals) {
 		return "map"
@@ -878,7 +869,7 @@ func inferQueryCmd(q doQuery) string {
 		return "read"
 	}
 	if q.Symbol != nil && *q.Symbol != "" {
-		return "refs"
+		return "read"
 	}
 	return "" // will be caught as error below
 }
@@ -969,18 +960,20 @@ func queryToMultiCmd(q doQuery) dispatch.MultiCmd {
 			flags["in"] = *q.In
 		}
 
-	case "refs", "prepare":
-		if q.Symbol != nil {
+	case "refs":
+		// Legacy: refs is no longer a command. Route to focus with expand.
+		cmd = "focus"
+		if q.File != nil && q.Symbol != nil && *q.Symbol != "" {
+			args = []string{*q.File + ":" + *q.Symbol}
+		} else if q.Symbol != nil {
 			args = []string{*q.Symbol}
+		} else if q.File != nil {
+			args = []string{*q.File}
 		}
-		if q.File != nil && *q.File != "" {
-			args = append([]string{*q.File}, args...)
-		}
-		if q.Impact != nil && *q.Impact {
-			flags["impact"] = true
-		}
-		if q.Chain != nil && *q.Chain != "" {
-			flags["chain"] = *q.Chain
+		if q.Callers != nil && *q.Callers {
+			flags["expand"] = "callers"
+		} else if q.Deps != nil && *q.Deps {
+			flags["expand"] = "deps"
 		}
 		if q.Depth != nil {
 			flags["depth"] = *q.Depth
