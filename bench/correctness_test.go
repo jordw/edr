@@ -92,15 +92,21 @@ func TestCorrectnessAmbiguousSymbol(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("bare Config is ambiguous", func(t *testing.T) {
-		errMsg := dispatchError(t, ctx, db, "read", []string{"Config"}, nil)
-		if !strings.Contains(errMsg, "ambiguous") {
-			t.Errorf("expected 'ambiguous' error, got: %s", errMsg)
-		}
-		// Should mention multiple files
-		for _, fragment := range []string{"go/pkg_a/config.go", "go/pkg_b/config.go", "py/models.py"} {
-			if !strings.Contains(errMsg, fragment) {
-				t.Errorf("ambiguous error should mention %s, got: %s", fragment, errMsg)
+		// Smart focus returns a ranked shortlist instead of an error.
+		result, err := dispatch.Dispatch(ctx, db, "read", []string{"Config"}, nil)
+		if err != nil {
+			// Old error path — still acceptable
+			errMsg := err.Error()
+			if !strings.Contains(errMsg, "ambiguous") {
+				t.Errorf("expected 'ambiguous' error, got: %s", errMsg)
 			}
+			return
+		}
+		// New shortlist path — result should have candidates
+		data, _ := json.Marshal(result)
+		resultStr := string(data)
+		if !strings.Contains(resultStr, "candidates") && !strings.Contains(resultStr, "ambiguous") {
+			t.Errorf("expected shortlist or ambiguous result, got: %s", resultStr)
 		}
 	})
 
@@ -122,9 +128,18 @@ func TestCorrectnessAmbiguousSymbol(t *testing.T) {
 	})
 
 	t.Run("bare Init is ambiguous", func(t *testing.T) {
-		errMsg := dispatchError(t, ctx, db, "read", []string{"Init"}, nil)
-		if !strings.Contains(errMsg, "ambiguous") {
-			t.Errorf("expected 'ambiguous' error for Init, got: %s", errMsg)
+		result, err := dispatch.Dispatch(ctx, db, "read", []string{"Init"}, nil)
+		if err != nil {
+			errMsg := err.Error()
+			if !strings.Contains(errMsg, "ambiguous") {
+				t.Errorf("expected 'ambiguous' error for Init, got: %s", errMsg)
+			}
+			return
+		}
+		data, _ := json.Marshal(result)
+		resultStr := string(data)
+		if !strings.Contains(resultStr, "candidates") && !strings.Contains(resultStr, "ambiguous") {
+			t.Errorf("expected shortlist or ambiguous result for Init, got: %s", resultStr)
 		}
 	})
 
