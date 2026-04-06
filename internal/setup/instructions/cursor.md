@@ -61,6 +61,6 @@ edr --focus f.go:Func --expand callers        # symbol + callers
 edr --write new.go --content "pkg main" --mkdir  # create file
 
 ## Other commands
-- `edr status` | `edr undo` | `edr setup`
-- `edr files "pattern"` — find files by content (trigram-accelerated)
-- `edr index` — build or inspect the search index
+- `edr status` — root, index, undo, build state, warnings
+- `edr undo` | `edr files "pattern"` | `edr index` | `edr bench`
+- Cross-repo: `--root /path` or `export EDR_ROOT=/path`

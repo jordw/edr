@@ -31,13 +31,13 @@ CLI args → cmd/ (Cobra) → cmdspec (flag validation) → dispatch (routing) �
 
 **internal/edit/**: Span-based edits with `Transaction` (TOCTOU guard: revalidates file hash before writing). `diff.go` produces unified diffs.
 
-**internal/search/**: Symbol search and text search (ripgrep-style).
+**internal/idx/**: Trigram index — binary format, build/query/staleness, `ReadHeader` for fast 44-byte checks. `format.go` has Marshal/Unmarshal, `index.go` has BuildFullFromWalk/Query/IsComplete.
 
 **internal/output/**: `plain.go` renders the transport format: JSON header (first line) → raw body → `---` between batch ops → optional `{"verify":...}` trailer. Every command has a `plain*` renderer function.
 
 **internal/session/**: File-backed sessions (`~/.edr/repos/<key>/sessions/<id>.json`). Delta reads (hash-based), body dedup, op log, assumption tracking, build state, checkpoint/restore. `PostProcess()` handles response optimization.
 
-**internal/setup/**: `edr setup` installer. Injects agent instructions into global configs (~/.claude, .cursorrules, etc.). Instructions are in `instructions/*.md`, token-capped at 600.
+**internal/setup/**: `edr setup` installer. Injects agent instructions into global configs (~/.claude, .cursorrules, etc.). Instructions are in `instructions/*.md`, token-capped at 750.
 
 ## Adding a new command
 
