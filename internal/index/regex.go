@@ -39,8 +39,9 @@ type regexPattern struct {
 	re      *regexp.Regexp
 	typ     string
 	nameIdx int
-	prefix  string // optional: if non-empty, line must contain this before trying regex
-	reject  string // optional: if non-empty, line must NOT contain this (fast reject)
+	prefix  string                // optional: if non-empty, line must contain this before trying regex
+	reject  string                // optional: if non-empty, line must NOT contain this (fast reject)
+	scan    func(line string) string // optional: fast scanner, returns name or "" (skips regex when set)
 }
 
 // ID is the unicode-aware identifier pattern: letters, digits, underscore.
@@ -75,19 +76,27 @@ var regexGo = &regexLang{
 	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", methodsOutside: true, langID: "go",
 	patterns: []regexPattern{
 		p(`^func\s+\(({ID}+)\s+\*?({ID}+)\)\s+({ID}+)\s*\(`, "method", 3, "func"),
-		p(`^func\s+({ID}+)\s*[\(\[]`, "function", 1, "func"),
-		p(`^type\s+({ID}+)\s+struct\s*\{`, "struct", 1, "type"),
-		p(`^type\s+({ID}+)\s+interface\s*\{`, "interface", 1, "type"),
-		p(`^type\s+({ID}+)\s+`, "type", 1, "type"),
-		p(`^var\s+({ID}+)\s+`, "variable", 1, "var"),
+		{re: re(`^func\s+({ID}+)\s*[\(\[]`), typ: "function", nameIdx: 1, prefix: "func", scan: func(line string) string { return scanKeywordIdent(line, "func") }},
+		{re: re(`^type\s+({ID}+)\s+struct\s*\{`), typ: "struct", nameIdx: 1, prefix: "type", scan: func(line string) string {
+			name := scanKeywordIdent(line, "type")
+			if name != "" && strings.Contains(line, "struct") { return name }
+			return ""
+		}},
+		{re: re(`^type\s+({ID}+)\s+interface\s*\{`), typ: "interface", nameIdx: 1, prefix: "type", scan: func(line string) string {
+			name := scanKeywordIdent(line, "type")
+			if name != "" && strings.Contains(line, "interface") { return name }
+			return ""
+		}},
+		{re: re(`^type\s+({ID}+)\s+`), typ: "type", nameIdx: 1, prefix: "type", scan: func(line string) string { return scanKeywordIdent(line, "type") }},
+		{re: re(`^var\s+({ID}+)\s+`), typ: "variable", nameIdx: 1, prefix: "var", scan: func(line string) string { return scanKeywordIdent(line, "var") }},
 	},
 }
 
 var regexPython = &regexLang{
 	endStyle: regexIndentEnd, container: ContainerIndent, langID: "python",
 	patterns: []regexPattern{
-		p(`^(\s*)class\s+({ID}+)`, "class", 2, "class"),
-		p(`^(\s*)(?:async\s+)?def\s+({ID}+)\s*\(`, "function", 2, "def"),
+		{re: re(`^(\s*)class\s+({ID}+)`), typ: "class", nameIdx: 2, prefix: "class", scan: func(line string) string { return scanKeywordIdent(line, "class") }},
+		{re: re(`^(\s*)(?:async\s+)?def\s+({ID}+)\s*\(`), typ: "function", nameIdx: 2, prefix: "def", scan: func(line string) string { return scanKeywordIdent(line, "def") }},
 	},
 }
 
@@ -124,12 +133,12 @@ var regexTypeScript = &regexLang{
 var regexRust = &regexLang{
 	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "rust",
 	patterns: []regexPattern{
-		p(`^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+({ID}+)`, "function", 1),
-		p(`^(?:pub(?:\([^)]*\))?\s+)?struct\s+({ID}+)`, "struct", 1),
-		p(`^(?:pub(?:\([^)]*\))?\s+)?enum\s+({ID}+)`, "type", 1),
-		p(`^(?:pub(?:\([^)]*\))?\s+)?trait\s+({ID}+)`, "interface", 1),
-		p(`^impl(?:<[^>]*>)?\s+(?:[\p{L}\p{N}_:]+\s+for\s+)?({ID}+)`, "impl", 1),
-		p(`^(?:pub(?:\([^)]*\))?\s+)?type\s+({ID}+)`, "type", 1),
+		{re: re(`^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+({ID}+)`), typ: "function", nameIdx: 1, scan: func(line string) string { return scanKeywordIdent(line, "fn") }},
+		{re: re(`^(?:pub(?:\([^)]*\))?\s+)?struct\s+({ID}+)`), typ: "struct", nameIdx: 1, scan: func(line string) string { return scanKeywordIdent(line, "struct") }},
+		{re: re(`^(?:pub(?:\([^)]*\))?\s+)?enum\s+({ID}+)`), typ: "type", nameIdx: 1, scan: func(line string) string { return scanKeywordIdent(line, "enum") }},
+		{re: re(`^(?:pub(?:\([^)]*\))?\s+)?trait\s+({ID}+)`), typ: "interface", nameIdx: 1, scan: func(line string) string { return scanKeywordIdent(line, "trait") }},
+		{re: re(`^impl(?:<[^>]*>)?\s+(?:[\p{L}\p{N}_:]+\s+for\s+)?({ID}+)`), typ: "impl", nameIdx: 1, scan: func(line string) string { return scanKeywordIdent(line, "impl") }},
+		{re: re(`^(?:pub(?:\([^)]*\))?\s+)?type\s+({ID}+)`), typ: "type", nameIdx: 1, scan: func(line string) string { return scanKeywordIdent(line, "type") }},
 	},
 }
 
@@ -156,9 +165,9 @@ var regexRuby = &regexLang{
 var regexC = &regexLang{
 	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "c",
 	patterns: []regexPattern{
-		{re: re(`^(?:static\s+)?(?:inline\s+)?(?:const\s+)?(?:unsigned\s+)?(?:struct\s+)?(?:{ID}+(?:\s*\*)*)\s+({ID}+)\s*\([^;]*$`), typ: "function", nameIdx: 1, prefix: "(", reject: ";"},
-		p(`^(?:typedef\s+)?struct\s+({ID}+)\s*\{`, "struct", 1, "struct"),
-		p(`^(?:typedef\s+)?enum\s+({ID}+)\s*\{`, "type", 1, "enum"),
+		{re: re(`^(?:static\s+)?(?:inline\s+)?(?:const\s+)?(?:unsigned\s+)?(?:struct\s+)?(?:{ID}+(?:\s*\*)*)\s+({ID}+)\s*\([^;]*$`), typ: "function", nameIdx: 1, prefix: "(", reject: ";", scan: scanCFunction},
+		{re: re(`^(?:typedef\s+)?struct\s+({ID}+)\s*\{`), typ: "struct", nameIdx: 1, prefix: "struct", scan: scanStructBrace},
+		{re: re(`^(?:typedef\s+)?enum\s+({ID}+)\s*\{`), typ: "type", nameIdx: 1, prefix: "enum", scan: scanEnumBrace},
 	},
 }
 
@@ -265,6 +274,132 @@ func computeFirstBytes(lang *regexLang) {
 	}
 }
 
+// --- Fast scanners ---
+// These replace regex for common patterns using byte-level string ops.
+
+// isIdent returns true if b is a letter, digit, or underscore.
+func isIdent(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
+}
+
+// extractIdent returns the identifier starting at pos, and the position after it.
+func extractIdent(line string, pos int) (string, int) {
+	start := pos
+	for pos < len(line) && isIdent(line[pos]) {
+		pos++
+	}
+	if pos == start {
+		return "", pos
+	}
+	return line[start:pos], pos
+}
+
+// skipWord advances past a specific keyword followed by whitespace.
+// Returns the new position, or -1 if the keyword isn't at pos.
+func skipWord(line string, pos int, word string) int {
+	if !strings.HasPrefix(line[pos:], word) {
+		return -1
+	}
+	end := pos + len(word)
+	if end >= len(line) || !isWhitespace(line[end]) {
+		return -1
+	}
+	return skipWS(line, end)
+}
+
+func isWhitespace(b byte) bool { return b == ' ' || b == '\t' }
+
+func skipWS(line string, pos int) int {
+	for pos < len(line) && isWhitespace(line[pos]) {
+		pos++
+	}
+	return pos
+}
+
+// scanCFunction extracts a C function name: [modifiers] <type> <name>(
+// Requires '(' present and no ';'. Works backwards from '(' to find the name.
+func scanCFunction(line string) string {
+	paren := strings.IndexByte(line, '(')
+	if paren < 2 {
+		return ""
+	}
+	// Walk backwards from '(' over whitespace to find end of name
+	end := paren
+	for end > 0 && isWhitespace(line[end-1]) {
+		end--
+	}
+	if end == 0 {
+		return ""
+	}
+	// Walk backwards over identifier chars to find start of name
+	start := end
+	for start > 0 && isIdent(line[start-1]) {
+		start--
+	}
+	if start == end {
+		return ""
+	}
+	name := line[start:end]
+	// Must have at least one word before the name (the return type)
+	if start == 0 {
+		return ""
+	}
+	// Skip back over whitespace — there must be a return type token
+	rpos := start - 1
+	for rpos > 0 && isWhitespace(line[rpos]) {
+		rpos--
+	}
+	if rpos < 0 || (!isIdent(line[rpos]) && line[rpos] != '*') {
+		return ""
+	}
+	return name
+}
+
+// scanKeywordIdent matches: [optional modifiers] <keyword> <name>
+// Used for Go (func/type/var), Python (class/def), Rust (fn/struct/etc), etc.
+func scanKeywordIdent(line string, keyword string) string {
+	pos := 0
+	// Skip leading whitespace (for indented patterns)
+	pos = skipWS(line, pos)
+	// Try to find the keyword, skipping known modifier words
+	for pos < len(line) {
+		if strings.HasPrefix(line[pos:], keyword) {
+			kend := pos + len(keyword)
+			if kend < len(line) && isWhitespace(line[kend]) {
+				// Found keyword — extract identifier after it
+				npos := skipWS(line, kend)
+				// Skip * for pointer returns, < for generics
+				if npos < len(line) && line[npos] == '*' {
+					npos++
+				}
+				name, _ := extractIdent(line, npos)
+				return name
+			}
+		}
+		// Skip a word (modifier or other token)
+		if isIdent(line[pos]) {
+			for pos < len(line) && isIdent(line[pos]) {
+				pos++
+			}
+			pos = skipWS(line, pos)
+		} else {
+			// Non-identifier char — not a modifier, give up
+			return ""
+		}
+	}
+	return ""
+}
+
+// scanStructBrace matches: [typedef] struct <name> {
+func scanStructBrace(line string) string {
+	return scanKeywordIdent(line, "struct")
+}
+
+// scanEnumBrace matches: [typedef] enum <name> {
+func scanEnumBrace(line string) string {
+	return scanKeywordIdent(line, "enum")
+}
+
 // regexLangForFile returns the regex language for a file path, or nil.
 func regexLangForFile(path string) *regexLang {
 	ext := filepath.Ext(path)
@@ -342,11 +477,19 @@ func RegexParse(path string, src []byte) []SymbolInfo {
 			if pat.reject != "" && strings.Contains(line, pat.reject) {
 				continue
 			}
-			m := pat.re.FindStringSubmatch(line)
-			if m == nil {
-				continue
+			// Try fast scanner first, fall back to regex.
+			var name string
+			var m []string
+			if pat.scan != nil {
+				name = pat.scan(line)
 			}
-			name := m[pat.nameIdx]
+			if name == "" {
+				m = pat.re.FindStringSubmatch(line)
+				if m == nil {
+					continue
+				}
+				name = m[pat.nameIdx]
+			}
 			if name == "" || name == "_" {
 				continue
 			}
