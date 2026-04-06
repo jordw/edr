@@ -164,21 +164,21 @@ func intersect(a, b []uint32) []uint32 {
 
 // Staleness returns true if the index is out of date with .git/index.
 func Staleness(repoRoot, edrDir string) bool {
-	d := loadIndex(edrDir)
-	if d == nil {
+	h, err := ReadHeader(edrDir)
+	if err != nil {
 		return true
 	}
-	return gitIndexMtime(repoRoot) != d.Header.GitMtime
+	return gitIndexMtime(repoRoot) != h.GitMtime
 }
 
 // IsComplete returns true if the index exists and is not stale, meaning
 // it covers all repo files and the unindexed-file walk can be skipped.
 func IsComplete(repoRoot, edrDir string) bool {
-	d := loadIndex(edrDir)
-	if d == nil {
+	h, err := ReadHeader(edrDir)
+	if err != nil {
 		return false
 	}
-	return d.Header.GitMtime != 0 && gitIndexMtime(repoRoot) == d.Header.GitMtime
+	return h.GitMtime != 0 && gitIndexMtime(repoRoot) == h.GitMtime
 }
 
 // Status holds index stats for edr index --status.
@@ -202,14 +202,14 @@ func GetStatus(repoRoot, edrDir string) Status {
 	}
 	s.Exists = true
 	s.SizeBytes = info.Size()
-	if data, err := os.ReadFile(mainPath); err == nil {
-		if d, err := Unmarshal(data); err == nil {
-			s.Files = int(d.Header.NumFiles)
-			s.Trigrams = int(d.Header.NumTrigrams)
-			s.GitMtime = d.Header.GitMtime
-		}
+	if h, err := ReadHeader(edrDir); err == nil {
+		s.Files = int(h.NumFiles)
+		s.Trigrams = int(h.NumTrigrams)
+		s.GitMtime = h.GitMtime
+		s.Stale = gitIndexMtime(repoRoot) != h.GitMtime
+	} else {
+		s.Stale = true
 	}
-	s.Stale = Staleness(repoRoot, edrDir)
 	return s
 }
 

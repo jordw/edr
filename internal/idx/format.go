@@ -4,11 +4,43 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"sort"
 )
 
 // Binary format constants.
 var magic = [8]byte{'E', 'D', 'R', 'T', 'R', 'I', 0, 0}
+
+// ReadHeader reads only the fixed-size header from the index file,
+// avoiding the cost of loading and parsing the full file table and postings.
+func ReadHeader(edrDir string) (*Header, error) {
+	f, err := os.Open(filepath.Join(edrDir, MainFile))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	buf := make([]byte, headerSize)
+	if _, err := io.ReadFull(f, buf); err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(buf[:8], magic[:]) {
+		return nil, fmt.Errorf("invalid trigram index magic")
+	}
+	h := &Header{
+		Version:      binary.LittleEndian.Uint32(buf[8:12]),
+		NumFiles:     binary.LittleEndian.Uint32(buf[12:16]),
+		NumTrigrams:  binary.LittleEndian.Uint32(buf[16:20]),
+		GitMtime:     int64(binary.LittleEndian.Uint64(buf[20:28])),
+		FileTableOff: binary.LittleEndian.Uint64(buf[28:36]),
+		PostingOff:   binary.LittleEndian.Uint64(buf[36:44]),
+	}
+	if h.Version != currentVersion {
+		return nil, fmt.Errorf("unsupported trigram index version: %d", h.Version)
+	}
+	return h, nil
+}
 
 const (
 	// version2: trigrams are extracted from lowercased file content,
