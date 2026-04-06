@@ -25,6 +25,7 @@ type regexLang struct {
 	containerClose string // "}", "end", ""
 	methodsOutside bool   // true if methods live outside the struct (Go)
 	langID         string
+	firstBytes     [256]bool // precomputed: can any pattern match a line starting with this byte?
 }
 
 type regexEndStyle int
@@ -39,6 +40,7 @@ type regexPattern struct {
 	typ     string
 	nameIdx int
 	prefix  string // optional: if non-empty, line must contain this before trying regex
+	reject  string // optional: if non-empty, line must NOT contain this (fast reject)
 }
 
 // ID is the unicode-aware identifier pattern: letters, digits, underscore.
@@ -154,9 +156,9 @@ var regexRuby = &regexLang{
 var regexC = &regexLang{
 	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "c",
 	patterns: []regexPattern{
-		p(`^(?:static\s+)?(?:inline\s+)?(?:const\s+)?(?:unsigned\s+)?(?:struct\s+)?(?:{ID}+(?:\s*\*)*)\s+({ID}+)\s*\([^;]*$`, "function", 1),
-		p(`^(?:typedef\s+)?struct\s+({ID}+)\s*\{`, "struct", 1),
-		p(`^(?:typedef\s+)?enum\s+({ID}+)\s*\{`, "type", 1),
+		{re: re(`^(?:static\s+)?(?:inline\s+)?(?:const\s+)?(?:unsigned\s+)?(?:struct\s+)?(?:{ID}+(?:\s*\*)*)\s+({ID}+)\s*\([^;]*$`), typ: "function", nameIdx: 1, prefix: "(", reject: ";"},
+		p(`^(?:typedef\s+)?struct\s+({ID}+)\s*\{`, "struct", 1, "struct"),
+		p(`^(?:typedef\s+)?enum\s+({ID}+)\s*\{`, "type", 1, "enum"),
 	},
 }
 
@@ -221,6 +223,46 @@ var regexByExt = map[string]*regexLang{
 	".swift": regexSwift,
 	".php":   regexPHP,
 	// TODO: add patterns for .scala, .lua, .zig once validated.
+}
+
+func init() {
+	// Precompute firstBytes for each language by probing every byte value
+	// against the compiled regexes. A byte is allowed if ANY pattern could
+	// match a line starting with it. This runs once at startup.
+	seen := map[*regexLang]bool{}
+	for _, lang := range regexByExt {
+		if seen[lang] {
+			continue
+		}
+		seen[lang] = true
+		computeFirstBytes(lang)
+	}
+}
+
+// computeFirstBytes sets which byte values can start a line that matches
+// any pattern. All ASCII letters and underscore are allowed (symbol
+// definitions start with identifiers or keywords). Whitespace is only
+// allowed if any pattern starts with \s or ^\s (indented methods).
+func computeFirstBytes(lang *regexLang) {
+	for b := 'a'; b <= 'z'; b++ { lang.firstBytes[b] = true }
+	for b := 'A'; b <= 'Z'; b++ { lang.firstBytes[b] = true }
+	lang.firstBytes['_'] = true
+	// Check if any pattern can match whitespace-started lines
+	for _, pat := range lang.patterns {
+		src := pat.re.String()
+		// Strip ^ anchor
+		if len(src) > 0 && src[0] == '^' {
+			src = src[1:]
+		}
+		// Pattern starts with \s, (\s, or optional group that allows \s
+		if strings.HasPrefix(src, "\\s") ||
+			strings.HasPrefix(src, "(\\s") ||
+			strings.HasPrefix(src, "(?:\\s") {
+			lang.firstBytes[' '] = true
+			lang.firstBytes['\t'] = true
+			break
+		}
+	}
 }
 
 // regexLangForFile returns the regex language for a file path, or nil.
@@ -288,9 +330,16 @@ func RegexParse(path string, src []byte) []SymbolInfo {
 	isTS := lang == regexTypeScript || lang == regexJava
 
 	for i, line := range lines {
+		// Fast first-byte check: skip lines that can't match any pattern.
+		if len(line) == 0 || !lang.firstBytes[line[0]] {
+			continue
+		}
 		for _, pat := range lang.patterns {
-			// Fast prefix check: skip regex if the line can't possibly match.
+			// Fast prefix/reject check: skip regex if the line can't possibly match.
 			if pat.prefix != "" && !strings.Contains(line, pat.prefix) {
+				continue
+			}
+			if pat.reject != "" && strings.Contains(line, pat.reject) {
 				continue
 			}
 			m := pat.re.FindStringSubmatch(line)
