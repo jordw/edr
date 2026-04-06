@@ -515,8 +515,23 @@ func (o *OnDemand) parseCandidateFiles(ctx context.Context, text string) map[str
 		return o.parseAll(ctx)
 	}
 
-	// Parse candidates in parallel, plus walk for unindexed files.
-	results := make(map[string]*cachedFile, len(candidatePaths))
+	// Pre-filter candidates: read file content and skip those that don't
+	// actually contain the search text (trigrams are approximate).
+	textLower := []byte(strings.ToLower(text))
+	var filteredPaths []string
+	for _, p := range candidatePaths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		if bytes.Contains(bytes.ToLower(data), textLower) {
+			filteredPaths = append(filteredPaths, p)
+		}
+	}
+
+	// Parse only confirmed candidates in parallel.
+	// Confirmed candidates ready for parallel parsing.
+	results := make(map[string]*cachedFile, len(filteredPaths))
 	var mu sync.Mutex
 	workers := runtime.NumCPU()
 	if workers > 8 {
@@ -544,15 +559,14 @@ func (o *OnDemand) parseCandidateFiles(ctx context.Context, text string) map[str
 		}()
 	}
 
-	// Feed indexed candidates
-	for _, p := range candidatePaths {
+	// Feed confirmed candidates
+	for _, p := range filteredPaths {
 		ch <- p
 	}
 
 	// Also parse unindexed files (they might contain the pattern).
 	// Skip when the index is complete — all files are already covered.
 	if !idx.IsComplete(o.root, o.edrDir) {
-		textLower := []byte(strings.ToLower(text))
 		WalkRepoFiles(o.root, func(path string) error {
 			if ctx.Err() != nil {
 				return ctx.Err()

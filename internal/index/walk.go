@@ -278,11 +278,13 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 		var err error
 		grepRe, err = regexp.Compile("(?i)(?:" + cfg.grep + ")")
 		if err != nil {
-			// Not a regex — push as SQL LIKE substring
+			// Not a regex — push as substring
+			sqlName = strings.ToLower(cfg.grep)
+		} else if !hasRegexMeta(cfg.grep) {
+			// Valid regex but is actually a plain literal — use as substring
+			// for trigram pre-filtering, AND keep grepRe for case-insensitive match.
 			sqlName = strings.ToLower(cfg.grep)
 		}
-		// If it IS valid regex, we could still push a simplified substring
-		// to SQL as a pre-filter, but for now keep it simple: regex = Go-side.
 	}
 
 	symbols, err := db.FilteredSymbols(ctx, sqlDir, cfg.symbolType, sqlName)
@@ -702,6 +704,17 @@ var langExtensions = map[string][]string{
 }
 
 // matchesLang returns true if the file matches the given language.
+// hasRegexMeta returns true if the string contains regex metacharacters.
+func hasRegexMeta(s string) bool {
+	for _, c := range s {
+		switch c {
+		case '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '^', '$', '\\':
+			return true
+		}
+	}
+	return false
+}
+
 func matchesLang(relPath, lang string) bool {
 	exts, ok := langExtensions[lang]
 	if !ok {
