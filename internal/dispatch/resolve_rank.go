@@ -76,6 +76,24 @@ func rankCandidates(candidates []index.SymbolInfo, query, root string) []rankedC
 			score += 5
 		}
 
+		// Span size: full definitions (many lines) beat forward declarations (1-2 lines)
+		span := int(s.EndLine - s.StartLine)
+		if span > 10 {
+			score += 10 // substantial body — likely the real definition
+		} else if span <= 1 {
+			score -= 10 // forward declaration or single-line stub
+		}
+
+		// Canonical path boost: include/ dirs and shallow paths are more likely
+		// to hold the "real" definition for widely-used types
+		if strings.HasPrefix(rel, "include/") {
+			score += 8
+		}
+		depth := strings.Count(rel, string(filepath.Separator))
+		if depth <= 2 {
+			score += 3 // shallow paths are more canonical
+		}
+
 		// Penalties
 		if isTestPath(rel) {
 			score -= 20
@@ -85,6 +103,9 @@ func rankCandidates(candidates []index.SymbolInfo, query, root string) []rankedC
 		}
 		if isVendorPath(rel) {
 			score -= 20
+		}
+		if strings.HasPrefix(rel, "arch/") && !strings.HasPrefix(rel, "arch/x86/") {
+			score -= 5 // non-x86 arch-specific code is rarely the target
 		}
 
 		ranked = append(ranked, rankedCandidate{
