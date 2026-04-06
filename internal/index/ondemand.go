@@ -474,6 +474,22 @@ func (o *OnDemand) Stats(ctx context.Context) (files int, symbols int, err error
 	return fileCount, symCount, nil
 }
 
+// FileCountExceeds returns true if the repo has more than n parseable files.
+// Stops walking as soon as the threshold is exceeded, avoiding a full walk.
+func (o *OnDemand) FileCountExceeds(n int) bool {
+	count := 0
+	WalkRepoFiles(o.root, func(path string) error {
+		if RegexSupported(path) {
+			count++
+			if count > n {
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
+	return count > n
+}
+
 func (o *OnDemand) IndexWarnings() []FileError { return nil }
 
 // --- Mutation ---

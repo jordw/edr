@@ -128,8 +128,10 @@ func findDepsTextBased(ctx context.Context, db SymbolStore, sym *SymbolInfo) ([]
 	}
 
 	// Phase 2: repo-wide lookup for remaining identifiers.
-	// Skip if same-file already found enough deps.
-	if len(deps) < 10 && len(otherIdents) > 0 {
+	// Skip if same-file already found enough deps, or if the repo is too
+	// large for a full parse to be worthwhile (>1000 files).
+	fileCount, _, _ := db.Stats(ctx)
+	if len(deps) < 10 && len(otherIdents) > 0 && fileCount <= 1000 {
 		allSyms, err := db.AllSymbols(ctx)
 		if err == nil {
 			byName := make(map[string][]SymbolInfo, len(allSyms)/2)

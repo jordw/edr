@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 )
 
@@ -165,17 +166,8 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 	totalMatches := 0
 	budgetUsed := 0
 
-	index.WalkRepoFiles(root, func(path string) error {
-		if totalMatches >= limit || (budget > 0 && budgetUsed >= budget) {
-			return filepath.SkipAll
-		}
-
-		rel, _ := filepath.Rel(root, path)
-		if rel == "" {
-			rel = path
-		}
-
-		// Apply include/exclude filters
+	// includeExcludeFilter returns true if the rel path passes include/exclude filters.
+	includeExcludeFilter := func(rel string) bool {
 		if len(includes) > 0 {
 			matched := false
 			for _, inc := range includes {
@@ -189,28 +181,30 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 				}
 			}
 			if !matched {
-				return nil
+				return false
 			}
 		}
 		for _, exc := range excludes {
 			if ok, _ := filepath.Match(exc, filepath.Base(rel)); ok {
-				return nil
+				return false
 			}
 			if ok, _ := filepath.Match(exc, rel); ok {
-				return nil
+				return false
 			}
 		}
+		return true
+	}
 
-		data, err := os.ReadFile(path)
+	// searchFile reads and searches a single file, appending matches.
+	searchFile := func(rel, absPath string) {
+		data, err := os.ReadFile(absPath)
 		if err != nil {
-			return nil
+			return
 		}
-
 		// Pre-filter: skip files that don't contain the pattern bytes
 		if !isRegex && !bytes.Contains(data, []byte(pattern)) {
-			return nil
+			return
 		}
-
 		lines := strings.Split(string(data), "\n")
 		for i, line := range lines {
 			if totalMatches >= limit || (budget > 0 && budgetUsed >= budget) {
@@ -240,6 +234,59 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 				totalMatches++
 			}
 		}
+	}
+
+	atLimit := func() bool {
+		return totalMatches >= limit || (budget > 0 && budgetUsed >= budget)
+	}
+
+	// Trigram pre-filter: for literal (non-regex) searches, use the index
+	// to skip files that can't contain the pattern.
+	edrDir := db.EdrDir()
+	var indexed map[string]struct{}
+	var candidates map[string]struct{}
+	if !isRegex {
+		tris := idx.QueryTrigrams(strings.ToLower(pattern))
+		indexed = idx.IndexedPaths(edrDir)
+		if indexed != nil && len(tris) > 0 {
+			if paths, ok := idx.Query(edrDir, tris); ok {
+				candidates = make(map[string]struct{}, len(paths))
+				for _, p := range paths {
+					candidates[p] = struct{}{}
+				}
+				// Search indexed candidates first
+				for _, rel := range paths {
+					if atLimit() {
+						break
+					}
+					if !includeExcludeFilter(rel) {
+						continue
+					}
+					searchFile(rel, filepath.Join(root, rel))
+				}
+			}
+		}
+	}
+
+	// Walk for unindexed files (or all files if no index/regex search)
+	index.WalkRepoFiles(root, func(path string) error {
+		if atLimit() {
+			return filepath.SkipAll
+		}
+		rel, _ := filepath.Rel(root, path)
+		if rel == "" {
+			rel = path
+		}
+		// Skip files already searched via index
+		if candidates != nil {
+			if _, ok := indexed[rel]; ok {
+				return nil
+			}
+		}
+		if !includeExcludeFilter(rel) {
+			return nil
+		}
+		searchFile(rel, path)
 		return nil
 	})
 
