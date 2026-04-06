@@ -522,6 +522,15 @@ var filesCmd = &cobra.Command{
 
 func init() { cmdspec.RegisterFlags(filesCmd.Flags(), "files") }
 
+var benchCmd = &cobra.Command{
+	Use:   "bench",
+	Short: ToolDesc["bench"],
+	Args:  cobra.NoArgs,
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "bench", args) },
+}
+
+func init() { rootCmd.AddCommand(benchCmd) }
+
 // buildNextResult constructs the result map for `edr next`.
 func buildNextResult(sess *session.Session, db index.SymbolStore, root, edrDir string) map[string]any {
 	result := map[string]any{}

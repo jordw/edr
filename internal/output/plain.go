@@ -96,6 +96,8 @@ func printPlain(e *Envelope) {
 			plainIndex(w, op)
 		case "files":
 			plainFiles(w, op)
+		case "bench":
+			plainBench(w, op)
 		default:
 			writeHeader(w, op)
 		}
@@ -773,6 +775,54 @@ func plainIndex(w *os.File, op Op) {
 }
 
 // hStr copies a string field from op to header, optionally renaming.
+func plainBench(w *os.File, op Op) {
+	// Header with repo info
+	h := map[string]any{}
+	if v, ok := op["root"].(string); ok {
+		h["root"] = v
+	}
+	if v := anyInt(op["indexed_files"]); v > 0 {
+		h["files"] = v
+	}
+	if v, ok := op["index_complete"].(bool); ok {
+		h["indexed"] = v
+	}
+	writeHeader(w, h)
+
+	// Targets
+	if targets, ok := op["targets"].(map[string]any); ok {
+		file, _ := targets["file"].(string)
+		dir, _ := targets["dir"].(string)
+		sym, _ := targets["symbol"].(string)
+		fmt.Fprintf(w, "targets: file=%s dir=%s symbol=%s\n\n", file, dir, sym)
+	}
+
+	// Results table
+	if benchmarks, ok := op["benchmarks"].([]any); ok {
+		for _, b := range benchmarks {
+			bm, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := bm["name"].(string)
+			if errMsg, ok := bm["error"].(string); ok {
+				fmt.Fprintf(w, "  %-25s  ERROR  %s\n", name, errMsg)
+				continue
+			}
+			ms := anyInt(bm["median_ms"])
+			status, _ := bm["status"].(string)
+			indicator := " "
+			switch status {
+			case "slow":
+				indicator = "!"
+			case "fast":
+				indicator = " "
+			}
+			fmt.Fprintf(w, " %s%-25s  %6dms  %s\n", indicator, name, ms, status)
+		}
+	}
+}
+
 func hStr(h map[string]any, hKey string, op Op, opKey string) {
 	if v, ok := op[opKey].(string); ok && v != "" {
 		h[hKey] = v

@@ -238,6 +238,11 @@ var Registry = []*Spec{
 		Category: CatRead, MinArgs: 1, MaxArgs: 1,
 		Flags: filesFlags,
 	},
+	{
+		Name: "bench", Desc: "Benchmark common operations on the current repo.",
+		Category: CatMeta, MinArgs: 0, MaxArgs: 0,
+		Flags: []FlagSpec{},
+	},
 }
 
 // --- Lookup ---
