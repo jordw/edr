@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -312,7 +313,20 @@ func runReadSymbol(ctx context.Context, db index.SymbolStore, root string, args 
 
 	sym, err := resolveSymbolArgs(ctx, db, root, args)
 	if err != nil {
-		return nil, err
+		// Smart resolution: rank ambiguous candidates instead of failing
+		var ambErr *index.AmbiguousSymbolError
+		if errors.As(err, &ambErr) {
+			ranked := rankCandidates(ambErr.Candidates, ambErr.Name, root)
+			if shouldAutoResolve(ranked, ambErr.Name) {
+				sym = &ranked[0].Symbol
+				err = nil
+			} else if len(ranked) > 0 {
+				return buildShortlist(ranked, ambErr.Name, root), nil
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// --signatures on a container: return compact stub instead of full body

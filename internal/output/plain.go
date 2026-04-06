@@ -186,7 +186,34 @@ func writeBody(w *os.File, body string) {
 	}
 }
 
+func plainResolveList(w *os.File, op Op) {
+	h := map[string]any{}
+	hStr(h, "query", op, "query")
+	hStr(h, "hint", op, "hint")
+	hStr(h, "root", op, "root")
+	writeHeader(w, h)
+
+	if candidates, ok := op["candidates"].([]any); ok {
+		for i, c := range candidates {
+			cm, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := cm["name"].(string)
+			typ, _ := cm["type"].(string)
+			file, _ := cm["file"].(string)
+			line := anyInt(cm["line"])
+			fmt.Fprintf(w, "  %d. %s:%d  %s %s\n", i+1, file, line, typ, name)
+		}
+	}
+}
+
 func plainRead(w *os.File, op Op) {
+	// Smart resolution shortlist — different shape than normal read
+	if resolve, ok := op["resolve"].(string); ok && resolve == "ambiguous" {
+		plainResolveList(w, op)
+		return
+	}
 	h := map[string]any{}
 	hStr(h, "file", op, "file")
 	hStr(h, "sym", op, "symbol")
