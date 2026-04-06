@@ -727,7 +727,13 @@ func repoMapLazy(ctx context.Context, db SymbolStore, root, edrDir string, cfg r
 	if !idx.IsComplete(root, edrDir) {
 		return "", RepoMapStats{}, false
 	}
-	// Get file list from the index — avoids walking the filesystem.
+
+	// Fast path: if symbol index exists, use it directly (no file parsing)
+	if idx.HasSymbolIndex(edrDir) {
+		return repoMapFromSymbolIndex(root, edrDir, cfg, budgetChars)
+	}
+
+	// Fallback: use file list from trigram index + lazy parsing
 	indexed := idx.IndexedPaths(edrDir)
 	if indexed == nil {
 		return "", RepoMapStats{}, false
@@ -868,6 +874,140 @@ func repoMapLazy(ctx context.Context, db SymbolStore, root, edrDir string, cfg r
 		TotalFiles:   totalFiles,
 		ShownSymbols: totalSymbols,
 		TotalSymbols: totalSymbols, // approximate — only parsed files counted
+		Files:        mapFiles,
+		DirSummary:   dirSummary,
+	}, true
+}
+
+// repoMapFromSymbolIndex builds a repo map purely from the persistent symbol index.
+// No file parsing — reads symbols from the index, groups by file, sorts, renders with budget.
+func repoMapFromSymbolIndex(root, edrDir string, cfg repoMapConfig, budgetChars int) (string, RepoMapStats, bool) {
+	allSyms, files := idx.LoadAllSymbols(edrDir)
+	if allSyms == nil {
+		return "", RepoMapStats{}, false
+	}
+
+	// Group symbols by file, filtering locals
+	type fileSyms struct {
+		rel  string
+		syms []idx.SymbolEntry
+	}
+	byFile := make(map[uint32]*fileSyms)
+	for _, s := range allSyms {
+		fs := byFile[s.FileID]
+		if fs == nil {
+			rel := ""
+			if int(s.FileID) < len(files) {
+				rel = files[s.FileID].Path
+			}
+			fs = &fileSyms{rel: rel}
+			byFile[s.FileID] = fs
+		}
+		// Filter locals: skip symbols nested inside functions/methods/variables
+		if cfg.hideLocals {
+			isLocal := false
+			for _, other := range byFile[s.FileID].syms {
+				switch other.Kind.String() {
+				case "function", "method", "variable":
+					if s.StartLine > other.StartLine && s.EndLine <= other.EndLine {
+						isLocal = true
+					}
+				}
+			}
+			if isLocal {
+				continue
+			}
+		}
+		fs.syms = append(fs.syms, s)
+	}
+
+	// Sort file IDs by render order
+	fileIDs := make([]uint32, 0, len(byFile))
+	for id, fs := range byFile {
+		if len(fs.syms) > 0 {
+			fileIDs = append(fileIDs, id)
+		}
+	}
+	sort.Slice(fileIDs, func(i, j int) bool {
+		ri := byFile[fileIDs[i]].rel
+		rj := byFile[fileIDs[j]].rel
+		ci := isCodeFile(ri)
+		cj := isCodeFile(rj)
+		if ci != cj { return ci }
+		ti := isTestOrBenchFile(ri)
+		tj := isTestOrBenchFile(rj)
+		if ti != tj { return !ti }
+		di := strings.Count(ri, string(filepath.Separator))
+		dj := strings.Count(rj, string(filepath.Separator))
+		if di != dj { return di < dj }
+		return ri < rj
+	})
+
+	totalFiles := len(fileIDs)
+	totalSymbols := len(allSyms)
+
+	// Render with budget
+	var b strings.Builder
+	var mapFiles []MapFileEntry
+	filesRendered := 0
+	shownSymbols := 0
+
+	for _, fid := range fileIDs {
+		fs := byFile[fid]
+		entry := MapFileEntry{File: fs.rel}
+		fmt.Fprintf(&b, "\n%s\n", fs.rel)
+		for _, s := range fs.syms {
+			fmt.Fprintf(&b, "  %s %s [%d-%d]\n", s.Kind, s.Name, s.StartLine, s.EndLine)
+			entry.Symbols = append(entry.Symbols, MapSymbolEntry{
+				Name: s.Name, Kind: s.Kind.String(),
+				Line: int(s.StartLine), EndLine: int(s.EndLine),
+			})
+			shownSymbols++
+		}
+		mapFiles = append(mapFiles, entry)
+		filesRendered++
+		if b.Len() >= budgetChars {
+			break
+		}
+	}
+
+	// Use header for accurate total file count
+	if h, err := idx.ReadHeader(edrDir); err == nil {
+		totalFiles = int(h.NumFiles)
+	}
+
+	truncated := filesRendered < totalFiles
+	budgetUsed := 0
+	if truncated {
+		budgetUsed = b.Len() / 4
+	}
+
+	// Dir summary
+	var dirSummary []DirSummaryEntry
+	if truncated && filesRendered*5 < totalFiles {
+		dirFiles := map[string]int{}
+		for _, fs := range byFile {
+			dir := strings.SplitN(fs.rel, string(filepath.Separator), 2)[0]
+			if !strings.Contains(fs.rel, string(filepath.Separator)) {
+				dir = "."
+			}
+			dirFiles[dir]++
+		}
+		for dir, count := range dirFiles {
+			dirSummary = append(dirSummary, DirSummaryEntry{Dir: dir, Files: count})
+		}
+		sort.Slice(dirSummary, func(i, j int) bool {
+			return dirSummary[i].Files > dirSummary[j].Files
+		})
+	}
+
+	return b.String(), RepoMapStats{
+		Truncated:    truncated,
+		BudgetUsed:   budgetUsed,
+		ShownFiles:   filesRendered,
+		TotalFiles:   totalFiles,
+		ShownSymbols: shownSymbols,
+		TotalSymbols: totalSymbols,
 		Files:        mapFiles,
 		DirSummary:   dirSummary,
 	}, true

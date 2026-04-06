@@ -303,7 +303,8 @@ func (o *OnDemand) parseDir(ctx context.Context, dir string) map[string]*cachedF
 }
 
 func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo, error) {
-	// Fast path: use symbol index if available
+	// Fast path: use symbol index if available (skip when dirty — edits may have changed symbols)
+	if !idx.IsDirty(o.edrDir) {
 	if entries := idx.LookupSymbols(o.edrDir, name); len(entries) > 0 {
 		_, files := idx.LoadAllSymbols(o.edrDir)
 		var candidates []SymbolInfo
@@ -325,6 +326,7 @@ func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo,
 			return best, nil
 		}
 		return nil, &AmbiguousSymbolError{Name: name, Root: o.root, Candidates: candidates}
+	}
 	}
 
 	all := o.parseCandidateFiles(ctx, name)
@@ -391,12 +393,15 @@ func (o *OnDemand) FilteredSymbols(ctx context.Context, dir, symbolType, namePat
 		}
 	}
 
+	// Fast path: use symbol index when available and no dir filter
+	if absDir == "" && idx.HasSymbolIndex(o.edrDir) && !idx.IsDirty(o.edrDir) {
+		return o.filteredSymbolsFromIndex(namePattern, symbolType)
+	}
+
 	var parsed map[string]*cachedFile
 	if absDir != "" {
 		parsed = o.parseDir(ctx, absDir)
 	} else if namePattern != "" {
-		// Use trigram index to narrow candidate files: symbol names appear
-		// in source, so files not containing the pattern can't have matching symbols.
 		parsed = o.parseCandidateFiles(ctx, namePattern)
 	} else {
 		parsed = o.parseAll(ctx)
@@ -417,6 +422,35 @@ func (o *OnDemand) FilteredSymbols(ctx context.Context, dir, symbolType, namePat
 			}
 			results = append(results, s)
 		}
+	}
+	return results, nil
+}
+
+// filteredSymbolsFromIndex reads symbols directly from the persistent index.
+func (o *OnDemand) filteredSymbolsFromIndex(namePattern, symbolType string) ([]SymbolInfo, error) {
+	allSyms, files := idx.LoadAllSymbols(o.edrDir)
+	if allSyms == nil {
+		return nil, nil
+	}
+
+	lowerPattern := strings.ToLower(namePattern)
+	var results []SymbolInfo
+	for _, s := range allSyms {
+		if symbolType != "" && s.Kind.String() != symbolType {
+			continue
+		}
+		if namePattern != "" && !strings.Contains(strings.ToLower(s.Name), lowerPattern) {
+			continue
+		}
+		file := ""
+		if int(s.FileID) < len(files) {
+			file = filepath.Join(o.root, files[s.FileID].Path)
+		}
+		results = append(results, SymbolInfo{
+			Name: s.Name, Type: s.Kind.String(), File: file,
+			StartLine: s.StartLine, EndLine: s.EndLine,
+			StartByte: s.StartByte, EndByte: s.EndByte,
+		})
 	}
 	return results, nil
 }

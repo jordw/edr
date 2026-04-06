@@ -230,7 +230,7 @@ func GetStatus(repoRoot, edrDir string) Status {
 		s.Files = int(h.NumFiles)
 		s.Trigrams = int(h.NumTrigrams)
 		s.GitMtime = h.GitMtime
-		s.Stale = gitIndexMtime(repoRoot) != h.GitMtime
+		s.Stale = gitIndexMtime(repoRoot) != h.GitMtime || IsDirty(edrDir)
 	} else {
 		s.Stale = true
 	}
@@ -369,6 +369,16 @@ func rebuildSmart(root, edrDir string, walkFn func(root string, fn func(path str
 		Files:    files,
 		Trigrams: entries,
 		Postings: postings,
+	}
+
+	// Preserve symbol data from old index if available.
+	// rebuildSmart only updates trigrams; full symbol rebuild requires edr index.
+	if old != nil && len(old.Symbols) > 0 {
+		d.Symbols = old.Symbols
+		d.NamePosts = old.NamePosts
+		d.NamePostings = old.NamePostings
+		d.Header.NumSymbols = old.Header.NumSymbols
+		d.Header.NumNameKeys = old.Header.NumNameKeys
 	}
 
 	// If timed out, zero the git mtime so next tick retries the remaining files
