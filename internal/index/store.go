@@ -22,11 +22,11 @@ type SymbolStore interface {
 	AllSymbols(ctx context.Context) ([]SymbolInfo, error)
 	FilteredSymbols(ctx context.Context, dir, symbolType, namePattern string) ([]SymbolInfo, error)
 
-	// Cross-file references
+	// Cross-file references (heuristic: body-text substring matching, not semantic)
 	FindSemanticCallers(ctx context.Context, symbolName, symbolFile string) ([]SymbolInfo, error)
 	FindSameFileCallers(ctx context.Context, symbolName, symbolFile string) ([]SymbolInfo, error)
 	FindSemanticReferences(ctx context.Context, symbolName, symbolFile string) ([]SymbolInfo, error)
-	HasRefs(ctx context.Context) bool
+	HasRefs(ctx context.Context) bool // Deprecated: always true, refs are heuristic
 
 	// File metadata
 	GetFileHash(ctx context.Context, path string) (string, error)

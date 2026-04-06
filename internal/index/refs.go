@@ -70,12 +70,12 @@ func findWordOccurrences(src []byte, file, name string, re *regexp.Regexp) []Sym
 }
 
 // FindReferencesInFile searches for references to a symbol name.
+// Uses heuristic body-text matching — not a true semantic reference index.
 func FindReferencesInFile(ctx context.Context, db SymbolStore, symbolName, symbolFile string) ([]SymbolInfo, error) {
-	if db.HasRefs(ctx) {
-		results, err := db.FindSemanticReferences(ctx, symbolName, symbolFile)
-		if err == nil && len(results) > 0 {
-			return results, nil
-		}
+	// Try body-substring matching first (fast heuristic, not semantic).
+	results, err := db.FindSemanticReferences(ctx, symbolName, symbolFile)
+	if err == nil && len(results) > 0 {
+		return results, nil
 	}
 	return findReferencesTextBased(ctx, db, symbolName)
 }
