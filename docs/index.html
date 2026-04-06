@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>edr — code editing tools for agents</title>
-<meta name="description" content="File tools for coding agents that front-load context. Every tool call returns what the agent needs next.">
+<meta name="description" content="Code-aware file tools for coding agents that front-load context. Symbol-level reads, structural navigation, and verification feedback.">
 <meta property="og:title" content="edr — code editing tools for agents">
-<meta property="og:description" content="File tools for coding agents that front-load context. Read a function — get its body plus what it calls. Edit code — get the updated function back.">
+<meta property="og:description" content="Code-aware file tools for coding agents. Symbol-level reads, structural navigation, and verification feedback. Fully local, no telemetry.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://github.com/jordw/edr">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%3E</text></svg>">
@@ -242,8 +242,8 @@ footer {
   <h1>edr</h1>
   <p class="tagline">code editing tools for agents</p>
   <p class="pitch">
-    <strong>edr replaces built-in file tools with ones that front-load context.</strong>
-    Read a function — get its body plus what it calls. Edit code — get the updated function back. Orient in a codebase — get structure, not a file listing.
+    <strong>edr gives coding agents code-aware file tools that front-load the context needed for the next step.</strong>
+    Instead of raw files and grep output, edr returns structured code context — symbols, not file listings; diffs with verification, not blind writes.
   </p>
   <div class="install-bar">
     <span class="prompt">$</span>
@@ -260,16 +260,16 @@ footer {
 <!-- Pillars -->
 <div class="pillars">
   <div class="pillar">
-    <h3>Front-loaded context</h3>
-    <p>Read a function — get its body plus what it calls. Edit code — get the updated function back. Each response includes what the agent needs next.</p>
+    <h3>Symbol-level reads and edits</h3>
+    <p>Focus on one function, not the 400-line file around it. Scope edits to a symbol. Get verification feedback after changes. The agent sees what it needs.</p>
   </div>
   <div class="pillar">
-    <h3>One call, not five</h3>
-    <p>Batch focus, orient, and edit into one call. The common pattern — read a symbol, edit it — is one command: <code>edr -f file:Sym -e --old X --new Y</code></p>
+    <h3>Structural navigation</h3>
+    <p>Orient shows what's in a directory in terms of symbols and files. Focus resolves ambiguous names with ranked matching. Budget controls size output for agent context windows.</p>
   </div>
   <div class="pillar">
     <h3>No repeated work</h3>
-    <p>edr tracks what the agent has seen. Re-reads return only what changed. Zero config.</p>
+    <p>edr tracks what the agent has seen. Repeated reads produce zero output. Sessions, dedup, and indexing — zero config.</p>
   </div>
 </div>
 
@@ -277,7 +277,7 @@ footer {
 <section>
   <h2>Why it matters</h2>
   <p>An agent that reads a 400-line file to find one function just added 15KB of noise to reason over. It's slower, more likely to get confused, and burns tokens on content that doesn't matter. Multiply that by every read, search, and test run in a task.</p>
-  <p>edr attacks this directly: <strong>precise reads</strong> (one function, not the file around it), <strong>fewer round-trips</strong> (batch three reads into one call), and <strong>no redundancy</strong> (re-reads return only what changed). The result is agents that finish faster and make fewer mistakes.</p>
+  <p>edr attacks this directly: <strong>precise reads</strong> (one symbol, not the file around it), <strong>structural navigation</strong> (orient and resolve by name, not grep), and <strong>no redundancy</strong> (repeated reads produce zero output). The result is agents that finish faster and make fewer mistakes.</p>
 </section>
 
 <!-- Example -->
@@ -311,7 +311,7 @@ edr <span class="flag">-e</span> src/scheduler.py <span class="flag">--old</span
 <section>
     <h2>How it compares</h2>
   <p>Without edr, agents grep to find code, read line ranges, guess what's relevant, edit, then re-read to check. Each step is a separate tool call with context the agent has to filter.</p>
-  <p>With edr, <code>focus file:Symbol</code> returns the function body plus what it calls. <code>edit</code> returns the updated code plus build errors with the broken function included. The agent makes fewer decisions about what to read because edr front-loads the right context.</p>
+  <p>With edr, <code>focus file:Symbol</code> returns the function body with relevant context. <code>edit</code> returns the diff and updated code with optional build verification. The agent makes fewer decisions about what to read because edr front-loads useful context.</p>
   <div class="table-wrap">
   <table>
     <thead><tr><th>Operation</th><th>What the agent gets</th></tr></thead>
