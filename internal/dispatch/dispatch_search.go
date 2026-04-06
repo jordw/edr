@@ -138,7 +138,7 @@ func runSymbolSearch(ctx context.Context, db index.SymbolStore, root, pattern st
 func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern string, flags map[string]any) (any, error) {
 	budget := flagInt(flags, "budget", defaultSearchBudget)
 	limit := flagInt(flags, "limit", 100)
-	contextLines := flagInt(flags, "context", 0)
+	contextLines := flagInt(flags, "context", 2) // default 2 lines context
 	noGroup := flagBool(flags, "no_group", false)
 	includes := flagStringSlice(flags, "include")
 	excludes := flagStringSlice(flags, "exclude")

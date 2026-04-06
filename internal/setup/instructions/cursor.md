@@ -25,11 +25,11 @@ edr orient cmd/ --budget 50                 # cap output size
 
 edr focus file.go                       # read file (smart budget)
 edr focus file.go:FuncName              # read specific symbol
+edr focus file.go:10-25                 # read line range
 edr focus FuncName                      # smart resolve (ranks matches)
-edr focus file.go --sig                 # signatures only (75-86% fewer tokens)
+edr focus file.go --sig                 # signatures only
 edr focus file.go:Func --expand deps    # include dependency signatures
 edr focus file.go --skeleton            # collapsed blocks
-edr focus file.go --no-expand           # suppress auto-expand
 
 ## Change code — `edr edit`
 
