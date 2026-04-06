@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jordw/edr/internal/edit"
+	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 )
@@ -547,7 +548,13 @@ func fileMtime(path string) string {
 // findCallersWithFallback tries semantic callers first, falls back to text-based refs.
 func findCallersWithFallback(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo) []index.SymbolInfo {
 	// For large repos, skip the full-repo parse and use same-file callers only.
-	files, _, _ := db.Stats(ctx)
+	// Use index header for fast file count when available.
+	files := 0
+	if h, err := idx.ReadHeader(db.EdrDir()); err == nil {
+		files = int(h.NumFiles)
+	} else {
+		files, _, _ = db.Stats(ctx)
+	}
 	if files > 1000 {
 		callers, _ := db.FindSameFileCallers(ctx, sym.Name, sym.File)
 		return callers

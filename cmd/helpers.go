@@ -22,8 +22,9 @@ func extractFlags(cmd *cobra.Command) map[string]any {
 		key := strings.ReplaceAll(name, "-", "_")
 		switch f.Value.Type() {
 		case "bool":
-			// Handle --no-<flag> negation: set the positive flag to false
+			// Handle --no-<flag> negation: set both the no_ key and the positive key
 			if strings.HasPrefix(key, "no_") {
+				flags[key] = true
 				positiveKey := strings.TrimPrefix(key, "no_")
 				flags[positiveKey] = false
 				return

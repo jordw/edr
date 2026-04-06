@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/jordw/edr/internal/idx"
 )
 
 // findReferencesTextBased scans all repo files for whole-word matches of symbolName.
@@ -130,7 +132,13 @@ func findDepsTextBased(ctx context.Context, db SymbolStore, sym *SymbolInfo) ([]
 	// Phase 2: repo-wide lookup for remaining identifiers.
 	// Skip if same-file already found enough deps, or if the repo is too
 	// large for a full parse to be worthwhile (>1000 files).
-	fileCount, _, _ := db.Stats(ctx)
+	// Use the index header for a fast file count when available.
+	fileCount := 0
+	if h, err := idx.ReadHeader(db.EdrDir()); err == nil {
+		fileCount = int(h.NumFiles)
+	} else {
+		fileCount, _, _ = db.Stats(ctx)
+	}
 	if len(deps) < 10 && len(otherIdents) > 0 && fileCount <= 1000 {
 		allSyms, err := db.AllSymbols(ctx)
 		if err == nil {
