@@ -182,7 +182,10 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 		if len(args) > 0 {
 			label = cmdName + "_" + args[0]
 		}
-		sess.CreateAutoCheckpoint(filepath.Join(edrDir, "sessions"), root, label, dirtyFiles)
+		if _, err := sess.CreateAutoCheckpoint(filepath.Join(edrDir, "sessions"), root, label, dirtyFiles); err != nil {
+			// Log checkpoint failure but don't block the edit
+			fmt.Fprintf(os.Stderr, "edr: checkpoint failed: %v\n", err)
+		}
 	}
 
 	env := output.NewEnvelope(cmdName)
@@ -370,6 +373,27 @@ var statusCmd = &cobra.Command{
 		}
 
 		result := buildNextResult(sess, db, root, edrDir)
+
+		if flagBool, _ := flags["debug"].(bool); flagBool {
+			sessDir := filepath.Join(edrDir, "sessions")
+			sessionID := session.ResolveSessionID()
+			result["debug"] = map[string]any{
+				"root":       root,
+				"edr_dir":    edrDir,
+				"sess_dir":   sessDir,
+				"session_id": sessionID,
+				"sess_file":  filepath.Join(sessDir, sessionID+".json"),
+				"checkpoints": func() []string {
+					infos := session.ListCheckpoints(sessDir)
+					ids := make([]string, len(infos))
+					for i, c := range infos {
+						ids[i] = c.ID
+					}
+					return ids
+				}(),
+			}
+		}
+
 		env := output.NewEnvelope("status")
 		env.AddOp("s0", "status", result)
 		env.ComputeOK()

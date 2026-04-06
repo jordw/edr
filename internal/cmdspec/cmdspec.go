@@ -202,6 +202,7 @@ var Registry = []*Spec{
 		Flags: []FlagSpec{
 			{Name: "focus", Type: FlagString, Default: "", Desc: "Set session focus (empty string clears)"},
 			{Name: "reset", Type: FlagBool, Default: false, Desc: "Clear session and checkpoints"},
+			{Name: "debug", Type: FlagBool, Default: false, Desc: "Show internal session/checkpoint paths for diagnostics"},
 		},
 	},
 	{

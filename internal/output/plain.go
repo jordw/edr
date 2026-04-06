@@ -635,6 +635,11 @@ func plainNext(w *os.File, op Op) {
 		h["external_changes"] = len(ext)
 	}
 
+	// Debug diagnostics (--debug flag)
+	if debug, ok := op["debug"]; ok {
+		h["debug"] = debug
+	}
+
 	writeHeader(w, h)
 
 	// Focus line

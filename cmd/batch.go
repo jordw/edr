@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
 	"strconv"
 
@@ -728,7 +729,9 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 				}
 			}
 			sessDir := filepath.Join(db.EdrDir(), "sessions")
-			sess.CreateAutoCheckpoint(sessDir, db.Root(), "batch", dirtyFiles)
+			if _, err := sess.CreateAutoCheckpoint(sessDir, db.Root(), "batch", dirtyFiles); err != nil {
+				fmt.Fprintf(os.Stderr, "edr: checkpoint failed: %v\n", err)
+			}
 		}
 	}
 
