@@ -254,6 +254,7 @@ func plainSearch(w *os.File, op Op) {
 	h["n"] = anyInt(op["total_matches"])
 	hTrunc(h, op)
 	hStr(h, "hint", op, "hint")
+	hStr(h, "root", op, "root")
 	writeHeader(w, h)
 
 	// Flat matches
@@ -410,6 +411,7 @@ func plainMap(w *os.File, op Op) {
 	}
 	hTrunc(h, op)
 	hStr(h, "hint", op, "hint")
+	hStr(h, "root", op, "root")
 	writeHeader(w, h)
 
 	// Structured map: list of file entries
@@ -727,6 +729,7 @@ func plainFiles(w *os.File, op Op) {
 		h["source"] = v
 	}
 	hTrunc(h, op)
+	hStr(h, "root", op, "root")
 	writeHeader(w, h)
 	// Body: one file per line
 	if files := toStringSlice(op["files"]); len(files) > 0 {

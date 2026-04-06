@@ -12,6 +12,7 @@ import (
 
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
+	"github.com/jordw/edr/internal/output"
 )
 
 const defaultSearchBudget = 2000
@@ -120,6 +121,9 @@ func runSymbolSearch(ctx context.Context, db index.SymbolStore, root, pattern st
 	result := map[string]any{
 		"total_matches": totalMatches,
 		"type":          "search",
+	}
+	if totalMatches == 0 {
+		result["root"] = output.Rel(root)
 	}
 	if len(files) > 0 {
 		result["files"] = toAnySlice(files)
@@ -294,6 +298,10 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 	result := map[string]any{
 		"total_matches": totalMatches,
 		"type":          "search",
+	}
+	// Surface repo root on empty results so agents can detect wrong-repo targeting.
+	if totalMatches == 0 {
+		result["root"] = output.Rel(root)
 	}
 
 	if noGroup || len(matches) == 0 {

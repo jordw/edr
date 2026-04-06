@@ -321,6 +321,8 @@ func runRepoMap(ctx context.Context, db index.SymbolStore, flags map[string]any)
 		dir := flagString(flags, "dir", "")
 		lang := flagString(flags, "lang", "")
 		symType := flagString(flags, "type", "")
+		// Surface repo root so agents can detect wrong-repo targeting.
+		result["root"] = output.Rel(db.Root())
 		if grep != "" || dir != "" || lang != "" || symType != "" {
 			parts := []string{}
 			if grep != "" {

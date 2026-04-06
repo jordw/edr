@@ -11,6 +11,7 @@ import (
 
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
+	"github.com/jordw/edr/internal/output"
 )
 
 const defaultFilesBudget = 2000
@@ -90,7 +91,11 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 		source = "scan"
 	}
 	sort.Strings(matches)
-	return filesResult(pattern, matches, source, budget), nil
+	result := filesResult(pattern, matches, source, budget)
+	if len(matches) == 0 {
+		result["root"] = output.Rel(root)
+	}
+	return result, nil
 }
 
 func fileMatches(data, searchBytes, searchLower []byte, caseSensitive bool) bool {
