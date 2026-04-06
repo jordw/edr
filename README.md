@@ -5,9 +5,10 @@
 **edr replaces built-in file tools with ones that front-load context.** Read a function — get its body plus what it calls. Edit code — get the updated function back. Orient in a codebase — get structure, not a file listing. Each response includes what the agent needs for its next decision, not just what it asked for.
 
 - **`focus file:Symbol`** — function body + dependency signatures. Not the 400-line file around it.
+- **`focus SymbolName`** — smart resolve: ranks matches, auto-opens the best one.
 - **`edit --old X --new Y`** — diff + updated function + build errors (with `--verify`).
 - **`orient`** — budget-controlled structural overview. Symbols, not filenames.
-- **Batch** — `edr -f file:Sym -e --old X --new Y` reads then edits in one call.
+- **Batch** — `edr --focus file:Sym --edit --old X --new Y` reads then edits in one call.
 - **Sessions** — re-reads return `{unchanged}`. The agent never processes the same content twice.
 
 Works with any agent that can run shell commands. Fully local, no telemetry.
@@ -85,7 +86,7 @@ edr parses files on demand with pure-Go regex-based symbol extraction — no pre
 
 **Sessions.** edr tracks what the agent has already seen and only returns what changed. Second read of an unchanged file: zero output. Zero config.
 
-**Search index.** `edr files "pattern"` finds files containing text. A trigram index builds in the background and accelerates case-sensitive queries — 20-30x faster than scanning on large repos. No setup required; `edr index` forces a full build if needed.
+**Search index.** `edr index` builds a trigram index that accelerates `files`, `orient --grep`, `focus SymbolName`, and text search. On the Linux kernel (93K files), indexed operations complete in 0.02-0.5s vs 3-4s without. The index builds incrementally in the background; `edr index` forces a full build. `edr bench` measures real performance on your repo.
 
 ## Commands
 
@@ -96,36 +97,32 @@ edr parses files on demand with pure-Go regex-based symbol extraction — no pre
 | `orient [path]` | Structural overview of a directory or project (replaces `map`) |
 | `focus file[:Symbol]` | Read file or symbol with context (replaces `read`) |
 | `edit file` | Edit, write, create files. `--verify` to check build. |
-| `status` | Session state, build state |
+| `status` | Repo root, index coverage, undo, build state, warnings |
 | `undo` | Revert last edit/write (auto-checkpointed) |
 | `files "pattern"` | Find files containing text (trigram-accelerated) |
 | `index` | Build or inspect the search index |
+| `bench` | Benchmark operations on current repo |
 | `setup` | Install agent instructions |
 
 Old command names `map` and `read` still work as aliases for `orient` and `focus`.
 
 ### Batch flags
 
-`-f` focus, `-o` orient, `-e` edit. Modifier flags follow each op. Plan what you need, then combine into one call:
+Chain operations with `--focus`, `--orient`, `--search`, `--edit`, `--write` (short: `-f -o -s -e -w`). File carries forward. Edit includes read-back automatically.
 
 ```bash
-edr -f file[:Symbol]              # Focus on file or symbol
-edr -f file:Class --sig           # Signatures only (no bodies)
-edr -o --dir src/                 # Structural overview of a directory
-edr -e file --old "x" --new "y"   # Edit (--verify to check build)
-edr -e file --content "..." --inside Class  # Write (via edit)
+edr --focus file:Sym --sig --orient cmd/
+edr --focus file:Func --edit --old "x" --new "y"
+edr --search "TODO" --include "*.go"
+edr --focus file:Func --expand callers
 ```
 
-Combine freely. One call to gather context, one to mutate:
+### Cross-repo targeting
 
 ```bash
-edr -f f.go --sig -f g.go:Func --expand -o --dir cmd/
-edr -f f.go:Sym -e f.go --old "x" --new "y" -f f.go:Sym   # post-edit read
-edr -e f.go --old "a" --new "b" -e g.go --old "c" --new "d"
-edr -e f.go --content "..." --mkdir
+edr focus file:Symbol --root /path/to/repo
+export EDR_ROOT=/path/to/repo    # set once, all commands use it
 ```
-
-Aliases `-r` (focus) and `-m` (orient) still work.
 
 ### Batch modifiers
 
