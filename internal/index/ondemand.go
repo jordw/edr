@@ -352,12 +352,38 @@ func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo,
 }
 
 func (o *OnDemand) SearchSymbols(ctx context.Context, pattern string, limit ...int) ([]SymbolInfo, error) {
-	all := o.parseCandidateFiles(ctx, pattern)
 	lim := 50
 	if len(limit) > 0 && limit[0] > 0 {
 		lim = limit[0]
 	}
 
+	// Fast path: scan symbol names from index
+	if !idx.IsDirty(o.edrDir) && idx.HasSymbolIndex(o.edrDir) {
+		allSyms, files := idx.LoadAllSymbols(o.edrDir)
+		if allSyms != nil {
+			lowerPattern := strings.ToLower(pattern)
+			var results []SymbolInfo
+			for _, s := range allSyms {
+				if strings.Contains(strings.ToLower(s.Name), lowerPattern) {
+					file := ""
+					if int(s.FileID) < len(files) {
+						file = filepath.Join(o.root, files[s.FileID].Path)
+					}
+					results = append(results, SymbolInfo{
+						Name: s.Name, Type: s.Kind.String(), File: file,
+						StartLine: s.StartLine, EndLine: s.EndLine,
+						StartByte: s.StartByte, EndByte: s.EndByte,
+					})
+					if len(results) >= lim {
+						return results, nil
+					}
+				}
+			}
+			return results, nil
+		}
+	}
+
+	all := o.parseCandidateFiles(ctx, pattern)
 	lowerPattern := strings.ToLower(pattern)
 	var results []SymbolInfo
 	for _, cf := range all {
@@ -374,6 +400,26 @@ func (o *OnDemand) SearchSymbols(ctx context.Context, pattern string, limit ...i
 }
 
 func (o *OnDemand) AllSymbols(ctx context.Context) ([]SymbolInfo, error) {
+	// Fast path: read from symbol index
+	if !idx.IsDirty(o.edrDir) && idx.HasSymbolIndex(o.edrDir) {
+		allSyms, files := idx.LoadAllSymbols(o.edrDir)
+		if allSyms != nil {
+			results := make([]SymbolInfo, 0, len(allSyms))
+			for _, s := range allSyms {
+				file := ""
+				if int(s.FileID) < len(files) {
+					file = filepath.Join(o.root, files[s.FileID].Path)
+				}
+				results = append(results, SymbolInfo{
+					Name: s.Name, Type: s.Kind.String(), File: file,
+					StartLine: s.StartLine, EndLine: s.EndLine,
+					StartByte: s.StartByte, EndByte: s.EndByte,
+				})
+			}
+			return results, nil
+		}
+	}
+
 	all := o.parseAll(ctx)
 	var results []SymbolInfo
 	for _, cf := range all {

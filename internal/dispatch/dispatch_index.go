@@ -34,6 +34,9 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 			result["trigrams"] = s.Trigrams
 			result["size_bytes"] = s.SizeBytes
 			result["stale"] = s.Stale
+			if h, err := idx.ReadHeader(edrDir); err == nil && h.NumSymbols > 0 {
+				result["symbols"] = int(h.NumSymbols)
+			}
 			if total > 0 {
 				result["coverage"] = fmt.Sprintf("%.0f%%", float64(s.Files)/float64(total)*100)
 			}
@@ -67,10 +70,14 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 	}
 
 	s := idx.GetStatus(root, edrDir)
-	return map[string]any{
+	result := map[string]any{
 		"status":        "built",
 		"files_indexed": s.Files,
 		"trigrams":      s.Trigrams,
 		"size_bytes":    s.SizeBytes,
-	}, nil
+	}
+	if h, err := idx.ReadHeader(edrDir); err == nil && h.NumSymbols > 0 {
+		result["symbols"] = int(h.NumSymbols)
+	}
+	return result, nil
 }

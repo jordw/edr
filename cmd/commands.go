@@ -550,6 +550,9 @@ func buildNextResult(sess *session.Session, db index.SymbolStore, root, edrDir s
 			"files":    int(h.NumFiles),
 			"complete": idx.IsComplete(root, edrDir),
 		}
+		if h.NumSymbols > 0 {
+			idxInfo["symbols"] = int(h.NumSymbols)
+		}
 		result["index"] = idxInfo
 	} else {
 		result["index"] = map[string]any{"files": 0, "complete": false}

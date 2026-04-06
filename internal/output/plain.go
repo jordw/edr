@@ -645,8 +645,11 @@ func plainNext(w *os.File, op Op) {
 	// Add index summary to header
 	if idxInfo, ok := op["index"].(map[string]any); ok {
 		files := anyInt(idxInfo["files"])
+		symbols := anyInt(idxInfo["symbols"])
 		complete, _ := idxInfo["complete"].(bool)
-		if complete {
+		if complete && symbols > 0 {
+			h["index"] = fmt.Sprintf("%d files, %d symbols", files, symbols)
+		} else if complete {
 			h["index"] = fmt.Sprintf("%d files", files)
 		} else if files > 0 {
 			h["index"] = fmt.Sprintf("%d files (stale)", files)
