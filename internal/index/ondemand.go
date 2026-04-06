@@ -303,6 +303,30 @@ func (o *OnDemand) parseDir(ctx context.Context, dir string) map[string]*cachedF
 }
 
 func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo, error) {
+	// Fast path: use symbol index if available
+	if entries := idx.LookupSymbols(o.edrDir, name); len(entries) > 0 {
+		_, files := idx.LoadAllSymbols(o.edrDir)
+		var candidates []SymbolInfo
+		for _, e := range entries {
+			file := ""
+			if int(e.FileID) < len(files) {
+				file = filepath.Join(o.root, files[e.FileID].Path)
+			}
+			candidates = append(candidates, SymbolInfo{
+				Name: e.Name, Type: e.Kind.String(), File: file,
+				StartLine: e.StartLine, EndLine: e.EndLine,
+				StartByte: e.StartByte, EndByte: e.EndByte,
+			})
+		}
+		if len(candidates) == 1 {
+			return &candidates[0], nil
+		}
+		if best := preferDefinition(candidates); best != nil {
+			return best, nil
+		}
+		return nil, &AmbiguousSymbolError{Name: name, Root: o.root, Candidates: candidates}
+	}
+
 	all := o.parseCandidateFiles(ctx, name)
 	var candidates []SymbolInfo
 	for _, cf := range all {

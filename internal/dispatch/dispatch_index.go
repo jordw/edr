@@ -45,8 +45,23 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 		return result, nil
 	}
 
-	// Full build
-	err := idx.BuildFullFromWalk(root, edrDir, index.WalkRepoFiles, nil)
+	// Full build with symbol extraction
+	symbolExtractor := func(path string, data []byte) []idx.SymbolEntry {
+		syms := index.RegexParse(path, data)
+		entries := make([]idx.SymbolEntry, len(syms))
+		for i, s := range syms {
+			entries[i] = idx.SymbolEntry{
+				Name:      s.Name,
+				Kind:      idx.ParseKind(s.Type),
+				StartLine: s.StartLine,
+				EndLine:   s.EndLine,
+				StartByte: s.StartByte,
+				EndByte:   s.EndByte,
+			}
+		}
+		return entries
+	}
+	err := idx.BuildFullFromWalk(root, edrDir, index.WalkRepoFiles, nil, symbolExtractor)
 	if err != nil {
 		return nil, err
 	}

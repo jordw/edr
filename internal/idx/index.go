@@ -383,7 +383,10 @@ func rebuildSmart(root, edrDir string, walkFn func(root string, fn func(path str
 }
 
 // BuildFullFromWalk builds a complete index by walking the repo. No time limit.
-func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(path string) error) error, progress func(int, int)) error {
+// SymbolExtractFn extracts symbols from a file. Returns (name, kind, startLine, endLine, startByte, endByte) tuples.
+type SymbolExtractFn func(path string, data []byte) []SymbolEntry
+
+func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(path string) error) error, progress func(int, int), extractSymbols ...SymbolExtractFn) error {
 	var paths []string
 	if err := walkFn(root, func(path string) error {
 		paths = append(paths, path)
@@ -399,6 +402,7 @@ func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(pat
 	type fileResult struct {
 		entry FileEntry
 		tris  []Trigram
+		syms  []SymbolEntry // v3: extracted symbols
 	}
 	resultCh := make(chan fileResult, len(paths))
 	var wg sync.WaitGroup
@@ -425,7 +429,11 @@ func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(pat
 			if err != nil || isBinary(data) {
 				return
 			}
-			resultCh <- fileResult{entry: entry, tris: ExtractTrigrams(bytes.ToLower(data))}
+			fr := fileResult{entry: entry, tris: ExtractTrigrams(bytes.ToLower(data))}
+			if len(extractSymbols) > 0 && extractSymbols[0] != nil {
+				fr.syms = extractSymbols[0](path, data)
+			}
+			resultCh <- fr
 			if progress != nil {
 				mu.Lock()
 				done++
@@ -439,10 +447,11 @@ func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(pat
 	type collected struct {
 		entry FileEntry
 		tris  []Trigram
+		syms  []SymbolEntry
 	}
 	var results []collected
 	for r := range resultCh {
-		results = append(results, collected{entry: r.entry, tris: r.tris})
+		results = append(results, collected{entry: r.entry, tris: r.tris, syms: r.syms})
 	}
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].entry.Path < results[j].entry.Path
@@ -459,15 +468,38 @@ func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(pat
 	}
 
 	postings, entries := BuildPostings(triMap)
+
+	// Build symbol table with correct file IDs (after sort)
+	var allSymbols []SymbolEntry
+	for i, r := range results {
+		fileID := uint32(i)
+		for _, s := range r.syms {
+			s.FileID = fileID
+			allSymbols = append(allSymbols, s)
+		}
+	}
+
+	// Build name postings
+	var namePostData []byte
+	var namePosts []NamePostEntry
+	if len(allSymbols) > 0 {
+		namePostData, namePosts = BuildNamePostings(allSymbols)
+	}
+
 	d := &IndexData{
 		Header: Header{
 			NumFiles:    uint32(len(files)),
 			NumTrigrams: uint32(len(entries)),
 			GitMtime:    gitMt,
+			NumSymbols:  uint32(len(allSymbols)),
+			NumNameKeys: uint32(len(namePosts)),
 		},
-		Files:    files,
-		Trigrams: entries,
-		Postings: postings,
+		Files:        files,
+		Trigrams:     entries,
+		Postings:     postings,
+		Symbols:      allSymbols,
+		NamePosts:    namePosts,
+		NamePostings: namePostData,
 	}
 	if err := atomicWrite(filepath.Join(edrDir, MainFile), d.Marshal()); err != nil {
 		return fmt.Errorf("writing index: %w", err)
