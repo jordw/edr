@@ -2,16 +2,18 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**edr replaces built-in file tools with ones that front-load context.** Read a function — get its body plus what it calls. Edit code — get the updated function back. Orient in a codebase — get structure, not a file listing. Each response includes what the agent needs for its next decision, not just what it asked for.
+**edr gives coding agents code-aware file tools that front-load the context needed for the next step.**
 
-- **`focus file:Symbol`** — function body + dependency signatures. Not the 400-line file around it.
-- **`focus SymbolName`** — smart resolve: ranks matches, auto-opens the best one.
-- **`edit --old X --new Y`** — diff + updated function + build errors (with `--verify`).
-- **`orient`** — budget-controlled structural overview. Symbols, not filenames.
-- **Batch** — `edr --focus file:Sym --edit --old X --new Y` reads then edits in one call.
-- **Sessions** — re-reads return `{unchanged}`. The agent never processes the same content twice.
+Instead of raw files and grep output, edr returns structured code context:
 
-Works with any agent that can run shell commands. Fully local, no telemetry.
+- **`focus file:Symbol`** — reads a symbol, not the whole file. Includes relevant surrounding context.
+- **`focus SymbolName`** — resolves likely matches and opens the best candidate.
+- **`edit --old X --new Y --verify`** — diff, updated context, and verification feedback.
+- **`orient`** — budgeted structural overview of the codebase in terms of symbols and files.
+- **`edr --focus file:Sym --edit ...`** — inspect and mutate in one call when needed.
+- Repeated reads are deduplicated so agents do less work.
+
+Fully local, shell-friendly, no telemetry. Designed to replace generic file operations with agent-oriented ones.
 
 ## Install
 
@@ -78,15 +80,15 @@ edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):"
 
 ## How it works
 
-edr parses files on demand with pure-Go regex-based symbol extraction — no pre-built index, no setup step, no staleness, no CGO dependency. This gives agents three capabilities they don't have with raw file tools:
+edr uses pure-Go regex-based symbol extraction to give agents capabilities they don't have with raw file tools:
 
-**Symbol-level operations.** Focus on one function instead of a 400-line file — the agent sees exactly what it needs, makes better decisions, and doesn't get confused by surrounding code. Get a class API with `--signatures` to understand structure before diving in. `--expand` includes dep signatures inline. Scope edits to a symbol with `--in Symbol` so they can't match the wrong code. Use `--verify` to check the build after edits (Go, Node, Rust, Make).
+**Symbol-level reads and edits.** Focus on one function instead of a 400-line file. Get a class API with `--signatures`. Scope edits to a symbol with `--in Symbol`. Use `--verify` for build feedback after edits. The agent sees what it needs and makes better decisions.
 
-**Batching.** `-f`, `-o`, `-e` combine focus, orient, and edit in one CLI call. One call to gather context, one to apply mutations. Fewer round-trips means faster task completion.
+**Structural navigation.** `orient` shows what's in a directory or project in terms of symbols and files, not raw listings. `focus SymbolName` resolves ambiguous names with ranked matching. Budget controls keep output sized for agent context windows.
 
-**Sessions.** edr tracks what the agent has already seen and only returns what changed. Second read of an unchanged file: zero output. Zero config.
+**Sessions.** edr tracks what the agent has already seen and returns only what changed. Repeated reads produce zero output. Zero config.
 
-**Search index.** `edr index` builds a trigram index that accelerates `files`, `orient --grep`, `focus SymbolName`, and text search. On the Linux kernel (93K files), indexed operations complete in 0.02-0.5s vs 3-4s without. The index builds incrementally in the background; `edr index` forces a full build. `edr bench` measures real performance on your repo.
+**Search and indexing.** `edr index` builds a trigram + symbol index that accelerates search, orient, and symbol resolution. On the Linux kernel (93K files), indexed operations complete in 0.02-0.5s. `edr bench` measures real performance on your repo.
 
 ## Commands
 
@@ -150,15 +152,15 @@ edr reads and edits any text file. Symbol-aware features (symbol reads, `--signa
 
 Without edr, agents grep to find code, read line ranges, guess what's relevant, edit, then re-read to check. Each step is a separate tool call with context the agent has to filter.
 
-With edr, `focus file:Symbol` returns the function body plus what it calls. `edit` returns the updated code plus build errors with the broken function included. The agent makes fewer decisions about what to read because edr front-loads the right context.
+With edr, `focus file:Symbol` returns the function body with relevant context. `edit` returns the diff and updated code with optional build verification. The agent makes fewer decisions about what to read because edr front-loads useful context.
 
 | Operation | What the agent gets |
 |---|---|
-| `focus file:Symbol` | Function body + dependency signatures (auto) |
-| `edit --old X --new Y` | Diff + updated function body + build result + error context (auto) |
-| `orient --dir src/` | Budget-controlled structural overview |
-| Batch (`-f ... -f ... -e ...`) | Multiple operations in one call |
-| Re-read unchanged file | `{unchanged: true}` (session dedup) |
+| `focus file:Symbol` | Symbol body + relevant surrounding context |
+| `focus SymbolName` | Ranked resolution, auto-opens best match |
+| `edit --old X --new Y --verify` | Diff + updated context + verification feedback |
+| `orient` | Budgeted structural overview (symbols and files) |
+| Re-read unchanged file | Deduplicated (zero output, zero waste) |
 
 ## License
 
