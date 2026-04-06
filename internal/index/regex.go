@@ -461,6 +461,13 @@ func RegexParse(path string, src []byte) []SymbolInfo {
 		lineOffsets[i+1] = lineOffsets[i] + uint32(len(line)) + 1 // +1 for \n
 	}
 
+	// Precompute brace depth at end of each line in a single pass.
+	// This replaces per-symbol forward scans with O(1) lookups.
+	var braceDepths []int
+	if lang.endStyle == regexBraceEnd {
+		braceDepths = precomputeBraceDepths(lines)
+	}
+
 	var symbols []SymbolInfo
 	isTS := lang == regexTypeScript || lang == regexJava
 
@@ -502,10 +509,15 @@ func RegexParse(path string, src []byte) []SymbolInfo {
 			var endLine int
 			switch lang.endStyle {
 			case regexBraceEnd:
-				if regexHasBrace(lines, i) {
-					endLine = regexFindBraceEnd(lines, i)
-				} else {
-					endLine = regexFindNoBraceEnd(lines, i)
+				if braceDepths != nil {
+					endLine = findBraceEndPrecomputed(braceDepths, i)
+				}
+				if endLine == 0 {
+					if regexHasBrace(lines, i) {
+						endLine = regexFindBraceEnd(lines, i)
+					} else {
+						endLine = regexFindNoBraceEnd(lines, i)
+					}
 				}
 			case regexIndentEnd:
 				endLine = regexFindIndentEnd(lines, i)
@@ -558,6 +570,107 @@ func RegexParse(path string, src []byte) []SymbolInfo {
 }
 
 // --- Brace/indent end-detection ---
+
+// precomputeBraceDepths does a single pass over all lines, tracking brace
+// depth while respecting strings, comments, and character literals.
+// Returns braceDepths[i] = cumulative brace depth at end of line i.
+func precomputeBraceDepths(lines []string) []int {
+	depths := make([]int, len(lines))
+	depth := 0
+	inString := byte(0)
+	inBlockComment := false
+
+	for i, line := range lines {
+		for j := 0; j < len(line); j++ {
+			ch := line[j]
+
+			if inBlockComment {
+				if ch == '*' && j+1 < len(line) && line[j+1] == '/' {
+					inBlockComment = false
+					j++
+				}
+				continue
+			}
+			if inString != 0 {
+				if ch == '\\' {
+					j++
+					continue
+				}
+				if ch == inString {
+					inString = 0
+				}
+				continue
+			}
+
+			switch ch {
+			case '/':
+				if j+1 < len(line) {
+					if line[j+1] == '/' {
+						goto nextLine // line comment
+					}
+					if line[j+1] == '*' {
+						inBlockComment = true
+						j++
+						continue
+					}
+				}
+			case '"', '`':
+				inString = ch
+			case '\'':
+				if j+2 < len(line) && line[j+2] == '\'' {
+					j += 2 // char literal
+				}
+			case '{':
+				depth++
+			case '}':
+				depth--
+			}
+		}
+	nextLine:
+		depths[i] = depth
+	}
+	return depths
+}
+
+// findBraceEndPrecomputed finds the closing brace line using precomputed depths.
+// Handles multiline signatures where { may be several lines after the declaration.
+func findBraceEndPrecomputed(depths []int, lineIdx int) int {
+	if lineIdx >= len(depths) {
+		return 0
+	}
+	// Find the line where the opening brace is (depth increases).
+	// For multiline sigs, the { may be on lineIdx or a later line.
+	baseDepth := 0
+	if lineIdx > 0 {
+		baseDepth = depths[lineIdx-1]
+	}
+	braceLineFound := false
+	for i := lineIdx; i < len(depths); i++ {
+		if depths[i] > baseDepth {
+			braceLineFound = true
+			// Opening brace is on line i. Now find the matching close:
+			// first subsequent line where depth returns to baseDepth.
+			for j := i + 1; j < len(depths); j++ {
+				if depths[j] <= baseDepth {
+					return j + 1 // 1-based
+				}
+			}
+			return 0
+		}
+		// If depth goes negative or we're past a reasonable window, give up
+		if i > lineIdx+30 && !braceLineFound {
+			return 0
+		}
+	}
+	// No opening brace found — single-line or no-brace declaration
+	// Check if depth went up and back on the declaration line itself
+	if depths[lineIdx] == baseDepth && lineIdx > 0 {
+		// Depth went up and came back on same line (single-line body)
+		// Check if any brace was on this line by comparing with prev line depth
+		// Actually we can't tell from cumulative depth alone. Return 0 for fallback.
+	}
+	return 0
+}
 
 func regexHasBrace(lines []string, lineIdx int) bool {
 	// No hard cap — stop conditions (blank line, new declaration) prevent runaway.
