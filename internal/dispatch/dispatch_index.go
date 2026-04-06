@@ -13,13 +13,17 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 	edrDir := db.EdrDir()
 
 	if flagBool(flags, "status", false) {
-		total := 0
-		index.WalkRepoFiles(root, func(_ string) error {
-			total++
-			return nil
-		})
-
 		s := idx.GetStatus(root, edrDir)
+
+		// Use index file count when available, fall back to walk.
+		total := s.Files
+		if !s.Exists || s.Stale {
+			total = 0
+			index.WalkRepoFiles(root, func(_ string) error {
+				total++
+				return nil
+			})
+		}
 		result := map[string]any{
 			"status": "ok",
 			"mode":   "status",
