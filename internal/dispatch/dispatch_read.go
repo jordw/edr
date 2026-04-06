@@ -313,6 +313,11 @@ func runReadSymbol(ctx context.Context, db index.SymbolStore, root string, args 
 
 	sym, err := resolveSymbolArgs(ctx, db, root, args)
 	if err != nil {
+		// File path resolution: redirect to file read
+		var fileRes *fileResolveResult
+		if errors.As(err, &fileRes) {
+			return runReadFile(ctx, db, root, []string{fileRes.File}, flags)
+		}
 		// Smart resolution: rank ambiguous candidates instead of failing
 		var ambErr *index.AmbiguousSymbolError
 		if errors.As(err, &ambErr) {

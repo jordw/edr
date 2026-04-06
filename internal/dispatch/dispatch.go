@@ -2,12 +2,14 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/edit"
@@ -30,8 +32,31 @@ func resolveSymbolArgs(ctx context.Context, db index.SymbolStore, root string, a
 
 	switch len(args) {
 	case 1:
-		sym, err := db.ResolveSymbol(ctx, args[0])
+		query := args[0]
+		// Path-like detection: if it contains / or looks like a filename,
+		// try file resolution first (returns nil,nil if not a file).
+		if looksLikeFilePath(query) {
+			if file, err := db.ResolvePathReadOnly(query); err == nil {
+				// It's a valid file — return nil to let the caller handle it as a file read.
+				return nil, &fileResolveResult{File: file}
+			}
+		}
+		// Try exact symbol resolution
+		sym, err := db.ResolveSymbol(ctx, query)
 		if err != nil {
+			// Try case-normalized form: TaskStruct → task_struct, taskStruct → task_struct
+			if normalized := normalizeSymbolName(query); normalized != query {
+				sym2, err2 := db.ResolveSymbol(ctx, normalized)
+				if err2 == nil {
+					return sym2, nil
+				}
+				// If normalized form found candidates (even ambiguous), use that error
+				// so the ranking code can handle it
+				var ambErr *index.AmbiguousSymbolError
+				if errors.As(err2, &ambErr) {
+					return nil, err2
+				}
+			}
 			return nil, err
 		}
 		return sym, nil
@@ -556,6 +581,35 @@ func commandFileKey(cmd string, args []string) string {
 
 // looksLikeFilePath returns true if the argument looks like a file path
 // rather than a symbol name (has path separators or a file extension).
+// fileResolveResult signals that a bare query resolved to a file path,
+// and the caller should redirect to a file read instead of symbol read.
+type fileResolveResult struct {
+	File string
+}
+
+func (e *fileResolveResult) Error() string {
+	return "resolved to file: " + e.File
+}
+
+// normalizeSymbolName converts CamelCase and camelCase to snake_case
+// for cross-convention symbol lookup.
+func normalizeSymbolName(name string) string {
+	var result []byte
+	for i, r := range name {
+		if i > 0 && unicode.IsUpper(r) {
+			prev := rune(name[i-1])
+			if unicode.IsLower(prev) || unicode.IsDigit(prev) {
+				result = append(result, '_')
+			}
+		}
+		result = append(result, byte(unicode.ToLower(r)))
+	}
+	// Also try replacing hyphens with underscores
+	s := string(result)
+	s = strings.ReplaceAll(s, "-", "_")
+	return s
+}
+
 func looksLikeFilePath(arg string) bool {
 	if strings.Contains(arg, "/") || strings.Contains(arg, string(filepath.Separator)) {
 		return true
