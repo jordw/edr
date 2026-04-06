@@ -526,6 +526,9 @@ func init() { cmdspec.RegisterFlags(filesCmd.Flags(), "files") }
 func buildNextResult(sess *session.Session, db index.SymbolStore, root, edrDir string) map[string]any {
 	result := map[string]any{}
 
+	// Always show root so agents know which repo context they're in.
+	result["root"] = output.Rel(root)
+
 	// Undo availability
 	sessDir := filepath.Join(edrDir, "sessions")
 	cpID := session.LatestAutoCheckpoint(sessDir)

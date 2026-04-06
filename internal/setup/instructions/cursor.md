@@ -51,15 +51,14 @@ EOF
 
 ## Batch — combine operations in one call
 
-`-f` focus, `-o` orient, `-s` search, `-e` edit, `-w` write. File carries forward.
-`-q CMD` other queries. `-V` verify (auto with edits).
-`--dry-run` preview. `--atomic` all-or-nothing.
+Chain operations with `--focus`, `--orient`, `--search`, `--edit`, `--write`.
+File carries forward between operations. Short aliases: `-f -o -s -e -w`.
 
-edr -f f.go --sig -o cmd/ -f g.go:Func --expand deps
-edr -f f.go:Sym -e --old "x" --new "y" -f f.go:Sym  (post-edit read)
-edr -s "TODO" --include "*.go" -f main.go:handleReq
-edr -w new.go --content "package main" --mkdir
-edr -f f.go:Func --expand callers
+edr --focus f.go --sig --orient cmd/          # read sigs + map dir
+edr --focus f.go:Func --edit --old "x" --new "y"  # read + edit (includes read-back)
+edr --search "TODO" --include "*.go"          # text search
+edr --focus f.go:Func --expand callers        # symbol + callers
+edr --write new.go --content "pkg main" --mkdir  # create file
 
 ## Other commands
 - `edr status` | `edr undo` | `edr setup`

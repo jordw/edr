@@ -150,9 +150,13 @@ func openStore(root string) (index.SymbolStore, error) {
 func getRoot(cmd *cobra.Command) string {
 	root, _ := cmd.Flags().GetString("root")
 	if root == "." || root == "" {
-		wd, err := os.Getwd()
-		if err == nil {
-			root = discoverRoot(wd)
+		if envRoot := os.Getenv("EDR_ROOT"); envRoot != "" {
+			root = envRoot
+		} else {
+			wd, err := os.Getwd()
+			if err == nil {
+				root = discoverRoot(wd)
+			}
 		}
 	}
 	// Normalize early so that @file resolution and DB open see the same root.

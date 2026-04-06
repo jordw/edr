@@ -611,6 +611,7 @@ func plainReset(w *os.File, op Op) {
 
 func plainNext(w *os.File, op Op) {
 	h := map[string]any{}
+	hStr(h, "root", op, "root")
 	hStr(h, "focus", op, "focus")
 
 	// Add build status to header
