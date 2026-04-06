@@ -13,6 +13,27 @@ import (
 // MainFile is the index filename within the edr repo directory.
 const MainFile = "trigram.idx"
 
+// DirtyFile marks the index as stale due to worktree edits.
+// Created by MarkDirty, checked by IsComplete, cleared by builds.
+const DirtyFile = "trigram.dirty"
+
+// MarkDirty signals that the trigram index may be stale because a file
+// was edited outside of git. Called after edr edit/write operations.
+func MarkDirty(edrDir string) {
+	os.WriteFile(filepath.Join(edrDir, DirtyFile), []byte("1"), 0600)
+}
+
+// ClearDirty removes the dirty marker after a full index build.
+func ClearDirty(edrDir string) {
+	os.Remove(filepath.Join(edrDir, DirtyFile))
+}
+
+// IsDirty returns true if edits have occurred since the last index build.
+func IsDirty(edrDir string) bool {
+	_, err := os.Stat(filepath.Join(edrDir, DirtyFile))
+	return err == nil
+}
+
 // BuildFull builds a complete trigram index from the given absolute paths.
 func BuildFull(root string, paths []string, gitMtime int64) *IndexData {
 	d := &IndexData{}
@@ -174,6 +195,9 @@ func Staleness(repoRoot, edrDir string) bool {
 // IsComplete returns true if the index exists and is not stale, meaning
 // it covers all repo files and the unindexed-file walk can be skipped.
 func IsComplete(repoRoot, edrDir string) bool {
+	if IsDirty(edrDir) {
+		return false
+	}
 	h, err := ReadHeader(edrDir)
 	if err != nil {
 		return false
@@ -353,6 +377,9 @@ func rebuildSmart(root, edrDir string, walkFn func(root string, fn func(path str
 	}
 
 	atomicWrite(filepath.Join(edrDir, MainFile), d.Marshal())
+	if !timedOut {
+		ClearDirty(edrDir)
+	}
 }
 
 // BuildFullFromWalk builds a complete index by walking the repo. No time limit.
@@ -445,6 +472,7 @@ func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(pat
 	if err := atomicWrite(filepath.Join(edrDir, MainFile), d.Marshal()); err != nil {
 		return fmt.Errorf("writing index: %w", err)
 	}
+	ClearDirty(edrDir)
 	return nil
 }
 

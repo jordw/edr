@@ -274,7 +274,9 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 
 	// Walk for unindexed files (or all files if no index/regex search).
 	// Skip when the index is complete — all files are already covered.
+	// When dirty, scan all files (index may have stale content).
 	complete := candidates != nil && idx.IsComplete(root, edrDir)
+	dirty := idx.IsDirty(edrDir)
 	if complete {
 		// no walk needed
 	} else {
@@ -286,8 +288,8 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 		if rel == "" {
 			rel = path
 		}
-		// Skip files already searched via index
-		if candidates != nil {
+		// Skip files already searched via index (unless dirty)
+		if candidates != nil && !dirty {
 			if _, ok := indexed[rel]; ok {
 				return nil
 			}

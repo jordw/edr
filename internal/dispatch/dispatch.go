@@ -13,6 +13,7 @@ import (
 
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/edit"
+	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 )
@@ -713,6 +714,8 @@ func commitEdits(ctx context.Context, db index.SymbolStore, edits []resolvedEdit
 			indexErrors[output.Rel(f)] = err.Error()
 		}
 	}
+	// Mark trigram index dirty so search falls back to scanning edited files.
+	idx.MarkDirty(db.EdrDir())
 
 	hashes := make(map[string]string)
 	for f := range fileSet {

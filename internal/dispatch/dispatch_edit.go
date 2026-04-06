@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jordw/edr/internal/edit"
+	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 )
@@ -506,6 +507,7 @@ func smartEditMoveAfter(ctx context.Context, db index.SymbolStore, root string, 
 	if err := os.WriteFile(srcSym.File, []byte(newContent), 0644); err != nil {
 		return nil, fmt.Errorf("write: %w", err)
 	}
+	idx.MarkDirty(db.EdrDir())
 	newHash, _ := edit.FileHash(srcSym.File)
 
 	return map[string]any{

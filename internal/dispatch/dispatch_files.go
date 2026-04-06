@@ -68,13 +68,15 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 
 	// Scan files not covered by the index.
 	// Skip when the index is complete — all files are already covered.
+	// When dirty, scan ALL files (index may have stale content).
+	dirty := idx.IsDirty(edrDir)
 	if !idx.IsComplete(root, edrDir) {
 		index.WalkRepoFiles(root, func(path string) error {
 			rel, _ := filepath.Rel(root, path)
 			if rel == "" {
 				rel = path
 			}
-			if indexed != nil {
+			if indexed != nil && !dirty {
 				if _, ok := indexed[rel]; ok {
 					return nil // already handled by index
 				}
