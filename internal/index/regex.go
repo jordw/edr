@@ -79,12 +79,12 @@ var regexGo = &regexLang{
 		{re: re(`^func\s+({ID}+)\s*[\(\[]`), typ: "function", nameIdx: 1, prefix: "func", scan: func(line string) string { return scanKeywordIdent(line, "func") }},
 		{re: re(`^type\s+({ID}+)\s+struct\s*\{`), typ: "struct", nameIdx: 1, prefix: "type", scan: func(line string) string {
 			name := scanKeywordIdent(line, "type")
-			if name != "" && strings.Contains(line, "struct") { return name }
+			if name != "" && strings.Contains(line, "struct") && strings.Contains(line, "{") { return name }
 			return ""
 		}},
 		{re: re(`^type\s+({ID}+)\s+interface\s*\{`), typ: "interface", nameIdx: 1, prefix: "type", scan: func(line string) string {
 			name := scanKeywordIdent(line, "type")
-			if name != "" && strings.Contains(line, "interface") { return name }
+			if name != "" && strings.Contains(line, "interface") && strings.Contains(line, "{") { return name }
 			return ""
 		}},
 		{re: re(`^type\s+({ID}+)\s+`), typ: "type", nameIdx: 1, prefix: "type", scan: func(line string) string { return scanKeywordIdent(line, "type") }},
@@ -392,11 +392,17 @@ func scanKeywordIdent(line string, keyword string) string {
 
 // scanStructBrace matches: [typedef] struct <name> {
 func scanStructBrace(line string) string {
+	if !strings.Contains(line, "{") {
+		return ""
+	}
 	return scanKeywordIdent(line, "struct")
 }
 
 // scanEnumBrace matches: [typedef] enum <name> {
 func scanEnumBrace(line string) string {
+	if !strings.Contains(line, "{") {
+		return ""
+	}
 	return scanKeywordIdent(line, "enum")
 }
 
