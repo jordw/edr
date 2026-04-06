@@ -30,6 +30,33 @@ var DefaultIgnore = []string{
 	".idea", ".vscode", "bin", "obj",
 }
 
+// WalkDirFiles walks a subdirectory of root, respecting .gitignore from root.
+func WalkDirFiles(root, dir string, fn func(path string) error) error {
+	gitignore := LoadGitIgnore(root)
+	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if shouldIgnoreDir(d.Name(), path, root, gitignore) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if gitignore != nil {
+			rel, _ := filepath.Rel(root, path)
+			if gitignore.IsIgnored(rel, false) {
+				return nil
+			}
+		}
+		info, err := d.Info()
+		if err != nil || info.Size() > 1<<20 {
+			return nil
+		}
+		return fn(path)
+	})
+}
+
 func WalkRepoFiles(root string, fn func(path string) error) error {
 	gitignore := LoadGitIgnore(root)
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {

@@ -6,7 +6,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
+	"strings"
 	"unicode"
 )
 
@@ -95,25 +98,21 @@ func findDepsTextBased(ctx context.Context, db SymbolStore, sym *SymbolInfo) ([]
 	body := src[sym.StartByte:sym.EndByte]
 	idents := extractIdentifiers(string(body))
 
-	// Build name→symbols map from all symbols (one call, not N).
-	allSyms, err := db.AllSymbols(ctx)
-	if err != nil {
-		return nil, err
-	}
-	byName := make(map[string][]SymbolInfo, len(allSyms)/2)
-	for _, s := range allSyms {
-		byName[s.Name] = append(byName[s.Name], s)
+	// Phase 1: same-file symbols (fast, no repo-wide parse).
+	sameFileSyms, _ := db.GetSymbolsByFile(ctx, sym.File)
+	sameFileByName := make(map[string]SymbolInfo, len(sameFileSyms))
+	for _, s := range sameFileSyms {
+		sameFileByName[s.Name] = s
 	}
 
-	// Look up each identifier in the map — O(1) per lookup.
-	var deps []SymbolInfo
+	var sameFile, otherIdents []string
 	depSeen := make(map[string]bool)
+	var deps []SymbolInfo
 	for _, name := range idents {
 		if builtinNames[name] {
 			continue
 		}
-		for _, m := range byName[name] {
-			// Skip the symbol itself (same file + name + line)
+		if m, ok := sameFileByName[name]; ok {
 			if m.File == sym.File && m.Name == sym.Name && m.StartLine == sym.StartLine {
 				continue
 			}
@@ -121,10 +120,79 @@ func findDepsTextBased(ctx context.Context, db SymbolStore, sym *SymbolInfo) ([]
 			if !depSeen[key] {
 				depSeen[key] = true
 				deps = append(deps, m)
+				sameFile = append(sameFile, name)
+			}
+		} else {
+			otherIdents = append(otherIdents, name)
+		}
+	}
+
+	// Phase 2: repo-wide lookup for remaining identifiers.
+	// Skip if same-file already found enough deps.
+	if len(deps) < 10 && len(otherIdents) > 0 {
+		allSyms, err := db.AllSymbols(ctx)
+		if err == nil {
+			byName := make(map[string][]SymbolInfo, len(allSyms)/2)
+			for _, s := range allSyms {
+				byName[s.Name] = append(byName[s.Name], s)
+			}
+
+			symDir := filepath.Dir(sym.File)
+			for _, name := range otherIdents {
+				matches := byName[name]
+				// Skip overly ambiguous names (>5 definitions across repo)
+				if len(matches) > 5 {
+					continue
+				}
+				for _, m := range matches {
+					key := m.File + ":" + m.Name
+					if !depSeen[key] {
+						depSeen[key] = true
+						deps = append(deps, m)
+					}
+				}
+			}
+
+			// Sort non-same-file deps by proximity: same dir first, then
+			// by path depth distance.
+			sameFileCount := len(sameFile)
+			if sameFileCount < len(deps) {
+				cross := deps[sameFileCount:]
+				sort.SliceStable(cross, func(i, j int) bool {
+					di := filepath.Dir(cross[i].File)
+					dj := filepath.Dir(cross[j].File)
+					// Same directory as target sorts first
+					iSame := di == symDir
+					jSame := dj == symDir
+					if iSame != jSame {
+						return iSame
+					}
+					// Closer path (fewer separators of difference) sorts first
+					return pathDistance(di, symDir) < pathDistance(dj, symDir)
+				})
 			}
 		}
 	}
+
 	return deps, nil
+}
+
+// pathDistance returns a rough measure of how far apart two directory paths are.
+func pathDistance(a, b string) int {
+	if a == b {
+		return 0
+	}
+	pa := strings.Split(a, string(filepath.Separator))
+	pb := strings.Split(b, string(filepath.Separator))
+	// Find common prefix length
+	common := 0
+	for i := 0; i < len(pa) && i < len(pb); i++ {
+		if pa[i] != pb[i] {
+			break
+		}
+		common++
+	}
+	return (len(pa) - common) + (len(pb) - common)
 }
 
 // extractIdentifiers splits source text into unique identifiers,

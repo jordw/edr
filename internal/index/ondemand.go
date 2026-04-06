@@ -284,11 +284,11 @@ func (o *OnDemand) parseDir(ctx context.Context, dir string) map[string]*cachedF
 		}()
 	}
 
-	WalkRepoFiles(o.root, func(path string) error {
+	WalkDirFiles(o.root, absDir, func(path string) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if strings.HasPrefix(path, absDir) && RegexSupported(path) {
+		if RegexSupported(path) {
 			ch <- path
 		}
 		return nil
@@ -353,11 +353,7 @@ func (o *OnDemand) AllSymbols(ctx context.Context) ([]SymbolInfo, error) {
 }
 
 func (o *OnDemand) FilteredSymbols(ctx context.Context, dir, symbolType, namePattern string) ([]SymbolInfo, error) {
-	// Always parse all files, then filter by dir prefix.
-	// dir may be absolute (from RepoMap) or relative.
-	parsed := o.parseAll(ctx)
-
-	// Normalize dir to absolute for comparison with symbol file paths.
+	// When dir is set, only parse that subtree instead of the whole repo.
 	absDir := ""
 	if dir != "" {
 		if filepath.IsAbs(dir) {
@@ -365,6 +361,13 @@ func (o *OnDemand) FilteredSymbols(ctx context.Context, dir, symbolType, namePat
 		} else {
 			absDir = filepath.Join(o.root, dir)
 		}
+	}
+
+	var parsed map[string]*cachedFile
+	if absDir != "" {
+		parsed = o.parseDir(ctx, absDir)
+	} else {
+		parsed = o.parseAll(ctx)
 	}
 
 	lowerPattern := strings.ToLower(namePattern)

@@ -583,6 +583,10 @@ func findRepoRoot() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Resolve symlinks so /tmp → /private/tmp (macOS) matches NormalizeRoot.
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
 	for {
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 			return dir, nil
@@ -601,6 +605,10 @@ func homeEdrDir(repoRoot string) string {
 	abs, err := filepath.Abs(repoRoot)
 	if err != nil {
 		abs = repoRoot
+	}
+	// Resolve symlinks so /tmp → /private/tmp (macOS) produces a stable key.
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
 	}
 	var base string
 	if override := os.Getenv("EDR_HOME"); override != "" {

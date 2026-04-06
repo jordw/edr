@@ -18,6 +18,10 @@ func HomeEdrDir(repoRoot string) string {
 	if err != nil {
 		abs = repoRoot
 	}
+	// Resolve symlinks so /tmp → /private/tmp (macOS) produces a stable key.
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	}
 
 	var base string
 	if override := os.Getenv("EDR_HOME"); override != "" {

@@ -475,6 +475,9 @@ func gitIndexMtime(repoRoot string) int64 {
 }
 
 func atomicWrite(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
