@@ -40,6 +40,9 @@ edr edit file.go --content "..." --mkdir           # create file
 edr edit file.go --old "x" --new "y" --verify     # edit + build check
 edr edit --where Symbol --old "x" --new "y"        # auto-resolve file
 
+### Assertions (batch)
+edr --edit f.go --old "Foo" --new "Bar" --assert-symbol-exists f.go:Bar
+
 ### Quoting for edits
 Always use heredocs for --old/--new to avoid shell quoting errors:
 `edr edit f.go --old "$(cat <<'EOF'
