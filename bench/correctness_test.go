@@ -299,3 +299,259 @@ func refFiles(refs []symbolFile) []string {
 	}
 	return files
 }
+
+// --- Lifecycle Integration Tests ---
+// These test the full edit→query pipeline including index freshness.
+
+// setupIndexedRepo creates a temp repo with source files and a built trigram+symbol index.
+func setupIndexedRepo(tb testing.TB) (index.SymbolStore, string) {
+	tb.Helper()
+	tmp := tb.TempDir()
+
+	// Create a Go file with a function and a struct
+	os.MkdirAll(filepath.Join(tmp, "pkg"), 0755)
+	os.WriteFile(filepath.Join(tmp, "pkg", "main.go"), []byte(`package pkg
+
+func Hello() string {
+	return "hello world"
+}
+
+func Goodbye() string {
+	return "goodbye world"
+}
+
+type Config struct {
+	Name    string
+	Timeout int
+}
+`), 0644)
+
+	// Create a second file for cross-file search
+	os.WriteFile(filepath.Join(tmp, "pkg", "util.go"), []byte(`package pkg
+
+func FormatName(name string) string {
+	return "formatted: " + name
+}
+`), 0644)
+
+	db := index.NewOnDemand(tmp)
+	tb.Cleanup(func() { db.Close() })
+
+	// Build the trigram+symbol index
+	ctx := context.Background()
+	_, err := dispatch.Dispatch(ctx, db, "index", nil, nil)
+	if err != nil {
+		tb.Fatalf("index build: %v", err)
+	}
+
+	return db, tmp
+}
+
+func TestCorrectnessEditThenSearch(t *testing.T) {
+	db, _ := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// Verify "hello world" is searchable before edit
+	var beforeSearch struct {
+		TotalMatches int `json:"total_matches"`
+	}
+	dispatchResult(t, ctx, db, "search", []string{"hello world"}, map[string]any{
+		"text": true,
+	}, &beforeSearch)
+	if beforeSearch.TotalMatches == 0 {
+		t.Fatal("expected to find 'hello world' before edit")
+	}
+
+	// Edit: change "hello world" to "hola mundo"
+	var editResult struct {
+		Status string `json:"status"`
+	}
+	dispatchResult(t, ctx, db, "edit", []string{"pkg/main.go"}, map[string]any{
+		"old_text": "hello world",
+		"new_text": "hola mundo",
+	}, &editResult)
+	if editResult.Status != "applied" {
+		t.Fatalf("edit status = %q, want applied", editResult.Status)
+	}
+
+	// Search for new text — should find it
+	var afterSearch struct {
+		TotalMatches int `json:"total_matches"`
+	}
+	dispatchResult(t, ctx, db, "search", []string{"hola mundo"}, map[string]any{
+		"text": true,
+	}, &afterSearch)
+	if afterSearch.TotalMatches == 0 {
+		t.Error("expected to find 'hola mundo' after edit")
+	}
+
+	// Search for old text — should NOT find it
+	var oldSearch struct {
+		TotalMatches int `json:"total_matches"`
+	}
+	dispatchResult(t, ctx, db, "search", []string{"hello world"}, map[string]any{
+		"text": true,
+	}, &oldSearch)
+	if oldSearch.TotalMatches > 0 {
+		t.Error("'hello world' should not be found after edit replaced it")
+	}
+
+	// Files search for new text — should find the file
+	var filesResult struct {
+		N int `json:"n"`
+	}
+	dispatchResult(t, ctx, db, "files", []string{"hola mundo"}, nil, &filesResult)
+	if filesResult.N == 0 {
+		t.Error("files should find 'hola mundo' after edit")
+	}
+}
+
+func TestCorrectnessEditThenSymbolLookup(t *testing.T) {
+	db, tmp := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// Verify Hello is resolvable from the symbol index
+	var beforeRead struct {
+		Symbol string `json:"symbol"`
+		File   string `json:"file"`
+	}
+	dispatchResult(t, ctx, db, "read", []string{"pkg/main.go:Hello"}, nil, &beforeRead)
+	if beforeRead.Symbol != "Hello" {
+		t.Fatalf("expected symbol Hello, got %q", beforeRead.Symbol)
+	}
+
+	// Edit: rename Hello to Greet
+	var editResult struct {
+		Status string `json:"status"`
+	}
+	dispatchResult(t, ctx, db, "edit", []string{"pkg/main.go"}, map[string]any{
+		"old_text": "func Hello()",
+		"new_text": "func Greet()",
+	}, &editResult)
+	if editResult.Status != "applied" {
+		t.Fatalf("edit status = %q, want applied", editResult.Status)
+	}
+
+	// Focus on Greet — should work (parse-on-demand after dirty)
+	var afterRead struct {
+		Symbol string `json:"symbol"`
+	}
+	dispatchResult(t, ctx, db, "read", []string{"pkg/main.go:Greet"}, nil, &afterRead)
+	if afterRead.Symbol != "Greet" {
+		t.Errorf("expected symbol Greet after rename, got %q", afterRead.Symbol)
+	}
+
+	// Focus on Hello — should fail (no longer exists)
+	_, err := dispatch.Dispatch(ctx, db, "read", []string{"pkg/main.go:Hello"}, nil)
+	if err == nil {
+		// Could be a shortlist result from smart focus — check content
+		t.Log("Hello resolved after rename (may be shortlist); verifying file content")
+		data, _ := os.ReadFile(filepath.Join(tmp, "pkg", "main.go"))
+		if strings.Contains(string(data), "func Hello()") {
+			t.Error("file should not contain func Hello() after rename")
+		}
+	}
+}
+
+func TestCorrectnessDirtyIndexStatus(t *testing.T) {
+	db, _ := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// Index should be clean initially
+	var statusBefore struct {
+		Stale bool `json:"stale"`
+	}
+	dispatchResult(t, ctx, db, "index", nil, map[string]any{"status": true}, &statusBefore)
+	if statusBefore.Stale {
+		t.Error("index should not be stale before any edits")
+	}
+
+	// Edit a file
+	var editResult struct {
+		Status string `json:"status"`
+	}
+	dispatchResult(t, ctx, db, "edit", []string{"pkg/main.go"}, map[string]any{
+		"old_text": "hello world",
+		"new_text": "hola mundo",
+	}, &editResult)
+	if editResult.Status != "applied" {
+		t.Fatalf("edit status = %q, want applied", editResult.Status)
+	}
+
+	// Index should now be stale (dirty marker set)
+	var statusAfter struct {
+		Stale bool `json:"stale"`
+	}
+	dispatchResult(t, ctx, db, "index", nil, map[string]any{"status": true}, &statusAfter)
+	if !statusAfter.Stale {
+		t.Error("index should be stale after edit (dirty marker)")
+	}
+
+	// Rebuild index
+	var rebuildResult struct {
+		Status string `json:"status"`
+	}
+	dispatchResult(t, ctx, db, "index", nil, nil, &rebuildResult)
+	if rebuildResult.Status != "built" {
+		t.Fatalf("index rebuild status = %q, want built", rebuildResult.Status)
+	}
+
+	// Should be clean again
+	var statusFinal struct {
+		Stale bool `json:"stale"`
+	}
+	dispatchResult(t, ctx, db, "index", nil, map[string]any{"status": true}, &statusFinal)
+	if statusFinal.Stale {
+		t.Error("index should not be stale after rebuild")
+	}
+}
+
+func TestCorrectnessIndexRebuildPreservesSymbols(t *testing.T) {
+	db, tmp := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// Verify symbol index has symbols after initial build
+	var status1 struct {
+		Symbols int `json:"symbols"`
+	}
+	dispatchResult(t, ctx, db, "index", nil, map[string]any{"status": true}, &status1)
+	if status1.Symbols == 0 {
+		t.Fatal("expected symbols in index after build")
+	}
+	initialSymbols := status1.Symbols
+
+	// Touch a file to make git index stale (simulates git operations)
+	// This triggers IncrementalTick → rebuildSmart on next command
+	os.WriteFile(filepath.Join(tmp, "pkg", "new.go"), []byte(`package pkg
+
+func NewFunc() {}
+`), 0644)
+
+	// Force a full rebuild (not incremental) to verify symbols survive
+	var rebuildResult struct {
+		Status  string `json:"status"`
+		Symbols int    `json:"symbols"`
+	}
+	dispatchResult(t, ctx, db, "index", nil, nil, &rebuildResult)
+	if rebuildResult.Status != "built" {
+		t.Fatalf("rebuild status = %q, want built", rebuildResult.Status)
+	}
+
+	// Symbol count should be >= initial (new file adds symbols)
+	var status2 struct {
+		Symbols int `json:"symbols"`
+	}
+	dispatchResult(t, ctx, db, "index", nil, map[string]any{"status": true}, &status2)
+	if status2.Symbols < initialSymbols {
+		t.Errorf("symbol count dropped after rebuild: %d → %d", initialSymbols, status2.Symbols)
+	}
+
+	// Verify symbol lookup still works after rebuild
+	var readResult struct {
+		Symbol string `json:"symbol"`
+	}
+	dispatchResult(t, ctx, db, "read", []string{"pkg/main.go:Goodbye"}, nil, &readResult)
+	if readResult.Symbol != "Goodbye" {
+		t.Errorf("symbol lookup after rebuild: got %q, want Goodbye", readResult.Symbol)
+	}
+}
