@@ -871,6 +871,236 @@ func TestCorrectnessFilesCommand(t *testing.T) {
 	}
 }
 
+func TestCorrectnessFuzzyMatch(t *testing.T) {
+	db, tmp := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// Write a file with specific indentation
+	os.WriteFile(filepath.Join(tmp, "pkg", "indented.go"), []byte("package pkg\n\nfunc Indented() {\n\tx := 1\n\ty := 2\n\tz := x + y\n\t_ = z\n}\n"), 0644)
+
+	// Normal edit should fail with wrong indentation
+	_, err := dispatch.Dispatch(ctx, db, "edit", []string{"pkg/indented.go"}, map[string]any{
+		"old_text": "x := 1\n    y := 2", // spaces instead of tabs
+		"new_text": "x := 10\n    y := 20",
+	})
+	if err == nil {
+		t.Error("non-fuzzy edit with wrong whitespace should fail")
+	}
+
+	// Fuzzy edit should succeed
+	var result struct {
+		Status string `json:"status"`
+	}
+	dispatchResult(t, ctx, db, "edit", []string{"pkg/indented.go"}, map[string]any{
+		"old_text": "x := 1\n    y := 2",
+		"new_text": "x := 10\n\ty := 20",
+		"fuzzy":    true,
+	}, &result)
+	if result.Status != "applied" {
+		t.Fatalf("fuzzy edit status = %q, want applied", result.Status)
+	}
+
+	// Verify the edit applied
+	data, _ := os.ReadFile(filepath.Join(tmp, "pkg", "indented.go"))
+	if !strings.Contains(string(data), "x := 10") {
+		t.Error("fuzzy edit should have changed x := 1 to x := 10")
+	}
+}
+
+func TestCorrectnessEditInSymbol(t *testing.T) {
+	db, _ := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// Edit scoped to Hello function only (--in Hello)
+	var result struct {
+		Status string `json:"status"`
+	}
+	dispatchResult(t, ctx, db, "edit", []string{"pkg/main.go"}, map[string]any{
+		"old_text": "return",
+		"new_text": "// modified\n\treturn",
+		"in":       "Hello",
+	}, &result)
+	if result.Status != "applied" {
+		t.Fatalf("--in Hello edit status = %q, want applied", result.Status)
+	}
+
+	// The edit should only affect Hello, not Goodbye
+	data, _ := os.ReadFile(filepath.Join(db.Root(), "pkg", "main.go"))
+	content := string(data)
+
+	// Count "// modified" — should appear exactly once (in Hello, not Goodbye)
+	count := strings.Count(content, "// modified")
+	if count != 1 {
+		t.Errorf("expected 1 occurrence of '// modified' (scoped to Hello), got %d", count)
+	}
+}
+
+func TestCorrectnessEditInSymbol_WrongSymbol(t *testing.T) {
+	db, _ := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// Edit scoped to a symbol that doesn't contain the text
+	_, err := dispatch.Dispatch(ctx, db, "edit", []string{"pkg/main.go"}, map[string]any{
+		"old_text": "FormatName", // not in main.go
+		"new_text": "Something",
+		"in":       "Hello",
+	})
+	if err == nil {
+		t.Error("edit --in Hello for text not in Hello should fail")
+	}
+}
+
+func TestCorrectnessRefreshHash(t *testing.T) {
+	db, tmp := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// Get the current hash
+	var readResult struct {
+		Hash string `json:"hash"`
+	}
+	dispatchResult(t, ctx, db, "read", []string{"pkg/main.go"}, map[string]any{"budget": 1}, &readResult)
+	oldHash := readResult.Hash
+
+	// Edit with correct hash should work
+	var result1 struct {
+		Status string `json:"status"`
+	}
+	dispatchResult(t, ctx, db, "edit", []string{"pkg/main.go"}, map[string]any{
+		"old_text":    "hello world",
+		"new_text":    "hi world",
+		"expect_hash": oldHash,
+	}, &result1)
+	if result1.Status != "applied" {
+		t.Fatalf("edit with correct hash: status = %q", result1.Status)
+	}
+
+	// Edit with stale hash should fail
+	_, err := dispatch.Dispatch(ctx, db, "edit", []string{"pkg/main.go"}, map[string]any{
+		"old_text":    "hi world",
+		"new_text":    "hey world",
+		"expect_hash": oldHash, // stale now
+	})
+	if err == nil {
+		t.Error("edit with stale hash should fail")
+	}
+
+	// Edit with stale hash + refresh_hash should succeed
+	var result2 struct {
+		Status string `json:"status"`
+	}
+	dispatchResult(t, ctx, db, "edit", []string{"pkg/main.go"}, map[string]any{
+		"old_text":     "hi world",
+		"new_text":     "hey world",
+		"expect_hash":  oldHash, // stale
+		"refresh_hash": true,
+	}, &result2)
+	if result2.Status != "applied" {
+		t.Fatalf("edit with refresh_hash: status = %q", result2.Status)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(tmp, "pkg", "main.go"))
+	if !strings.Contains(string(data), "hey world") {
+		t.Error("refresh_hash edit should have applied")
+	}
+}
+
+func TestCorrectnessReplaceAll(t *testing.T) {
+	db, tmp := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// Write a file with repeated text
+	os.WriteFile(filepath.Join(tmp, "pkg", "repeated.go"), []byte("package pkg\n\nfunc R1() string { return \"old\" }\nfunc R2() string { return \"old\" }\nfunc R3() string { return \"old\" }\n"), 0644)
+
+	// Replace all "old" with "new"
+	var result struct {
+		Status string `json:"status"`
+	}
+	dispatchResult(t, ctx, db, "edit", []string{"pkg/repeated.go"}, map[string]any{
+		"old_text": `"old"`,
+		"new_text": `"new"`,
+		"all":      true,
+	}, &result)
+	if result.Status != "applied" {
+		t.Fatalf("replace all: status = %q", result.Status)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(tmp, "pkg", "repeated.go"))
+	content := string(data)
+	if strings.Contains(content, `"old"`) {
+		t.Error("replace all should have replaced all occurrences")
+	}
+	if strings.Count(content, `"new"`) != 3 {
+		t.Errorf("expected 3 occurrences of \"new\", got %d", strings.Count(content, `"new"`))
+	}
+}
+
+func TestCorrectnessSearchInFile(t *testing.T) {
+	db, _ := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// Search within a specific file (use file:* to indicate whole file)
+	var result struct {
+		TotalMatches int `json:"total_matches"`
+	}
+	dispatchResult(t, ctx, db, "search", []string{"return"}, map[string]any{
+		"text": true,
+		"in":   "pkg/main.go:Hello",
+	}, &result)
+	if result.TotalMatches == 0 {
+		t.Error("search --in pkg/main.go:Hello for 'return' should find matches")
+	}
+
+	// Search within a specific file:symbol
+	var symResult struct {
+		TotalMatches int `json:"total_matches"`
+	}
+	dispatchResult(t, ctx, db, "search", []string{"hello"}, map[string]any{
+		"text": true,
+		"in":   "pkg/main.go:Hello",
+	}, &symResult)
+	if symResult.TotalMatches == 0 {
+		t.Error("search --in pkg/main.go:Hello for 'hello' should find match")
+	}
+
+	// Search in symbol should NOT find text from other functions
+	var scopedResult struct {
+		TotalMatches int `json:"total_matches"`
+	}
+	dispatchResult(t, ctx, db, "search", []string{"goodbye"}, map[string]any{
+		"text": true,
+		"in":   "pkg/main.go:Hello",
+	}, &scopedResult)
+	if scopedResult.TotalMatches > 0 {
+		t.Error("search --in Hello for 'goodbye' should NOT match (it's in Goodbye)")
+	}
+}
+
+func TestCorrectnessExpandCallersSmallRepo(t *testing.T) {
+	db, tmp := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// Add a caller
+	os.WriteFile(filepath.Join(tmp, "pkg", "caller.go"), []byte("package pkg\n\nfunc UseHello() string {\n\treturn Hello()\n}\n"), 0644)
+
+	// --expand callers on small repo should use full FindSemanticCallers path
+	result, err := dispatch.Dispatch(ctx, db, "read", []string{"pkg/main.go:Hello"}, map[string]any{
+		"expand": "callers",
+	})
+	if err != nil {
+		t.Fatalf("expand callers: %v", err)
+	}
+	data, _ := json.Marshal(result)
+	resultStr := string(data)
+
+	// Should have callers section with UseHello
+	if !strings.Contains(resultStr, "callers") {
+		t.Error("expand callers should include callers section on small repo")
+	}
+	if !strings.Contains(resultStr, "UseHello") {
+		t.Error("callers should include UseHello")
+	}
+}
+
 func TestCorrectnessIndexRebuildPreservesSymbols(t *testing.T) {
 	db, tmp := setupIndexedRepo(t)
 	ctx := context.Background()
