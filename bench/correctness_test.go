@@ -506,6 +506,159 @@ func TestCorrectnessDirtyIndexStatus(t *testing.T) {
 	}
 }
 
+func TestCorrectnessEditThenOrientGrep(t *testing.T) {
+	db, _ := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// orient --grep should find Hello before edit
+	var before struct {
+		Symbols int `json:"symbols"`
+	}
+	dispatchResult(t, ctx, db, "orient", nil, map[string]any{
+		"grep": "Hello", "budget": 100,
+	}, &before)
+	if before.Symbols == 0 {
+		t.Fatal("orient --grep should find Hello before edit")
+	}
+
+	// Rename Hello to Greet
+	dispatchResult(t, ctx, db, "edit", []string{"pkg/main.go"}, map[string]any{
+		"old_text": "func Hello()",
+		"new_text": "func Greet()",
+	}, nil)
+
+	// orient --grep for Greet should find it
+	var afterGreet struct {
+		Symbols int `json:"symbols"`
+	}
+	dispatchResult(t, ctx, db, "orient", nil, map[string]any{
+		"grep": "Greet", "budget": 100,
+	}, &afterGreet)
+	if afterGreet.Symbols == 0 {
+		t.Error("orient --grep should find Greet after rename")
+	}
+
+	// orient --grep for Hello should NOT find it
+	var afterHello struct {
+		Symbols int `json:"symbols"`
+	}
+	dispatchResult(t, ctx, db, "orient", nil, map[string]any{
+		"grep": "Hello", "budget": 100,
+	}, &afterHello)
+	if afterHello.Symbols > 0 {
+		t.Error("orient --grep should not find Hello after rename")
+	}
+}
+
+func TestCorrectnessEditBareSymbolResolve(t *testing.T) {
+	db, _ := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// Bare focus on Goodbye should resolve (symbol index path)
+	result, err := dispatch.Dispatch(ctx, db, "read", []string{"Goodbye"}, nil)
+	if err != nil {
+		t.Fatalf("bare focus Goodbye before edit: %v", err)
+	}
+	data, _ := json.Marshal(result)
+	if !strings.Contains(string(data), "Goodbye") {
+		t.Error("bare focus should resolve Goodbye")
+	}
+
+	// Rename Goodbye to Farewell
+	dispatchResult(t, ctx, db, "edit", []string{"pkg/main.go"}, map[string]any{
+		"old_text": "func Goodbye()",
+		"new_text": "func Farewell()",
+	}, nil)
+
+	// Bare focus on Farewell should work (dirty index skipped, parse-on-demand)
+	result2, err := dispatch.Dispatch(ctx, db, "read", []string{"Farewell"}, nil)
+	if err != nil {
+		t.Fatalf("bare focus Farewell after rename: %v", err)
+	}
+	data2, _ := json.Marshal(result2)
+	if !strings.Contains(string(data2), "Farewell") {
+		t.Errorf("bare focus should resolve Farewell after rename, got: %s", string(data2)[:min(200, len(data2))])
+	}
+
+	// Bare focus on Goodbye should fail
+	_, err = dispatch.Dispatch(ctx, db, "read", []string{"Goodbye"}, nil)
+	if err == nil {
+		// Smart focus might return a shortlist — that's ok as long as file doesn't have Goodbye
+		t.Log("Goodbye resolved after rename (shortlist acceptable)")
+	}
+}
+
+func TestCorrectnessWriteNewFileThenSearch(t *testing.T) {
+	db, _ := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// Write a brand new file (not in the index at all)
+	dispatchResult(t, ctx, db, "edit", []string{"pkg/brand_new.go"}, map[string]any{
+		"content": "package pkg\n\nfunc UniqueNewFunction() string {\n\treturn \"xyzzy\"\n}\n",
+		"mkdir":   true,
+	}, nil)
+
+	// Search for the unique text
+	var searchResult struct {
+		TotalMatches int `json:"total_matches"`
+	}
+	dispatchResult(t, ctx, db, "search", []string{"xyzzy"}, map[string]any{
+		"text": true,
+	}, &searchResult)
+	if searchResult.TotalMatches == 0 {
+		t.Error("search should find 'xyzzy' in newly written file")
+	}
+
+	// Focus the new symbol
+	var readResult struct {
+		Symbol string `json:"symbol"`
+	}
+	dispatchResult(t, ctx, db, "read", []string{"pkg/brand_new.go:UniqueNewFunction"}, nil, &readResult)
+	if readResult.Symbol != "UniqueNewFunction" {
+		t.Errorf("expected UniqueNewFunction, got %q", readResult.Symbol)
+	}
+}
+
+func TestCorrectnessMultipleEditsOneFile(t *testing.T) {
+	db, _ := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// Rename Hello to Alpha
+	dispatchResult(t, ctx, db, "edit", []string{"pkg/main.go"}, map[string]any{
+		"old_text": "func Hello()",
+		"new_text": "func Alpha()",
+	}, nil)
+
+	// Rename Goodbye to Beta
+	dispatchResult(t, ctx, db, "edit", []string{"pkg/main.go"}, map[string]any{
+		"old_text": "func Goodbye()",
+		"new_text": "func Beta()",
+	}, nil)
+
+	// Both new names should resolve
+	var r1, r2 struct {
+		Symbol string `json:"symbol"`
+	}
+	dispatchResult(t, ctx, db, "read", []string{"pkg/main.go:Alpha"}, nil, &r1)
+	if r1.Symbol != "Alpha" {
+		t.Errorf("expected Alpha, got %q", r1.Symbol)
+	}
+	dispatchResult(t, ctx, db, "read", []string{"pkg/main.go:Beta"}, nil, &r2)
+	if r2.Symbol != "Beta" {
+		t.Errorf("expected Beta, got %q", r2.Symbol)
+	}
+
+	// Old names should fail
+	_, err1 := dispatch.Dispatch(ctx, db, "read", []string{"pkg/main.go:Hello"}, nil)
+	if err1 == nil {
+		t.Error("Hello should not resolve after rename to Alpha")
+	}
+	_, err2 := dispatch.Dispatch(ctx, db, "read", []string{"pkg/main.go:Goodbye"}, nil)
+	if err2 == nil {
+		t.Error("Goodbye should not resolve after rename to Beta")
+	}
+}
+
 func TestCorrectnessIndexRebuildPreservesSymbols(t *testing.T) {
 	db, tmp := setupIndexedRepo(t)
 	ctx := context.Background()

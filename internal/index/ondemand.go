@@ -670,14 +670,18 @@ func (o *OnDemand) parseCandidateFiles(ctx context.Context, text string) map[str
 
 	// Also parse unindexed files (they might contain the pattern).
 	// Skip when the index is complete — all files are already covered.
+	// When dirty, scan ALL files (index may have stale content).
+	dirty := idx.IsDirty(o.edrDir)
 	if !idx.IsComplete(o.root, o.edrDir) {
 		WalkRepoFiles(o.root, func(path string) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			rel, _ := filepath.Rel(o.root, path)
-			if _, isIndexed := indexed[rel]; isIndexed {
-				return nil // already handled above
+			if !dirty {
+				if _, isIndexed := indexed[rel]; isIndexed {
+					return nil // already handled above
+				}
 			}
 			if !RegexSupported(path) {
 				return nil
