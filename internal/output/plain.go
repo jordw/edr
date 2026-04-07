@@ -189,6 +189,7 @@ func writeBody(w *os.File, body string) {
 func plainResolveList(w *os.File, op Op) {
 	h := map[string]any{}
 	hStr(h, "query", op, "query")
+	hStr(h, "method", op, "method")
 	hStr(h, "hint", op, "hint")
 	hStr(h, "root", op, "root")
 	writeHeader(w, h)
@@ -252,7 +253,12 @@ func plainRead(w *os.File, op Op) {
 		if !ok || len(slice) == 0 {
 			continue
 		}
-		fmt.Fprintf(w, "\n--- %s ---\n", key)
+		methodKey := key + "_method"
+		if m, ok := op[methodKey].(string); ok {
+			fmt.Fprintf(w, "\n--- %s (%s) ---\n", key, m)
+		} else {
+			fmt.Fprintf(w, "\n--- %s ---\n", key)
+		}
 		for _, item := range slice {
 			file, _ := item["file"].(string)
 			sig, _ := item["signature"].(string)
@@ -282,6 +288,7 @@ func plainSearch(w *os.File, op Op) {
 	hSession(h, op)
 	h["n"] = anyInt(op["total_matches"])
 	hTrunc(h, op)
+	hStr(h, "source", op, "source")
 	hStr(h, "hint", op, "hint")
 	hStr(h, "root", op, "root")
 	writeHeader(w, h)
@@ -439,6 +446,7 @@ func plainMap(w *os.File, op Op) {
 		h["symbols"] = v
 	}
 	hTrunc(h, op)
+	hStr(h, "source", op, "source")
 	hStr(h, "hint", op, "hint")
 	hStr(h, "root", op, "root")
 	writeHeader(w, h)

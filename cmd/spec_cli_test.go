@@ -2409,7 +2409,7 @@ func TestSpec_ReadExpand(t *testing.T) {
 			t.Error("body should contain compute function")
 		}
 		// Should contain deps section
-		if !strings.Contains(body, "--- deps ---") {
+		if !strings.Contains(body, "--- deps") {
 			t.Error("should have deps section")
 		}
 	})
@@ -2421,7 +2421,7 @@ func TestSpec_ReadExpand(t *testing.T) {
 			t.Fatalf("exit %d", exit)
 		}
 		body := r.Ops[0].Body
-		if !strings.Contains(body, "--- callers ---") {
+		if !strings.Contains(body, "--- callers") {
 			t.Error("should have callers section")
 		}
 	})
@@ -2433,7 +2433,7 @@ func TestSpec_ReadExpand(t *testing.T) {
 			t.Fatalf("exit %d", exit)
 		}
 		body := r.Ops[0].Body
-		if !strings.Contains(body, "--- deps ---") {
+		if !strings.Contains(body, "--- deps") {
 			t.Error("bare --expand should default to deps")
 		}
 	})
