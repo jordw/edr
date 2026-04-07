@@ -98,6 +98,8 @@ func printPlain(e *Envelope) {
 			plainFiles(w, op)
 		case "bench":
 			plainBench(w, op)
+		case "assert":
+			plainAssert(w, op)
 		default:
 			writeHeader(w, op)
 		}
@@ -873,6 +875,22 @@ func plainBench(w *os.File, op Op) {
 			fmt.Fprintf(w, " %s%-25s  %6dms  %s\n", indicator, name, ms, status)
 		}
 	}
+}
+
+func plainAssert(w *os.File, op Op) {
+	h := map[string]any{}
+	hStr(h, "check", op, "check")
+	hStr(h, "target", op, "target")
+	if passed, ok := op["passed"].(bool); ok {
+		if passed {
+			h["passed"] = true
+		} else {
+			h["passed"] = false
+			hStr(h, "message", op, "message")
+		}
+	}
+	hStr(h, "file", op, "file")
+	writeHeader(w, h)
 }
 
 func hStr(h map[string]any, hKey string, op Op, opKey string) {

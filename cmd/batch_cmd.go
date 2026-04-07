@@ -97,9 +97,10 @@ type batchState struct {
 	atomic        bool
 	seenMutation  bool // true after first -e or -w
 
-	root      string
-	stdinUsed bool
-	lastFile  string // carry-forward: last file used by any op
+	root        string
+	stdinUsed   bool
+	lastFile    string // carry-forward: last file used by any op
+	assertions  []doAssert
 }
 
 func (s *batchState) flush() {
@@ -189,6 +190,10 @@ func (s *batchState) toParams() doParams {
 		}
 	}
 	// No auto-verify in batch mode — use -V to opt in.
+
+	if len(s.assertions) > 0 {
+		p.Assertions = s.assertions
+	}
 
 	return p
 }
@@ -865,6 +870,36 @@ func parseBatchArgs(args []string) (*batchState, error) {
 
 		case "--verbose":
 			verbose = true
+
+		// ── assertions ──
+
+		case "--assert-symbol-exists":
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.assertions = append(s.assertions, doAssert{SymbolExists: val})
+
+		case "--assert-symbol-absent":
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.assertions = append(s.assertions, doAssert{SymbolAbsent: val})
+
+		case "--assert-text-present":
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.assertions = append(s.assertions, doAssert{TextPresent: val, File: s.lastFile})
+
+		case "--assert-text-absent":
+			val, err := nextArg(arg)
+			if err != nil {
+				return nil, err
+			}
+			s.assertions = append(s.assertions, doAssert{TextAbsent: val, File: s.lastFile})
 
 		default:
 			return nil, suggestBatchFlag(arg, s.currentOp)

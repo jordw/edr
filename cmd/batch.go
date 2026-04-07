@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"strings"
 	"path/filepath"
 	"strconv"
 
@@ -37,6 +38,15 @@ func setOptStr(flags map[string]any, key string, v *string) {
 	}
 }
 
+// doAssert is a post-edit assertion that checks a condition.
+type doAssert struct {
+	SymbolExists string `json:"symbol_exists,omitempty"` // file:Symbol or bare Symbol must exist
+	SymbolAbsent string `json:"symbol_absent,omitempty"` // file:Symbol or bare Symbol must NOT exist
+	TextPresent  string `json:"text_present,omitempty"`  // text must be present in file (requires File)
+	TextAbsent   string `json:"text_absent,omitempty"`   // text must NOT be present in file (requires File)
+	File         string `json:"file,omitempty"`           // file context for text assertions
+}
+
 // doParams holds the parsed params for batch operations.
 type doParams struct {
 	Reads           []doRead   `json:"reads"`
@@ -51,6 +61,7 @@ type doParams struct {
 	Verify          any        `json:"verify"`
 	ReadAfterEdit   *bool      `json:"read_after_edit,omitempty"`
 	Atomic          *bool      `json:"atomic,omitempty"`
+	Assertions      []doAssert `json:"assertions,omitempty"`
 
 	// ReadQueryOrder preserves the interleaved CLI order of reads and queries.
 	// Each entry is "r<N>" for Reads[N] or "q<N>" for Queries[N].
@@ -826,6 +837,11 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 		}
 	}
 
+	// 5d. Assertions — post-edit checks
+	if len(p.Assertions) > 0 && !editsFailed && !isDryRun {
+		executeAssertions(ctx, db, env, p.Assertions)
+	}
+
 	// 6. Verify — skip for failed edits, dry-run, or all-noop (#19)
 	if editsFailed && hasVerify {
 		env.SetVerify(map[string]any{"status": "skipped", "reason": "edits failed"})
@@ -855,6 +871,84 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 	env.ComputeOK()
 
 	return nil
+}
+
+// executeAssertions runs post-edit assertions and adds results to the envelope.
+func executeAssertions(ctx context.Context, db index.SymbolStore, env *output.Envelope, assertions []doAssert) {
+	for i, a := range assertions {
+		opID := fmt.Sprintf("a%d", i)
+		result := map[string]any{"type": "assert"}
+
+		switch {
+		case a.SymbolExists != "":
+			result["check"] = "symbol_exists"
+			result["target"] = a.SymbolExists
+			_, err := dispatch.Dispatch(ctx, db, "focus", []string{a.SymbolExists}, map[string]any{"budget": 1, "no_expand": true})
+			if err != nil {
+				result["passed"] = false
+				result["message"] = fmt.Sprintf("symbol %q not found", a.SymbolExists)
+			} else {
+				result["passed"] = true
+			}
+
+		case a.SymbolAbsent != "":
+			result["check"] = "symbol_absent"
+			result["target"] = a.SymbolAbsent
+			_, err := dispatch.Dispatch(ctx, db, "focus", []string{a.SymbolAbsent}, map[string]any{"budget": 1, "no_expand": true})
+			if err != nil {
+				result["passed"] = true // not found = absent = pass
+			} else {
+				result["passed"] = false
+				result["message"] = fmt.Sprintf("symbol %q still exists (expected absent)", a.SymbolAbsent)
+			}
+
+		case a.TextPresent != "" && a.File != "":
+			result["check"] = "text_present"
+			result["target"] = a.TextPresent
+			result["file"] = a.File
+			file, err := db.ResolvePath(a.File)
+			if err != nil {
+				result["passed"] = false
+				result["error"] = err.Error()
+			} else {
+				data, err := os.ReadFile(file)
+				if err != nil {
+					result["passed"] = false
+					result["error"] = err.Error()
+				} else if strings.Contains(string(data), a.TextPresent) {
+					result["passed"] = true
+				} else {
+					result["passed"] = false
+					result["message"] = fmt.Sprintf("text %q not found in %s", a.TextPresent, a.File)
+				}
+			}
+
+		case a.TextAbsent != "" && a.File != "":
+			result["check"] = "text_absent"
+			result["target"] = a.TextAbsent
+			result["file"] = a.File
+			file, err := db.ResolvePath(a.File)
+			if err != nil {
+				result["passed"] = true // can't read = absent = pass
+			} else {
+				data, err := os.ReadFile(file)
+				if err != nil {
+					result["passed"] = true
+				} else if strings.Contains(string(data), a.TextAbsent) {
+					result["passed"] = false
+					result["message"] = fmt.Sprintf("text %q still present in %s (expected absent)", a.TextAbsent, a.File)
+				} else {
+					result["passed"] = true
+				}
+			}
+
+		default:
+			result["passed"] = false
+			result["message"] = "invalid assertion: must specify symbol_exists, symbol_absent, text_present, or text_absent"
+		}
+
+		env.AddOp(opID, "assert", result)
+	}
 }
 
 // inferQueryCmd determines the public command from populated fields when cmd is omitted.
