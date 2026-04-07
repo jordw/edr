@@ -85,9 +85,12 @@ func Execute() {
 
 // knownCommands is the set of valid edr subcommand names.
 var knownCommands = map[string]bool{
-	"read": true, "write": true, "edit": true, "map": true,
-	"search": true, "refs": true, "rename": true, "verify": true,
-	"reset": true, "setup": true, "batch": true, "index": true, "files": true,
+	// Primary commands
+	"orient": true, "focus": true, "edit": true, "status": true,
+	"undo": true, "setup": true, "index": true, "files": true, "bench": true,
+	// Internal/batch aliases
+	"read": true, "write": true, "map": true, "search": true,
+	"rename": true, "verify": true, "batch": true,
 }
 
 // detectCommandName extracts the subcommand name from os.Args.

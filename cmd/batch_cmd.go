@@ -310,14 +310,14 @@ func parseBatchArgs(args []string) (*batchState, error) {
 		case "-q", "--query":
 			s.flush()
 			s.currentOp = opQuery
-			// Next arg is the command name (refs, prepare, etc.)
+			// Next arg is the command name (search, orient, focus, etc.)
 			cmdName, err := nextArg(arg)
 			if err != nil {
 				return nil, err
 			}
 			spec := cmdspec.ByName(cmdName)
 			if spec == nil || spec.Category != cmdspec.CatRead {
-				return nil, fmt.Errorf("-q: %q is not a valid query command (use search, map, read)", cmdName)
+				return nil, fmt.Errorf("-q: %q is not a valid query command (use search, orient, focus)", cmdName)
 			}
 			s.currentQuery = doQuery{Cmd: cmdName}
 			// Consume the target argument (file:symbol) if present
@@ -566,7 +566,7 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			}
 			s.currentQuery.Group = bp(false)
 
-		// ── query modifiers (refs, prepare) ──
+		// ── query modifiers ──
 
 		case "--impact":
 			if s.currentOp != opQuery {
@@ -1061,7 +1061,7 @@ Operations:
   -s, --search PATTERN       Search for text/symbols
   -e, --edit   FILE[:SYM]    Edit file (file carries forward from previous op)
   -w, --write  FILE          Write/create file
-  -q, --query  CMD [TARGET]  Run query command (search, map, read)
+  -q, --query  CMD [TARGET]  Run query command (search, orient, focus)
   -V, --verify               Build check (opt-in, use -V to enable)
 
 Modifier flags apply to the preceding operation.
