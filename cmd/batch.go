@@ -851,6 +851,7 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 		env.Errors = append(env.Errors, output.OpError{Code: "warning", Message: w})
 	}
 
+	env.ComputeSummary()
 	env.ComputeOK()
 
 	return nil

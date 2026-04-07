@@ -29,6 +29,7 @@ type Envelope struct {
 	Ops           []Op      `json:"ops"`
 	Verify        any       `json:"verify"`
 	Errors        []OpError `json:"errors"`
+	Summary       any       `json:"summary,omitempty"` // batch summary, set by ComputeSummary
 }
 
 // NewEnvelope creates an envelope for a command.
@@ -118,13 +119,17 @@ func (e *Envelope) AddFailedOpResult(opID, opType, code string, result any) {
 // AddSkippedOp adds an op that was not attempted due to a prior failure.
 // Unlike AddFailedOp, this does not set ok=false on the envelope — the
 // failure is on the gating op, not this one.
-func (e *Envelope) AddSkippedOp(opID, opType, reason string) {
-	e.Ops = append(e.Ops, Op{
+func (e *Envelope) AddSkippedOp(opID, opType, reason string, causedBy ...string) {
+	op := Op{
 		"op_id":  opID,
 		"type":   opType,
 		"status": "skipped",
 		"reason": reason,
-	})
+	}
+	if len(causedBy) > 0 && causedBy[0] != "" {
+		op["caused_by"] = causedBy[0]
+	}
+	e.Ops = append(e.Ops, op)
 }
 
 // AddError adds a structured error to the envelope.
@@ -140,6 +145,49 @@ func (e *Envelope) SetVerify(v any) {
 
 // ComputeOK recalculates ok based on ops, errors, and verify.
 // True only when: len(errors)==0 AND no op has "error" key AND verify (if present) has ok:true.
+// ComputeSummary builds an aggregate summary of batch ops by type.
+// Only set when there are multiple ops (batch mode).
+func (e *Envelope) ComputeSummary() {
+	if len(e.Ops) <= 1 {
+		return
+	}
+
+	type counts struct {
+		Total   int `json:"total"`
+		Applied int `json:"applied,omitempty"`
+		Skipped int `json:"skipped,omitempty"`
+		Failed  int `json:"failed,omitempty"`
+	}
+	byType := map[string]*counts{}
+
+	for _, op := range e.Ops {
+		opType, _ := op["type"].(string)
+		if opType == "" {
+			continue
+		}
+		c := byType[opType]
+		if c == nil {
+			c = &counts{}
+			byType[opType] = c
+		}
+		c.Total++
+
+		status, _ := op["status"].(string)
+		switch {
+		case status == "skipped":
+			c.Skipped++
+		case op["error"] != nil:
+			c.Failed++
+		case status == "applied" || status == "dry_run" || status == "noop" || status == "built":
+			c.Applied++
+		default:
+			c.Applied++ // reads and queries count as applied
+		}
+	}
+
+	e.Summary = byType
+}
+
 func (e *Envelope) ComputeOK() {
 	e.OK = true
 	for _, err := range e.Errors {
@@ -211,6 +259,9 @@ func PrintEnvelope(e *Envelope) {
 	}
 	if len(e.Errors) > 0 {
 		wire["errors"] = e.Errors
+	}
+	if e.Summary != nil {
+		wire["summary"] = e.Summary
 	}
 
 	data, err := json.Marshal(wire)
