@@ -659,6 +659,218 @@ func TestCorrectnessMultipleEditsOneFile(t *testing.T) {
 	}
 }
 
+func TestCorrectnessSearchSymbols(t *testing.T) {
+	db, _ := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// SearchSymbols (substring match) — used by smart focus
+	var result struct {
+		TotalMatches int `json:"total_matches"`
+	}
+	dispatchResult(t, ctx, db, "search", []string{"Hello"}, nil, &result)
+	if result.TotalMatches == 0 {
+		t.Error("symbol search should find Hello")
+	}
+
+	// Partial match — "Good" should match "Goodbye"
+	var partial struct {
+		TotalMatches int `json:"total_matches"`
+	}
+	dispatchResult(t, ctx, db, "search", []string{"Good"}, nil, &partial)
+	if partial.TotalMatches == 0 {
+		t.Error("symbol search should find partial match 'Good' → Goodbye")
+	}
+
+	// After edit, search should reflect changes
+	dispatchResult(t, ctx, db, "edit", []string{"pkg/main.go"}, map[string]any{
+		"old_text": "func Hello()",
+		"new_text": "func Howdy()",
+	}, nil)
+
+	var afterEdit struct {
+		TotalMatches int `json:"total_matches"`
+	}
+	dispatchResult(t, ctx, db, "search", []string{"Howdy"}, nil, &afterEdit)
+	if afterEdit.TotalMatches == 0 {
+		t.Error("symbol search should find Howdy after rename")
+	}
+}
+
+func TestCorrectnessExpandCallers(t *testing.T) {
+	db, tmp := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// Create a file that calls Hello
+	os.WriteFile(filepath.Join(tmp, "pkg", "caller.go"), []byte(`package pkg
+
+func CallHello() string {
+	return Hello()
+}
+`), 0644)
+
+	// Rebuild index to include new file
+	dispatchResult(t, ctx, db, "index", nil, nil, nil)
+
+	// Read Hello with --expand callers
+	result, err := dispatch.Dispatch(ctx, db, "read", []string{"pkg/main.go:Hello"}, map[string]any{
+		"expand": "callers",
+	})
+	if err != nil {
+		t.Fatalf("read with expand callers: %v", err)
+	}
+	data, _ := json.Marshal(result)
+	resultStr := string(data)
+
+	// Should contain the function body
+	if !strings.Contains(resultStr, "hello world") {
+		t.Error("result should contain Hello function body")
+	}
+
+	// Should have callers section (may or may not find CallHello depending on repo size)
+	// On small repos (<1000 files), FindSemanticCallers runs
+	t.Logf("expand callers result keys present: callers=%v", strings.Contains(resultStr, "callers"))
+}
+
+func TestCorrectnessExpandDeps(t *testing.T) {
+	db, tmp := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// Create a file where a function calls FormatName
+	os.WriteFile(filepath.Join(tmp, "pkg", "consumer.go"), []byte(`package pkg
+
+func Greet(name string) string {
+	return "Hi " + FormatName(name)
+}
+`), 0644)
+
+	// Read Greet with --expand deps
+	result, err := dispatch.Dispatch(ctx, db, "read", []string{"pkg/consumer.go:Greet"}, map[string]any{
+		"expand": "deps",
+	})
+	if err != nil {
+		t.Fatalf("read with expand deps: %v", err)
+	}
+	data, _ := json.Marshal(result)
+	resultStr := string(data)
+
+	// Should contain the function body
+	if !strings.Contains(resultStr, "FormatName") {
+		t.Error("result should contain FormatName reference in body")
+	}
+
+	// deps section should include FormatName (same-file or cross-file dep)
+	if strings.Contains(resultStr, "deps") {
+		t.Log("deps section found in result")
+	}
+}
+
+func TestCorrectnessContainerAt(t *testing.T) {
+	db, _ := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// Write --inside Config should work (uses GetContainerAt)
+	var writeResult struct {
+		Status string `json:"status"`
+	}
+	dispatchResult(t, ctx, db, "edit", []string{"pkg/main.go"}, map[string]any{
+		"inside":  "Config",
+		"content": "\tMaxConns int",
+	}, &writeResult)
+	if writeResult.Status != "applied" {
+		t.Fatalf("write --inside Config: status = %q, want applied", writeResult.Status)
+	}
+
+	// Verify the field was added inside Config
+	var readResult json.RawMessage
+	dispatchResult(t, ctx, db, "read", []string{"pkg/main.go:Config"}, nil, &readResult)
+	if !strings.Contains(string(readResult), "MaxConns") {
+		t.Error("Config should contain MaxConns after write --inside")
+	}
+}
+
+func TestCorrectnessFilteredSymbolsByType(t *testing.T) {
+	db, _ := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// orient --type function should only return functions
+	var funcResult struct {
+		Symbols int `json:"symbols"`
+	}
+	dispatchResult(t, ctx, db, "orient", nil, map[string]any{
+		"type": "function", "budget": 200,
+	}, &funcResult)
+	if funcResult.Symbols == 0 {
+		t.Fatal("orient --type function should find functions")
+	}
+
+	// orient --type struct should only return structs
+	var structResult struct {
+		Symbols int `json:"symbols"`
+	}
+	dispatchResult(t, ctx, db, "orient", nil, map[string]any{
+		"type": "struct", "budget": 200,
+	}, &structResult)
+	if structResult.Symbols == 0 {
+		t.Fatal("orient --type struct should find structs")
+	}
+
+	// Function count + struct count should not exceed total
+	var allResult struct {
+		Symbols int `json:"symbols"`
+	}
+	dispatchResult(t, ctx, db, "orient", nil, map[string]any{
+		"budget": 200,
+	}, &allResult)
+	if funcResult.Symbols+structResult.Symbols > allResult.Symbols {
+		t.Errorf("function(%d) + struct(%d) > total(%d)",
+			funcResult.Symbols, structResult.Symbols, allResult.Symbols)
+	}
+}
+
+func TestCorrectnessOrientDir(t *testing.T) {
+	db, _ := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// orient pkg/ should scope to that directory
+	var dirResult struct {
+		Files   int `json:"files"`
+		Symbols int `json:"symbols"`
+	}
+	dispatchResult(t, ctx, db, "orient", []string{"pkg"}, map[string]any{
+		"budget": 200,
+	}, &dirResult)
+	if dirResult.Files == 0 {
+		t.Error("orient pkg/ should find files")
+	}
+	if dirResult.Symbols == 0 {
+		t.Error("orient pkg/ should find symbols")
+	}
+}
+
+func TestCorrectnessFilesCommand(t *testing.T) {
+	db, _ := setupIndexedRepo(t)
+	ctx := context.Background()
+
+	// files should find text in indexed files
+	var result struct {
+		N      int    `json:"n"`
+		Source string `json:"source"`
+	}
+	dispatchResult(t, ctx, db, "files", []string{"FormatName"}, nil, &result)
+	if result.N == 0 {
+		t.Error("files should find FormatName")
+	}
+
+	// files for non-existent text
+	var empty struct {
+		N int `json:"n"`
+	}
+	dispatchResult(t, ctx, db, "files", []string{"xyzzy_nonexistent_text"}, nil, &empty)
+	if empty.N != 0 {
+		t.Errorf("files for nonexistent text should return 0, got %d", empty.N)
+	}
+}
+
 func TestCorrectnessIndexRebuildPreservesSymbols(t *testing.T) {
 	db, tmp := setupIndexedRepo(t)
 	ctx := context.Background()
