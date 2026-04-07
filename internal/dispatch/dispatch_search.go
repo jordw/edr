@@ -118,9 +118,18 @@ func runSymbolSearch(ctx context.Context, db index.SymbolStore, root, pattern st
 		}
 	}
 
+	// Determine source
+	symSource := "parse"
+	if edrDir := db.EdrDir(); idx.HasSymbolIndex(edrDir) && !idx.IsDirty(edrDir) {
+		symSource = "symbol_index"
+	} else if edrDir := db.EdrDir(); idx.IsDirty(edrDir) {
+		symSource = "parse (index dirty)"
+	}
+
 	result := map[string]any{
 		"total_matches": totalMatches,
 		"type":          "search",
+		"source":        symSource,
 	}
 	if totalMatches == 0 {
 		result["root"] = output.Rel(root)
@@ -302,10 +311,23 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 	})
 	}
 
+	// Determine search source for provenance
+	searchSource := "scan"
+	if candidates != nil {
+		if dirty {
+			searchSource = "index+scan (index dirty)"
+		} else if complete {
+			searchSource = "index"
+		} else {
+			searchSource = "index+scan"
+		}
+	}
+
 	// Build result
 	result := map[string]any{
 		"total_matches": totalMatches,
 		"type":          "search",
+		"source":        searchSource,
 	}
 	// Surface repo root on empty results so agents can detect wrong-repo targeting.
 	if totalMatches == 0 {

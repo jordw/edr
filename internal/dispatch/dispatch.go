@@ -338,11 +338,21 @@ func runRepoMap(ctx context.Context, db index.SymbolStore, flags map[string]any)
 	if err != nil {
 		return nil, err
 	}
+	// Determine data source for provenance
+	edrDir := db.EdrDir()
+	source := "parse"
+	if idx.HasSymbolIndex(edrDir) && !idx.IsDirty(edrDir) {
+		source = "symbol_index"
+	} else if idx.IsDirty(edrDir) {
+		source = "parse (index dirty)"
+	}
+
 	result := map[string]any{
 		"files":     stats.TotalFiles,
 		"symbols":   stats.TotalSymbols,
 		"content":   stats.Files,
 		"truncated": stats.Truncated,
+		"source":    source,
 	}
 	if stats.TotalFiles == 0 && stats.TotalSymbols == 0 {
 		grep := flagString(flags, "grep", "")

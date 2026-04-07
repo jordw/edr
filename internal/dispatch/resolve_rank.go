@@ -175,6 +175,7 @@ func buildShortlist(ranked []rankedCandidate, query, root string) map[string]any
 		"resolve":    "ambiguous",
 		"query":      query,
 		"candidates": items,
+		"method":     "heuristic_ranking",
 		"hint":       "use file:symbol syntax to pick one, e.g. edr focus " + ranked[0].Rel + ":" + ranked[0].Symbol.Name,
 		"root":       output.Rel(root),
 	}
