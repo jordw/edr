@@ -26,7 +26,45 @@ func runSmartEdit(ctx context.Context, db index.SymbolStore, root string, args [
 	if err != nil || !readBack {
 		return result, err
 	}
+
+	// Annotate with target resolution provenance
+	if m, ok := result.(map[string]any); ok {
+		annotateEditMode(m, flags)
+		// For dry-run, add index freshness context
+		if dryRun {
+			edrDir := db.EdrDir()
+			if idx.IsDirty(edrDir) {
+				m["index_state"] = "dirty"
+			} else if idx.HasSymbolIndex(edrDir) {
+				m["index_state"] = "fresh"
+			} else {
+				m["index_state"] = "none"
+			}
+		}
+	}
+
 	return attachReadBack(ctx, db, result)
+}
+
+// annotateEditMode adds target_origin and edit_mode to the result for provenance.
+func annotateEditMode(result map[string]any, flags map[string]any) {
+	if flagString(flags, "where", "") != "" {
+		result["target_origin"] = "where"
+	} else if flagString(flags, "move_after", "") != "" {
+		result["target_origin"] = "move_after"
+	}
+
+	if flagString(flags, "in", "") != "" {
+		result["edit_mode"] = "scoped_text_match"
+	} else if flagInt(flags, "insert_at", 0) > 0 {
+		result["edit_mode"] = "insert_at"
+	} else if flagInt(flags, "start_line", 0) > 0 {
+		result["edit_mode"] = "line_range"
+	} else if flagString(flags, "old_text", "") != "" {
+		result["edit_mode"] = "text_match"
+	} else if _, hasSym := result["symbol"]; hasSym {
+		result["edit_mode"] = "symbol"
+	}
 }
 
 func refreshEditHash(db index.SymbolStore, args []string, flags map[string]any) bool {

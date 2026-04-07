@@ -361,6 +361,9 @@ func plainEdit(w *os.File, op Op) {
 	hStr(h, "status", op, "status")
 	hStr(h, "hash", op, "hash")
 	hStr(h, "msg", op, "message")
+	hStr(h, "edit_mode", op, "edit_mode")
+	hStr(h, "target_origin", op, "target_origin")
+	hStr(h, "index_state", op, "index_state")
 
 	// Include read_back metadata in the header if present
 	if rb, ok := op["read_back"].(map[string]any); ok {
