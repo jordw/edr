@@ -559,12 +559,16 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 	})
 
 	// Build output with early-stop budget.
+	// Text builder is used only for budget calculation; structured entries
+	// are the actual output, so both must respect the same per-symbol stop.
 	var b strings.Builder
 	if budgetChars == 0 {
 		budgetChars = cfg.budget * 4
 	}
 	truncated := false
 	filesRendered := 0
+	shownSymbols := 0
+	var mapFiles []MapFileEntry
 	for _, file := range fileOrder {
 		syms := byFile[file]
 		if len(syms) == 0 {
@@ -575,19 +579,34 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 			rel = file
 		}
 		fmt.Fprintf(&b, "\n%s\n", rel)
+		entry := MapFileEntry{File: rel}
 		for _, sym := range syms {
+			if budgetChars > 0 && b.Len() >= budgetChars {
+				truncated = true
+				break
+			}
+			me := MapSymbolEntry{
+				Name:    sym.Name,
+				Kind:    sym.Type,
+				Line:    int(sym.StartLine),
+				EndLine: int(sym.EndLine),
+			}
 			if searchCounts != nil {
 				if c := searchCounts[file+"\x00"+sym.Name]; c > 0 {
 					fmt.Fprintf(&b, "  %s %s [%d-%d] (%d matches)\n", sym.Type, sym.Name, sym.StartLine, sym.EndLine, c)
+					me.Matches = c
+					entry.Symbols = append(entry.Symbols, me)
+					shownSymbols++
 					continue
 				}
 			}
 			fmt.Fprintf(&b, "  %s %s [%d-%d]\n", sym.Type, sym.Name, sym.StartLine, sym.EndLine)
+			entry.Symbols = append(entry.Symbols, me)
+			shownSymbols++
 		}
+		mapFiles = append(mapFiles, entry)
 		filesRendered++
-		// Early stop: if budget set and exceeded, mark truncated and stop
-		if budgetChars > 0 && b.Len() >= budgetChars {
-			truncated = true
+		if truncated {
 			break
 		}
 	}
@@ -602,41 +621,8 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 		}
 	}
 
-	// Count shown symbols
-	shownSymbols := 0
-	for _, file := range fileOrder[:filesRendered] {
-		shownSymbols += len(byFile[file])
-	}
-
 	if !truncated && budgetChars > 0 && filesRendered < totalFiles {
 		truncated = true
-	}
-
-	// Build structured file entries for the shown files
-	var mapFiles []MapFileEntry
-	for _, file := range fileOrder[:filesRendered] {
-		syms := byFile[file]
-		if len(syms) == 0 {
-			continue
-		}
-		rel, _ := filepath.Rel(root, file)
-		if rel == "" {
-			rel = file
-		}
-		entry := MapFileEntry{File: rel}
-		for _, s := range syms {
-			me := MapSymbolEntry{
-				Name:    s.Name,
-				Kind:    s.Type,
-				Line:    int(s.StartLine),
-				EndLine: int(s.EndLine),
-			}
-			if searchCounts != nil {
-				me.Matches = searchCounts[file+"\x00"+s.Name]
-			}
-			entry.Symbols = append(entry.Symbols, me)
-		}
-		mapFiles = append(mapFiles, entry)
 	}
 
 	budgetUsed := 0
@@ -816,7 +802,12 @@ func repoMapLazy(ctx context.Context, db SymbolStore, root, edrDir string, cfg r
 
 		entry := MapFileEntry{File: rel}
 		fmt.Fprintf(&b, "\n%s\n", rel)
+		budgetHit := false
 		for _, s := range syms {
+			if b.Len() >= budgetChars {
+				budgetHit = true
+				break
+			}
 			fmt.Fprintf(&b, "  %s %s [%d-%d]\n", s.Type, s.Name, s.StartLine, s.EndLine)
 			entry.Symbols = append(entry.Symbols, MapSymbolEntry{
 				Name: s.Name, Kind: s.Type,
@@ -826,7 +817,7 @@ func repoMapLazy(ctx context.Context, db SymbolStore, root, edrDir string, cfg r
 		mapFiles = append(mapFiles, entry)
 		filesRendered++
 
-		if b.Len() >= budgetChars {
+		if budgetHit {
 			break
 		}
 	}
@@ -955,7 +946,12 @@ func repoMapFromSymbolIndex(root, edrDir string, cfg repoMapConfig, budgetChars 
 		fs := byFile[fid]
 		entry := MapFileEntry{File: fs.rel}
 		fmt.Fprintf(&b, "\n%s\n", fs.rel)
+		budgetHit := false
 		for _, s := range fs.syms {
+			if budgetChars > 0 && b.Len() >= budgetChars {
+				budgetHit = true
+				break
+			}
 			fmt.Fprintf(&b, "  %s %s [%d-%d]\n", s.Kind, s.Name, s.StartLine, s.EndLine)
 			entry.Symbols = append(entry.Symbols, MapSymbolEntry{
 				Name: s.Name, Kind: s.Kind.String(),
@@ -965,7 +961,7 @@ func repoMapFromSymbolIndex(root, edrDir string, cfg repoMapConfig, budgetChars 
 		}
 		mapFiles = append(mapFiles, entry)
 		filesRendered++
-		if b.Len() >= budgetChars {
+		if budgetHit {
 			break
 		}
 	}

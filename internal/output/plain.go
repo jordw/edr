@@ -920,6 +920,12 @@ func hTrunc(h map[string]any, op Op) {
 		if bu := anyInt(op["budget_used"]); bu > 0 {
 			h["budget_used"] = bu
 		}
+		if ss := anyInt(op["shown_symbols"]); ss > 0 {
+			h["shown_symbols"] = ss
+		}
+		if sf := anyInt(op["shown_files"]); sf > 0 {
+			h["shown_files"] = sf
+		}
 	}
 }
 

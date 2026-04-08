@@ -386,15 +386,14 @@ func runRepoMap(ctx context.Context, db index.SymbolStore, flags map[string]any)
 	if stats.Truncated {
 		result["shown_files"] = stats.ShownFiles
 		result["shown_symbols"] = stats.ShownSymbols
-		result["hint"] = "use --dir, --type, --lang, or --grep to narrow scope"
 		if stats.BudgetUsed > 0 {
 			result["budget_used"] = stats.BudgetUsed
 		}
 		if len(stats.DirSummary) > 0 {
 			result["dirs"] = stats.DirSummary
-			result["hint"] = "repo too large for full map; use --dir <name> to drill into a directory"
-			// Keep content (individual symbols) alongside dir summary
-			// so the agent sees both structure and some symbols
+			result["hint"] = fmt.Sprintf("showing %d/%d symbols; use --dir <name> to drill into a directory", stats.ShownSymbols, stats.TotalSymbols)
+		} else {
+			result["hint"] = fmt.Sprintf("showing %d/%d symbols; use --dir, --type, --lang, or --grep to narrow scope", stats.ShownSymbols, stats.TotalSymbols)
 		}
 	}
 	return result, nil
