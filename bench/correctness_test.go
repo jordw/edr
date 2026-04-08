@@ -10,6 +10,7 @@ import (
 
 	"github.com/jordw/edr/internal/dispatch"
 	"github.com/jordw/edr/internal/index"
+	"github.com/jordw/edr/internal/output"
 )
 
 // setupAdversarialRepo creates a temp copy of bench/testdata/adversarial, indexed and ready.
@@ -47,6 +48,7 @@ func setupAdversarialRepo(tb testing.TB) (index.SymbolStore, string) {
 
 	db := index.NewOnDemand(tmp)
 	tb.Cleanup(func() { db.Close() })
+	output.SetRoot(db.Root())
 	return db, tmp
 }
 
@@ -336,6 +338,7 @@ func FormatName(name string) string {
 
 	db := index.NewOnDemand(tmp)
 	tb.Cleanup(func() { db.Close() })
+	output.SetRoot(db.Root())
 
 	// Build the trigram+symbol index
 	ctx := context.Background()
