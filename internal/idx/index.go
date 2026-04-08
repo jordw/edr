@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -13,14 +14,28 @@ import (
 // MainFile is the index filename within the edr repo directory.
 const MainFile = "trigram.idx"
 
-// DirtyFile marks the index as stale due to worktree edits.
-// Created by MarkDirty, checked by IsComplete, cleared by builds.
+// DirtyFile tracks which files have been edited since the last index build.
+// Contains one relative path per line. Empty or absent = clean.
 const DirtyFile = "trigram.dirty"
 
-// MarkDirty signals that the trigram index may be stale because a file
-// was edited outside of git. Called after edr edit/write operations.
-func MarkDirty(edrDir string) {
-	os.WriteFile(filepath.Join(edrDir, DirtyFile), []byte("1"), 0600)
+// MarkDirty signals that specific files were edited and the index may be stale.
+// Appends the given relative paths to the dirty set.
+func MarkDirty(edrDir string, files ...string) {
+	path := filepath.Join(edrDir, DirtyFile)
+	existing := DirtyFiles(edrDir)
+	set := make(map[string]bool, len(existing)+len(files))
+	for _, f := range existing {
+		set[f] = true
+	}
+	for _, f := range files {
+		set[f] = true
+	}
+	var lines []string
+	for f := range set {
+		lines = append(lines, f)
+	}
+	sort.Strings(lines)
+	os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0600)
 }
 
 // ClearDirty removes the dirty marker after a full index build.
@@ -28,10 +43,35 @@ func ClearDirty(edrDir string) {
 	os.Remove(filepath.Join(edrDir, DirtyFile))
 }
 
-// IsDirty returns true if edits have occurred since the last index build.
+// IsDirty returns true if any files have been edited since the last index build.
 func IsDirty(edrDir string) bool {
-	_, err := os.Stat(filepath.Join(edrDir, DirtyFile))
-	return err == nil
+	info, err := os.Stat(filepath.Join(edrDir, DirtyFile))
+	return err == nil && info.Size() > 0
+}
+
+// IsDirtyFile returns true if a specific file has been edited since the last build.
+func IsDirtyFile(edrDir, relPath string) bool {
+	for _, f := range DirtyFiles(edrDir) {
+		if f == relPath {
+			return true
+		}
+	}
+	return false
+}
+
+// DirtyFiles returns the set of files edited since the last index build.
+func DirtyFiles(edrDir string) []string {
+	data, err := os.ReadFile(filepath.Join(edrDir, DirtyFile))
+	if err != nil {
+		return nil
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files
 }
 
 // BuildFull builds a complete trigram index from the given absolute paths.

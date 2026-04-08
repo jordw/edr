@@ -303,18 +303,24 @@ func (o *OnDemand) parseDir(ctx context.Context, dir string) map[string]*cachedF
 }
 
 func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo, error) {
-	// Fast path: use symbol index if available (skip when dirty — edits may have changed symbols)
-	if !idx.IsDirty(o.edrDir) {
+	// Fast path: use symbol index if available.
+	// With per-file dirty tracking, we use indexed results for clean files
+	// and skip entries from dirty files (they'll be found by parseCandidateFiles).
 	if entries := idx.LookupSymbols(o.edrDir, name); len(entries) > 0 {
 		_, files := idx.LoadAllSymbols(o.edrDir)
 		var candidates []SymbolInfo
 		for _, e := range entries {
-			file := ""
+			rel := ""
 			if int(e.FileID) < len(files) {
-				file = filepath.Join(o.root, files[e.FileID].Path)
+				rel = files[e.FileID].Path
+			}
+			// Skip entries from dirty files — they may be stale
+			if idx.IsDirtyFile(o.edrDir, rel) {
+				continue
 			}
 			candidates = append(candidates, SymbolInfo{
-				Name: e.Name, Type: e.Kind.String(), File: file,
+				Name: e.Name, Type: e.Kind.String(),
+				File:      filepath.Join(o.root, rel),
 				StartLine: e.StartLine, EndLine: e.EndLine,
 				StartByte: e.StartByte, EndByte: e.EndByte,
 			})
@@ -325,8 +331,10 @@ func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo,
 		if best := preferDefinition(candidates); best != nil {
 			return best, nil
 		}
-		return nil, &AmbiguousSymbolError{Name: name, Root: o.root, Candidates: candidates}
-	}
+		if len(candidates) > 0 {
+			return nil, &AmbiguousSymbolError{Name: name, Root: o.root, Candidates: candidates}
+		}
+		// All entries were from dirty files — fall through to parse
 	}
 
 	all := o.parseCandidateFiles(ctx, name)

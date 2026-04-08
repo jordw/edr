@@ -724,8 +724,12 @@ func commitEdits(ctx context.Context, db index.SymbolStore, edits []resolvedEdit
 			indexErrors[output.Rel(f)] = err.Error()
 		}
 	}
-	// Mark trigram index dirty so search falls back to scanning edited files.
-	idx.MarkDirty(db.EdrDir())
+	// Mark specific files as dirty so index queries skip them.
+	relFiles := make([]string, 0, len(fileList))
+	for _, f := range fileList {
+		relFiles = append(relFiles, output.Rel(f))
+	}
+	idx.MarkDirty(db.EdrDir(), relFiles...)
 
 	hashes := make(map[string]string)
 	for f := range fileSet {

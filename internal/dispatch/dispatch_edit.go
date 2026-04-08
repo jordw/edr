@@ -545,7 +545,7 @@ func smartEditMoveAfter(ctx context.Context, db index.SymbolStore, root string, 
 	if err := os.WriteFile(srcSym.File, []byte(newContent), 0644); err != nil {
 		return nil, fmt.Errorf("write: %w", err)
 	}
-	idx.MarkDirty(db.EdrDir())
+	idx.MarkDirty(db.EdrDir(), output.Rel(srcSym.File))
 	newHash, _ := edit.FileHash(srcSym.File)
 
 	return map[string]any{
