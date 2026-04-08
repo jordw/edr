@@ -457,6 +457,23 @@ func plainMap(w *os.File, op Op) {
 	hStr(h, "source", op, "source")
 	hStr(h, "hint", op, "hint")
 	hStr(h, "root", op, "root")
+	// Include compact dir summary in header when truncation is severe
+	if dirs, ok := op["dirs"].([]any); ok && len(dirs) > 0 {
+		compact := make([]string, 0, len(dirs))
+		for _, d := range dirs {
+			if dm, ok := d.(map[string]any); ok {
+				dir, _ := dm["dir"].(string)
+				files := anyInt(dm["files"])
+				if dir != "" && files > 0 {
+					compact = append(compact, fmt.Sprintf("%s(%d)", dir, files))
+				}
+			}
+		}
+		if len(compact) > 10 {
+			compact = compact[:10]
+		}
+		h["dirs"] = compact
+	}
 	if dym := op["did_you_mean"]; dym != nil {
 		switch v := dym.(type) {
 		case []string:
@@ -476,6 +493,23 @@ func plainMap(w *os.File, op Op) {
 		}
 	}
 	writeHeader(w, h)
+
+	// When budget is too low for useful symbol output, render dir summary instead
+	if shownSyms := anyInt(op["shown_symbols"]); shownSyms >= 0 && shownSyms < 10 {
+		if dirs, ok := op["dirs"].([]any); ok && len(dirs) > 0 {
+			for _, d := range dirs {
+				dm, ok := d.(map[string]any)
+				if !ok {
+					continue
+				}
+				dir, _ := dm["dir"].(string)
+				files := anyInt(dm["files"])
+				symbols := anyInt(dm["symbols"])
+				fmt.Fprintf(w, "%-30s %4d files  %5d symbols\n", dir+"/", files, symbols)
+			}
+			return
+		}
+	}
 
 	// Structured map: list of file entries
 	if content, ok := op["content"].([]any); ok {
