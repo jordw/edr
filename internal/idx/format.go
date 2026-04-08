@@ -238,6 +238,201 @@ func (d *IndexData) Marshal() []byte {
 	return data
 }
 
+// LoadSymbolIndex reads the file table, symbol table, and name postings
+// from the index file, skipping the bulk trigram data. This is much cheaper
+// than loading the full index for symbol-only queries.
+func LoadSymbolIndex(edrDir string) (files []FileEntry, symbols []SymbolEntry, namePosts []NamePostEntry, namePostings []byte, err error) {
+	path := filepath.Join(edrDir, MainFile)
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	defer f.Close()
+
+	// Read header
+	hdr := make([]byte, headerSize)
+	n, err := io.ReadAtLeast(f, hdr, v2HeaderSize)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if !bytes.Equal(hdr[:8], magic[:]) {
+		return nil, nil, nil, nil, fmt.Errorf("invalid trigram index magic")
+	}
+	version := binary.LittleEndian.Uint32(hdr[8:12])
+	numFiles := binary.LittleEndian.Uint32(hdr[12:16])
+	fileTableOff := binary.LittleEndian.Uint64(hdr[28:36])
+	postingOff := binary.LittleEndian.Uint64(hdr[36:44])
+
+	var numSymbols, numNameKeys uint32
+	var symbolOff, namePostOff uint64
+	if version >= 3 && n >= headerSize {
+		numSymbols = binary.LittleEndian.Uint32(hdr[44:48])
+		symbolOff = binary.LittleEndian.Uint64(hdr[48:56])
+		namePostOff = binary.LittleEndian.Uint64(hdr[56:64])
+		numNameKeys = binary.LittleEndian.Uint32(hdr[64:68])
+	}
+	if numSymbols == 0 {
+		return nil, nil, nil, nil, fmt.Errorf("no symbol index")
+	}
+
+	// Read file table (FileTableOff to PostingOff)
+	ftSize := postingOff - fileTableOff
+	ftData := make([]byte, ftSize)
+	if _, err := f.Seek(int64(fileTableOff), io.SeekStart); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if _, err := io.ReadFull(f, ftData); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	files = make([]FileEntry, 0, numFiles)
+	pos := uint64(0)
+	for i := uint32(0); i < numFiles; i++ {
+		if pos+2 > uint64(len(ftData)) {
+			break
+		}
+		pathLen := binary.LittleEndian.Uint16(ftData[pos:])
+		pos += 2
+		if pos+uint64(pathLen)+16 > uint64(len(ftData)) {
+			break
+		}
+		p := string(ftData[pos : pos+uint64(pathLen)])
+		pos += uint64(pathLen)
+		mt := int64(binary.LittleEndian.Uint64(ftData[pos:]))
+		pos += 8
+		sz := int64(binary.LittleEndian.Uint64(ftData[pos:]))
+		pos += 8
+		files = append(files, FileEntry{Path: p, Mtime: mt, Size: sz})
+	}
+
+	// Read from SymbolOff to end of file (symbols + name postings + name post table)
+	// This skips the trigram postings + trigram table which is the bulk of the data.
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	tailSize := fi.Size() - int64(symbolOff)
+	tailData := make([]byte, tailSize)
+	if _, err := f.Seek(int64(symbolOff), io.SeekStart); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if _, err := io.ReadFull(f, tailData); err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	// Parse symbol table
+	symbols = make([]SymbolEntry, 0, numSymbols)
+	spos := uint64(0)
+	for i := uint32(0); i < numSymbols; i++ {
+		if spos+6 > uint64(len(tailData)) {
+			break
+		}
+		fileID := binary.LittleEndian.Uint32(tailData[spos:])
+		spos += 4
+		nameLen := binary.LittleEndian.Uint16(tailData[spos:])
+		spos += 2
+		if spos+uint64(nameLen)+17 > uint64(len(tailData)) {
+			break
+		}
+		nm := string(tailData[spos : spos+uint64(nameLen)])
+		spos += uint64(nameLen)
+		kind := SymbolKind(tailData[spos])
+		spos++
+		startLine := binary.LittleEndian.Uint32(tailData[spos:])
+		spos += 4
+		endLine := binary.LittleEndian.Uint32(tailData[spos:])
+		spos += 4
+		startByte := binary.LittleEndian.Uint32(tailData[spos:])
+		spos += 4
+		endByte := binary.LittleEndian.Uint32(tailData[spos:])
+		spos += 4
+		symbols = append(symbols, SymbolEntry{
+			FileID: fileID, Name: nm, Kind: kind,
+			StartLine: startLine, EndLine: endLine,
+			StartByte: startByte, EndByte: endByte,
+		})
+	}
+
+	// Parse name postings and table
+	if namePostOff > 0 && numNameKeys > 0 {
+		npDataStart := namePostOff - symbolOff
+		namePostTableSize := uint64(numNameKeys) * 20
+		namePostTableOff := uint64(len(tailData)) - namePostTableSize
+		if npDataStart <= namePostTableOff {
+			namePostings = tailData[npDataStart:namePostTableOff]
+		}
+		npos := namePostTableOff
+		namePosts = make([]NamePostEntry, 0, numNameKeys)
+		for i := uint32(0); i < numNameKeys; i++ {
+			if npos+20 > uint64(len(tailData)) {
+				break
+			}
+			np := NamePostEntry{
+				NameHash: binary.LittleEndian.Uint64(tailData[npos:]),
+				Count:    binary.LittleEndian.Uint32(tailData[npos+8:]),
+				Offset:   binary.LittleEndian.Uint64(tailData[npos+12:]),
+			}
+			namePosts = append(namePosts, np)
+			npos += 20
+		}
+	}
+
+	return files, symbols, namePosts, namePostings, nil
+}
+
+// LoadFileTable reads only the header and file table from the index file.
+// This avoids loading the full index (trigrams, postings, symbols) into memory.
+func LoadFileTable(edrDir string) ([]FileEntry, error) {
+	path := filepath.Join(edrDir, MainFile)
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	// Read header
+	hdr := make([]byte, headerSize)
+	if _, err := io.ReadAtLeast(f, hdr, v2HeaderSize); err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(hdr[:8], magic[:]) {
+		return nil, fmt.Errorf("invalid trigram index magic")
+	}
+	numFiles := binary.LittleEndian.Uint32(hdr[12:16])
+	fileTableOff := binary.LittleEndian.Uint64(hdr[28:36])
+	postingOff := binary.LittleEndian.Uint64(hdr[36:44])
+
+	// Read only the file table section
+	tableSize := postingOff - fileTableOff
+	if _, err := f.Seek(int64(fileTableOff), io.SeekStart); err != nil {
+		return nil, err
+	}
+	data := make([]byte, tableSize)
+	if _, err := io.ReadFull(f, data); err != nil {
+		return nil, err
+	}
+
+	files := make([]FileEntry, 0, numFiles)
+	pos := uint64(0)
+	for i := uint32(0); i < numFiles; i++ {
+		if pos+2 > uint64(len(data)) {
+			break
+		}
+		pathLen := binary.LittleEndian.Uint16(data[pos:])
+		pos += 2
+		if pos+uint64(pathLen)+16 > uint64(len(data)) {
+			break
+		}
+		p := string(data[pos : pos+uint64(pathLen)])
+		pos += uint64(pathLen)
+		mtime := int64(binary.LittleEndian.Uint64(data[pos:]))
+		pos += 8
+		size := int64(binary.LittleEndian.Uint64(data[pos:]))
+		pos += 8
+		files = append(files, FileEntry{Path: p, Mtime: mtime, Size: size})
+	}
+	return files, nil
+}
+
 // Unmarshal decodes binary data into an IndexData.
 func Unmarshal(data []byte) (*IndexData, error) {
 	if len(data) < v2HeaderSize {

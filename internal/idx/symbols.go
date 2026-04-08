@@ -4,6 +4,7 @@ import (
 	"hash/fnv"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // NameHash computes a stable hash for symbol name lookup.
@@ -112,28 +113,58 @@ func HasSymbolIndex(edrDir string) bool {
 	return h.Version >= 3 && h.NumSymbols > 0
 }
 
-// LookupSymbols loads the index and queries symbols by exact name.
+// cachedSymbolIndex holds the lightweight symbol-only index.
+// This avoids loading the full trigram index (which can be 200MB+)
+// when only symbol lookups are needed.
+var (
+	symIdxMu    sync.Mutex
+	symIdxDir   string
+	symIdxFiles []FileEntry
+	symIdxData  *IndexData // only Symbols, NamePosts, NamePostings populated
+)
+
+func loadSymbolIndexCached(edrDir string) (*IndexData, []FileEntry) {
+	symIdxMu.Lock()
+	defer symIdxMu.Unlock()
+	if symIdxData != nil && symIdxDir == edrDir {
+		return symIdxData, symIdxFiles
+	}
+	files, symbols, namePosts, namePostings, err := LoadSymbolIndex(edrDir)
+	if err != nil {
+		return nil, nil
+	}
+	symIdxDir = edrDir
+	symIdxFiles = files
+	symIdxData = &IndexData{
+		Symbols:      symbols,
+		NamePosts:    namePosts,
+		NamePostings: namePostings,
+	}
+	return symIdxData, symIdxFiles
+}
+
+// LookupSymbols queries symbols by exact name using the lightweight symbol index.
 // Returns nil if no symbol index is available.
 func LookupSymbols(edrDir, name string) []SymbolEntry {
 	if !HasSymbolIndex(edrDir) {
 		return nil
 	}
-	d := loadIndex(edrDir)
+	d, _ := loadSymbolIndexCached(edrDir)
 	if d == nil {
 		return nil
 	}
 	return QuerySymbolsByName(d, name)
 }
 
-// LoadAllSymbols loads all symbols from the index.
+// LoadAllSymbols loads all symbols and file entries from the lightweight symbol index.
 // Returns nil if no symbol index is available.
 func LoadAllSymbols(edrDir string) ([]SymbolEntry, []FileEntry) {
 	if !HasSymbolIndex(edrDir) {
 		return nil, nil
 	}
-	d := loadIndex(edrDir)
+	d, files := loadSymbolIndexCached(edrDir)
 	if d == nil {
 		return nil, nil
 	}
-	return d.Symbols, d.Files
+	return d.Symbols, files
 }

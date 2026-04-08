@@ -837,9 +837,24 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 		}
 	}
 
-	// 5d. Assertions — post-edit checks
+	// 5d. Assertions — post-edit checks; rollback edits if any assertion fails
 	if len(p.Assertions) > 0 && !editsFailed && !isDryRun {
-		executeAssertions(ctx, db, env, p.Assertions)
+		if executeAssertions(ctx, db, env, p.Assertions) {
+			// Assertion failed — rollback to pre-edit checkpoint
+			sessDir := filepath.Join(db.EdrDir(), "sessions")
+			cpID := session.LatestAutoCheckpoint(sessDir)
+			if cpID != "" && sess != nil {
+				dirtyFiles := sess.GetDirtyFiles()
+				restored, _, _, restoreErr := sess.RestoreCheckpoint(sessDir, db.Root(), cpID, false, dirtyFiles)
+				if restoreErr == nil {
+					env.AddError("assertion_rollback",
+						fmt.Sprintf("assertion failed; rolled back %d file(s) to checkpoint %s", len(restored), cpID))
+				} else {
+					env.AddError("rollback_failed",
+						fmt.Sprintf("assertion failed and rollback failed: %v", restoreErr))
+				}
+			}
+		}
 	}
 
 	// 6. Verify — skip for failed edits, dry-run, or all-noop (#19)
@@ -874,7 +889,7 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 }
 
 // executeAssertions runs post-edit assertions and adds results to the envelope.
-func executeAssertions(ctx context.Context, db index.SymbolStore, env *output.Envelope, assertions []doAssert) {
+func executeAssertions(ctx context.Context, db index.SymbolStore, env *output.Envelope, assertions []doAssert) (anyFailed bool) {
 	for i, a := range assertions {
 		opID := fmt.Sprintf("a%d", i)
 		result := map[string]any{"type": "assert"}
@@ -947,8 +962,12 @@ func executeAssertions(ctx context.Context, db index.SymbolStore, env *output.En
 			result["message"] = "invalid assertion: must specify symbol_exists, symbol_absent, text_present, or text_absent"
 		}
 
+		if passed, ok := result["passed"].(bool); ok && !passed {
+			anyFailed = true
+		}
 		env.AddOp(opID, "assert", result)
 	}
+	return anyFailed
 }
 
 // inferQueryCmd determines the public command from populated fields when cmd is omitted.

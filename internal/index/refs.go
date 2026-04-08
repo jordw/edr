@@ -107,7 +107,7 @@ func findDepsTextBased(ctx context.Context, db SymbolStore, sym *SymbolInfo) ([]
 		sameFileByName[s.Name] = s
 	}
 
-	var sameFile, otherIdents []string
+	var otherIdents []string
 	depSeen := make(map[string]bool)
 	var deps []SymbolInfo
 	for _, name := range idents {
@@ -122,65 +122,90 @@ func findDepsTextBased(ctx context.Context, db SymbolStore, sym *SymbolInfo) ([]
 			if !depSeen[key] {
 				depSeen[key] = true
 				deps = append(deps, m)
-				sameFile = append(sameFile, name)
 			}
 		} else {
 			otherIdents = append(otherIdents, name)
 		}
 	}
 
-	// Phase 2: repo-wide lookup for remaining identifiers.
-	// Skip if same-file already found enough deps, or if the repo is too
-	// large for a full parse to be worthwhile (>1000 files).
-	// Use the index header for a fast file count when available.
-	fileCount := 0
-	if h, err := idx.ReadHeader(db.EdrDir()); err == nil {
-		fileCount = int(h.NumFiles)
-	} else {
-		fileCount, _, _ = db.Stats(ctx)
-	}
-	if len(deps) < 10 && len(otherIdents) > 0 && fileCount <= 1000 {
-		allSyms, err := db.AllSymbols(ctx)
-		if err == nil {
-			byName := make(map[string][]SymbolInfo, len(allSyms)/2)
-			for _, s := range allSyms {
-				byName[s.Name] = append(byName[s.Name], s)
-			}
+	// Phase 2: cross-file lookup for remaining identifiers.
+	// Use the symbol index for O(k) lookups when available;
+	// fall back to AllSymbols for small repos without an index.
+	if len(otherIdents) > 0 {
+		crossStart := len(deps)
+		symDir := filepath.Dir(sym.File)
+		edrDir := db.EdrDir()
 
-			symDir := filepath.Dir(sym.File)
+		if idx.HasSymbolIndex(edrDir) {
+			// Fast path: symbol index available — O(k) lookups via cached lightweight index
+			_, files := idx.LoadAllSymbols(edrDir)
 			for _, name := range otherIdents {
-				matches := byName[name]
-				// Skip overly ambiguous names (>5 definitions across repo)
-				if len(matches) > 5 {
+				entries := idx.LookupSymbols(edrDir, name)
+				if len(entries) > 5 {
 					continue
 				}
-				for _, m := range matches {
-					key := m.File + ":" + m.Name
-					if !depSeen[key] {
-						depSeen[key] = true
-						deps = append(deps, m)
+				for _, e := range entries {
+					rel := ""
+					if int(e.FileID) < len(files) {
+						rel = files[e.FileID].Path
+					}
+					abs := filepath.Join(db.Root(), rel)
+					key := abs + ":" + e.Name
+					if depSeen[key] {
+						continue
+					}
+					if idx.IsDirtyFile(edrDir, rel) {
+						continue
+					}
+					depSeen[key] = true
+					deps = append(deps, SymbolInfo{
+						Name: e.Name, Type: e.Kind.String(),
+						File:      abs,
+						StartLine: e.StartLine, EndLine: e.EndLine,
+						StartByte: e.StartByte, EndByte: e.EndByte,
+					})
+				}
+			}
+		} else {
+			// Slow path: no index — parse all symbols (small repos only)
+			fileCount, _, _ := db.Stats(ctx)
+			if fileCount <= 1000 {
+				allSyms, err := db.AllSymbols(ctx)
+				if err == nil {
+					byName := make(map[string][]SymbolInfo, len(allSyms)/2)
+					for _, s := range allSyms {
+						byName[s.Name] = append(byName[s.Name], s)
+					}
+					for _, name := range otherIdents {
+						matches := byName[name]
+						if len(matches) > 5 {
+							continue
+						}
+						for _, m := range matches {
+							key := m.File + ":" + m.Name
+							if !depSeen[key] {
+								depSeen[key] = true
+								deps = append(deps, m)
+							}
+						}
 					}
 				}
 			}
+		}
 
-			// Sort non-same-file deps by proximity: same dir first, then
-			// by path depth distance.
-			sameFileCount := len(sameFile)
-			if sameFileCount < len(deps) {
-				cross := deps[sameFileCount:]
-				sort.SliceStable(cross, func(i, j int) bool {
-					di := filepath.Dir(cross[i].File)
-					dj := filepath.Dir(cross[j].File)
-					// Same directory as target sorts first
-					iSame := di == symDir
-					jSame := dj == symDir
-					if iSame != jSame {
-						return iSame
-					}
-					// Closer path (fewer separators of difference) sorts first
-					return pathDistance(di, symDir) < pathDistance(dj, symDir)
-				})
-			}
+		// Sort cross-file deps by proximity: same dir first, then by path distance.
+		if crossStart < len(deps) {
+			cross := deps[crossStart:]
+			sort.SliceStable(cross, func(i, j int) bool {
+				di := filepath.Dir(cross[i].File)
+				dj := filepath.Dir(cross[j].File)
+				iSame := di == symDir
+				jSame := dj == symDir
+				if iSame != jSame {
+					return iSame
+				}
+				return pathDistance(di, symDir) < pathDistance(dj, symDir)
+			})
 		}
 	}
 

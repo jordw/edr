@@ -324,6 +324,7 @@ func runReadSymbol(ctx context.Context, db index.SymbolStore, root string, args 
 			if shouldAutoResolve(ranked, ambErr.Name) {
 				sym = &ranked[0].Symbol
 				err = nil
+				flags["_auto_resolved"] = true
 			} else if len(ranked) > 0 {
 				return buildShortlist(ranked, ambErr.Name, root), nil
 			}
@@ -366,6 +367,38 @@ func runReadSymbol(ctx context.Context, db index.SymbolStore, root string, args 
 		}
 		hash, _ := edit.FileHash(sym.File)
 		return symbolReadResult(sym, body, hash, nil), nil
+	}
+
+	// Auto-skeleton: when a bare-name auto-resolved to a large symbol (>200 lines)
+	// and the caller didn't request a specific mode, use skeleton to avoid dumping
+	// hundreds of lines into agent context. If skeleton doesn't reduce enough
+	// (e.g. flat structs), truncate to ~200 lines.
+	autoResolved := flagBool(flags, "_auto_resolved", false)
+	symLines := sym.EndLine - sym.StartLine + 1
+	const autoSkeletonThreshold = 200
+	if autoResolved && symLines > autoSkeletonThreshold && budget == 0 {
+		body, outlineErr := index.OutlineSymbol(sym.File, *sym, 2)
+		if outlineErr == nil {
+			outlineLines := strings.Count(body, "\n") + 1
+			if outlineLines <= autoSkeletonThreshold {
+				// Skeleton reduced output enough
+				hash, _ := edit.FileHash(sym.File)
+				r := symbolReadResult(sym, body, hash, nil)
+				r["auto_skeleton"] = true
+				r["full_lines"] = symLines
+				r["hint"] = fmt.Sprintf("symbol is %d lines; showing skeleton. Use edr focus %s:%s for full body", symLines, output.Rel(sym.File), sym.Name)
+				return r, nil
+			}
+			// Skeleton didn't collapse enough — truncate to threshold
+			truncBody, _ := output.TruncateAtLine(body, autoSkeletonThreshold*40)
+			hash, _ := edit.FileHash(sym.File)
+			r := symbolReadResult(sym, truncBody, hash, nil)
+			r["auto_truncated"] = true
+			r["full_lines"] = symLines
+			r["hint"] = fmt.Sprintf("symbol is %d lines; showing first ~%d. Use edr focus %s:%s for full body", symLines, autoSkeletonThreshold, output.Rel(sym.File), sym.Name)
+			return r, nil
+		}
+		// Fall through to full read if outline fails
 	}
 
 	src, err := os.ReadFile(sym.File)
