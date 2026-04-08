@@ -70,9 +70,7 @@ func Execute() {
 		if se, ok := err.(silentError); ok {
 			os.Exit(se.ExitCode())
 		}
-		// All other errors: emit structured JSON so the agent can parse it.
-		// Exit 0 because the agent reads ok:false from the output;
-		// non-zero exit codes just alarm the human watching the terminal.
+		// All other errors: emit structured JSON and exit 1.
 		cmdName := detectCommandName()
 		msg := err.Error()
 		if strings.Contains(msg, "no such file or directory") {
@@ -80,6 +78,7 @@ func Execute() {
 		} else {
 			output.ErrorEnvelope(cmdName, "command_error", msg)
 		}
+		os.Exit(1)
 	}
 }
 

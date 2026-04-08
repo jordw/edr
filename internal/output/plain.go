@@ -792,6 +792,9 @@ func plainUndo(w *os.File, op Op) {
 	if restored := toStringSlice(op["restored"]); len(restored) > 0 {
 		h["files"] = len(restored)
 	}
+	if v := anyInt(op["remaining"]); v >= 0 {
+		h["remaining"] = v
+	}
 	writeHeader(w, h)
 	if restored := toStringSlice(op["restored"]); len(restored) > 0 {
 		for _, f := range restored {

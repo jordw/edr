@@ -182,7 +182,10 @@ func runSmartEditInner(ctx context.Context, db index.SymbolStore, root string, a
 
 	// Require new_text if an edit mode is active.
 	if !newTextSet && newText == "" {
-		return nil, fmt.Errorf("edit requires 'new_text' in flags")
+		if oldText != "" {
+			return nil, fmt.Errorf("--old requires --new (or --delete to remove the matched text)")
+		}
+		return nil, fmt.Errorf("edit requires --new, --content, or --delete")
 	}
 
 	// --insert-at N: zero-width insertion before line N

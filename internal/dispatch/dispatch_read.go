@@ -1,6 +1,7 @@
 package dispatch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -633,8 +634,9 @@ func fileMtime(path string) string {
 
 // findCallersWithFallback tries semantic callers first, falls back to text-based refs.
 func findCallersWithFallback(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo) []index.SymbolInfo {
-	// For large repos, skip the full-repo parse and use same-file callers only.
-	// Use index header for fast file count when available.
+	// For large repos, use trigram-narrowed search instead of full parse.
+	// parseCandidateFiles uses the trigram index to find files containing
+	// the symbol name, then only parses those files.
 	files := 0
 	if h, err := idx.ReadHeader(db.EdrDir()); err == nil {
 		files = int(h.NumFiles)
@@ -642,7 +644,42 @@ func findCallersWithFallback(ctx context.Context, db index.SymbolStore, sym *ind
 		files, _, _ = db.Stats(ctx)
 	}
 	if files > 1000 {
+		// Same-file callers first (fast)
 		callers, _ := db.FindSameFileCallers(ctx, sym.Name, sym.File)
+		// Cross-file callers: find files containing the symbol name
+		// via trigram-narrowed search, get all symbols from those files,
+		// then check which symbols' bodies reference it.
+		nameMatches, _ := db.FilteredSymbols(ctx, "", "", sym.Name)
+		// Collect unique cross-file paths from name-matching results.
+		// parseCandidateFiles already narrowed to files containing the text.
+		crossFiles := make(map[string]bool)
+		for _, s := range nameMatches {
+			if s.File != sym.File {
+				crossFiles[s.File] = true
+			}
+		}
+		nameBytes := []byte(sym.Name)
+		seen := make(map[string]bool)
+		for file := range crossFiles {
+			src, err := os.ReadFile(file)
+			if err != nil || !bytes.Contains(src, nameBytes) {
+				continue
+			}
+			allFileSyms, _ := db.GetSymbolsByFile(ctx, file)
+			for _, s := range allFileSyms {
+				if s.Name == sym.Name {
+					continue
+				}
+				key := s.File + ":" + s.Name
+				if seen[key] || int(s.EndByte) > len(src) {
+					continue
+				}
+				if bytes.Contains(src[s.StartByte:s.EndByte], nameBytes) {
+					seen[key] = true
+					callers = append(callers, s)
+				}
+			}
+		}
 		return callers
 	}
 

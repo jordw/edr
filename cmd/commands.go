@@ -61,7 +61,7 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 		addDispatchFailedOp(env, opID, cmdName, err)
 		env.ComputeOK()
 		output.PrintEnvelope(env)
-		return nil
+		return silentError{code: 1}
 	}
 
 	// Multi-result: expand into individual ops (e.g. multi-file read)
@@ -107,6 +107,9 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	recordOp(sess, cmdName, args, flags, result, err == nil)
 
 	output.PrintEnvelope(env)
+	if !env.OK {
+		return silentError{code: 1}
+	}
 	return nil
 }
 
@@ -133,12 +136,16 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	}
 
 	// If any content-equivalent flag was provided on CLI, skip stdin.
+	// Also skip when --old is set without --new — let dispatch give a clear error.
 	hasContent := false
 	for _, key := range []string{stdinKey, "content", "new_text", "body", "delete", "move_after"} {
 		if _, ok := flags[key]; ok {
 			hasContent = true
 			break
 		}
+	}
+	if _, hasOld := flags["old_text"]; hasOld && !hasContent {
+		hasContent = true // skip stdin, let dispatch validate
 	}
 	// Handle --content - (read from stdin)
 	if v, ok := flags["content"].(string); ok && v == "-" {
@@ -202,7 +209,7 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 		addDispatchFailedOp(env, opID, cmdName, err)
 		env.ComputeOK()
 		output.PrintEnvelope(env)
-		return nil
+		return silentError{code: 1}
 	}
 
 	// Apply session post-processing
@@ -256,6 +263,9 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	recordOp(sess, cmdName, args, flags, result, err == nil)
 
 	output.PrintEnvelope(env)
+	if !env.OK {
+		return silentError{code: 1}
+	}
 	return nil
 }
 
@@ -466,7 +476,7 @@ var undoCmd = &cobra.Command{
 			env.AddFailedOpWithCode("u0", "undo", "no_checkpoint", "no auto-checkpoint found; nothing to undo")
 			env.ComputeOK()
 			output.PrintEnvelope(env)
-			return nil
+			return silentError{code: 1}
 		}
 
 		dirtyFiles := sess.GetDirtyFiles()
@@ -482,12 +492,22 @@ var undoCmd = &cobra.Command{
 
 		result := map[string]any{
 			"status":   "undone",
-			"restored": restored,
 			"target":   cpID,
+			"restored": restored,
 		}
 		if preRestoreID != "" {
 			result["safety_checkpoint"] = preRestoreID
 		}
+		// Report remaining checkpoints so the agent knows how many undos are left
+		remaining := session.ListCheckpoints(sessDir)
+		// Filter to only auto checkpoints (cp_auto_*)
+		autoCount := 0
+		for _, cp := range remaining {
+			if strings.HasPrefix(cp.ID, "cp_auto_") {
+				autoCount++
+			}
+		}
+		result["remaining"] = autoCount
 		// Remove files created after the checkpoint (they did not exist then)
 		var removed []string
 		for _, f := range notRemoved {

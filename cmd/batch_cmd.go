@@ -1009,6 +1009,9 @@ func runBatch(args []string) error {
 	}
 
 	output.PrintEnvelope(env)
+	if !env.OK {
+		return silentError{code: 1}
+	}
 	return nil
 }
 
