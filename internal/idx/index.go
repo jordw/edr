@@ -67,9 +67,15 @@ func DirtyFiles(edrDir string) []string {
 	}
 	var files []string
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		if line != "" {
-			files = append(files, line)
+		// Skip empty lines and legacy boolean markers ("1")
+		if line == "" || line == "1" {
+			continue
 		}
+		// Basic validation: must look like a relative path
+		if !strings.Contains(line, "/") && !strings.Contains(line, ".") {
+			continue
+		}
+		files = append(files, line)
 	}
 	return files
 }
