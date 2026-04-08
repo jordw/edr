@@ -41,9 +41,25 @@ func runSearchUnified(ctx context.Context, db index.SymbolStore, root string, ar
 		return runTextSearch(ctx, db, root, pattern, flags)
 	}
 
+	// When the symbol index is dirty, symbol search reparses all files
+	// (very slow on large repos). Skip it and go straight to text search
+	// which uses the trigram index and is much faster.
+	edrDir := db.EdrDir()
+	symIndexDirty := idx.IsDirty(edrDir) || !idx.HasSymbolIndex(edrDir)
+
+	if symIndexDirty {
+		return runTextSearch(ctx, db, root, pattern, flags)
+	}
+
 	// Default: symbol search via orient --grep, with auto-fallback to text.
 	result, err := runSymbolSearch(ctx, db, root, pattern, flags)
 	if err != nil {
+		// Regex errors mean the pattern isn't a valid symbol grep
+		// (e.g. "printk(KERN_INFO"). Fall through to text search
+		// which handles literal patterns.
+		if strings.Contains(err.Error(), "invalid --grep regex") {
+			return runTextSearch(ctx, db, root, pattern, flags)
+		}
 		return nil, err
 	}
 	// Auto-fallback: if symbol search returned nothing, retry as text search

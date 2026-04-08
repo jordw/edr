@@ -81,7 +81,7 @@ func printPlain(e *Envelope) {
 		case "search":
 			plainSearch(w, op)
 		case "edit", "write":
-			plainEdit(w, op)
+			plainEdit(w, op, multi)
 		case "rename":
 			plainRename(w, op)
 		case "orient", "map":
@@ -355,7 +355,7 @@ func writeMatch(w *os.File, file string, m any) {
 	}
 }
 
-func plainEdit(w *os.File, op Op) {
+func plainEdit(w *os.File, op Op, multi bool) {
 	h := map[string]any{}
 	hStr(h, "file", op, "file")
 	hStr(h, "status", op, "status")
@@ -382,10 +382,13 @@ func plainEdit(w *os.File, op Op) {
 	diff, _ := op["diff"].(string)
 	writeBody(w, diff)
 
-	// Append read-back content after the diff
-	if rb, ok := op["read_back"].(map[string]any); ok {
-		if content, ok := rb["content"].(string); ok && content != "" {
-			writeBody(w, content)
+	// Append read-back content after the diff (skip in batch mode — the
+	// preceding focus op already showed the body, and the diff shows changes).
+	if !multi {
+		if rb, ok := op["read_back"].(map[string]any); ok {
+			if content, ok := rb["content"].(string); ok && content != "" {
+				writeBody(w, content)
+			}
 		}
 	}
 }

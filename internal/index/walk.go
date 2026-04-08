@@ -278,8 +278,7 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 		var err error
 		grepRe, err = regexp.Compile("(?i)(?:" + cfg.grep + ")")
 		if err != nil {
-			// Not a regex — push as substring
-			sqlName = strings.ToLower(cfg.grep)
+			return "", RepoMapStats{}, fmt.Errorf("invalid --grep regex %q: %w", cfg.grep, err)
 		} else if !hasRegexMeta(cfg.grep) {
 			// Valid regex but is actually a plain literal — use as substring
 			// for trigram pre-filtering, AND keep grepRe for case-insensitive match.

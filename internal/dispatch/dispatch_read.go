@@ -40,15 +40,14 @@ func isBinaryFile(path string) bool {
 	return false
 }
 
-// grepMatch returns true if name matches the grep pattern.
-// Tries regex first (to support alternation like "error|warn");
-// falls back to case-insensitive substring if the pattern is not valid regex.
-func grepMatch(name, pattern string) bool {
+// grepMatch returns true if name matches the grep pattern (case-insensitive regex).
+// Returns an error if the pattern is not valid regex.
+func grepMatch(name, pattern string) (bool, error) {
 	re, err := regexp.Compile("(?i)(?:" + pattern + ")")
 	if err != nil {
-		return strings.Contains(strings.ToLower(name), strings.ToLower(pattern))
+		return false, fmt.Errorf("invalid --grep regex %q: %w", pattern, err)
 	}
-	return re.MatchString(name)
+	return re.MatchString(name), nil
 }
 
 func runReadFile(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
@@ -496,8 +495,14 @@ func runSymbols(ctx context.Context, db index.SymbolStore, root string, args []s
 		if typeFilter != "" && !strings.EqualFold(s.Type, typeFilter) {
 			continue
 		}
-		if grepFilter != "" && !grepMatch(s.Name, grepFilter) {
-			continue
+		if grepFilter != "" {
+			matched, err := grepMatch(s.Name, grepFilter)
+			if err != nil {
+				return nil, err
+			}
+			if !matched {
+				continue
+			}
 		}
 		if hideLocals {
 			isLocal := false
