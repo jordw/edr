@@ -2,11 +2,9 @@
 
 edr is a CLI tool that replaces built-in agent file operations with context-efficient alternatives. The global instructions (installed by `edr setup`) tell you how to *use* edr; this file tells you how to *develop* it.
 
-## Self-hosting warning
+## Self-hosting: use the homebrew binary
 
-edr is both the tool and the target. If you break the build, you lose your tools. Every edit/write is auto-checkpointed; use `edr undo` to revert. If a broken edit prevents `go build`, fall back to built-in Read/Edit tools to fix the compile error, then rebuild.
-
-## Build cycle
+Use `/opt/homebrew/bin/edr` (the installed release) for all file operations while developing. This survives build breakage — if `go build` fails, edr still works. Only use `go install` when testing features you just built.
 
 ```
 go build -o edr . && go install    # after every Go source change
