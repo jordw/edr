@@ -104,6 +104,9 @@ func rankCandidates(candidates []index.SymbolInfo, query, root string) []rankedC
 		if isVendorPath(rel) {
 			score -= 20
 		}
+		if isSamplePath(rel) {
+			score -= 15
+		}
 		if strings.HasPrefix(rel, "arch/") && !strings.HasPrefix(rel, "arch/x86/") {
 			score -= 5 // non-x86 arch-specific code is rarely the target
 		}
@@ -250,6 +253,8 @@ func isDefinitionType(t string) bool {
 func isTestPath(rel string) bool {
 	base := filepath.Base(rel)
 	return strings.HasSuffix(base, "_test.go") ||
+		strings.HasSuffix(base, "_test.c") ||
+		strings.HasSuffix(base, "_test.rs") ||
 		strings.HasSuffix(base, ".test.ts") ||
 		strings.HasSuffix(base, ".test.js") ||
 		strings.HasSuffix(base, "_test.py") ||
@@ -271,4 +276,14 @@ func isVendorPath(rel string) bool {
 	return strings.HasPrefix(rel, "vendor/") ||
 		strings.HasPrefix(rel, "node_modules/") ||
 		strings.HasPrefix(rel, "third_party/")
+}
+
+func isSamplePath(rel string) bool {
+	return strings.HasPrefix(rel, "samples/") ||
+		strings.HasPrefix(rel, "examples/") ||
+		strings.HasPrefix(rel, "tools/testing/") ||
+		strings.HasPrefix(rel, "tools/selftests/") ||
+		strings.Contains(rel, "/testdata/") ||
+		strings.Contains(rel, "/example/") ||
+		strings.Contains(rel, "/bench/")
 }
