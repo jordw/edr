@@ -165,7 +165,7 @@ var regexRuby = &regexLang{
 var regexC = &regexLang{
 	endStyle: regexBraceEnd, container: ContainerBrace, containerClose: "}", langID: "c",
 	patterns: []regexPattern{
-		{re: re(`^(?:static\s+)?(?:inline\s+)?(?:const\s+)?(?:unsigned\s+)?(?:struct\s+)?(?:{ID}+(?:\s*\*)*)\s+({ID}+)\s*\([^;]*$`), typ: "function", nameIdx: 1, prefix: "(", reject: ";", scan: scanCFunction},
+		{re: re(`^(?:static\s+)?(?:inline\s+)?(?:const\s+)?(?:unsigned\s+)?(?:struct\s+)?(?:{ID}+(?:\s*\*)*)\s+({ID}+)\s*\((?:[^;]*$|[^;]*\{)`), typ: "function", nameIdx: 1, prefix: "(", scan: scanCFunction},
 		{re: re(`^(?:typedef\s+)?struct\s+({ID}+)\s*\{`), typ: "struct", nameIdx: 1, prefix: "struct", scan: scanStructBrace},
 		{re: re(`^(?:typedef\s+)?enum\s+({ID}+)\s*\{`), typ: "type", nameIdx: 1, prefix: "enum", scan: scanEnumBrace},
 	},
@@ -321,6 +321,10 @@ func skipWS(line string, pos int) int {
 func scanCFunction(line string) string {
 	paren := strings.IndexByte(line, '(')
 	if paren < 2 {
+		return ""
+	}
+	// Reject forward declarations: lines with ';' but no '{' are prototypes, not definitions.
+	if strings.ContainsRune(line, ';') && !strings.ContainsRune(line, '{') {
 		return ""
 	}
 	// Walk backwards from '(' over whitespace to find end of name

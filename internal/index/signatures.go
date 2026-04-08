@@ -2,6 +2,7 @@ package index
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -131,6 +132,10 @@ func extractGoFields(body string) string {
 	if len(fields) == 0 {
 		return ""
 	}
+	const maxGoSigFields = 30
+	if len(fields) > maxGoSigFields {
+		return strings.Join(fields[:maxGoSigFields], "; ") + fmt.Sprintf("; // ... %d more fields", len(fields)-maxGoSigFields)
+	}
 	return strings.Join(fields, "; ")
 }
 
@@ -218,6 +223,8 @@ func ExtractContainerStub(container SymbolInfo, children []SymbolInfo) string {
 
 	// Struct/class fields aren't indexed as symbols in most languages.
 	// When no child symbols were found, extract field lines from source.
+	// Cap at maxSigFields to avoid dumping huge structs.
+	const maxSigFields = 30
 	if len(lines) == 1 {
 		body := string(data[container.StartByte:container.EndByte])
 		if idx := strings.Index(body, "{"); idx >= 0 {
@@ -228,8 +235,15 @@ func ExtractContainerStub(container SymbolInfo, children []SymbolInfo) string {
 				}
 			} else {
 				if fields := extractCFields(inner); len(fields) > 0 {
-					for _, f := range fields {
-						lines = append(lines, "\t"+f)
+					if len(fields) > maxSigFields {
+						for _, f := range fields[:maxSigFields] {
+							lines = append(lines, "\t"+f)
+						}
+						lines = append(lines, fmt.Sprintf("\t// ... %d more fields", len(fields)-maxSigFields))
+					} else {
+						for _, f := range fields {
+							lines = append(lines, "\t"+f)
+						}
 					}
 				}
 			}

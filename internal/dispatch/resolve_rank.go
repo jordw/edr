@@ -76,11 +76,17 @@ func rankCandidates(candidates []index.SymbolInfo, query, root string) []rankedC
 			score += 5
 		}
 
-		// Span size: full definitions (many lines) beat forward declarations (1-2 lines)
+		// Span size: larger definitions are more likely the canonical/core one.
+		// Graduated scale rewards substantial implementations over stubs.
 		span := int(s.EndLine - s.StartLine)
-		if span > 10 {
-			score += 10 // substantial body — likely the real definition
-		} else if span <= 1 {
+		switch {
+		case span >= 100:
+			score += 15 // major implementation
+		case span >= 30:
+			score += 10 // substantial body
+		case span >= 10:
+			score += 5
+		case span <= 1:
 			score -= 10 // forward declaration or single-line stub
 		}
 
@@ -90,10 +96,20 @@ func rankCandidates(candidates []index.SymbolInfo, query, root string) []rankedC
 			score += 8
 		}
 		depth := strings.Count(rel, string(filepath.Separator))
-		if depth <= 2 {
-			score += 3 // shallow paths are more canonical
+		if depth <= 1 {
+			score += 8 // top-level files are very likely canonical
+		} else if depth <= 2 {
+			score += 4
+		} else if depth >= 5 {
+			score -= 5 // deeply nested files are rarely the primary definition
 		}
 
+		// Peripheral path penalty: leaf/plugin/driver directories contain
+		// many definitions of common names but are rarely the target.
+		// This is cross-language: applies to drivers/, plugins/, contrib/, etc.
+		if isPeripheralPath(rel) {
+			score -= 15
+		}
 		// Penalties
 		if isTestPath(rel) {
 			score -= 20
@@ -107,10 +123,9 @@ func rankCandidates(candidates []index.SymbolInfo, query, root string) []rankedC
 		if isSamplePath(rel) {
 			score -= 15
 		}
-		if strings.HasPrefix(rel, "arch/") && !strings.HasPrefix(rel, "arch/x86/") {
-			score -= 5 // non-x86 arch-specific code is rarely the target
+		if isScriptsPath(rel) {
+			score -= 10
 		}
-
 		ranked = append(ranked, rankedCandidate{
 			Symbol: s,
 			Tier:   tier,
@@ -278,6 +293,23 @@ func isVendorPath(rel string) bool {
 		strings.HasPrefix(rel, "third_party/")
 }
 
+// isPeripheralPath returns true for directories that contain many definitions
+// of common names (open, init, probe, config, etc.) but are leaf code rather
+// than core infrastructure. Cross-language: applies to any project layout.
+func isPeripheralPath(rel string) bool {
+	parts := strings.SplitN(rel, string(filepath.Separator), 2)
+	if len(parts) == 0 {
+		return false
+	}
+	switch parts[0] {
+	case "drivers", "plugins", "extensions", "addons", "contrib":
+		return true
+	case "adapters", "connectors", "integrations":
+		return true
+	}
+	return false
+}
+
 func isSamplePath(rel string) bool {
 	return strings.HasPrefix(rel, "samples/") ||
 		strings.HasPrefix(rel, "examples/") ||
@@ -286,4 +318,18 @@ func isSamplePath(rel string) bool {
 		strings.Contains(rel, "/testdata/") ||
 		strings.Contains(rel, "/example/") ||
 		strings.Contains(rel, "/bench/")
+}
+
+// isScriptsPath returns true for build/dev utility directories that contain
+// re-declarations of core types but are not primary source code.
+func isScriptsPath(rel string) bool {
+	parts := strings.SplitN(rel, string(filepath.Separator), 2)
+	if len(parts) == 0 {
+		return false
+	}
+	switch parts[0] {
+	case "scripts", "script", "build", "ci", "hack", "deploy":
+		return true
+	}
+	return false
 }

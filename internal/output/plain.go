@@ -457,6 +457,24 @@ func plainMap(w *os.File, op Op) {
 	hStr(h, "source", op, "source")
 	hStr(h, "hint", op, "hint")
 	hStr(h, "root", op, "root")
+	if dym := op["did_you_mean"]; dym != nil {
+		switch v := dym.(type) {
+		case []string:
+			if len(v) > 0 {
+				h["did_you_mean"] = v
+			}
+		case []any:
+			strs := make([]string, 0, len(v))
+			for _, s := range v {
+				if str, ok := s.(string); ok {
+					strs = append(strs, str)
+				}
+			}
+			if len(strs) > 0 {
+				h["did_you_mean"] = strs
+			}
+		}
+	}
 	writeHeader(w, h)
 
 	// Structured map: list of file entries

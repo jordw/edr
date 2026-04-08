@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -337,7 +338,14 @@ func runRepoMap(ctx context.Context, db index.SymbolStore, flags map[string]any)
 	}
 	budget := flagInt(flags, "budget", 0)
 	if budget == 0 && !flagBool(flags, "full", false) {
+		// Check if budget was explicitly set to 0 (invalid) vs not set at all.
+		if _, explicit := flagLookup(flags, "budget"); explicit {
+			return nil, fmt.Errorf("--budget must be a positive integer")
+		}
 		budget = defaultMapBudget
+	}
+	if budget < 0 {
+		return nil, fmt.Errorf("--budget must be a positive integer")
 	}
 	if budget > 0 {
 		opts = append(opts, index.WithBudget(budget))
@@ -384,6 +392,13 @@ func runRepoMap(ctx context.Context, db index.SymbolStore, flags map[string]any)
 				parts = append(parts, "--type "+symType)
 			}
 			result["hint"] = "no symbols matched filters: " + strings.Join(parts, ", ")
+		}
+		// Fuzzy suggestions: when --grep matched nothing, suggest similar names.
+		if grep != "" {
+			suggestions := suggestSimilarNames(ctx, db, grep, dir, symType)
+			if len(suggestions) > 0 {
+				result["did_you_mean"] = suggestions
+			}
 		}
 	}
 	if stats.Truncated {
@@ -864,4 +879,83 @@ func suggestCommand(input string) string {
 		}
 	}
 	return best
+}
+
+// suggestSimilarNames finds symbol names similar to a failed --grep query.
+// Uses Levenshtein distance with length pre-filtering for speed.
+// Returns up to 5 suggestions.
+func suggestSimilarNames(ctx context.Context, db index.SymbolStore, query, dir, symType string) []string {
+	queryLower := strings.ToLower(query)
+	queryLen := len(queryLower)
+
+	// Skip for very short queries or regex patterns.
+	if queryLen < 4 || strings.ContainsAny(query, ".*+?[](){}|\\^$") {
+		return nil
+	}
+
+	// Re-query without grep to get the full symbol set (respecting dir/type).
+	sqlDir := ""
+	if dir != "" {
+		sqlDir = filepath.Join(db.Root(), dir)
+	}
+	symbols, err := db.FilteredSymbols(ctx, sqlDir, symType, "")
+	if err != nil {
+		return nil
+	}
+
+	// Collect unique lowercase names.
+	nameSet := make(map[string]string) // lowercase -> original case
+	for _, s := range symbols {
+		lower := strings.ToLower(s.Name)
+		if _, seen := nameSet[lower]; !seen {
+			nameSet[lower] = s.Name
+		}
+	}
+	// Max edit distance scales with query length.
+	maxDist := queryLen / 3
+	if maxDist < 2 {
+		maxDist = 2
+	}
+	if maxDist > 5 {
+		maxDist = 5
+	}
+
+	type suggestion struct {
+		name string
+		dist int
+	}
+	var candidates []suggestion
+	for lower, original := range nameSet {
+		nameLen := len(lower)
+		// Length pre-filter: skip names too different in length.
+		diff := queryLen - nameLen
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff > maxDist {
+			continue
+		}
+		d := cmdspec.Levenshtein(queryLower, lower)
+		if d > 0 && d <= maxDist {
+			candidates = append(candidates, suggestion{original, d})
+		}
+	}
+
+	// Sort by distance, then alphabetically.
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].dist != candidates[j].dist {
+			return candidates[i].dist < candidates[j].dist
+		}
+		return candidates[i].name < candidates[j].name
+	})
+
+	limit := 5
+	if len(candidates) < limit {
+		limit = len(candidates)
+	}
+	result := make([]string, limit)
+	for i := range result {
+		result[i] = candidates[i].name
+	}
+	return result
 }

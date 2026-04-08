@@ -304,6 +304,27 @@ func TestRegexGo_RepoAccuracy(t *testing.T) {
 }
 
 
+func TestRegexC_SingleLineBody(t *testing.T) {
+	src := []byte("void oneliner(void) { return; }\nvoid forward_decl(int x);\nint multi(void)\n{\n    return 42;\n}\nextern int ext_func(int a, int b);\nstatic inline void helper(void) { x++; }\n")
+	syms := RegexParse("test.c", src)
+	names := map[string]bool{}
+	for _, s := range syms {
+		names[s.Name] = true
+	}
+	// Single-line function bodies should be found.
+	for _, want := range []string{"oneliner", "multi", "helper"} {
+		if !names[want] {
+			t.Errorf("missing: %s (got %v)", want, names)
+		}
+	}
+	// Forward declarations and extern should NOT be found.
+	for _, reject := range []string{"forward_decl", "ext_func"} {
+		if names[reject] {
+			t.Errorf("should not match forward declaration: %s", reject)
+		}
+	}
+}
+
 func TestRegexCSharp_Basic(t *testing.T) {
 	src := `using System;
 

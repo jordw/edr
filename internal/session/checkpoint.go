@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -172,15 +173,20 @@ func (s *Session) RestoreCheckpoint(sessDir, repoRoot, cpID string, saveCurrentF
 	}
 
 	// Restore files. Files with nil content didn't exist at checkpoint time
-	// — delete them to undo the creation.
+	// — delete them to undo the creation. Only report files that actually changed.
 	cpFileSet := make(map[string]bool, len(cp.Files))
 	for _, f := range cp.Files {
 		cpFileSet[f.Path] = true
 		abs := filepath.Join(repoRoot, f.Path)
 		if f.Content == nil {
 			// File didn't exist at checkpoint time — delete it
-			os.Remove(abs)
-			restored = append(restored, f.Path)
+			if err := os.Remove(abs); err == nil {
+				restored = append(restored, f.Path)
+			}
+			continue
+		}
+		// Skip files whose content already matches the checkpoint.
+		if cur, err := os.ReadFile(abs); err == nil && bytes.Equal(cur, f.Content) {
 			continue
 		}
 		if err := atomicWrite(abs, f.Content); err != nil {
