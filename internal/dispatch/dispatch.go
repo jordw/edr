@@ -321,6 +321,9 @@ func runRepoMap(ctx context.Context, db index.SymbolStore, flags map[string]any)
 		opts = append(opts, index.WithSymbolType(symType))
 	}
 	if grep := flagString(flags, "grep", ""); grep != "" {
+		if w := warnBREPatterns(grep); w != "" {
+			fmt.Fprintf(os.Stderr, "edr: warning: %s\n", w)
+		}
 		opts = append(opts, index.WithGrep(grep))
 	}
 	if lang := flagString(flags, "lang", ""); lang != "" {

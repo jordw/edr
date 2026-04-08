@@ -50,6 +50,18 @@ func grepMatch(name, pattern string) (bool, error) {
 	return re.MatchString(name), nil
 }
 
+// warnBREPatterns returns a warning if the pattern uses BRE/POSIX syntax
+// that silently behaves differently in Go's RE2 regex engine.
+func warnBREPatterns(pattern string) string {
+	if strings.Contains(pattern, `\|`) {
+		return fmt.Sprintf("--grep pattern contains \\|; use | for alternation (Go regex, not BRE)")
+	}
+	if strings.Contains(pattern, `\(`) || strings.Contains(pattern, `\)`) {
+		return fmt.Sprintf("--grep pattern contains \\( or \\); use ( ) for grouping (Go regex, not BRE)")
+	}
+	return ""
+}
+
 func runReadFile(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) < 1 {
 		return nil, fmt.Errorf("read-file requires 1-3 arguments: <file> [start-line] [end-line]")

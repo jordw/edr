@@ -64,6 +64,54 @@ func goSignature(body, symType string) string {
 }
 
 // extractGoFields extracts field names and types from a struct body.
+// extractCFields extracts field declarations from a C/C++ struct body.
+// Returns one compact line per field (e.g. "unsigned int nr_running;").
+// Skips comments, preprocessor directives, and blank lines.
+func extractCFields(body string) []string {
+	lines := strings.Split(body, "\n")
+	var fields []string
+	inComment := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Track block comments
+		if inComment {
+			if idx := strings.Index(trimmed, "*/"); idx >= 0 {
+				inComment = false
+				trimmed = strings.TrimSpace(trimmed[idx+2:])
+				if trimmed == "" {
+					continue
+				}
+			} else {
+				continue
+			}
+		}
+		if strings.HasPrefix(trimmed, "/*") {
+			if !strings.Contains(trimmed, "*/") {
+				inComment = true
+			}
+			continue
+		}
+		// Skip blanks, closing brace, comments, preprocessor
+		if trimmed == "" || trimmed == "}" || trimmed == "};" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		// Strip trailing inline comments
+		if idx := strings.Index(trimmed, "/*"); idx > 0 {
+			trimmed = strings.TrimSpace(trimmed[:idx])
+		}
+		if idx := strings.Index(trimmed, "//"); idx > 0 {
+			trimmed = strings.TrimSpace(trimmed[:idx])
+		}
+		if trimmed != "" {
+			fields = append(fields, trimmed)
+		}
+	}
+	return fields
+}
+
 func extractGoFields(body string) string {
 	lines := strings.Split(body, "\n")
 	var fields []string
@@ -168,14 +216,22 @@ func ExtractContainerStub(container SymbolInfo, children []SymbolInfo) string {
 		lines = append(lines, sig)
 	}
 
-	// Go structs/interfaces: fields aren't indexed as symbols.
-	// Fall back to extractGoFields which parses them from source.
-	if ext == ".go" && len(lines) == 1 {
+	// Struct/class fields aren't indexed as symbols in most languages.
+	// When no child symbols were found, extract field lines from source.
+	if len(lines) == 1 {
 		body := string(data[container.StartByte:container.EndByte])
 		if idx := strings.Index(body, "{"); idx >= 0 {
-			fields := extractGoFields(body[idx+1:])
-			if fields != "" {
-				lines = append(lines, "    "+fields)
+			inner := body[idx+1:]
+			if ext == ".go" {
+				if fields := extractGoFields(inner); fields != "" {
+					lines = append(lines, "    "+fields)
+				}
+			} else {
+				if fields := extractCFields(inner); len(fields) > 0 {
+					for _, f := range fields {
+						lines = append(lines, "\t"+f)
+					}
+				}
 			}
 		}
 	}
