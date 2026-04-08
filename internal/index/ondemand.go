@@ -627,14 +627,42 @@ func (o *OnDemand) parseCandidateFiles(ctx context.Context, text string) map[str
 		}
 	}
 
-	// If no index or no trigrams, fall back to full parse.
-	if indexed == nil || len(tris) == 0 {
+	if indexed == nil {
 		return o.parseAll(ctx)
 	}
 
-	// Pre-filter candidates: read file content and skip those that don't
-	// actually contain the search text (trigrams are approximate).
+	// For short text (< 3 chars), pad with a space prefix to produce at
+	// least one trigram. Symbol definitions are almost always preceded by
+	// whitespace ("struct rq", "int rq", "def rq"), so " <name>" narrows
+	// the candidate set dramatically without missing definitions.
+	if len(tris) == 0 && len(text) >= 2 {
+		tris = idx.QueryTrigrams(" " + strings.ToLower(text))
+		if len(tris) > 0 {
+			if paths, ok := idx.Query(o.edrDir, tris); ok {
+				for _, rel := range paths {
+					abs := filepath.Join(o.root, rel)
+					if RegexSupported(abs) {
+						candidatePaths = append(candidatePaths, abs)
+					}
+				}
+			}
+		}
+	}
+
+	// If still no trigrams (1-char names or no index matches), full parse.
+	if len(tris) == 0 {
+		return o.parseAll(ctx)
+	}
+
 	textLower := []byte(strings.ToLower(text))
+
+	// Build per-file dirty set for targeted re-checking.
+	dirtySet := make(map[string]bool)
+	for _, f := range idx.DirtyFiles(o.edrDir) {
+		dirtySet[f] = true
+	}
+
+	// Pre-filter trigram candidates by content (trigrams are approximate).
 	var filteredPaths []string
 	for _, p := range candidatePaths {
 		data, err := os.ReadFile(p)
@@ -646,70 +674,80 @@ func (o *OnDemand) parseCandidateFiles(ctx context.Context, text string) map[str
 		}
 	}
 
-	// Parse only confirmed candidates in parallel.
-	// Confirmed candidates ready for parallel parsing.
+	// Collect walk candidates: paths that need content-check + parse.
+	// With trigrams: only dirty + unindexed files (trigram results cover the rest).
+	// Without trigrams (short names): all files (can't narrow by trigrams).
+	trigramHandled := make(map[string]bool, len(candidatePaths))
+	for _, p := range candidatePaths {
+		if rel, err := filepath.Rel(o.root, p); err == nil {
+			trigramHandled[rel] = true
+		}
+	}
+
+	// Only parse the specific dirty files — no full walk needed.
+	// The trigram index covers all indexed clean files.
+	var walkPaths []string
+	for rel := range dirtySet {
+		if trigramHandled[rel] {
+			continue
+		}
+		abs := filepath.Join(o.root, rel)
+		if RegexSupported(abs) {
+			walkPaths = append(walkPaths, abs)
+		}
+	}
+
+	// Parse all candidates in parallel. Workers do content-check for
+	// walk candidates (avoids double-reading since parseFile reads too).
 	results := make(map[string]*cachedFile, len(filteredPaths))
 	var mu sync.Mutex
 	workers := runtime.NumCPU()
 	if workers > 8 {
 		workers = 8
 	}
-	ch := make(chan string, workers*4)
+
+	type parseJob struct {
+		path         string
+		contentCheck bool // true = read+check content before parsing
+	}
+	ch := make(chan parseJob, workers*4)
 
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for path := range ch {
+			for job := range ch {
 				if ctx.Err() != nil {
 					return
 				}
-				cf, err := o.parseFile(path)
+				if job.contentCheck {
+					data, err := os.ReadFile(job.path)
+					if err != nil {
+						continue
+					}
+					if !bytes.Contains(bytes.ToLower(data), textLower) {
+						continue
+					}
+				}
+				cf, err := o.parseFile(job.path)
 				if err != nil || cf == nil {
 					continue
 				}
 				mu.Lock()
-				results[path] = cf
+				results[job.path] = cf
 				mu.Unlock()
 			}
 		}()
 	}
 
-	// Feed confirmed candidates
+	// Feed trigram-confirmed candidates (no content check needed)
 	for _, p := range filteredPaths {
-		ch <- p
+		ch <- parseJob{path: p}
 	}
-
-	// Also parse unindexed files (they might contain the pattern).
-	// Skip when the index is complete — all files are already covered.
-	// When dirty, scan ALL files (index may have stale content).
-	dirty := idx.IsDirty(o.edrDir)
-	if !idx.IsComplete(o.root, o.edrDir) {
-		WalkRepoFiles(o.root, func(path string) error {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			rel, _ := filepath.Rel(o.root, path)
-			if !dirty {
-				if _, isIndexed := indexed[rel]; isIndexed {
-					return nil // already handled above
-				}
-			}
-			if !RegexSupported(path) {
-				return nil
-			}
-			// Quick content check before expensive parse
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return nil
-			}
-			if !bytes.Contains(bytes.ToLower(data), textLower) {
-				return nil
-			}
-			ch <- path
-			return nil
-		})
+	// Feed walk candidates (need content check in worker)
+	for _, p := range walkPaths {
+		ch <- parseJob{path: p, contentCheck: true}
 	}
 
 	close(ch)
