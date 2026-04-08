@@ -16,7 +16,7 @@ Run `edr status` between tasks or after failures.
 edr orient                                  # repo overview
 edr orient cmd/                             # directory structure
 edr orient --grep "TestSpec"                # symbols by name (regex)
-edr orient --body "http.Get"                # symbols whose body contains text
+edr orient --body "http.Get"                # body contains text
 edr orient cmd/ --lang go --type interface  # filter by language + type
 edr orient --glob "**/*_test.go"            # filter by file pattern
 edr orient cmd/ --budget 50                 # cap output size
@@ -44,7 +44,7 @@ edr edit --where Symbol --old "x" --new "y"        # auto-resolve file
 edr --edit f.go --old "Foo" --new "Bar" --assert-symbol-exists f.go:Bar
 
 ### Quoting for edits
-Always use heredocs for --old/--new to avoid shell quoting errors:
+Use heredocs or @file refs for --old/--new to avoid quoting errors:
 `edr edit f.go --old "$(cat <<'EOF'
 old code
 EOF

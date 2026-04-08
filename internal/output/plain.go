@@ -339,14 +339,14 @@ func writeMatch(w *os.File, file string, m any) {
 		return
 	}
 
-	// Text search match
+	// Text search match — compact grep-like output
 	line := anyInt(mm["line"])
 	text, _ := mm["text"].(string)
 
 	if file != "" {
 		if snippet, ok := mm["snippet"].(string); ok && snippet != "" {
-			fmt.Fprintf(w, "%s:%d:\n", file, line)
-			writeBody(w, snippet)
+			// Print snippet directly with file context (no separate header line)
+			fmt.Fprintf(w, "%s:%d:\n%s", file, line, snippet)
 		} else {
 			fmt.Fprintf(w, "%s:%d: %s\n", file, line, text)
 		}
