@@ -47,13 +47,24 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 	var matches []string
 	source := "scan"
 
+	dirty := idx.IsDirty(edrDir)
 	tris := idx.QueryTrigrams(strings.ToLower(pattern))
 	indexed := idx.IndexedPaths(edrDir)
 
 	if indexed != nil && len(tris) > 0 {
-		// Get candidates from index, verify each
+		// Use index for trigram candidates — valid even when dirty for
+		// unchanged files. Dirty files are rescanned below.
 		if candidates, ok := idx.Query(edrDir, tris); ok {
+			dirtySet := make(map[string]bool)
+			if dirty {
+				for _, f := range idx.DirtyFiles(edrDir) {
+					dirtySet[f] = true
+				}
+			}
 			for _, rel := range candidates {
+				if dirtySet[rel] {
+					continue // will be rescanned below
+				}
 				data, err := os.ReadFile(filepath.Join(root, rel))
 				if err != nil {
 					continue
@@ -63,20 +74,32 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 				}
 			}
 			source = "index"
+			if dirty {
+				source = "index+dirty"
+			}
 		}
 	}
 
 	// Scan files not covered by the index.
-	// Skip when the index is complete — all files are already covered.
-	// When dirty, scan ALL files (index may have stale content).
-	dirty := idx.IsDirty(edrDir)
-	if !idx.IsComplete(root, edrDir) {
+	if dirty {
+		// Only scan dirty files — the index covers the rest.
+		for _, rel := range idx.DirtyFiles(edrDir) {
+			data, err := os.ReadFile(filepath.Join(root, rel))
+			if err != nil {
+				continue
+			}
+			if fileMatches(data, searchBytes, searchLower, caseSensitive) {
+				matches = append(matches, rel)
+			}
+		}
+	} else if !idx.IsComplete(root, edrDir) {
+		// Index is clean but incomplete — scan unindexed files.
 		index.WalkRepoFiles(root, func(path string) error {
 			rel, _ := filepath.Rel(root, path)
 			if rel == "" {
 				rel = path
 			}
-			if indexed != nil && !dirty {
+			if indexed != nil {
 				if _, ok := indexed[rel]; ok {
 					return nil // already handled by index
 				}

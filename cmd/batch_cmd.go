@@ -240,8 +240,12 @@ func parseBatchArgs(args []string) (*batchState, error) {
 			path := val[1:]
 			root := s.root
 			if root == "" {
-				wd, _ := os.Getwd()
-				root = discoverRoot(wd)
+				if envRoot := os.Getenv("EDR_ROOT"); envRoot != "" {
+					root = envRoot
+				} else {
+					wd, _ := os.Getwd()
+					root = discoverRoot(wd)
+				}
 			}
 			if root != "" {
 				resolved, err := index.ResolvePathReadOnly(root, path)
@@ -971,8 +975,15 @@ func runBatch(args []string) error {
 	// Resolve root — discover repo root by walking up for .git
 	root := state.root
 	if root == "" {
-		wd, _ := os.Getwd()
-		root = discoverRoot(wd)
+		if envRoot := os.Getenv("EDR_ROOT"); envRoot != "" {
+			root = envRoot
+		} else {
+			wd, _ := os.Getwd()
+			root = discoverRoot(wd)
+		}
+	}
+	if normalized, err := index.NormalizeRoot(root); err == nil {
+		root = normalized
 	}
 
 	// Read-only batch

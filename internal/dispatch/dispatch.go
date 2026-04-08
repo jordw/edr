@@ -224,7 +224,12 @@ func runReadUnified(ctx context.Context, db index.SymbolStore, root string, args
 		if resolveErr != nil {
 			return runReadSymbol(ctx, db, root, args, flags)
 		}
-		if _, statErr := os.Stat(resolved); statErr != nil {
+		info, statErr := os.Stat(resolved)
+		if statErr != nil {
+			return runReadSymbol(ctx, db, root, args, flags)
+		}
+		// Directories are not readable as files — treat bare name as symbol search
+		if info.IsDir() {
 			return runReadSymbol(ctx, db, root, args, flags)
 		}
 	}

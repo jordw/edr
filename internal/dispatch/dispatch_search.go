@@ -258,6 +258,14 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 	edrDir := db.EdrDir()
 	var indexed map[string]struct{}
 	var candidates map[string]struct{}
+	dirty := idx.IsDirty(edrDir)
+	var dirtySet map[string]bool
+	if dirty {
+		dirtySet = make(map[string]bool)
+		for _, f := range idx.DirtyFiles(edrDir) {
+			dirtySet[f] = true
+		}
+	}
 	if !isRegex {
 		tris := idx.QueryTrigrams(strings.ToLower(pattern))
 		indexed = idx.IndexedPaths(edrDir)
@@ -267,10 +275,13 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 				for _, p := range paths {
 					candidates[p] = struct{}{}
 				}
-				// Search indexed candidates first
+				// Search indexed candidates (skip dirty — rescanned below)
 				for _, rel := range paths {
 					if atLimit() {
 						break
+					}
+					if dirtySet[rel] {
+						continue
 					}
 					if !includeExcludeFilter(rel) {
 						continue
@@ -281,41 +292,47 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 		}
 	}
 
-	// Walk for unindexed files (or all files if no index/regex search).
-	// Skip when the index is complete — all files are already covered.
-	// When dirty, scan all files (index may have stale content).
+	// Scan files not covered by the index.
 	complete := candidates != nil && idx.IsComplete(root, edrDir)
-	dirty := idx.IsDirty(edrDir)
-	if complete {
-		// no walk needed
-	} else {
-	index.WalkRepoFiles(root, func(path string) error {
-		if atLimit() {
-			return filepath.SkipAll
+	if dirty && candidates != nil {
+		// Index used for unchanged files above; only scan dirty files.
+		for _, rel := range idx.DirtyFiles(edrDir) {
+			if atLimit() {
+				break
+			}
+			if !includeExcludeFilter(rel) {
+				continue
+			}
+			searchFile(rel, filepath.Join(root, rel))
 		}
-		rel, _ := filepath.Rel(root, path)
-		if rel == "" {
-			rel = path
-		}
-		// Skip files already searched via index (unless dirty)
-		if candidates != nil && !dirty {
-			if _, ok := indexed[rel]; ok {
+	} else if !complete {
+		// No index or incomplete clean index — walk unindexed files.
+		index.WalkRepoFiles(root, func(path string) error {
+			if atLimit() {
+				return filepath.SkipAll
+			}
+			rel, _ := filepath.Rel(root, path)
+			if rel == "" {
+				rel = path
+			}
+			if candidates != nil {
+				if _, ok := indexed[rel]; ok {
+					return nil
+				}
+			}
+			if !includeExcludeFilter(rel) {
 				return nil
 			}
-		}
-		if !includeExcludeFilter(rel) {
+			searchFile(rel, path)
 			return nil
-		}
-		searchFile(rel, path)
-		return nil
-	})
+		})
 	}
 
 	// Determine search source for provenance
 	searchSource := "scan"
 	if candidates != nil {
 		if dirty {
-			searchSource = "index+scan (index dirty)"
+			searchSource = "index+dirty"
 		} else if complete {
 			searchSource = "index"
 		} else {

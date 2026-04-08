@@ -1,13 +1,14 @@
 package idx
 
 import (
-	"bytes"
 	"fmt"
 	"os"
+	"runtime"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -121,7 +122,7 @@ func BuildFull(root string, paths []string, gitMtime int64) *IndexData {
 	for i, f := range indexed {
 		files[i] = f.entry
 		fileID := uint32(i)
-		for _, t := range ExtractTrigrams(bytes.ToLower(f.data)) {
+		for _, t := range ExtractTrigrams(f.data) {
 			triMap[t] = append(triMap[t], fileID)
 		}
 	}
@@ -384,7 +385,7 @@ func rebuildSmart(root, edrDir string, walkFn func(root string, fn func(path str
 		if err != nil || isBinary(data) {
 			continue
 		}
-		tris := ExtractTrigrams(bytes.ToLower(data))
+		tris := ExtractTrigrams(data)
 		indexed = append(indexed, fileResult{entry: f.entry, tris: tris})
 	}
 
@@ -460,12 +461,55 @@ func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(pat
 		tris  []Trigram
 		syms  []SymbolEntry // v3: extracted symbols
 	}
-	resultCh := make(chan fileResult, len(paths))
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 8)
-	var done int
-	var mu sync.Mutex
+	workers := runtime.NumCPU()
+	if workers < 8 {
+		workers = 8
+	}
+	resultCh := make(chan fileResult, workers*4)
+	pathCh := make(chan int, workers*4)
+	var done atomic.Int64
+	total := len(paths)
 
+	// Load old index to reuse trigrams+symbols for unchanged files.
+	old := loadIndex(edrDir)
+	type oldFileData struct {
+		entry FileEntry
+		tris  []Trigram
+		syms  []SymbolEntry
+	}
+	var oldByPath map[string]*oldFileData
+	if old != nil {
+		oldByPath = make(map[string]*oldFileData, len(old.Files))
+		for i := range old.Files {
+			oldByPath[old.Files[i].Path] = &oldFileData{entry: old.Files[i]}
+		}
+		// Reconstruct per-file trigrams from postings.
+		for _, te := range old.Trigrams {
+			ids := DecodePosting(old.Postings, te.Offset, te.Count)
+			for _, id := range ids {
+				if int(id) < len(old.Files) {
+					d := oldByPath[old.Files[id].Path]
+					d.tris = append(d.tris, te.Tri)
+				}
+			}
+		}
+		// Reconstruct per-file symbols.
+		for _, s := range old.Symbols {
+			if int(s.FileID) < len(old.Files) {
+				d := oldByPath[old.Files[s.FileID].Path]
+				d.syms = append(d.syms, s)
+			}
+		}
+	}
+
+	// Pre-compute relative paths and stat info. Classify as reusable or needing re-index.
+	type pathInfo struct {
+		rel  string
+		abs  string
+		info os.FileInfo
+	}
+	var needIndex []pathInfo
+	var reused []fileResult
 	for _, p := range paths {
 		rel, _ := filepath.Rel(root, p)
 		if rel == "" {
@@ -475,37 +519,69 @@ func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(pat
 		if err != nil {
 			continue
 		}
-		entry := FileEntry{Path: rel, Mtime: info.ModTime().UnixNano(), Size: info.Size()}
-		wg.Add(1)
-		go func(path string, entry FileEntry) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			data, err := os.ReadFile(path)
-			if err != nil || isBinary(data) {
-				return
-			}
-			fr := fileResult{entry: entry, tris: ExtractTrigrams(bytes.ToLower(data))}
-			if len(extractSymbols) > 0 && extractSymbols[0] != nil {
-				fr.syms = extractSymbols[0](path, data)
-			}
-			resultCh <- fr
-			if progress != nil {
-				mu.Lock()
-				done++
-				progress(done, len(paths))
-				mu.Unlock()
-			}
-		}(p, entry)
+		// Reuse old data if mtime matches — skip reading the file entirely.
+		if od, ok := oldByPath[rel]; ok && od.entry.Mtime == info.ModTime().UnixNano() && len(od.tris) > 0 {
+			reused = append(reused, fileResult{
+				entry: FileEntry{Path: rel, Mtime: info.ModTime().UnixNano(), Size: info.Size()},
+				tris:  od.tris,
+				syms:  od.syms,
+			})
+			continue
+		}
+		needIndex = append(needIndex, pathInfo{rel: rel, abs: p, info: info})
 	}
-	go func() { wg.Wait(); close(resultCh) }()
+	total = len(needIndex) + len(reused)
+
+	// Worker pool — only processes files that actually need re-indexing.
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range pathCh {
+				pi := needIndex[idx]
+				data, err := os.ReadFile(pi.abs)
+				if err != nil || isBinary(data) {
+					if progress != nil {
+						n := int(done.Add(1))
+						progress(n, total)
+					}
+					continue
+				}
+				entry := FileEntry{Path: pi.rel, Mtime: pi.info.ModTime().UnixNano(), Size: pi.info.Size()}
+				fr := fileResult{entry: entry, tris: ExtractTrigrams(data)}
+				if len(extractSymbols) > 0 && extractSymbols[0] != nil {
+					fr.syms = extractSymbols[0](pi.abs, data)
+				}
+				resultCh <- fr
+				if progress != nil {
+					n := int(done.Add(1))
+					progress(n, total)
+				}
+			}
+		}()
+	}
+
+	// Feed paths to workers
+	go func() {
+		for i := range needIndex {
+			pathCh <- i
+		}
+		close(pathCh)
+		wg.Wait()
+		close(resultCh)
+	}()
 
 	type collected struct {
 		entry FileEntry
 		tris  []Trigram
 		syms  []SymbolEntry
 	}
-	var results []collected
+	// Start with reused results, append newly indexed ones.
+	results := make([]collected, 0, len(reused)+len(needIndex))
+	for _, r := range reused {
+		results = append(results, collected{entry: r.entry, tris: r.tris, syms: r.syms})
+	}
 	for r := range resultCh {
 		results = append(results, collected{entry: r.entry, tris: r.tris, syms: r.syms})
 	}
@@ -541,7 +617,6 @@ func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(pat
 	if len(allSymbols) > 0 {
 		namePostData, namePosts = BuildNamePostings(allSymbols)
 	}
-
 	d := &IndexData{
 		Header: Header{
 			NumFiles:    uint32(len(files)),

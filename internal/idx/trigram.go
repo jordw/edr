@@ -28,31 +28,42 @@ func ExtractTrigrams(data []byte) []Trigram {
 	const size = (1 << 24) / 8
 	bp := trigramPool.Get().(*[]byte)
 	seen := *bp
-	defer func() {
-		clear(seen)
-		trigramPool.Put(bp)
-	}()
+
+	// Track which bytes in the bitset were touched so we only scan/clear those.
+	// Max unique trigrams = min(len(data)-2, 2^24). Each trigram touches 1 byte,
+	// so dirty tracks at most that many distinct byte positions.
+	dirty := make([]uint32, 0, 1024)
 
 	for i := 0; i <= len(data)-3; i++ {
-		t := uint32(data[i])<<16 | uint32(data[i+1])<<8 | uint32(data[i+2])
-		seen[t/8] |= 1 << (t % 8)
-	}
-
-	// Count first, then allocate exact size.
-	n := 0
-	for _, b := range seen {
-		n += popcount(b)
-	}
-	out := make([]Trigram, 0, n)
-	for i := range seen {
-		b := seen[i]
-		for b != 0 {
-			bit := b & (-b)         // lowest set bit
-			pos := uint32(i)*8 + uint32(bitIndex(bit))
-			out = append(out, trigramFromUint(pos))
-			b ^= bit
+		b0, b1, b2 := data[i], data[i+1], data[i+2]
+		if b0 >= 'A' && b0 <= 'Z' { b0 |= 0x20 }
+		if b1 >= 'A' && b1 <= 'Z' { b1 |= 0x20 }
+		if b2 >= 'A' && b2 <= 'Z' { b2 |= 0x20 }
+		t := uint32(b0)<<16 | uint32(b1)<<8 | uint32(b2)
+		idx := t / 8
+		bit := byte(1 << (t % 8))
+		if seen[idx]&bit == 0 {
+			seen[idx] |= bit
+			dirty = append(dirty, idx)
 		}
 	}
+
+	out := make([]Trigram, 0, len(dirty))
+	for _, idx := range dirty {
+		b := seen[idx]
+		for b != 0 {
+			lo := b & (-b)
+			pos := idx*8 + uint32(bitIndex(lo))
+			out = append(out, trigramFromUint(pos))
+			b ^= lo
+		}
+	}
+
+	// Clear only touched bytes instead of the full 2MB.
+	for _, idx := range dirty {
+		seen[idx] = 0
+	}
+	trigramPool.Put(bp)
 	return out
 }
 

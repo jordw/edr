@@ -491,7 +491,7 @@ func runSymbols(ctx context.Context, db index.SymbolStore, root string, args []s
 		nameCounts[s.Name]++
 	}
 
-	var results []output.Symbol
+	var results []index.MapSymbolEntry
 	for _, s := range syms {
 		if typeFilter != "" && !strings.EqualFold(s.Type, typeFilter) {
 			continue
@@ -511,17 +511,12 @@ func runSymbols(ctx context.Context, db index.SymbolStore, root string, args []s
 				continue
 			}
 		}
-		sym := output.Symbol{
-			Type:  s.Type,
-			Name:  s.Name,
-			File:  output.Rel(s.File),
-			Lines: [2]int{int(s.StartLine), int(s.EndLine)},
-			Size:  int(s.EndByte-s.StartByte) / 4,
-		}
-		if nameCounts[s.Name] > 1 {
-			sym.Qualifier = fmt.Sprintf("line %d", s.StartLine)
-		}
-		results = append(results, sym)
+		results = append(results, index.MapSymbolEntry{
+			Name:    s.Name,
+			Kind:    s.Type,
+			Line:    int(s.StartLine),
+			EndLine: int(s.EndLine),
+		})
 	}
 	return map[string]any{
 		"content": []any{
