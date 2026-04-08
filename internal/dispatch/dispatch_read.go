@@ -351,17 +351,29 @@ func runReadSymbol(ctx context.Context, db index.SymbolStore, root string, args 
 		allSyms, _ := db.GetSymbolsByFile(ctx, sym.File)
 		stub := index.ExtractContainerStub(*sym, allSyms)
 		hash, _ := edit.FileHash(sym.File)
+		size := len(stub) / 4
+		truncated := false
+		if budget > 0 && size > budget {
+			stub, truncated = output.TruncateAtLine(stub, budget*4)
+		}
 		r := symbolReadResult(sym, stub, hash, map[string]any{"signatures": true})
-		r["size"] = len(stub) / 4
+		r["size"] = size
+		r["truncated"] = truncated
+		setBudgetUsed(r, size)
 		// Record signature for assumption tracking (agent sees the signature)
 		src, _ := os.ReadFile(sym.File)
 		addSignatureToResult(sym, src, r)
 		return r, nil
 	}
 
-	// --signatures on a non-container: return error
+	// --signatures on a non-container: show the function/symbol signature line
 	if flagBool(flags, "signatures", false) {
-		return nil, fmt.Errorf("%s is a %s, not a container; use --skeleton or read without --signatures", sym.Name, sym.Type)
+		src, _ := os.ReadFile(sym.File)
+		sig := index.ExtractSignatureFromSource(*sym, src)
+		hash, _ := edit.FileHash(sym.File)
+		r := symbolReadResult(sym, sig, hash, map[string]any{"signatures": true})
+		r["size"] = len(sig) / 4
+		return r, nil
 	}
 
 	// --skeleton or --depth: progressive disclosure via AST-aware collapsing
@@ -416,6 +428,16 @@ func runReadSymbol(ctx context.Context, db index.SymbolStore, root string, args 
 	src, err := os.ReadFile(sym.File)
 	if err != nil {
 		return nil, err
+	}
+
+	// Guard against stale index byte offsets that exceed the actual file size.
+	if int(sym.EndByte) > len(src) || int(sym.StartByte) > len(src) {
+		fresh, rerr := db.GetSymbol(ctx, sym.File, sym.Name)
+		if rerr != nil {
+			return nil, fmt.Errorf("stale symbol offsets for %s (file %d bytes, offsets %d:%d); re-parse failed: %w",
+				sym.Name, len(src), sym.StartByte, sym.EndByte, rerr)
+		}
+		sym = fresh
 	}
 
 	body := string(src[sym.StartByte:sym.EndByte])

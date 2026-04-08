@@ -319,6 +319,9 @@ func runRepoMap(ctx context.Context, db index.SymbolStore, flags map[string]any)
 		opts = append(opts, index.WithGlob(glob))
 	}
 	if symType := flagString(flags, "type", ""); symType != "" {
+		if !index.ValidSymbolType(symType) {
+			fmt.Fprintf(os.Stderr, "edr: warning: unknown symbol type %q; valid types: function, method, struct, class, interface, type, variable, constant, enum, impl, module, trait, macro, property (aliases: func, fn, iface, intf, var, const)\n", symType)
+		}
 		opts = append(opts, index.WithSymbolType(symType))
 	}
 	if grep := flagString(flags, "grep", ""); grep != "" {

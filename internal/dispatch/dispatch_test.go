@@ -1108,9 +1108,9 @@ func hello() {}
 }
 
 
-// --- Signatures on non-container returns error ---
+// --- Signatures on non-container returns signature line ---
 
-func TestReadSymbol_SignaturesOnFunction_ReturnsError(t *testing.T) {
+func TestReadSymbol_SignaturesOnFunction_ReturnsSig(t *testing.T) {
 	tmp := t.TempDir()
 	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc Execute() {\n\tfmt.Println(\"hi\")\n}\n"), 0644)
 
@@ -1119,12 +1119,17 @@ func TestReadSymbol_SignaturesOnFunction_ReturnsError(t *testing.T) {
 	defer db.Close()
 	output.SetRoot(db.Root())
 
-	_, err := dispatch.Dispatch(ctx, db, "read", []string{"main.go:Execute"}, map[string]any{"signatures": true})
-	if err == nil {
-		t.Fatal("expected error for --signatures on a function")
+	result, err := dispatch.Dispatch(ctx, db, "read", []string{"main.go:Execute"}, map[string]any{"signatures": true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "not a container") {
-		t.Errorf("error should mention 'not a container', got: %v", err)
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", result)
+	}
+	content, _ := m["content"].(string)
+	if !strings.Contains(content, "func Execute()") {
+		t.Errorf("expected signature to contain func Execute(), got: %s", content)
 	}
 }
 

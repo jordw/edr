@@ -318,9 +318,14 @@ func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo,
 			if idx.IsDirtyFile(o.edrDir, rel) {
 				continue
 			}
+			absPath := filepath.Join(o.root, rel)
+			// Validate byte offsets against actual file size to catch stale index entries.
+			if fi, err := os.Stat(absPath); err != nil || int64(e.EndByte) > fi.Size() {
+				continue
+			}
 			candidates = append(candidates, SymbolInfo{
 				Name: e.Name, Type: e.Kind.String(),
-				File:      filepath.Join(o.root, rel),
+				File:      absPath,
 				StartLine: e.StartLine, EndLine: e.EndLine,
 				StartByte: e.StartByte, EndByte: e.EndByte,
 			})

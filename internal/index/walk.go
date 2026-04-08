@@ -152,6 +152,21 @@ var typeAliases = map[string]string{
 	"const": "constant",
 }
 
+var knownSymbolTypes = map[string]bool{
+	"function": true, "method": true, "struct": true, "class": true,
+	"interface": true, "type": true, "variable": true, "constant": true,
+	"enum": true, "impl": true, "module": true, "trait": true,
+	"macro": true, "property": true,
+}
+
+// ValidSymbolType returns true if t is a recognized symbol type or alias.
+func ValidSymbolType(t string) bool {
+	if _, ok := typeAliases[t]; ok {
+		return true
+	}
+	return knownSymbolTypes[t]
+}
+
 func WithSymbolType(t string) RepoMapOption {
 	return func(c *repoMapConfig) {
 		if canonical, ok := typeAliases[t]; ok {
