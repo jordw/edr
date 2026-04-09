@@ -501,6 +501,9 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 						if end > len(lines) {
 							end = len(lines)
 						}
+						if start >= end {
+							continue
+						}
 						count := 0
 						for _, line := range lines[start:end] {
 							if caseSensitive {

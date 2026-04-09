@@ -106,10 +106,10 @@ func rankCandidates(candidates []index.SymbolInfo, query, root string) []rankedC
 			score += 10 // top-level files are very likely canonical
 		} else if depth <= 2 {
 			score += 5
-		} else if depth >= 4 {
-			score -= 5
 		} else if depth >= 6 {
 			score -= 10 // deeply nested = leaf code
+		} else if depth >= 4 {
+			score -= 5
 		}
 
 		// Peripheral path penalty: leaf/plugin/driver directories contain
@@ -142,6 +142,23 @@ func rankCandidates(candidates []index.SymbolInfo, query, root string) []rankedC
 			Score:  score,
 			Rel:    rel,
 		})
+	}
+
+	// Peripheral majority adjustment: when >50% of candidates are from
+	// peripheral paths (drivers/, plugins/, etc.), the name naturally lives
+	// there — reduce the penalty so they aren't all suppressed.
+	peripheralCount := 0
+	for _, r := range ranked {
+		if isPeripheralPath(r.Rel) {
+			peripheralCount++
+		}
+	}
+	if len(ranked) > 0 && peripheralCount*2 > len(ranked) {
+		for i := range ranked {
+			if isPeripheralPath(ranked[i].Rel) {
+				ranked[i].Score += 10 // recover most of the -15 penalty
+			}
+		}
 	}
 
 	// Minority language penalty: when >70% of candidates share one file
