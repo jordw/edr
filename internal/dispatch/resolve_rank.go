@@ -93,21 +93,31 @@ func rankCandidates(candidates []index.SymbolInfo, query, root string) []rankedC
 		// Canonical path boost: include/ dirs and shallow paths are more likely
 		// to hold the "real" definition for widely-used types
 		if strings.HasPrefix(rel, "include/") {
-			score += 8
+			score += 12
 		}
+		// Core infrastructure directories get a boost — these paths typically
+		// hold primary definitions rather than consumers or bindings.
+		if isCoreInfraPath(rel) {
+			score += 10
+		}
+
 		depth := strings.Count(rel, string(filepath.Separator))
 		if depth <= 1 {
-			score += 8 // top-level files are very likely canonical
+			score += 10 // top-level files are very likely canonical
 		} else if depth <= 2 {
-			score += 4
-		} else if depth >= 5 {
-			score -= 5 // deeply nested files are rarely the primary definition
+			score += 5
+		} else if depth >= 4 {
+			score -= 5
+		} else if depth >= 6 {
+			score -= 10 // deeply nested = leaf code
 		}
 
 		// Peripheral path penalty: leaf/plugin/driver directories contain
 		// many definitions of common names but are rarely the target.
-		// This is cross-language: applies to drivers/, plugins/, contrib/, etc.
 		if isPeripheralPath(rel) {
+			score -= 15
+		}
+		if isToolsPath(rel) {
 			score -= 15
 		}
 		// Penalties
@@ -132,6 +142,32 @@ func rankCandidates(candidates []index.SymbolInfo, query, root string) []rankedC
 			Score:  score,
 			Rel:    rel,
 		})
+	}
+
+	// Minority language penalty: when >70% of candidates share one file
+	// extension, penalize outliers. E.g. Rust bindings in a C-dominant repo.
+	if len(ranked) >= 4 {
+		extCount := map[string]int{}
+		for _, r := range ranked {
+			ext := strings.ToLower(filepath.Ext(r.Rel))
+			extCount[ext]++
+		}
+		var majorExt string
+		majorCount := 0
+		for ext, count := range extCount {
+			if count > majorCount {
+				majorExt = ext
+				majorCount = count
+			}
+		}
+		if majorCount*10 >= len(ranked)*7 { // >70% share one extension
+			for i := range ranked {
+				ext := strings.ToLower(filepath.Ext(ranked[i].Rel))
+				if ext != majorExt {
+					ranked[i].Score -= 12
+				}
+			}
+		}
 	}
 
 	// Sort: tier first (hard boundary), then score descending, then path for stability
@@ -291,6 +327,41 @@ func isVendorPath(rel string) bool {
 	return strings.HasPrefix(rel, "vendor/") ||
 		strings.HasPrefix(rel, "node_modules/") ||
 		strings.HasPrefix(rel, "third_party/")
+}
+
+// isCoreInfraPath returns true for directories that typically hold primary
+// definitions and core infrastructure rather than consumers or bindings.
+func isCoreInfraPath(rel string) bool {
+	parts := strings.SplitN(rel, string(filepath.Separator), 2)
+	if len(parts) == 0 {
+		return false
+	}
+	switch parts[0] {
+	// C/C++ kernel/system patterns
+	case "kernel", "core", "init", "mm", "fs", "net", "block", "ipc", "security":
+		return true
+	// Go/general patterns
+	case "internal", "pkg", "cmd":
+		return true
+	// General source patterns (only at top level)
+	case "src", "lib":
+		return true
+	}
+	return false
+}
+
+// isToolsPath returns true for tooling/utility directories that are
+// not primary source code.
+func isToolsPath(rel string) bool {
+	parts := strings.SplitN(rel, string(filepath.Separator), 2)
+	if len(parts) == 0 {
+		return false
+	}
+	switch parts[0] {
+	case "tools", "tool", "util", "utils", "hack", "misc":
+		return true
+	}
+	return false
 }
 
 // isPeripheralPath returns true for directories that contain many definitions
