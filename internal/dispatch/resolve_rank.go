@@ -298,6 +298,12 @@ func shouldAutoResolve(ranked []rankedCandidate, query string) bool {
 	if top.Tier != tierExact {
 		return false
 	}
+	// Model-ranked results: never auto-resolve ambiguous queries.
+	// The model scores don't have calibrated confidence gaps —
+	// always show the shortlist so the user can pick.
+	if top.Method == "model" {
+		return len(ranked) == 1
+	}
 	// Short/common name rule: require higher confidence
 	minGap := 20
 	if len(query) <= 3 {

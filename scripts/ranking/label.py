@@ -87,28 +87,50 @@ def main(args):
             if line:
                 examples.append(json.loads(line))
 
-    print(f"Labeling {len(examples)} examples with {model}")
+    print(f"Labeling {len(examples)} examples with {model} ({args.concurrency} concurrent)")
 
-    labeled = []
-    for i, ex in enumerate(examples):
-        label = label_example(client, ex, model)
-        if label is not None:
-            ex["label"] = label
-            labeled.append(ex)
-            c = ex["candidates"][label]
-            print(f"  [{i+1}/{len(examples)}] {ex['query']} → {c['file']}:{c.get('start_line', '?')} {c['name']}")
-        else:
-            print(f"  [{i+1}/{len(examples)}] {ex['query']} → SKIPPED (no valid label)")
+    # Skip already-labeled examples (resume support)
+    already = set()
+    try:
+        with open(args.output) as f:
+            for line in f:
+                ex = json.loads(line.strip())
+                already.add(ex["query"] + "\x00" + ex.get("repo", ""))
+    except FileNotFoundError:
+        pass
+    remaining = [ex for ex in examples if ex["query"] + "\x00" + ex.get("repo", "") not in already]
+    if already:
+        print(f"  Resuming: {len(already)} already done, {len(remaining)} remaining")
 
-        # Rate limiting
-        if i < len(examples) - 1:
-            time.sleep(0.1)
+    import concurrent.futures
 
-    with open(args.output, "w") as f:
-        for ex in labeled:
-            f.write(json.dumps(ex) + "\n")
+    labeled = len(already)
+    skipped = 0
+    lock = __import__("threading").Lock()
 
-    print(f"\nLabeled {len(labeled)}/{len(examples)} examples → {args.output}")
+    with open(args.output, "a") as f:
+        def process(i_ex):
+            nonlocal labeled, skipped
+            i, ex = i_ex
+            label = label_example(client, ex, model)
+            if label is not None:
+                ex["label"] = label
+                c = ex["candidates"][label]
+                with lock:
+                    f.write(json.dumps(ex) + "\n")
+                    f.flush()
+                    labeled += 1
+                    n = labeled + skipped
+                    if n % 50 == 0 or n == len(remaining):
+                        print(f"  [{n}/{len(remaining)}] labeled={labeled} skipped={skipped}")
+            else:
+                with lock:
+                    skipped += 1
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+            list(pool.map(process, enumerate(remaining)))
+
+    print(f"\nLabeled {labeled}/{len(examples)} examples → {args.output}")
 
 
 if __name__ == "__main__":
@@ -117,4 +139,6 @@ if __name__ == "__main__":
     parser.add_argument("--output", "-o", default="labeled.jsonl")
     parser.add_argument("--model", default="claude-haiku-4-5-20251001",
                         help="Anthropic model to use")
+    parser.add_argument("--concurrency", "-j", type=int, default=20,
+                        help="Number of concurrent API requests")
     main(parser.parse_args())
