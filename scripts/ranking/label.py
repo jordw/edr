@@ -90,15 +90,21 @@ def main(args):
     print(f"Labeling {len(examples)} examples with {model} ({args.concurrency} concurrent)")
 
     # Skip already-labeled examples (resume support)
+    # Key includes candidate files to avoid collisions when candidates change
+    def example_key(ex):
+        cands = "|".join(c.get("file", "") + ":" + str(c.get("start_line", ""))
+                         for c in ex.get("candidates", [])[:5])
+        return ex["query"] + "\x00" + ex.get("repo", "") + "\x00" + cands
+
     already = set()
     try:
         with open(args.output) as f:
             for line in f:
                 ex = json.loads(line.strip())
-                already.add(ex["query"] + "\x00" + ex.get("repo", ""))
+                already.add(example_key(ex))
     except FileNotFoundError:
         pass
-    remaining = [ex for ex in examples if ex["query"] + "\x00" + ex.get("repo", "") not in already]
+    remaining = [ex for ex in examples if example_key(ex) not in already]
     if already:
         print(f"  Resuming: {len(already)} already done, {len(remaining)} remaining")
 

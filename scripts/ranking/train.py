@@ -44,11 +44,13 @@ class RankingTransformer(nn.Module):
         ])
         self.score_head = nn.Linear(DIM, 1)
 
-    def forward(self, x):
-        """x: [batch, num_candidates, NUM_FEATURES] → [batch, num_candidates]"""
+    def forward(self, x, key_padding_mask=None):
+        """x: [batch, num_candidates, NUM_FEATURES] → [batch, num_candidates]
+        key_padding_mask: [batch, num_candidates] True = padded (ignore)
+        """
         x = self.proj(x)
         for layer in self.layers:
-            x = layer(x)
+            x = layer(x, key_padding_mask)
         return self.score_head(x).squeeze(-1)
 
 
@@ -64,8 +66,8 @@ class TransformerLayer(nn.Module):
         )
         self.ln2 = nn.LayerNorm(DIM)
 
-    def forward(self, x):
-        attn_out, _ = self.attn(x, x, x)
+    def forward(self, x, key_padding_mask=None):
+        attn_out, _ = self.attn(x, x, x, key_padding_mask=key_padding_mask)
         x = self.ln1(x + attn_out)
         x = self.ln2(x + self.ffn(x))
         return x
@@ -173,7 +175,10 @@ class RankingDataset(Dataset):
         self.examples = []
         self.max_candidates = max_candidates
         for ex in examples:
-            if len(ex["candidates"]) >= 2:
+            cands = ex["candidates"][:max_candidates]
+            label = ex.get("label", 0)
+            # Skip if too few candidates or label is out of bounds after truncation
+            if len(cands) >= 2 and 0 <= label < len(cands):
                 self.examples.append(ex)
 
     def __len__(self):
@@ -211,9 +216,10 @@ def export_weights(model: RankingTransformer, path: str):
     """Export weights in the binary format matching Go's Weights struct."""
     sd = model.state_dict()
 
-    def write_tensor(f, key):
+    def write_tensor(f, key, transpose=False):
         t = sd[key].detach().cpu().float()
-        # Weights are stored row-major, matching Go's layout
+        if transpose and t.dim() == 2:
+            t = t.t().contiguous()  # [outDim, inDim] → [inDim, outDim] for Go
         f.write(struct.pack(f"<{t.numel()}f", *t.flatten().tolist()))
 
     def write_scalar(f, key):
@@ -221,8 +227,8 @@ def export_weights(model: RankingTransformer, path: str):
         f.write(struct.pack("<f", v))
 
     with open(path, "wb") as f:
-        # Feature projection
-        write_tensor(f, "proj.weight")  # [DIM, NUM_FEATURES] → transpose for Go
+        # Feature projection: PyTorch [DIM, NUM_FEATURES] → Go [NUM_FEATURES, DIM]
+        write_tensor(f, "proj.weight", transpose=True)
         write_tensor(f, "proj.bias")
 
         for l in range(NUM_LAYERS):
@@ -233,29 +239,31 @@ def export_weights(model: RankingTransformer, path: str):
             q_w, k_w, v_w = in_w.chunk(3, dim=0)
             q_b, k_b, v_b = in_b.chunk(3, dim=0)
 
+            # Each Q/K/V weight is [DIM, DIM] → transpose to [DIM, DIM] for Go
             for w, b in [(q_w, q_b), (k_w, k_b), (v_w, v_b)]:
-                f.write(struct.pack(f"<{w.numel()}f", *w.flatten().tolist()))
+                wt = w.t().contiguous()
+                f.write(struct.pack(f"<{wt.numel()}f", *wt.flatten().tolist()))
                 f.write(struct.pack(f"<{b.numel()}f", *b.flatten().tolist()))
 
             # Output projection
-            write_tensor(f, f"{prefix}.attn.out_proj.weight")
+            write_tensor(f, f"{prefix}.attn.out_proj.weight", transpose=True)
             write_tensor(f, f"{prefix}.attn.out_proj.bias")
 
-            # LayerNorm 1
+            # LayerNorm 1 (no transpose — gamma/beta are 1D)
             write_tensor(f, f"{prefix}.ln1.weight")
             write_tensor(f, f"{prefix}.ln1.bias")
 
             # FFN
-            write_tensor(f, f"{prefix}.ffn.0.weight")
+            write_tensor(f, f"{prefix}.ffn.0.weight", transpose=True)
             write_tensor(f, f"{prefix}.ffn.0.bias")
-            write_tensor(f, f"{prefix}.ffn.2.weight")
+            write_tensor(f, f"{prefix}.ffn.2.weight", transpose=True)
             write_tensor(f, f"{prefix}.ffn.2.bias")
 
             # LayerNorm 2
             write_tensor(f, f"{prefix}.ln2.weight")
             write_tensor(f, f"{prefix}.ln2.bias")
 
-        # Score head
+        # Score head: [1, DIM] → [DIM] (flatten, no transpose needed for 1D)
         write_tensor(f, "score_head.weight")
         write_scalar(f, "score_head.bias")
 
@@ -294,10 +302,12 @@ def train(args):
         total = 0
 
         for features, labels, lengths in loader:
-            scores = model(features)  # [batch, max_candidates]
+            # key_padding_mask: True = padded position (ignore in attention)
+            padding_mask = torch.arange(args.max_candidates).unsqueeze(0) >= lengths.unsqueeze(1)
+            scores = model(features, key_padding_mask=padding_mask)
 
-            # Mask padded positions
-            mask = torch.arange(args.max_candidates).unsqueeze(0) < lengths.unsqueeze(1)
+            # Mask padded positions for loss
+            mask = ~padding_mask
             scores = scores.masked_fill(~mask, float("-inf"))
 
             loss = F.cross_entropy(scores, labels)
