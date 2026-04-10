@@ -4,11 +4,36 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
+	"github.com/jordw/edr/internal/ranking"
 )
+
+// Cached model weights — loaded once per process.
+var (
+	modelOnce    sync.Once
+	modelWeights *ranking.Weights
+	modelEdrDir  string
+)
+
+func loadModelWeights(edrDir string) *ranking.Weights {
+	if edrDir == "" {
+		return nil
+	}
+	modelOnce.Do(func() {
+		modelEdrDir = edrDir
+		modelWeights = ranking.LoadWeights(edrDir)
+	})
+	// If edrDir changed (different repo), reload
+	if edrDir != modelEdrDir {
+		modelEdrDir = edrDir
+		modelWeights = ranking.LoadWeights(edrDir)
+	}
+	return modelWeights
+}
 
 // rankTier determines hard ranking boundaries — tier 1 always beats tier 2.
 type rankTier int
@@ -23,11 +48,73 @@ type rankedCandidate struct {
 	Tier   rankTier
 	Score  int
 	Rel    string // relative path
+	Method string // "model" or "heuristic"
 }
 
 // rankCandidates scores and sorts symbol candidates for smart focus resolution.
 // Returns candidates sorted by tier (hard boundary), then score descending.
-func rankCandidates(candidates []index.SymbolInfo, query, root string) []rankedCandidate {
+// When model weights are available in edrDir, uses the transformer model;
+// otherwise falls back to hand-tuned heuristic scoring.
+func rankCandidates(candidates []index.SymbolInfo, query, root string, edrDir ...string) []rankedCandidate {
+	// Try model-based ranking when weights are available
+	dir := ""
+	if len(edrDir) > 0 {
+		dir = edrDir[0]
+	}
+	if w := loadModelWeights(dir); w != nil {
+		if result := modelRank(w, candidates, query, root); result != nil {
+			return result
+		}
+	}
+	return heuristicRank(candidates, query, root)
+}
+
+// modelRank uses the transformer model to score candidates.
+func modelRank(w *ranking.Weights, candidates []index.SymbolInfo, query, root string) []rankedCandidate {
+	// Build feature vectors
+	feats := make([]ranking.CandidateFeatures, len(candidates))
+	rels := make([]string, len(candidates))
+	for i, s := range candidates {
+		rel, _ := filepath.Rel(root, s.File)
+		rels[i] = rel
+		feats[i] = ranking.CandidateFeatures{
+			Name:      s.Name,
+			Type:      s.Type,
+			File:      rel,
+			StartLine: s.StartLine,
+			EndLine:   s.EndLine,
+		}
+	}
+
+	results := ranking.Rank(w, query, feats)
+	if results == nil {
+		return nil
+	}
+
+	ranked := make([]rankedCandidate, len(results))
+	queryLower := strings.ToLower(query)
+	for i, r := range results {
+		s := candidates[r.Index]
+		nameLower := strings.ToLower(s.Name)
+		tier := tierPartial
+		if strings.EqualFold(s.Name, query) {
+			tier = tierExact
+		} else if !strings.Contains(nameLower, queryLower) {
+			continue
+		}
+		ranked[i] = rankedCandidate{
+			Symbol: s,
+			Tier:   tier,
+			Score:  int(r.Score * 100), // scale for display
+			Rel:    rels[r.Index],
+			Method: "model",
+		}
+	}
+	return ranked
+}
+
+// heuristicRank is the hand-tuned fallback scorer.
+func heuristicRank(candidates []index.SymbolInfo, query, root string) []rankedCandidate {
 	queryLower := strings.ToLower(query)
 	queryShape := inferShape(query)
 
@@ -242,11 +329,15 @@ func buildShortlist(ranked []rankedCandidate, query, root string) map[string]any
 			"score": c.Score,
 		})
 	}
+	method := "heuristic_ranking"
+	if len(ranked) > 0 && ranked[0].Method == "model" {
+		method = "model_ranking"
+	}
 	return map[string]any{
 		"resolve":    "ambiguous",
 		"query":      query,
 		"candidates": items,
-		"method":     "heuristic_ranking",
+		"method":     method,
 		"hint":       "use file:symbol syntax to pick one, e.g. edr focus " + ranked[0].Rel + ":" + ranked[0].Symbol.Name,
 		"root":       output.Rel(root),
 	}

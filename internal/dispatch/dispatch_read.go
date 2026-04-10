@@ -333,7 +333,7 @@ func runReadSymbol(ctx context.Context, db index.SymbolStore, root string, args 
 		// Smart resolution: rank ambiguous candidates instead of failing
 		var ambErr *index.AmbiguousSymbolError
 		if errors.As(err, &ambErr) {
-			ranked := rankCandidates(ambErr.Candidates, ambErr.Name, root)
+			ranked := rankCandidates(ambErr.Candidates, ambErr.Name, root, db.EdrDir())
 			if shouldAutoResolve(ranked, ambErr.Name) {
 				sym = &ranked[0].Symbol
 				err = nil
