@@ -20,6 +20,7 @@ type ExportCandidate struct {
 	File      string `json:"file"`
 	StartLine uint32 `json:"start_line"`
 	EndLine   uint32 `json:"end_line"`
+	Snippet   string `json:"snippet,omitempty"` // first few lines of body
 }
 
 // ExportCandidateList builds a training example from a query and candidates.

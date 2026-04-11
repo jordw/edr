@@ -31,8 +31,13 @@ def format_candidates(candidates: list[dict]) -> str:
     lines = []
     for i, c in enumerate(candidates):
         span = c.get("end_line", 0) - c.get("start_line", 0)
-        lines.append(f"  {i}. {c['file']}:{c.get('start_line', '?')}  "
-                      f"{c.get('type', '?')} {c['name']}  ({span} lines)")
+        header = (f"  {i}. {c['file']}:{c.get('start_line', '?')}  "
+                  f"{c.get('type', '?')} {c['name']}  ({span} lines)")
+        lines.append(header)
+        snippet = c.get("snippet", "")
+        if snippet:
+            for sl in snippet.split("\n")[:3]:
+                lines.append(f"     | {sl}")
     return "\n".join(lines)
 
 
@@ -41,20 +46,20 @@ def label_example(client, example: dict, model: str) -> int | None:
     repo = example.get("repo", "unknown")
     candidates = example["candidates"]
 
-    prompt = f"""You are labeling training data for a code navigation tool. Given a bare symbol query and a list of candidate definitions from a repository, pick the one most likely intended by a developer.
+    prompt = f"""Pick the canonical definition of "{query}" in the {repo} repository.
 
-Repository: {repo}
-Query: {query}
+"Canonical" means: the definition that other files in this repo most often import, include, call, or reference. Not a wrapper, binding, re-export, test helper, or vendored copy.
+
+Rules:
+- Prefer core/library code over tests, tools, scripts, examples, vendor
+- Prefer the definition site over usage sites or re-declarations  
+- Prefer larger implementations over stubs or forward declarations
+- When genuinely ambiguous, prefer shallower paths (closer to repo root)
 
 Candidates:
 {format_candidates(candidates)}
 
-Which candidate (by number) is the most likely intended target? Consider:
-- Is this the primary/canonical definition, or a secondary/wrapper/binding?
-- Is this in core infrastructure or leaf/peripheral code?
-- Would most developers working in this repo mean this one?
-
-Reply with just the number (0-based index). Nothing else."""
+Reply with just the candidate number. Nothing else."""
 
     try:
         response = client.messages.create(

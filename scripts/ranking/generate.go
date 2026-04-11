@@ -182,9 +182,46 @@ func main() {
 
 		ex := ranking.ExportCandidateList(query, absRoot, candidates)
 		ex.Repo = repo
+		// Attach source snippets (first 3 lines of each candidate body)
+		for i, s := range deduped {
+			snippet := readSnippet(s.File, int(s.StartLine), 3)
+			if snippet != "" {
+				ex.Candidates[i].Snippet = snippet
+			}
+		}
 		enc.Encode(ex)
 		generated++
 	}
 
 	fmt.Fprintf(os.Stderr, "Generated %d candidate lists\n", generated)
+}
+
+// readSnippet reads n lines starting at startLine (1-based) from a file.
+func readSnippet(path string, startLine, n int) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.SplitAfter(string(data), "\n")
+	start := startLine - 1
+	if start < 0 {
+		start = 0
+	}
+	end := start + n
+	if end > len(lines) {
+		end = len(lines)
+	}
+	if start >= end {
+		return ""
+	}
+	var b strings.Builder
+	for _, line := range lines[start:end] {
+		b.WriteString(line)
+	}
+	s := strings.TrimRight(b.String(), "\n")
+	// Cap at 200 chars to keep JSONL reasonable
+	if len(s) > 200 {
+		s = s[:200] + "..."
+	}
+	return s
 }
