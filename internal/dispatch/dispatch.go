@@ -169,7 +169,11 @@ func autoRefreshIndex(root, edrDir string) {
 		}
 		return entries
 	}
-	_ = idx.BuildFullFromWalk(root, edrDir, index.WalkRepoFiles, nil, symbolExtractor)
+	err := idx.BuildFullFromWalk(root, edrDir, index.WalkRepoFiles, nil, symbolExtractor)
+	if err == nil {
+		// Invalidate in-memory caches so subsequent queries see fresh data
+		idx.InvalidateSymbolCache()
+	}
 }
 
 // relError rewrites absolute repo paths in error messages to relative paths.

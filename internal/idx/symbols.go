@@ -123,6 +123,16 @@ var (
 	symIdxData  *IndexData // only Symbols, NamePosts, NamePostings populated
 )
 
+// InvalidateSymbolCache clears the cached symbol index, forcing a reload
+// from disk on the next access. Call after rebuilding the index.
+func InvalidateSymbolCache() {
+	symIdxMu.Lock()
+	symIdxData = nil
+	symIdxFiles = nil
+	symIdxDir = ""
+	symIdxMu.Unlock()
+}
+
 func loadSymbolIndexCached(edrDir string) (*IndexData, []FileEntry) {
 	symIdxMu.Lock()
 	defer symIdxMu.Unlock()
