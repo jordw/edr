@@ -149,9 +149,14 @@ func heuristicRank(candidates []index.SymbolInfo, query, root string) []rankedCa
 
 		// 1. Import count — the primary signal.
 		// Files imported by many others are canonical/authoritative.
+		// For C/C++ source files, inherit the count of their corresponding
+		// header (the .c implements the .h, so they share importance).
 		inbound := 0
 		if graph != nil {
 			inbound = graph.Inbound(rel)
+			if inbound == 0 {
+				inbound = headerImportCount(graph, rel)
+			}
 		}
 		switch {
 		case inbound >= 100:
@@ -349,6 +354,37 @@ func shapeBoost(symbolType string, shape nameShape) int {
 		}
 	}
 	return 0
+}
+
+// headerImportCount returns the import count of the corresponding header file
+// for C/C++ source files. E.g., for "kernel/sched/core.c", checks
+// "kernel/sched/core.h", "include/linux/core.h", etc.
+// Returns 0 for non-C files or if no matching header is found.
+func headerImportCount(graph *idx.ImportGraphData, rel string) int {
+	ext := strings.ToLower(filepath.Ext(rel))
+	switch ext {
+	case ".c", ".cc", ".cpp", ".cxx":
+	default:
+		return 0
+	}
+	base := rel[:len(rel)-len(ext)]
+
+	// Try direct header: foo.c → foo.h
+	for _, hext := range []string{".h", ".hpp"} {
+		if n := graph.Inbound(base + hext); n > 0 {
+			return n
+		}
+	}
+
+	// Try include/ variants: kernel/sched/core.c → include/linux/core.h
+	// Just check what the .c file itself includes and pick the most-imported one.
+	best := 0
+	for _, imported := range graph.Imports(rel) {
+		if n := graph.Inbound(imported); n > best {
+			best = n
+		}
+	}
+	return best
 }
 
 func isDefinitionType(t string) bool {
