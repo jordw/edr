@@ -25,30 +25,81 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 # Must match Go constants
-NUM_FEATURES = 30
+SCALAR_FEATURES = 30
+CHAR_DIM = 8
+NUM_BUCKETS = 256
+ENCODER_OUT = CHAR_DIM * 2  # query + path embeddings concatenated
+INPUT_DIM = ENCODER_OUT + SCALAR_FEATURES  # 16 + 30 = 46
 DIM = 16
 NUM_HEADS = 2
 HEAD_DIM = DIM // NUM_HEADS
 FFN_HIDDEN = 48
 NUM_LAYERS = 2
+NUM_FEATURES = SCALAR_FEATURES  # backward compat for dataset
+
+
+def trigram_hash(s: str) -> list[int]:
+    """Hash character trigrams to bucket indices, matching Go's EncodeString."""
+    s = s.lower()
+    if len(s) < 3:
+        s = s + "   "
+    buckets = []
+    for i in range(len(s) - 2):
+        h = (ord(s[i]) * 31 * 31 + ord(s[i+1]) * 31 + ord(s[i+2])) % NUM_BUCKETS
+        buckets.append(h)
+    return buckets
+
+
+class CharEncoder(nn.Module):
+    """Trigram-based character encoder matching Go's EncodeString."""
+    def __init__(self):
+        super().__init__()
+        self.embed = nn.Embedding(NUM_BUCKETS, CHAR_DIM)
+
+    def forward(self, bucket_indices):
+        """bucket_indices: [batch, max_trigrams] (padded with 0)
+        Returns: [batch, CHAR_DIM] (max-pooled)
+        """
+        emb = self.embed(bucket_indices)  # [batch, max_trigrams, CHAR_DIM]
+        # Max pool over trigrams dimension
+        pooled, _ = emb.max(dim=1)  # [batch, CHAR_DIM]
+        return pooled
 
 
 class RankingTransformer(nn.Module):
-    """Tiny transformer for candidate ranking."""
+    """Tiny transformer with char-level encoding for candidate ranking."""
 
     def __init__(self):
         super().__init__()
-        self.proj = nn.Linear(NUM_FEATURES, DIM)
+        self.char_enc = CharEncoder()
+        self.proj = nn.Linear(INPUT_DIM, DIM)
+        self.dropout = nn.Dropout(0.1)
         self.layers = nn.ModuleList([
             TransformerLayer() for _ in range(NUM_LAYERS)
         ])
         self.score_head = nn.Linear(DIM, 1)
 
-    def forward(self, x, key_padding_mask=None):
-        """x: [batch, num_candidates, NUM_FEATURES] → [batch, num_candidates]
-        key_padding_mask: [batch, num_candidates] True = padded (ignore)
+    def forward(self, scalar_features, query_trigrams, path_trigrams,
+                key_padding_mask=None):
         """
+        scalar_features: [batch, num_candidates, SCALAR_FEATURES]
+        query_trigrams: [batch, num_candidates, max_trigrams]
+        path_trigrams: [batch, num_candidates, max_trigrams]
+        key_padding_mask: [batch, num_candidates] True = padded
+        """
+        B, N, _ = scalar_features.shape
+
+        # Encode query and path strings
+        q_flat = query_trigrams.reshape(B * N, -1)
+        p_flat = path_trigrams.reshape(B * N, -1)
+        q_emb = self.char_enc(q_flat).reshape(B, N, CHAR_DIM)
+        p_emb = self.char_enc(p_flat).reshape(B, N, CHAR_DIM)
+
+        # Concatenate: [char_query, char_path, scalar_features]
+        x = torch.cat([q_emb, p_emb, scalar_features], dim=-1)  # [B, N, INPUT_DIM]
+
         x = self.proj(x)
+        x = self.dropout(x)
         for layer in self.layers:
             x = layer(x, key_padding_mask)
         return self.score_head(x).squeeze(-1)
@@ -219,6 +270,9 @@ def extract_all_features(query: str, candidates: list[dict]) -> list[list[float]
 
 # --- Dataset ---
 
+MAX_TRIGRAMS = 32  # max trigrams per string (covers paths up to ~34 chars)
+
+
 class RankingDataset(Dataset):
     def __init__(self, examples, max_candidates=50):
         self.examples = []
@@ -226,7 +280,6 @@ class RankingDataset(Dataset):
         for ex in examples:
             cands = ex["candidates"][:max_candidates]
             label = ex.get("label", 0)
-            # Skip if too few candidates or label is out of bounds after truncation
             if len(cands) >= 2 and 0 <= label < len(cands):
                 self.examples.append(ex)
 
@@ -238,25 +291,40 @@ class RankingDataset(Dataset):
         query = ex["query"]
         candidates = ex["candidates"][:self.max_candidates]
         label = ex["label"]
+        n = len(candidates)
 
+        # Scalar features
         features = torch.tensor(
             extract_all_features(query, candidates),
             dtype=torch.float32,
         )
-        n = len(candidates)
-        # Pad to max_candidates
         if n < self.max_candidates:
-            pad = torch.zeros(self.max_candidates - n, NUM_FEATURES)
-            features = torch.cat([features, pad])
+            features = torch.cat([features, torch.zeros(self.max_candidates - n, NUM_FEATURES)])
 
-        return features, label, n
+        # Trigram indices for char encoder
+        query_tris = torch.zeros(self.max_candidates, MAX_TRIGRAMS, dtype=torch.long)
+        path_tris = torch.zeros(self.max_candidates, MAX_TRIGRAMS, dtype=torch.long)
+
+        q_buckets = trigram_hash(query)[:MAX_TRIGRAMS]
+        for i, c in enumerate(candidates):
+            # Same query trigrams for all candidates
+            for j, b in enumerate(q_buckets):
+                query_tris[i, j] = b
+            # Path trigrams per candidate
+            p_buckets = trigram_hash(c.get("file", ""))[:MAX_TRIGRAMS]
+            for j, b in enumerate(p_buckets):
+                path_tris[i, j] = b
+
+        return features, query_tris, path_tris, label, n
 
 
 def collate_fn(batch):
     features = torch.stack([b[0] for b in batch])
-    labels = torch.tensor([b[1] for b in batch], dtype=torch.long)
-    lengths = torch.tensor([b[2] for b in batch], dtype=torch.long)
-    return features, labels, lengths
+    query_tris = torch.stack([b[1] for b in batch])
+    path_tris = torch.stack([b[2] for b in batch])
+    labels = torch.tensor([b[3] for b in batch], dtype=torch.long)
+    lengths = torch.tensor([b[4] for b in batch], dtype=torch.long)
+    return features, query_tris, path_tris, labels, lengths
 
 
 # --- Weight export ---
@@ -276,7 +344,10 @@ def export_weights(model: RankingTransformer, path: str):
         f.write(struct.pack("<f", v))
 
     with open(path, "wb") as f:
-        # Feature projection: PyTorch [DIM, NUM_FEATURES] → Go [NUM_FEATURES, DIM]
+        # Character encoder: trigram embedding table [NUM_BUCKETS, CHAR_DIM]
+        write_tensor(f, "char_enc.embed.weight")  # no transpose — [NUM_BUCKETS, CHAR_DIM] matches Go layout
+
+        # Input projection: PyTorch [DIM, INPUT_DIM] → Go [INPUT_DIM, DIM]
         write_tensor(f, "proj.weight", transpose=True)
         write_tensor(f, "proj.bias")
 
@@ -372,10 +443,10 @@ def train(args):
         correct = 0
         total = 0
 
-        for features, labels, lengths in loader:
+        for features, query_tris, path_tris, labels, lengths in loader:
             # key_padding_mask: True = padded position (ignore in attention)
             padding_mask = torch.arange(args.max_candidates).unsqueeze(0) >= lengths.unsqueeze(1)
-            scores = model(features, key_padding_mask=padding_mask)
+            scores = model(features, query_tris, path_tris, key_padding_mask=padding_mask)
 
             # Mask padded positions for loss
             mask = ~padding_mask
@@ -406,9 +477,9 @@ def train(args):
         eval_correct = 0
         eval_total = 0
         with torch.no_grad():
-            for features, labels, lengths in eval_loader:
+            for features, query_tris, path_tris, labels, lengths in eval_loader:
                 padding_mask = torch.arange(args.max_candidates).unsqueeze(0) >= lengths.unsqueeze(1)
-                scores = model(features, key_padding_mask=padding_mask)
+                scores = model(features, query_tris, path_tris, key_padding_mask=padding_mask)
                 scores = scores.masked_fill(padding_mask, float("-inf"))
                 preds = scores.argmax(dim=1)
                 eval_correct += (preds == labels).sum().item()
