@@ -9,7 +9,7 @@ Why: context-efficient output (skeletons, deltas, token budgets) vs dumping raw 
 
 Only fall back to built-in tools if `edr` itself won't compile/run.
 
-Run `edr status` between tasks. If `(stale)`, run `edr index` first — stale indexes miss results.
+Run `edr status` between tasks or after failures.
 
 ## Search — `edr files` and `edr orient`
 

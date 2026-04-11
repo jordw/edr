@@ -80,6 +80,14 @@ func Dispatch(ctx context.Context, db index.SymbolStore, cmd string, args []stri
 	root := db.Root()
 	setRootOnce.Do(func() { output.SetRoot(root) })
 
+	// Auto-refresh stale index for read-only commands.
+	// BuildFullFromWalk skips unchanged files (mtime check), so this is
+	// fast when only a few files are dirty — typically sub-second.
+	edrDir := db.EdrDir()
+	if edrDir != "" && idx.IsDirty(edrDir) && isReadCommand(cmd) {
+		autoRefreshIndex(root, edrDir)
+	}
+
 	var result any
 	var err error
 
@@ -120,6 +128,48 @@ func Dispatch(ctx context.Context, db index.SymbolStore, cmd string, args []stri
 		return nil, relError(root, err)
 	}
 	return result, nil
+}
+
+// isReadCommand returns true for commands that depend on index freshness.
+func isReadCommand(cmd string) bool {
+	switch cmd {
+	case "orient", "map", "focus", "read", "search", "files":
+		return true
+	}
+	return false
+}
+
+// autoRefreshIndex rebuilds the index for dirty files only.
+// BuildFullFromWalk reuses data for unchanged files (mtime match),
+// so this is fast when only a few files changed.
+func autoRefreshIndex(root, edrDir string) {
+	dirty := idx.DirtyFiles(edrDir)
+	if len(dirty) == 0 {
+		// Dirty flag set but no specific files — could be legacy "1" marker
+		// or external changes. Don't auto-rebuild (too expensive without knowing what changed).
+		return
+	}
+	// Only auto-rebuild if a small number of files changed.
+	// For large-scale changes (git checkout, branch switch), let the user run edr index.
+	if len(dirty) > 50 {
+		return
+	}
+	symbolExtractor := func(path string, data []byte) []idx.SymbolEntry {
+		syms := index.RegexParse(path, data)
+		entries := make([]idx.SymbolEntry, len(syms))
+		for i, s := range syms {
+			entries[i] = idx.SymbolEntry{
+				Name:      s.Name,
+				Kind:      idx.ParseKind(s.Type),
+				StartLine: s.StartLine,
+				EndLine:   s.EndLine,
+				StartByte: s.StartByte,
+				EndByte:   s.EndByte,
+			}
+		}
+		return entries
+	}
+	_ = idx.BuildFullFromWalk(root, edrDir, index.WalkRepoFiles, nil, symbolExtractor)
 }
 
 // relError rewrites absolute repo paths in error messages to relative paths.
