@@ -1,0 +1,11 @@
+[
+  {"name": "linux", "url": "https://github.com/torvalds/linux.git", "shallow": true},
+  {"name": "vscode", "url": "https://github.com/microsoft/vscode.git", "shallow": true},
+  {"name": "kubernetes", "url": "https://github.com/kubernetes/kubernetes.git", "shallow": true},
+  {"name": "pytorch", "url": "https://github.com/pytorch/pytorch.git", "shallow": true},
+  {"name": "rails", "url": "https://github.com/rails/rails.git", "shallow": true},
+  {"name": "tokio", "url": "https://github.com/tokio-rs/tokio.git", "shallow": true},
+  {"name": "react", "url": "https://github.com/facebook/react.git", "shallow": true},
+  {"name": "spring-framework", "url": "https://github.com/spring-projects/spring-framework.git", "shallow": true},
+  {"name": "edr", "url": "self", "shallow": false}
+]
