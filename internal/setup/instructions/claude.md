@@ -9,14 +9,21 @@ Why: context-efficient output (skeletons, deltas, token budgets) vs dumping raw 
 
 Only fall back to built-in tools if `edr` itself won't compile/run.
 
-Run `edr status` between tasks or after failures.
+Run `edr status` between tasks. If `(stale)`, run `edr index` first — stale indexes miss results.
 
-## Find code — `edr orient`
+## Search — `edr files` and `edr orient`
+
+edr files "pattern"                         # fulltext across ALL files (use this first)
+edr files "TODO" --include "*.go"           # fulltext with glob filter
+edr orient --grep "TestSpec"                # symbols by NAME (regex)
+edr orient --body "http.Get"               # symbols whose body contains text (parsed only)
+
+`edr files` searches all text. `orient --body` only searches inside parsed symbol bodies.
+
+## Orient — structural overview
 
 edr orient                                  # repo overview
 edr orient cmd/                             # directory structure
-edr orient --grep "TestSpec"                # symbols by name (regex)
-edr orient --body "http.Get"                # body contains text
 edr orient cmd/ --lang go --type interface  # filter by language + type
 edr orient --glob "**/*_test.go"            # filter by file pattern
 edr orient cmd/ --budget 50                 # cap output size
@@ -40,30 +47,15 @@ edr edit file.go --content "..." --mkdir           # create file
 edr edit file.go --old "x" --new "y" --verify     # edit + build check
 edr edit --where Symbol --old "x" --new "y"        # auto-resolve file
 
-### Assertions (batch)
-edr --edit f.go --old "Foo" --new "Bar" --assert-symbol-exists f.go:Bar
-
-### Quoting for edits
-Use heredocs or @file refs for --old/--new to avoid quoting errors:
-`edr edit f.go --old "$(cat <<'EOF'
-old code
-EOF
-)" --new "$(cat <<'EOF'
-new code
-EOF
-)"`
-
 ## Batch — combine operations in one call
 
-Chain with `--focus`, `--orient`, `--search`, `--edit`, `--write` (or `-f -o -s -e -w`).
-File carries forward. Edit includes read-back automatically.
+Chain with `-f -o -s -e -w`. File carries forward. Edit includes read-back.
 
-edr --orient cmd/ --focus f.go --sig
 edr --focus f.go:Func --edit --old "x" --new "y"
 edr --search "TODO" --include "*.go"
 edr --focus f.go:Func --expand callers
 
 ## Other commands
 - `edr status` — root, index, undo, build state, warnings
-- `edr undo` | `edr files "pattern"` | `edr index` | `edr bench`
+- `edr undo` | `edr index` | `edr bench`
 - Cross-repo: `--root /path` or `export EDR_ROOT=/path`
