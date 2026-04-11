@@ -49,6 +49,7 @@ func RecordShortlist(query string, candidates []TrainingCandidate) {
 }
 
 // RecordShortlistPersist saves the shortlist to disk for cross-process matching.
+// Uses a query-specific filename to avoid races with concurrent edr invocations.
 func RecordShortlistPersist(edrDir, query string, candidates []TrainingCandidate) {
 	RecordShortlist(query, candidates)
 	if edrDir == "" {
@@ -59,7 +60,18 @@ func RecordShortlistPersist(edrDir, query string, candidates []TrainingCandidate
 	if err != nil {
 		return
 	}
+	// Write both a query-specific file and the generic one (backward compat)
+	os.WriteFile(pendingPath(edrDir, query), data, 0644)
 	os.WriteFile(filepath.Join(edrDir, "pending_shortlist.json"), data, 0644)
+}
+
+func pendingPath(edrDir, query string) string {
+	// Simple hash to avoid filesystem-unsafe characters
+	safe := strings.ReplaceAll(strings.ToLower(query), "/", "_")
+	if len(safe) > 40 {
+		safe = safe[:40]
+	}
+	return filepath.Join(edrDir, "pending_"+safe+".json")
 }
 
 // MatchPick checks if a focus command matches a pending shortlist candidate.
@@ -72,7 +84,23 @@ func MatchPick(edrDir, repoRoot, file, symbol string) bool {
 	pendingShortlist = nil // consume regardless
 	pendingMu.Unlock()
 
-	// Try disk if not in memory (cross-process)
+	// Try disk if not in memory (cross-process).
+	// Check query-specific file first (concurrency-safe), then generic.
+	if pending == nil && edrDir != "" && symbol != "" {
+		// Try query-specific pending file (matches the symbol being focused)
+		for _, tryQuery := range []string{symbol, strings.ToLower(symbol)} {
+			path := pendingPath(edrDir, tryQuery)
+			data, err := os.ReadFile(path)
+			if err == nil {
+				var p PendingShortlist
+				if json.Unmarshal(data, &p) == nil && p.Query != "" {
+					pending = &p
+					os.Remove(path)
+					break
+				}
+			}
+		}
+	}
 	if pending == nil && edrDir != "" {
 		path := filepath.Join(edrDir, "pending_shortlist.json")
 		data, err := os.ReadFile(path)
