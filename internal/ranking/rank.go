@@ -15,7 +15,16 @@ func Rank(w *Weights, query string, candidates []CandidateFeatures) []RankResult
 	}
 
 	features := ExtractAll(query, candidates)
-	scores := Score(w, features, len(candidates))
+
+	// Build string arrays for char encoder
+	queries := make([]string, len(candidates))
+	paths := make([]string, len(candidates))
+	for i, c := range candidates {
+		queries[i] = query
+		paths[i] = c.File
+	}
+
+	scores := Score(w, features, queries, paths, len(candidates))
 	if scores == nil {
 		return nil
 	}

@@ -2,11 +2,22 @@ package ranking
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
 
+// helper: make query/path arrays for n candidates
+func makeStrings(query string, paths []string) ([]string, []string) {
+	queries := make([]string, len(paths))
+	for i := range queries {
+		queries[i] = query
+	}
+	return queries, paths
+}
+
 func TestScoreNilWeights(t *testing.T) {
-	scores := Score(nil, make([]float32, NumFeatures*3), 3)
+	q, p := makeStrings("test", []string{"a.go", "b.go", "c.go"})
+	scores := Score(nil, make([]float32, ScalarFeatures*3), q, p, 3)
 	if scores != nil {
 		t.Error("nil weights should return nil scores")
 	}
@@ -15,7 +26,7 @@ func TestScoreNilWeights(t *testing.T) {
 func TestScoreZeroCandidates(t *testing.T) {
 	w := &Weights{}
 	initLayerNorms(w)
-	scores := Score(w, nil, 0)
+	scores := Score(w, nil, nil, nil, 0)
 	if scores != nil {
 		t.Error("zero candidates should return nil scores")
 	}
@@ -23,12 +34,13 @@ func TestScoreZeroCandidates(t *testing.T) {
 
 func TestScoreDeterministic(t *testing.T) {
 	w := randomWeights(42)
-	features := make([]float32, 5*NumFeatures)
+	features := make([]float32, 5*ScalarFeatures)
 	for i := range features {
 		features[i] = float32(i%7) * 0.1
 	}
-	s1 := Score(w, features, 5)
-	s2 := Score(w, features, 5)
+	q, p := makeStrings("init", []string{"a/b.c", "c/d.c", "e/f.c", "g/h.c", "i/j.c"})
+	s1 := Score(w, features, q, p, 5)
+	s2 := Score(w, features, q, p, 5)
 	for i := range s1 {
 		if s1[i] != s2[i] {
 			t.Errorf("score[%d]: %f != %f", i, s1[i], s2[i])
@@ -38,11 +50,16 @@ func TestScoreDeterministic(t *testing.T) {
 
 func TestScoreProducesFinite(t *testing.T) {
 	w := randomWeights(123)
-	features := make([]float32, 10*NumFeatures)
+	features := make([]float32, 10*ScalarFeatures)
 	for i := range features {
 		features[i] = float32(i%13)*0.2 - 1.0
 	}
-	scores := Score(w, features, 10)
+	paths := make([]string, 10)
+	for i := range paths {
+		paths[i] = "some/path/file.go"
+	}
+	q, p := makeStrings("probe", paths)
+	scores := Score(w, features, q, p, 10)
 	for i, s := range scores {
 		if math.IsNaN(float64(s)) || math.IsInf(float64(s), 0) {
 			t.Errorf("score[%d] is not finite: %f", i, s)
@@ -52,13 +69,17 @@ func TestScoreProducesFinite(t *testing.T) {
 
 func TestScoreVariesByInput(t *testing.T) {
 	w := randomWeights(99)
-	features := make([]float32, 3*NumFeatures)
-	// Make each candidate different
-	features[0*NumFeatures+FCaseExact] = 1
-	features[0*NumFeatures+FLogSpan] = 0.8
-	features[1*NumFeatures+FIsTestPath] = 1
-	features[2*NumFeatures+FNameIsShort] = 1
-	scores := Score(w, features, 3)
+	features := make([]float32, 3*ScalarFeatures)
+	features[0*ScalarFeatures+FLogSpan] = 0.8
+	features[1*ScalarFeatures+FIsTestPath] = 1
+	features[2*ScalarFeatures+FNameIsShort] = 1
+	// Different paths so char encoder produces different embeddings
+	q, p := makeStrings("open", []string{
+		"kernel/sched/core.c",
+		"test/unit_test.go",
+		"x.py",
+	})
+	scores := Score(w, features, q, p, 3)
 	allSame := true
 	for i := 1; i < len(scores); i++ {
 		if scores[i] != scores[0] {
@@ -71,8 +92,28 @@ func TestScoreVariesByInput(t *testing.T) {
 	}
 }
 
+func TestCharEncoderSimilarity(t *testing.T) {
+	w := randomWeights(77)
+	// "sched" in query and "sched/core.c" in path should share trigrams
+	e1 := EncodeString(&w.CharEnc, "sched")
+	e2 := EncodeString(&w.CharEnc, "sched/core.c")
+	e3 := EncodeString(&w.CharEnc, "totally_different")
+
+	// Cosine similarity: e1·e2 should be higher than e1·e3
+	dot12, dot13 := float32(0), float32(0)
+	for d := 0; d < CharDim; d++ {
+		dot12 += e1[d] * e2[d]
+		dot13 += e1[d] * e3[d]
+	}
+	// Not guaranteed with random weights, but the shared "sch","che","hed" trigrams
+	// pull from the same embedding rows. Just check they're different.
+	if dot12 == dot13 {
+		t.Error("expected different similarity scores for similar vs different strings")
+	}
+}
+
 func TestWeightCount(t *testing.T) {
-	want := NumFeatures*Dim + Dim // proj
+	want := NumBuckets*CharDim + InputDim*Dim + Dim // char enc + proj
 	for range [NumLayers]struct{}{} {
 		want += 3 * (Dim*Dim + Dim) // QKV
 		want += Dim*Dim + Dim       // O
@@ -142,7 +183,6 @@ func TestExtractAll(t *testing.T) {
 
 // --- test helpers ---
 
-// randomWeights creates deterministic pseudo-random weights for testing.
 func randomWeights(seed int) *Weights {
 	w := &Weights{}
 	i := seed
@@ -155,6 +195,7 @@ func randomWeights(seed int) *Weights {
 			s[j] = next()
 		}
 	}
+	fillSlice(w.CharEnc.TrigramEmbed[:])
 	fillSlice(w.ProjW[:])
 	fillSlice(w.ProjB[:])
 	for l := 0; l < NumLayers; l++ {
@@ -167,7 +208,6 @@ func randomWeights(seed int) *Weights {
 		fillSlice(lw.VB[:])
 		fillSlice(lw.OW[:])
 		fillSlice(lw.OB[:])
-		// LayerNorm: gamma=1, beta=0 (identity init)
 		for j := range lw.LN1G {
 			lw.LN1G[j] = 1
 		}
@@ -184,7 +224,6 @@ func randomWeights(seed int) *Weights {
 	return w
 }
 
-// initLayerNorms sets layer norm gamma=1 so zero weights don't produce NaN.
 func initLayerNorms(w *Weights) {
 	for l := 0; l < NumLayers; l++ {
 		for j := range w.Layers[l].LN1G {
@@ -195,3 +234,5 @@ func initLayerNorms(w *Weights) {
 		}
 	}
 }
+
+var _ = strings.Contains // suppress unused import

@@ -17,7 +17,8 @@ const WeightsFile = "rank_model.bin"
 var TotalWeights = countWeights()
 
 func countWeights() int {
-	n := NumFeatures*Dim + Dim // projection
+	n := NumBuckets * CharDim // char encoder trigram embeddings
+	n += InputDim*Dim + Dim  // projection
 	for range [NumLayers]struct{}{} {
 		n += 3 * (Dim*Dim + Dim) // Q, K, V
 		n += Dim*Dim + Dim       // O
@@ -56,6 +57,9 @@ func readWeights(r io.Reader) *Weights {
 		return v, err
 	}
 
+	if read(w.CharEnc.TrigramEmbed[:]) != nil {
+		return nil
+	}
 	if read(w.ProjW[:]) != nil {
 		return nil
 	}
@@ -107,6 +111,9 @@ func writeWeights(wr io.Writer, w *Weights) error {
 	write := func(src []float32) error {
 		return binary.Write(wr, binary.LittleEndian, src)
 	}
+	if err := write(w.CharEnc.TrigramEmbed[:]); err != nil {
+		return err
+	}
 	if err := write(w.ProjW[:]); err != nil {
 		return err
 	}
@@ -144,6 +151,9 @@ func validateWeights(w *Weights) bool {
 			}
 		}
 		return true
+	}
+	if !checkSlice(w.CharEnc.TrigramEmbed[:]) {
+		return false
 	}
 	if !checkSlice(w.ProjW[:]) || !checkSlice(w.ProjB[:]) {
 		return false
