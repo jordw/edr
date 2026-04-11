@@ -12,4 +12,4 @@ RUN /edr/setup.sh /tmp/target
 
 ENV PATH="/root/.local/bin:$PATH"
 RUN edr --version
-RUN edr init --root /tmp/target
+RUN edr index --root /tmp/target
