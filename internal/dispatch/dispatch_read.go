@@ -638,29 +638,56 @@ func fileMtime(path string) string {
 func findCallersWithFallback(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo) []index.SymbolInfo {
 	root := db.Root()
 	edrDir := db.EdrDir()
-	rel, _ := filepath.Rel(root, sym.File)
-
 	// Same-file callers (always fast, always accurate)
 	callers, _ := db.FindSameFileCallers(ctx, sym.Name, sym.File)
 
 	// Cross-file callers: use import graph when available.
-	// Only files that import the target's file (or its header) can be real callers.
+	// Find all files that declare/define this symbol, then check their importers.
+	// This handles C where sched_tick is defined in core.c but declared in sched.h —
+	// callers include sched.h, not core.c.
 	graph := idx.ReadImportGraph(edrDir)
 	if graph != nil {
-		importerFiles := graph.Importers(rel)
-		// Also check importers of the corresponding header (for C/C++)
-		ext := strings.ToLower(filepath.Ext(rel))
-		if ext == ".h" || ext == ".hpp" {
-			// Header file: importers are direct
-		} else if ext == ".c" || ext == ".cc" || ext == ".cpp" || ext == ".cxx" {
-			// Source file: also check who imports the header
-			base := rel[:len(rel)-len(ext)]
-			for _, hext := range []string{".h", ".hpp"} {
-				importerFiles = append(importerFiles, graph.Importers(base+hext)...)
+		// Collect importers of ALL files containing this symbol,
+		// plus importers of headers included by the definition file.
+		// The second part handles C where the declaration (extern void foo())
+		// is in a header but the regex parser only finds the definition.
+		importerSet := make(map[string]bool)
+		symRel, _ := filepath.Rel(root, sym.File)
+		allSymFiles := findSymbolFiles(ctx, db, sym.Name, root)
+		// Also add headers that the definition file includes
+		// (the declaration is likely in one of them)
+		for _, inc := range graph.Imports(symRel) {
+			allSymFiles = append(allSymFiles, inc)
+		}
+		for _, symFileRel := range allSymFiles {
+			for _, imp := range graph.Importers(symFileRel) {
+				importerSet[imp] = true
+			}
+		}
+		// Pre-filter importers using trigram index: only check files
+		// that the trigram index says contain the symbol name.
+		nameBytes := []byte(sym.Name)
+		trigramCandidates := make(map[string]bool)
+		if candidates, _ := db.FilteredSymbols(ctx, "", "", sym.Name); len(candidates) > 0 {
+			for _, c := range candidates {
+				cRel, _ := filepath.Rel(root, c.File)
+				trigramCandidates[cRel] = true
 			}
 		}
 
-		nameBytes := []byte(sym.Name)
+		var importerFiles []string
+		for f := range importerSet {
+			// If we have trigram data, only include importers that
+			// the trigram index says contain the symbol name
+			if len(trigramCandidates) > 0 && !trigramCandidates[f] {
+				continue
+			}
+			importerFiles = append(importerFiles, f)
+		}
+		// Still cap as safety net
+		if len(importerFiles) > 100 {
+			importerFiles = importerFiles[:100]
+		}
 		seen := make(map[string]bool)
 		for _, importerRel := range importerFiles {
 			abs := filepath.Join(root, importerRel)
@@ -739,6 +766,24 @@ func findCallersWithFallback(ctx context.Context, db index.SymbolStore, sym *ind
 }
 
 // symbolsToSignatures converts symbols to signature structs for output.
+// findSymbolFiles returns relative paths of all files that define or declare
+// a symbol with the given name. Used to find header files for C callers.
+func findSymbolFiles(ctx context.Context, db index.SymbolStore, name, root string) []string {
+	syms, _ := db.FilteredSymbols(ctx, "", "", name)
+	seen := make(map[string]bool)
+	var files []string
+	for _, s := range syms {
+		if strings.EqualFold(s.Name, name) {
+			rel, err := filepath.Rel(root, s.File)
+			if err == nil && !seen[rel] {
+				seen[rel] = true
+				files = append(files, rel)
+			}
+		}
+	}
+	return files
+}
+
 func symbolsToSignatures(ctx context.Context, syms []index.SymbolInfo) []relatedSym {
 	var items []relatedSym
 	for _, s := range syms {
