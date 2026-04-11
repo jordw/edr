@@ -53,7 +53,16 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 		return result, nil
 	}
 
-	// Full build with symbol extraction
+	// Collect imports during the symbol extraction walk (no second pass).
+	var importMu sync.Mutex
+	var rawImports [][2]string // (importer_rel, raw_import_string, ext)
+	type rawImp struct {
+		importerRel string
+		raw         string
+		ext         string
+	}
+	var collectedImports []rawImp
+
 	symbolExtractor := func(path string, data []byte) []idx.SymbolEntry {
 		syms := index.RegexParse(path, data)
 		entries := make([]idx.SymbolEntry, len(syms))
@@ -67,6 +76,19 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 				EndByte:   s.EndByte,
 			}
 		}
+		// Extract imports from the same file data (piggybacking on the walk)
+		ext := filepath.Ext(path)
+		imports := index.ExtractImports(data, ext)
+		if len(imports) > 0 {
+			rel, err := filepath.Rel(root, path)
+			if err == nil {
+				importMu.Lock()
+				for _, imp := range imports {
+					collectedImports = append(collectedImports, rawImp{rel, imp.Raw, ext})
+				}
+				importMu.Unlock()
+			}
+		}
 		return entries
 	}
 	err := idx.BuildFullFromWalk(root, edrDir, index.WalkRepoFiles, nil, symbolExtractor)
@@ -74,11 +96,27 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 		return nil, err
 	}
 
-	// Build import graph from the indexed files
-	importEdges, importFiles := buildImportGraph(root)
-	if len(importEdges) > 0 {
-		graph := idx.BuildImportGraph(importFiles, importEdges)
-		idx.WriteImportGraph(edrDir, graph)
+	// Resolve imports and build graph (no file I/O — just resolution)
+	if len(collectedImports) > 0 {
+		indexed := idx.IndexedPaths(edrDir)
+		var allFiles []string
+		for rel := range indexed {
+			allFiles = append(allFiles, rel)
+		}
+		sort.Strings(allFiles)
+		suffixIdx := index.BuildSuffixIndex(allFiles)
+
+		for _, imp := range collectedImports {
+			resolved := index.ResolveImport(suffixIdx, imp.raw, imp.importerRel, imp.ext)
+			for _, target := range resolved {
+				rawImports = append(rawImports, [2]string{imp.importerRel, target})
+			}
+		}
+
+		if len(rawImports) > 0 {
+			graph := idx.BuildImportGraph(allFiles, rawImports)
+			idx.WriteImportGraph(edrDir, graph)
+		}
 	}
 
 	s := idx.GetStatus(root, edrDir)
@@ -100,8 +138,9 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 	return result, nil
 }
 
-// buildImportGraph walks the repo, extracts imports, resolves them, and returns edges.
-func buildImportGraph(root string) ([][2]string, []string) {
+// buildImportGraph is no longer used — imports are extracted during BuildFullFromWalk.
+// Kept as dead code reference until confirmed removable.
+func _unused_buildImportGraph(root string) ([][2]string, []string) {
 	// Collect all file paths
 	var allFiles []string
 	index.WalkRepoFiles(root, func(path string) error {
