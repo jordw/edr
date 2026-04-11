@@ -25,7 +25,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 # Must match Go constants
-NUM_FEATURES = 34
+NUM_FEATURES = 40
 DIM = 16
 NUM_HEADS = 2
 HEAD_DIM = DIM // NUM_HEADS
@@ -84,6 +84,8 @@ FEATURE_NAMES = [
     "ext_c", "ext_go", "ext_rust", "ext_py_ts",
     "ext_majority_ratio", "span_rank", "file_symbol_count",
     "name_has_underscore", "name_all_lower", "name_starts_upper", "name_is_short",
+    "candidate_count", "peripheral_ratio", "core_ratio",
+    "query_len", "span_std_dev", "max_span_ratio",
 ]
 
 CORE_DIRS = {"kernel", "core", "init", "mm", "fs", "net", "block", "ipc",
@@ -196,11 +198,34 @@ def extract_all_features(query: str, candidates: list[dict]) -> list[list[float]
     for i, ext in enumerate(exts):
         feats[i][26] = ext_counts[ext] / n
 
-    # Span rank
+    # Span rank + max span ratio
     spans = [max(c.get("end_line", 0) - c.get("start_line", 0) + 1, 1) for c in candidates]
+    max_span = max(spans) if spans else 1
     for i in range(n):
         smaller = sum(1 for s in spans if s < spans[i])
         feats[i][27] = smaller / (n - 1)
+        feats[i][39] = spans[i] / max_span  # max_span_ratio
+
+    # Global context features
+    import math as _math
+    cand_count = min(_math.log2(n) / 6.0, 1.0)
+    periph_count = sum(1 for f in feats if f[15] > 0)  # FIsPeripheral
+    core_count = sum(1 for f in feats if f[14] > 0)     # FIsCore
+    periph_ratio = periph_count / n
+    core_ratio = core_count / n
+    query_len = min(len(query) / 20.0, 1.0)
+
+    log_spans = [_math.log2(s) for s in spans]
+    mean_ls = sum(log_spans) / n
+    var_ls = sum((ls - mean_ls) ** 2 for ls in log_spans) / n
+    span_std = min(_math.sqrt(var_ls) / 3.0, 1.0)
+
+    for i in range(n):
+        feats[i][34] = cand_count
+        feats[i][35] = periph_ratio
+        feats[i][36] = core_ratio
+        feats[i][37] = query_len
+        feats[i][38] = span_std
 
     return feats
 

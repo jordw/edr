@@ -47,7 +47,14 @@ const (
 	FNameAllLower      // name is all lowercase
 	FNameStartsUpper   // name starts with uppercase (Go/Rust/Java convention)
 	FNameIsShort       // len(name) <= 3
-	// = 34 features = NumFeatures
+	// Global context features (set by ExtractAll)
+	FCandidateCount   // log2(total candidates) / 6, clamped
+	FPeripheralRatio  // fraction of candidates from peripheral paths
+	FCoreRatio        // fraction of candidates from core paths
+	FQueryLen         // len(query) / 20, clamped to [0,1]
+	FSpanStdDev       // std dev of log-spans / 3, how varied the candidates are
+	FMaxSpanRatio     // this candidate's span / max span among all candidates
+	// = 40 features = NumFeatures
 )
 
 // CandidateFeatures holds the raw info needed to extract features.
@@ -253,7 +260,13 @@ func ExtractAll(query string, candidates []CandidateFeatures) []float32 {
 			spans[i] = 1
 		}
 	}
-	// Count how many candidates have smaller span
+	// Count how many candidates have smaller span + max span ratio
+	maxSpan := 0
+	for _, s := range spans {
+		if s > maxSpan {
+			maxSpan = s
+		}
+	}
 	for i := range candidates {
 		smaller := 0
 		for j := range candidates {
@@ -262,6 +275,46 @@ func ExtractAll(query string, candidates []CandidateFeatures) []float32 {
 			}
 		}
 		out[i*NumFeatures+FSpanRank] = float32(smaller) / float32(n-1)
+		if maxSpan > 0 {
+			out[i*NumFeatures+FMaxSpanRatio] = float32(spans[i]) / float32(maxSpan)
+		}
+	}
+
+	// Global context: candidate count, peripheral/core ratios, query len
+	candCount := clamp(float32(math.Log2(float64(n)))/6.0, 0, 1)
+	peripheralCount := 0
+	coreCount := 0
+	for i := range candidates {
+		if out[i*NumFeatures+FIsPeripheral] > 0 {
+			peripheralCount++
+		}
+		if out[i*NumFeatures+FIsCore] > 0 {
+			coreCount++
+		}
+	}
+	periphRatio := float32(peripheralCount) / float32(n)
+	coreRatio := float32(coreCount) / float32(n)
+	queryLen := clamp(float32(len(query))/20.0, 0, 1)
+
+	// Span std dev
+	meanLogSpan := float32(0)
+	for _, s := range spans {
+		meanLogSpan += float32(math.Log2(float64(s)))
+	}
+	meanLogSpan /= float32(n)
+	variance := float32(0)
+	for _, s := range spans {
+		d := float32(math.Log2(float64(s))) - meanLogSpan
+		variance += d * d
+	}
+	spanStdDev := clamp(float32(math.Sqrt(float64(variance/float32(n))))/3.0, 0, 1)
+
+	for i := range candidates {
+		out[i*NumFeatures+FCandidateCount] = candCount
+		out[i*NumFeatures+FPeripheralRatio] = periphRatio
+		out[i*NumFeatures+FCoreRatio] = coreRatio
+		out[i*NumFeatures+FQueryLen] = queryLen
+		out[i*NumFeatures+FSpanStdDev] = spanStdDev
 	}
 
 	return out
