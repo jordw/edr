@@ -304,15 +304,17 @@ func isDefinitionType(t string) bool {
 }
 
 func isTestPath(rel string) bool {
-	base := filepath.Base(rel)
-	return strings.HasSuffix(base, "_test.go") ||
-		strings.HasSuffix(base, "_test.c") ||
-		strings.HasSuffix(base, "_test.rs") ||
-		strings.HasSuffix(base, ".test.ts") ||
-		strings.HasSuffix(base, ".test.js") ||
-		strings.HasSuffix(base, "_test.py") ||
-		strings.Contains(rel, "/test/") ||
-		strings.Contains(rel, "/tests/") ||
+	lower := strings.ToLower(rel)
+	// Directory-based patterns
+	for _, seg := range []string{"test/", "tests/", "testing/", "spec/", "__tests__/"} {
+		if strings.Contains(lower, seg) || strings.HasPrefix(lower, seg) {
+			return true
+		}
+	}
+	// File-based patterns
+	base := filepath.Base(lower)
+	return strings.Contains(base, "_test.") ||
+		strings.Contains(base, ".test.") ||
 		strings.HasPrefix(base, "test_")
 }
 

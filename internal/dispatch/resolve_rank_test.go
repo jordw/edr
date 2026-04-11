@@ -1,223 +1,180 @@
 package dispatch
 
 import (
-	"strings"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 )
 
-func TestRankCandidates_PeripheralPenalty(t *testing.T) {
-	root := "/repo"
-	candidates := []index.SymbolInfo{
-		{Name: "open", Type: "function", File: "/repo/drivers/tty/serial.c", StartLine: 50, EndLine: 80},
-		{Name: "open", Type: "function", File: "/repo/fs/open.c", StartLine: 100, EndLine: 250},
-		{Name: "open", Type: "function", File: "/repo/plugins/auth/handler.go", StartLine: 10, EndLine: 20},
+// setupTestGraph creates a temp edr dir with an import graph for testing.
+func setupTestGraph(t *testing.T, files []string, edges [][2]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	edrDir := filepath.Join(dir, ".edr")
+	os.MkdirAll(edrDir, 0755)
+
+	// Write a root.txt so HomeEdrDir can find it
+	// (we'll pass root directly to heuristicRank)
+
+	graph := idx.BuildImportGraph(files, edges)
+	if err := idx.WriteImportGraph(edrDir, graph); err != nil {
+		t.Fatal(err)
 	}
-	ranked := rankCandidates(candidates, "open", root)
-	if len(ranked) < 3 {
-		t.Fatalf("expected 3 candidates, got %d", len(ranked))
-	}
-	// fs/open.c should rank first: shallow + large span, no penalties
-	if ranked[0].Rel != "fs/open.c" {
-		t.Errorf("expected fs/open.c first, got %s", ranked[0].Rel)
-	}
-	// Both peripheral paths should be penalized below fs/open.c
-	for _, r := range ranked[1:] {
-		if r.Score >= ranked[0].Score {
-			t.Errorf("%s (score %d) should rank below %s (score %d)", r.Rel, r.Score, ranked[0].Rel, ranked[0].Score)
-		}
-	}
+	return dir
 }
 
-func TestRankCandidates_DepthGradient(t *testing.T) {
-	root := "/repo"
+func TestRankCandidates_ImportCountPrimary(t *testing.T) {
+	// File with high import count should rank first
+	root := setupTestGraph(t,
+		[]string{"core/api.h", "core/api.c", "plugins/ext.c", "test/test.c"},
+		[][2]string{
+			{"core/api.c", "core/api.h"},
+			{"plugins/ext.c", "core/api.h"},
+			{"test/test.c", "core/api.h"},
+		},
+	)
 	candidates := []index.SymbolInfo{
-		{Name: "init", Type: "function", File: "/repo/init.c", StartLine: 1, EndLine: 50},
-		{Name: "init", Type: "function", File: "/repo/a/b/init.c", StartLine: 1, EndLine: 50},
-		{Name: "init", Type: "function", File: "/repo/a/b/c/d/e/init.c", StartLine: 1, EndLine: 50},
+		{Name: "init", Type: "function", File: filepath.Join(root, "plugins/ext.c"), StartLine: 10, EndLine: 20},
+		{Name: "init", Type: "function", File: filepath.Join(root, "core/api.h"), StartLine: 5, EndLine: 50},
+		{Name: "init", Type: "function", File: filepath.Join(root, "test/test.c"), StartLine: 1, EndLine: 5},
 	}
 	ranked := rankCandidates(candidates, "init", root)
 	if len(ranked) < 3 {
 		t.Fatalf("expected 3 candidates, got %d", len(ranked))
 	}
-	// Shallowest should rank first
-	if ranked[0].Rel != "init.c" {
-		t.Errorf("expected init.c first, got %s", ranked[0].Rel)
+	// core/api.h has 3 inbound imports — should rank first
+	if ranked[0].Rel != "core/api.h" {
+		t.Errorf("expected core/api.h first (most imported), got %s (score %d)", ranked[0].Rel, ranked[0].Score)
 	}
-	// Deepest should rank last
-	if ranked[2].Rel != "a/b/c/d/e/init.c" {
-		t.Errorf("expected a/b/c/d/e/init.c last, got %s", ranked[2].Rel)
+	// test/test.c should rank last (0 imports, small span)
+	if ranked[2].Rel != "test/test.c" {
+		t.Errorf("expected test/test.c last, got %s", ranked[2].Rel)
 	}
 }
 
-func TestRankCandidates_SpanGradient(t *testing.T) {
-	root := "/repo"
+func TestRankCandidates_HeaderInheritance(t *testing.T) {
+	// A .c file should inherit its .h's import count
+	root := setupTestGraph(t,
+		[]string{"lib/queue.h", "lib/queue.c", "drivers/foo.c"},
+		[][2]string{
+			{"lib/queue.c", "lib/queue.h"},
+			{"drivers/foo.c", "lib/queue.h"},
+		},
+	)
 	candidates := []index.SymbolInfo{
-		{Name: "Config", Type: "struct", File: "/repo/src/config.go", StartLine: 10, EndLine: 12},  // 2-line stub
-		{Name: "Config", Type: "struct", File: "/repo/lib/config.go", StartLine: 10, EndLine: 50},  // 40-line struct
-		{Name: "Config", Type: "struct", File: "/repo/pkg/config.go", StartLine: 10, EndLine: 200}, // 190-line struct
+		{Name: "enqueue", Type: "function", File: filepath.Join(root, "lib/queue.c"), StartLine: 50, EndLine: 100},
+		{Name: "enqueue", Type: "function", File: filepath.Join(root, "drivers/foo.c"), StartLine: 10, EndLine: 30},
+	}
+	ranked := rankCandidates(candidates, "enqueue", root)
+	if len(ranked) < 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(ranked))
+	}
+	// lib/queue.c should rank first: its .h has 2 inbound imports
+	if ranked[0].Rel != "lib/queue.c" {
+		t.Errorf("expected lib/queue.c first (header inherited), got %s (score %d)", ranked[0].Rel, ranked[0].Score)
+	}
+}
+
+func TestRankCandidates_SpanTiebreaker(t *testing.T) {
+	// When import counts are equal (both 0), larger span wins
+	root := setupTestGraph(t, []string{"a.go", "b.go"}, nil)
+	candidates := []index.SymbolInfo{
+		{Name: "Run", Type: "function", File: filepath.Join(root, "a.go"), StartLine: 10, EndLine: 20},
+		{Name: "Run", Type: "function", File: filepath.Join(root, "b.go"), StartLine: 10, EndLine: 150},
+	}
+	ranked := rankCandidates(candidates, "Run", root)
+	if len(ranked) < 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(ranked))
+	}
+	if ranked[0].Rel != "b.go" {
+		t.Errorf("expected b.go first (larger span), got %s", ranked[0].Rel)
+	}
+}
+
+func TestRankCandidates_TestPenalty(t *testing.T) {
+	root := setupTestGraph(t, []string{"core.go", "test/core_test.go"}, nil)
+	candidates := []index.SymbolInfo{
+		{Name: "Config", Type: "struct", File: filepath.Join(root, "test/core_test.go"), StartLine: 10, EndLine: 50},
+		{Name: "Config", Type: "struct", File: filepath.Join(root, "core.go"), StartLine: 10, EndLine: 50},
 	}
 	ranked := rankCandidates(candidates, "Config", root)
-	if len(ranked) < 3 {
-		t.Fatalf("expected 3 candidates, got %d", len(ranked))
+	if len(ranked) < 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(ranked))
 	}
-	// Largest span should rank first
-	if ranked[0].Rel != "pkg/config.go" {
-		t.Errorf("expected pkg/config.go first, got %s (score %d)", ranked[0].Rel, ranked[0].Score)
-	}
-}
-
-func TestIsPeripheralPath(t *testing.T) {
-	yes := []string{"drivers/tty/serial.c", "plugins/auth/main.go", "extensions/foo.rs", "contrib/bar.py", "addons/baz.js", "adapters/db.go", "connectors/api.ts", "integrations/slack.py"}
-	no := []string{"src/main.go", "lib/config.go", "include/header.h", "kernel/sched/core.c", "cmd/root.go", "modules/auth.js"}
-
-	for _, p := range yes {
-		if !isPeripheralPath(p) {
-			t.Errorf("expected peripheral: %s", p)
-		}
-	}
-	for _, p := range no {
-		if isPeripheralPath(p) {
-			t.Errorf("should not be peripheral: %s", p)
-		}
+	if ranked[0].Rel != "core.go" {
+		t.Errorf("expected core.go first (test penalty), got %s", ranked[0].Rel)
 	}
 }
 
-func TestRankCandidates_ToolsPenalty(t *testing.T) {
-	root := "/repo"
+func TestRankCandidates_NameMatchQuality(t *testing.T) {
+	root := setupTestGraph(t, []string{"a.go", "b.go"}, nil)
 	candidates := []index.SymbolInfo{
-		{Name: "open", Type: "method", File: "/repo/tools/lib/python/feat/parse.py", StartLine: 63, EndLine: 80},
-		{Name: "open", Type: "function", File: "/repo/fs/open.c", StartLine: 100, EndLine: 200},
-		{Name: "open", Type: "function", File: "/repo/drivers/tty/serial.c", StartLine: 50, EndLine: 80},
+		{Name: "HandleRequest", Type: "function", File: filepath.Join(root, "a.go"), StartLine: 10, EndLine: 50},
+		{Name: "handle", Type: "function", File: filepath.Join(root, "b.go"), StartLine: 10, EndLine: 50},
 	}
-	ranked := rankCandidates(candidates, "open", root)
-	if len(ranked) < 3 {
-		t.Fatalf("expected 3 candidates, got %d", len(ranked))
+	// Querying "handle" — exact case-insensitive match on b.go, prefix on a.go
+	ranked := rankCandidates(candidates, "handle", root)
+	if len(ranked) < 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(ranked))
 	}
-	// tools/ should NOT be #1 — fs/open.c should beat it
-	if ranked[0].Rel == "tools/lib/python/feat/parse.py" {
-		t.Errorf("tools/ path should not rank first; got %s at #1", ranked[0].Rel)
+	// Exact match should win (tier 1 vs tier 2)
+	if ranked[0].Rel != "b.go" {
+		t.Errorf("expected b.go first (exact match), got %s", ranked[0].Rel)
 	}
-	// Find the tools candidate and verify it's penalized
-	for _, r := range ranked {
-		if r.Rel == "tools/lib/python/feat/parse.py" {
-			if r.Score >= ranked[0].Score {
-				t.Errorf("tools/ path (score %d) should rank below #1 %s (score %d)", r.Score, ranked[0].Rel, ranked[0].Score)
-			}
-			return
-		}
-	}
-	t.Error("tools/ candidate not found in results")
 }
 
-func TestRankCandidates_MinorityLanguage(t *testing.T) {
-	root := "/repo"
-	// 8 C files + 2 Rust files — Rust should be penalized
+func TestRankCandidates_NoGraph(t *testing.T) {
+	// Should still work without an import graph (no edr dir)
+	root := "/nonexistent/repo"
 	candidates := []index.SymbolInfo{
-		{Name: "probe", Type: "function", File: "/repo/rust/kernel/uaccess.rs", StartLine: 316, EndLine: 330},
-		{Name: "probe", Type: "function", File: "/repo/rust/kernel/page.rs", StartLine: 310, EndLine: 325},
-		{Name: "probe", Type: "function", File: "/repo/drivers/a.c", StartLine: 50, EndLine: 100},
-		{Name: "probe", Type: "function", File: "/repo/drivers/b.c", StartLine: 50, EndLine: 100},
-		{Name: "probe", Type: "function", File: "/repo/drivers/c.c", StartLine: 50, EndLine: 100},
-		{Name: "probe", Type: "function", File: "/repo/drivers/d.c", StartLine: 50, EndLine: 100},
-		{Name: "probe", Type: "function", File: "/repo/drivers/e.c", StartLine: 50, EndLine: 100},
-		{Name: "probe", Type: "function", File: "/repo/drivers/f.c", StartLine: 50, EndLine: 100},
-		{Name: "probe", Type: "function", File: "/repo/drivers/g.c", StartLine: 50, EndLine: 100},
-		{Name: "probe", Type: "function", File: "/repo/drivers/h.c", StartLine: 50, EndLine: 100},
+		{Name: "foo", Type: "function", File: "/nonexistent/repo/a.go", StartLine: 10, EndLine: 100},
+		{Name: "foo", Type: "function", File: "/nonexistent/repo/b.go", StartLine: 10, EndLine: 20},
 	}
-	ranked := rankCandidates(candidates, "probe", root)
-	// Find Rust candidates and verify they're penalized vs C
-	for _, r := range ranked {
-		if strings.HasSuffix(r.Rel, ".rs") {
-			// Rust candidates should have the minority penalty applied
-			for _, c := range ranked {
-				if strings.HasSuffix(c.Rel, ".c") && c.Score > r.Score {
-					return // found a C file ranking above Rust — pass
-				}
-			}
-			t.Error("no .c file ranks above .rs files despite .c being >70% of candidates")
-			return
-		}
+	ranked := rankCandidates(candidates, "foo", root)
+	if len(ranked) < 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(ranked))
+	}
+	// Larger span should still win when no graph
+	if ranked[0].Rel != "a.go" {
+		t.Errorf("expected a.go first (larger span, no graph), got %s", ranked[0].Rel)
 	}
 }
 
-func TestRankCandidates_PeripheralMajority(t *testing.T) {
-	root := "/repo"
-	// When >50% are from drivers/, the penalty should be reduced
-	candidates := []index.SymbolInfo{
-		{Name: "probe", Type: "function", File: "/repo/core/probe.c", StartLine: 10, EndLine: 50},
-		{Name: "probe", Type: "function", File: "/repo/drivers/a/probe.c", StartLine: 10, EndLine: 50},
-		{Name: "probe", Type: "function", File: "/repo/drivers/b/probe.c", StartLine: 10, EndLine: 50},
-		{Name: "probe", Type: "function", File: "/repo/drivers/c/probe.c", StartLine: 10, EndLine: 50},
+func TestIsTestPath(t *testing.T) {
+	yes := []string{
+		"test/unit_test.go", "tests/foo.py", "testing/bar.c",
+		"spec/models_spec.rb", "__tests__/App.test.tsx",
+		"pkg/foo_test.go", "test_helper.rb",
 	}
-	ranked := rankCandidates(candidates, "probe", root)
-	if len(ranked) < 4 {
-		t.Fatalf("expected 4 candidates, got %d", len(ranked))
+	no := []string{
+		"src/main.go", "lib/config.go", "kernel/sched/core.c",
 	}
-	// core/probe.c should still be #1 (core path boost)
-	if ranked[0].Rel != "core/probe.c" {
-		t.Errorf("expected core/probe.c first, got %s", ranked[0].Rel)
-	}
-	// But drivers/ candidates should not be crushed — their effective
-	// penalty is only -5 (base -15 + majority recovery +10)
-	driverScore := 0
-	for _, r := range ranked {
-		if strings.HasPrefix(r.Rel, "drivers/") {
-			driverScore = r.Score
-			break
-		}
-	}
-	gap := ranked[0].Score - driverScore
-	if gap > 25 {
-		t.Errorf("peripheral majority recovery should limit the gap; core=%d driver=%d gap=%d", ranked[0].Score, driverScore, gap)
-	}
-}
-
-func TestIsToolsPath(t *testing.T) {
-	yes := []string{"tools/lib/main.py", "tool/gen.go", "util/helpers.js", "utils/format.ts", "hack/verify.sh", "misc/debug.c"}
-	no := []string{"src/tools/util.ts", "lib/util.go", "cmd/tool.go"}
-
 	for _, p := range yes {
-		if !isToolsPath(p) {
-			t.Errorf("expected tools path: %s", p)
+		if !isTestPath(p) {
+			t.Errorf("expected test path: %s", p)
 		}
 	}
 	for _, p := range no {
-		if isToolsPath(p) {
-			t.Errorf("should not be tools path: %s", p)
+		if isTestPath(p) {
+			t.Errorf("should not be test path: %s", p)
 		}
 	}
 }
 
-func TestIsCoreInfraPath(t *testing.T) {
-	yes := []string{"kernel/sched/core.c", "core/main.go", "internal/dispatch/handler.go", "pkg/api/server.go", "src/main.ts", "lib/config.go", "fs/open.c", "net/socket.c"}
-	no := []string{"drivers/tty/serial.c", "tools/perf/main.c", "test/unit_test.go", "vendor/lib.go"}
-
+func TestIsVendorPath(t *testing.T) {
+	yes := []string{"vendor/lib.go", "node_modules/react/index.js", "third_party/foo.c"}
+	no := []string{"src/vendor.go", "lib/config.go"}
 	for _, p := range yes {
-		if !isCoreInfraPath(p) {
-			t.Errorf("expected core infra path: %s", p)
+		if !isVendorPath(p) {
+			t.Errorf("expected vendor path: %s", p)
 		}
 	}
 	for _, p := range no {
-		if isCoreInfraPath(p) {
-			t.Errorf("should not be core infra path: %s", p)
-		}
-	}
-}
-
-func TestIsScriptsPath(t *testing.T) {
-	yes := []string{"scripts/build.sh", "build/lib/main.ts", "ci/pipeline.yml", "hack/verify.sh", "deploy/k8s.yaml", "script/bootstrap"}
-	no := []string{"src/scripts/util.ts", "lib/build.go", "cmd/deploy.go"}
-
-	for _, p := range yes {
-		if !isScriptsPath(p) {
-			t.Errorf("expected scripts path: %s", p)
-		}
-	}
-	for _, p := range no {
-		if isScriptsPath(p) {
-			t.Errorf("should not be scripts path: %s", p)
+		if isVendorPath(p) {
+			t.Errorf("should not be vendor path: %s", p)
 		}
 	}
 }

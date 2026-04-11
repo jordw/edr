@@ -25,7 +25,7 @@ var importPatterns = map[string][]*regexp.Regexp{
 	// Python: from X import Y, import X
 	".py": {
 		regexp.MustCompile(`from\s+([\w.]+)\s+import`),
-		regexp.MustCompile(`^import\s+([\w.]+)`),
+		regexp.MustCompile(`(?m)^import\s+([\w.]+)`),
 	},
 
 	// JavaScript/TypeScript: import ... from 'path', require('path')
