@@ -50,7 +50,7 @@ git clone https://github.com/jordw/edr.git && ./edr/setup.sh
 
 ## Example
 
-A raw read of `dispatch.go` is 965 lines. Here's what `edr focus` returns for the symbol you actually care about — the function body plus signatures of the helpers it calls:
+Ask for one function and `edr focus` returns it *plus* the signatures of every helper it calls — so the agent has enough API in hand to reason about an edit without a second read:
 
 ```
 $ edr focus internal/dispatch/dispatch.go:Dispatch
@@ -82,9 +82,11 @@ func Dispatch(ctx context.Context, db index.SymbolStore, cmd string, args []stri
 dispatch_edit.go    func runSmartEdit(...) (any, error)
 dispatch_search.go  func runSearchUnified(...) (any, error)
 dispatch_verify.go  func runVerify(...) (any, error)
+dispatch_index.go   func runIndex(...) (any, error)
+dispatch_files.go   func runFiles(...) (any, error)
 ```
 
-45 lines of body, 5 signatures, one JSON header. The agent gets the function it asked for plus enough surrounding API to reason about edits — without pulling in the other 920 lines.
+The agent asked for `Dispatch`. It also got back signatures for `runSmartEdit`, `runSearchUnified`, `runVerify`, `runIndex`, and `runFiles` — every helper the function calls — from the files they actually live in. No grep, no guessing, no second tool call. (And as a side effect, 45 lines of body beats dumping the whole 965-line file.)
 
 Typical workflow: orient → focus → edit:
 
