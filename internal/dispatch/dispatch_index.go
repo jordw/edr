@@ -3,6 +3,11 @@ package dispatch
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"sync"
 
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
@@ -69,6 +74,13 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 		return nil, err
 	}
 
+	// Build import graph from the indexed files
+	importEdges, importFiles := buildImportGraph(root)
+	if len(importEdges) > 0 {
+		graph := idx.BuildImportGraph(importFiles, importEdges)
+		idx.WriteImportGraph(edrDir, graph)
+	}
+
 	s := idx.GetStatus(root, edrDir)
 	result := map[string]any{
 		"status":        "built",
@@ -79,5 +91,83 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 	if h, err := idx.ReadHeader(edrDir); err == nil && h.NumSymbols > 0 {
 		result["symbols"] = int(h.NumSymbols)
 	}
+	if idx.HasImportGraph(edrDir) {
+		graph := idx.ReadImportGraph(edrDir)
+		if graph != nil {
+			result["import_edges"] = len(graph.Edges)
+		}
+	}
 	return result, nil
+}
+
+// buildImportGraph walks the repo, extracts imports, resolves them, and returns edges.
+func buildImportGraph(root string) ([][2]string, []string) {
+	// Collect all file paths
+	var allFiles []string
+	index.WalkRepoFiles(root, func(path string) error {
+		rel, err := filepath.Rel(root, path)
+		if err == nil {
+			allFiles = append(allFiles, rel)
+		}
+		return nil
+	})
+	sort.Strings(allFiles)
+
+	// Build suffix index for import resolution
+	suffixIdx := index.BuildSuffixIndex(allFiles)
+
+	// Extract imports from each file and resolve
+	type fileImport struct {
+		importer string
+		imported []string
+	}
+
+	var mu sync.Mutex
+	var edges [][2]string
+
+	workers := runtime.NumCPU()
+	if workers > 8 {
+		workers = 8
+	}
+	ch := make(chan string, workers*4)
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for rel := range ch {
+				abs := filepath.Join(root, rel)
+				data, err := os.ReadFile(abs)
+				if err != nil {
+					continue
+				}
+				ext := filepath.Ext(rel)
+				imports := index.ExtractImports(data, ext)
+				if len(imports) == 0 {
+					continue
+				}
+				var localEdges [][2]string
+				for _, imp := range imports {
+					resolved := index.ResolveImport(suffixIdx, imp.Raw, rel, ext)
+					for _, target := range resolved {
+						localEdges = append(localEdges, [2]string{rel, target})
+					}
+				}
+				if len(localEdges) > 0 {
+					mu.Lock()
+					edges = append(edges, localEdges...)
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+
+	for _, f := range allFiles {
+		ch <- f
+	}
+	close(ch)
+	wg.Wait()
+
+	return edges, allFiles
 }
