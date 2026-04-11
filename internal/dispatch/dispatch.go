@@ -271,6 +271,13 @@ func runReadUnified(ctx context.Context, db index.SymbolStore, root string, args
 				return runReadFile(ctx, db, root, []string{prefix[:idx2]}, flags)
 			}
 		}
+		// Single line number: file:N → read a window around that line
+		lineNum, _ := strconv.Atoi(suffix)
+		if lineNum > 0 {
+			flags["start_line"] = lineNum
+			flags["end_line"] = lineNum + 20 // show ~20 lines from that point
+			return runReadFile(ctx, db, root, []string{arg[:idx]}, flags)
+		}
 	}
 
 	// Single arg: try as file first, fall back to symbol if it does not look like a path
@@ -950,19 +957,25 @@ func suggestSimilarNames(ctx context.Context, db index.SymbolStore, query, dir, 
 		return nil
 	}
 
-	// Re-query without grep to get the full symbol set (respecting dir/type).
-	sqlDir := ""
-	if dir != "" {
-		sqlDir = filepath.Join(db.Root(), dir)
-	}
-	symbols, err := db.FilteredSymbols(ctx, sqlDir, symType, "")
-	if err != nil {
+	// Use AllSymbols (fast path via symbol index) instead of FilteredSymbols
+	// which would trigger a full repo parse on large repos.
+	symbols, err := db.AllSymbols(ctx)
+	if err != nil || len(symbols) == 0 {
 		return nil
 	}
 
-	// Collect unique lowercase names.
+	// Collect unique lowercase names, filtered by dir/type if specified.
 	nameSet := make(map[string]string) // lowercase -> original case
 	for _, s := range symbols {
+		if symType != "" && s.Type != symType {
+			continue
+		}
+		if dir != "" {
+			rel, _ := filepath.Rel(db.Root(), s.File)
+			if !strings.HasPrefix(rel, dir) {
+				continue
+			}
+		}
 		lower := strings.ToLower(s.Name)
 		if _, seen := nameSet[lower]; !seen {
 			nameSet[lower] = s.Name
