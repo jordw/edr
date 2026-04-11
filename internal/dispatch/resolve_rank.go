@@ -7,6 +7,7 @@ import (
 	"sync"
 	"unicode"
 
+	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/ranking"
@@ -116,7 +117,10 @@ func modelRank(w *ranking.Weights, candidates []index.SymbolInfo, query, root st
 // heuristicRank is the hand-tuned fallback scorer.
 func heuristicRank(candidates []index.SymbolInfo, query, root string) []rankedCandidate {
 	queryLower := strings.ToLower(query)
-	queryShape := inferShape(query)
+
+	// Load import graph (cached) for file importance signal
+	edrDir := index.HomeEdrDir(root)
+	graph := idx.ReadImportGraph(edrDir)
 
 	var ranked []rankedCandidate
 	seen := map[string]bool{}
@@ -138,140 +142,80 @@ func heuristicRank(candidates []index.SymbolInfo, query, root string) []rankedCa
 		} else if strings.Contains(nameLower, queryLower) {
 			tier = tierPartial
 		} else {
-			continue // shouldn't happen but skip
+			continue
 		}
 
 		var score int
 
-		// Exactness within tier
-		if tier == tierExact && s.Name == query {
-			score += 10 // case-exact
+		// 1. Import count — the primary signal.
+		// Files imported by many others are canonical/authoritative.
+		inbound := 0
+		if graph != nil {
+			inbound = graph.Inbound(rel)
 		}
-		if tier == tierPartial {
-			if strings.HasPrefix(nameLower, queryLower) {
-				score += 15
-			} else if strings.HasSuffix(nameLower, queryLower) {
-				score += 5
-			}
-		}
-
-		// Type hint from query shape (small tiebreaker)
-		score += shapeBoost(s.Type, queryShape)
-
-		// Definition types get small boost
-		if isDefinitionType(s.Type) {
+		switch {
+		case inbound >= 100:
+			score += 30 // heavily imported (core header/module)
+		case inbound >= 20:
+			score += 20
+		case inbound >= 5:
+			score += 12
+		case inbound >= 1:
 			score += 5
 		}
 
-		// Span size: larger definitions are more likely the canonical/core one.
-		// Graduated scale rewards substantial implementations over stubs.
+		// 2. Span size — larger implementations over stubs.
 		span := int(s.EndLine - s.StartLine)
 		switch {
 		case span >= 100:
-			score += 15 // major implementation
-		case span >= 30:
-			score += 10 // substantial body
-		case span >= 10:
-			score += 5
-		case span <= 1:
-			score -= 10 // forward declaration or single-line stub
-		}
-
-		// Canonical path boost: include/ dirs and shallow paths are more likely
-		// to hold the "real" definition for widely-used types
-		if strings.HasPrefix(rel, "include/") {
 			score += 12
-		}
-		// Core infrastructure directories get a boost — these paths typically
-		// hold primary definitions rather than consumers or bindings.
-		if isCoreInfraPath(rel) {
-			score += 10
-		}
-
-		depth := strings.Count(rel, string(filepath.Separator))
-		if depth <= 1 {
-			score += 10 // top-level files are very likely canonical
-		} else if depth <= 2 {
-			score += 5
-		} else if depth >= 6 {
-			score -= 10 // deeply nested = leaf code
-		} else if depth >= 4 {
-			score -= 5
+		case span >= 30:
+			score += 8
+		case span >= 10:
+			score += 4
+		case span <= 1:
+			score -= 8 // forward declaration or stub
 		}
 
-		// Peripheral path penalty: leaf/plugin/driver directories contain
-		// many definitions of common names but are rarely the target.
-		if isPeripheralPath(rel) {
-			score -= 15
+		// 3. Name match quality.
+		if tier == tierExact && s.Name == query {
+			score += 8 // case-exact
 		}
-		if isToolsPath(rel) {
-			score -= 15
+		if tier == tierPartial {
+			if strings.HasPrefix(nameLower, queryLower) {
+				score += 10
+			} else if strings.HasSuffix(nameLower, queryLower) {
+				score += 3
+			}
 		}
-		// Penalties
+
+		// 4. Test/vendor penalty — these are never canonical.
 		if isTestPath(rel) {
 			score -= 20
-		}
-		if isDocPath(rel) {
-			score -= 25
 		}
 		if isVendorPath(rel) {
 			score -= 20
 		}
-		if isSamplePath(rel) {
-			score -= 15
+
+		// 5. Definition type boost.
+		if isDefinitionType(s.Type) {
+			score += 3
 		}
-		if isScriptsPath(rel) {
-			score -= 10
+
+		// 6. Shallow depth tiebreaker — when import counts don't differentiate.
+		depth := strings.Count(rel, string(filepath.Separator))
+		if depth <= 1 {
+			score += 4
+		} else if depth <= 2 {
+			score += 2
 		}
+
 		ranked = append(ranked, rankedCandidate{
 			Symbol: s,
 			Tier:   tier,
 			Score:  score,
 			Rel:    rel,
 		})
-	}
-
-	// Peripheral majority adjustment: when >50% of candidates are from
-	// peripheral paths (drivers/, plugins/, etc.), the name naturally lives
-	// there — reduce the penalty so they aren't all suppressed.
-	peripheralCount := 0
-	for _, r := range ranked {
-		if isPeripheralPath(r.Rel) {
-			peripheralCount++
-		}
-	}
-	if len(ranked) > 0 && peripheralCount*2 > len(ranked) {
-		for i := range ranked {
-			if isPeripheralPath(ranked[i].Rel) {
-				ranked[i].Score += 10 // recover most of the -15 penalty
-			}
-		}
-	}
-
-	// Minority language penalty: when >70% of candidates share one file
-	// extension, penalize outliers. E.g. Rust bindings in a C-dominant repo.
-	if len(ranked) >= 4 {
-		extCount := map[string]int{}
-		for _, r := range ranked {
-			ext := strings.ToLower(filepath.Ext(r.Rel))
-			extCount[ext]++
-		}
-		var majorExt string
-		majorCount := 0
-		for ext, count := range extCount {
-			if count > majorCount {
-				majorExt = ext
-				majorCount = count
-			}
-		}
-		if majorCount*10 >= len(ranked)*7 { // >70% share one extension
-			for i := range ranked {
-				ext := strings.ToLower(filepath.Ext(ranked[i].Rel))
-				if ext != majorExt {
-					ranked[i].Score -= 12
-				}
-			}
-		}
 	}
 
 	// Sort: tier first (hard boundary), then score descending, then path for stability
