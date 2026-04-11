@@ -34,11 +34,20 @@ func TestExtractImports_Go(t *testing.T) {
 
 import "fmt"
 import foo "github.com/foo/bar"
+
+import (
+	"os"
+	"path/filepath"
+	baz "github.com/baz/qux"
+)
 `)
 	imports := ExtractImports(src, ".go")
 	want := map[string]bool{
-		"fmt":                    true,
-		"github.com/foo/bar":    true,
+		"fmt":                 true,
+		"github.com/foo/bar": true,
+		"os":                 true,
+		"path/filepath":      true,
+		"github.com/baz/qux": true,
 	}
 	got := map[string]bool{}
 	for _, imp := range imports {
@@ -48,6 +57,9 @@ import foo "github.com/foo/bar"
 		if !got[w] {
 			t.Errorf("missing import %q", w)
 		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("got %d imports, want %d: %v", len(got), len(want), got)
 	}
 }
 
@@ -101,11 +113,15 @@ func TestExtractImports_Rust(t *testing.T) {
 	src := []byte(`
 use tokio::runtime::Runtime;
 use std::collections::HashMap;
+mod config;
+mod utils;
 `)
 	imports := ExtractImports(src, ".rs")
 	want := map[string]bool{
 		"tokio::runtime::Runtime":   true,
 		"std::collections::HashMap": true,
+		"config":                    true,
+		"utils":                     true,
 	}
 	got := map[string]bool{}
 	for _, imp := range imports {
@@ -122,11 +138,13 @@ func TestExtractImports_Ruby(t *testing.T) {
 	src := []byte(`
 require 'active_record'
 require "json"
+require_relative 'config/application'
 `)
 	imports := ExtractImports(src, ".rb")
 	want := map[string]bool{
-		"active_record": true,
-		"json":          true,
+		"active_record":        true,
+		"json":                 true,
+		"config/application":   true,
 	}
 	got := map[string]bool{}
 	for _, imp := range imports {
@@ -205,6 +223,30 @@ func TestBuildSuffixIndex(t *testing.T) {
 	matches = idx["mxl5xx.c"]
 	if len(matches) != 1 {
 		t.Errorf("mxl5xx.c: expected 1 match, got %d", len(matches))
+	}
+}
+
+func TestResolveImport_Go(t *testing.T) {
+	files := []string{
+		"internal/cmdspec/cmdspec.go",
+		"internal/dispatch/dispatch.go",
+		"cmd/commands.go",
+	}
+	idx := BuildSuffixIndex(files)
+
+	// Module path should resolve to files in the matching directory
+	matches := ResolveImport(idx, "github.com/jordw/edr/internal/cmdspec", "cmd/commands.go", ".go")
+	if len(matches) == 0 {
+		t.Error("expected Go import to resolve to internal/cmdspec/cmdspec.go")
+	}
+	found := false
+	for _, m := range matches {
+		if m == "internal/cmdspec/cmdspec.go" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected internal/cmdspec/cmdspec.go in matches, got %v", matches)
 	}
 }
 

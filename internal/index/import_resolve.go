@@ -43,15 +43,34 @@ func ResolveImport(idx SuffixIndex, raw string, importerPath string, ext string)
 
 	case ".go":
 		// Go: raw is a module path like "github.com/foo/bar"
-		// Try the last 1-3 components as directory names
+		// Try the last 1-3 components as directory names, then find .go files
+		// in matching directories.
 		parts := strings.Split(raw, "/")
 		for i := len(parts) - 1; i >= 0 && i >= len(parts)-3; i-- {
-			suffix := strings.Join(parts[i:], "/")
-			// Look for any .go file under this directory suffix
-			for _, candidate := range idx[suffix] {
-				if strings.HasSuffix(candidate, ".go") {
-					return []string{candidate}
+			dirSuffix := strings.Join(parts[i:], "/")
+			// Look for files whose path contains this directory suffix
+			// e.g., "internal/cmdspec" matches "internal/cmdspec/cmdspec.go"
+			var matches []string
+			for suffix, candidates := range idx {
+				if strings.HasPrefix(suffix, dirSuffix+"/") || suffix == dirSuffix {
+					for _, c := range candidates {
+						if strings.HasSuffix(c, ".go") && !strings.HasSuffix(c, "_test.go") {
+							matches = append(matches, c)
+						}
+					}
 				}
+			}
+			if len(matches) > 0 {
+				// Deduplicate
+				seen := map[string]bool{}
+				var unique []string
+				for _, m := range matches {
+					if !seen[m] {
+						seen[m] = true
+						unique = append(unique, m)
+					}
+				}
+				return unique
 			}
 		}
 		return nil
