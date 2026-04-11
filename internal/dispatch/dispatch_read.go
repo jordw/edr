@@ -14,7 +14,6 @@ import (
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
-	"github.com/jordw/edr/internal/session"
 )
 
 // relatedSym is a compact symbol reference with signature, used in expand/prepare output.
@@ -340,15 +339,6 @@ func runReadSymbol(ctx context.Context, db index.SymbolStore, root string, args 
 				err = nil
 				flags["_auto_resolved"] = true
 			} else if len(ranked) > 0 {
-				// Record shortlist for implicit training labels
-				var trainingCands []session.TrainingCandidate
-				for _, r := range ranked {
-					trainingCands = append(trainingCands, session.TrainingCandidate{
-						Name: r.Symbol.Name, Type: r.Symbol.Type,
-						File: r.Rel, StartLine: r.Symbol.StartLine, EndLine: r.Symbol.EndLine,
-					})
-				}
-				session.RecordShortlistPersist(db.EdrDir(), ambErr.Name, trainingCands)
 				return buildShortlist(ranked, ambErr.Name, root), nil
 			}
 		}
