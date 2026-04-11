@@ -6,11 +6,11 @@
 
 Instead of raw files and grep output, edr returns structured code context:
 
+- **`orient`** — budgeted structural overview of the codebase in terms of symbols and files.
 - **`focus file:Symbol`** — reads a symbol, not the whole file. Includes relevant surrounding context.
 - **`focus SymbolName`** — resolves likely matches and opens the best candidate.
 - **`edit --old X --new Y --verify`** — diff, updated context, and verification feedback.
-- **`orient`** — budgeted structural overview of the codebase in terms of symbols and files.
-- **`edr --focus file:Sym --edit ...`** — inspect and mutate in one call when needed.
+- **`edr --orient cmd/ --focus file:Sym --edit ...`** — survey, inspect, and mutate in one call when needed.
 - Repeated reads are deduplicated so agents do less work.
 
 Fully local, shell-friendly, no telemetry. Designed to replace generic file operations with agent-oriented ones.
@@ -50,15 +50,15 @@ git clone https://github.com/jordw/edr.git && ./edr/setup.sh
 
 ## Example
 
-Focus on a function, orient in the project, edit it:
+Orient in the project, focus on a function, edit it:
 
 ```bash
 # Without edr: grep to find it, read the range, grep for callers, read each caller
 # 5+ tool calls, ~25KB of context
 
 # With edr: 3 calls, ~3KB
-edr focus src/scheduler.py:run             # just the function (not the file)
 edr orient --dir src/                      # structural overview
+edr focus src/scheduler.py:run             # just the function (not the file)
 edr edit src/scheduler.py \
     --old "def run(self):" \
     --new "def run(self, retries=3):" --verify
@@ -67,11 +67,11 @@ edr edit src/scheduler.py \
 **Batched:** gather everything in one call, mutate in one call:
 
 ```bash
-# 1. Focus on three APIs + orient, one call
-edr -f src/scheduler.py:Scheduler --sig \
+# 1. Orient + focus on three APIs, one call
+edr -o --dir src/ \
+    -f src/scheduler.py:Scheduler --sig \
     -f src/config.py:parse_config \
-    -f src/worker.py:Worker --sig \
-    -o --dir src/
+    -f src/worker.py:Worker --sig
 
 # 2. Edit two files, verify at the end
 edr -e src/scheduler.py --old "def run(self):" --new "def run(self, retries=3):" \
@@ -113,7 +113,7 @@ Old command names `map` and `read` still work as aliases for `orient` and `focus
 Chain operations with `--focus`, `--orient`, `--search`, `--edit`, `--write` (short: `-f -o -s -e -w`). File carries forward. Edit includes read-back automatically.
 
 ```bash
-edr --focus file:Sym --sig --orient cmd/
+edr --orient cmd/ --focus file:Sym --sig
 edr --focus file:Func --edit --old "x" --new "y"
 edr --search "TODO" --include "*.go"
 edr --focus file:Func --expand callers
@@ -156,10 +156,10 @@ With edr, `focus file:Symbol` returns the function body with relevant context. `
 
 | Operation | What the agent gets |
 |---|---|
+| `orient` | Budgeted structural overview (symbols and files) |
 | `focus file:Symbol` | Symbol body + relevant surrounding context |
 | `focus SymbolName` | Ranked resolution, auto-opens best match |
 | `edit --old X --new Y --verify` | Diff + updated context + verification feedback |
-| `orient` | Budgeted structural overview (symbols and files) |
 | Re-read unchanged file | Deduplicated (zero output, zero waste) |
 
 ## License

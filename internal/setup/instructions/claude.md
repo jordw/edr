@@ -58,7 +58,7 @@ EOF
 Chain with `--focus`, `--orient`, `--search`, `--edit`, `--write` (or `-f -o -s -e -w`).
 File carries forward. Edit includes read-back automatically.
 
-edr --focus f.go --sig --orient cmd/
+edr --orient cmd/ --focus f.go --sig
 edr --focus f.go:Func --edit --old "x" --new "y"
 edr --search "TODO" --include "*.go"
 edr --focus f.go:Func --expand callers

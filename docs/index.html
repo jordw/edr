@@ -283,24 +283,24 @@ footer {
 <!-- Example -->
 <section class="example">
   <h2>Example</h2>
-  <p>Focus on a function, orient in the project, edit it:</p>
+  <p>Orient in the project, focus on a function, edit it:</p>
 <pre><code><span class="comment"># Without edr: grep to find it, read the range, grep for callers, read each caller</span>
 <span class="comment"># 5+ tool calls, ~25KB of context</span>
 
 <span class="comment"># With edr:</span>
-edr <span class="flag">focus</span> src/scheduler.py:run             <span class="comment"># just the function (not the file)</span>
 edr <span class="flag">orient</span> <span class="flag">--dir</span> src/                      <span class="comment"># structural overview</span>
+edr <span class="flag">focus</span> src/scheduler.py:run             <span class="comment"># just the function (not the file)</span>
 edr <span class="flag">edit</span> src/scheduler.py \
     <span class="flag">--old</span> "def run(self):" \
     <span class="flag">--new</span> "def run(self, retries=3):"      <span class="comment"># --verify to check build</span></code></pre>
   <p>3 calls, ~3KB.</p>
 
   <p style="margin-top: 1.5rem;"><strong>Batched:</strong> gather everything in one call, mutate in one call:</p>
-<pre><code><span class="comment"># 1. Focus on three APIs + orient, one call</span>
-edr <span class="flag">-f</span> src/scheduler.py:Scheduler <span class="flag">--sig</span> \
+<pre><code><span class="comment"># 1. Orient + focus on three APIs, one call</span>
+edr <span class="flag">-o</span> <span class="flag">--dir</span> src/ \
+    <span class="flag">-f</span> src/scheduler.py:Scheduler <span class="flag">--sig</span> \
     <span class="flag">-f</span> src/config.py:parse_config \
-    <span class="flag">-f</span> src/worker.py:Worker <span class="flag">--sig</span> \
-    <span class="flag">-o</span> <span class="flag">--dir</span> src/
+    <span class="flag">-f</span> src/worker.py:Worker <span class="flag">--sig</span>
 
 <span class="comment"># 2. Edit two files, verify at the end</span>
 edr <span class="flag">-e</span> src/scheduler.py <span class="flag">--old</span> "def run(self):" <span class="flag">--new</span> "def run(self, retries=3):" \
@@ -316,9 +316,9 @@ edr <span class="flag">-e</span> src/scheduler.py <span class="flag">--old</span
   <table>
     <thead><tr><th>Operation</th><th>What the agent gets</th></tr></thead>
     <tbody>
+      <tr><td><code>orient --dir src/</code></td><td>Budget-controlled structural overview</td></tr>
       <tr><td><code>focus file:Symbol</code></td><td>Function body + dependency signatures (auto)</td></tr>
       <tr><td><code>edit --old X --new Y</code></td><td>Diff + updated function body + build result + error context (auto)</td></tr>
-      <tr><td><code>orient --dir src/</code></td><td>Budget-controlled structural overview</td></tr>
       <tr><td>Batch (<code>-f ... -f ... -e ...</code>)</td><td>Multiple operations in one call</td></tr>
       <tr><td>Re-read unchanged file</td><td><code>{unchanged: true}</code> (session dedup)</td></tr>
     </tbody>
@@ -349,7 +349,7 @@ edr <span class="flag">-e</span> src/scheduler.py <span class="flag">--old</span
   <p>Old command names <code>map</code> and <code>read</code> still work as aliases for <code>orient</code> and <code>focus</code>.</p>
 
   <h3 style="margin-top: 1.5rem; font-size: 1.1rem;">Batch flags</h3>
-  <p><code>-f</code> focus, <code>-o</code> orient, <code>-e</code> edit. Modifier flags follow each op. Plan what you need, then combine into one call:</p>
+  <p><code>-o</code> orient, <code>-f</code> focus, <code>-e</code> edit. Modifier flags follow each op. Plan what you need, then combine into one call:</p>
 <pre><code>edr <span class="flag">-f</span> file[:Symbol]              <span class="comment"># Focus on file or symbol</span>
 edr <span class="flag">-f</span> file:Class <span class="flag">--sig</span>           <span class="comment"># Signatures only (no bodies)</span>
 edr <span class="flag">-o</span> <span class="flag">--dir</span> src/                 <span class="comment"># Structural overview of a directory</span>
@@ -357,7 +357,7 @@ edr <span class="flag">-e</span> file <span class="flag">--old</span> "x" <span 
 edr <span class="flag">-e</span> file <span class="flag">--content</span> "..." <span class="flag">--inside</span> Class  <span class="comment"># Write (via edit)</span></code></pre>
 
   <p>Combine freely. One call to gather context, one to mutate:</p>
-<pre><code>edr <span class="flag">-f</span> f.go <span class="flag">--sig</span> <span class="flag">-f</span> g.go:Func <span class="flag">--expand</span> <span class="flag">-o</span> <span class="flag">--dir</span> cmd/
+<pre><code>edr <span class="flag">-o</span> <span class="flag">--dir</span> cmd/ <span class="flag">-f</span> f.go <span class="flag">--sig</span> <span class="flag">-f</span> g.go:Func <span class="flag">--expand</span>
 edr <span class="flag">-f</span> f.go:Sym <span class="flag">-e</span> f.go <span class="flag">--old</span> "x" <span class="flag">--new</span> "y" <span class="flag">-f</span> f.go:Sym   <span class="comment"># post-edit read</span>
 edr <span class="flag">-e</span> f.go <span class="flag">--old</span> "a" <span class="flag">--new</span> "b" <span class="flag">-e</span> g.go <span class="flag">--old</span> "c" <span class="flag">--new</span> "d"
 edr <span class="flag">-e</span> f.go <span class="flag">--content</span> "..." <span class="flag">--mkdir</span></code></pre>

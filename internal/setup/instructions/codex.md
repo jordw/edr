@@ -58,7 +58,7 @@ EOF
 Chain operations with `--focus`, `--orient`, `--search`, `--edit`, `--write`.
 File carries forward between operations. Short aliases: `-f -o -s -e -w`.
 
-edr --focus f.go --sig --orient cmd/          # read sigs + map dir
+edr --orient cmd/ --focus f.go --sig          # map dir + read sigs
 edr --focus f.go:Func --edit --old "x" --new "y"  # read + edit (includes read-back)
 edr --search "TODO" --include "*.go"          # text search
 edr --focus f.go:Func --expand callers        # symbol + callers
