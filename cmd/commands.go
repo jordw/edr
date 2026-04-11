@@ -832,6 +832,25 @@ func recordOp(sess *session.Session, cmdName string, args []string, flags map[st
 	action, kind := classifyOp(cmdName, flags, result, ok)
 	sess.RecordOp(cmdName, file, symbol, action, kind, ok)
 
+	// Implicit training labels: if this focus resolves a pending shortlist pick,
+	// record the (query, candidates, chosen) tuple.
+	if (cmdName == "focus" || cmdName == "read") && ok && file != "" && symbol != "" {
+		edrDir := ""
+		if sess != nil {
+			// Get edrDir from the session's repo root
+			root := sess.RepoRoot()
+			if root != "" {
+				edrDir = index.HomeEdrDir(root)
+			}
+		}
+		if edrDir != "" {
+			session.MatchPick(edrDir, sess.RepoRoot(), file, symbol)
+		}
+	} else {
+		// Non-focus commands clear the pending shortlist
+		session.ClearPendingShortlist()
+	}
+
 	if !ok {
 		return
 	}
