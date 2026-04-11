@@ -25,7 +25,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 # Must match Go constants
-NUM_FEATURES = 26
+NUM_FEATURES = 34
 DIM = 16
 NUM_HEADS = 2
 HEAD_DIM = DIM // NUM_HEADS
@@ -81,7 +81,9 @@ FEATURE_NAMES = [
     "is_definition", "log_span",
     "depth", "is_include", "is_core", "is_peripheral", "is_tools",
     "is_test", "is_vendor", "is_doc", "is_sample", "is_scripts",
-    "ext_c", "ext_go", "ext_rust", "ext_py_ts", "ext_other",
+    "ext_c", "ext_go", "ext_rust", "ext_py_ts",
+    "ext_majority_ratio", "span_rank", "file_symbol_count",
+    "name_has_underscore", "name_all_lower", "name_starts_upper", "name_is_short",
 ]
 
 CORE_DIRS = {"kernel", "core", "init", "mm", "fs", "net", "block", "ipc",
@@ -162,10 +164,45 @@ def extract_features(query: str, candidate: dict) -> list[float]:
         f[24] = 1.0
     elif ext in PY_TS_EXTS:
         f[25] = 1.0
-    else:
-        pass  # ext_other would be f[26] but we only have 26 features (0-25)
+
+    # Cross-candidate features (26-28) are set by extract_all_features below
+    # f[26] = ext_majority_ratio (set later)
+    # f[27] = span_rank (set later)
+
+    # File symbol count (28) — not available in training data, leave 0
+
+    # Name character features
+    f[29] = float("_" in name)
+    f[30] = float(name == name.lower())
+    f[31] = float(len(name) > 0 and name[0].isupper())
+    f[32] = float(len(name) <= 3)
+    # f[33] unused (padding to 34)
 
     return f
+
+
+def extract_all_features(query: str, candidates: list[dict]) -> list[list[float]]:
+    """Extract features for all candidates, including cross-candidate features."""
+    import os
+    feats = [extract_features(query, c) for c in candidates]
+    n = len(candidates)
+    if n < 2:
+        return feats
+
+    # Extension majority ratio
+    exts = [os.path.splitext(c.get("file", ""))[1].lower() for c in candidates]
+    from collections import Counter
+    ext_counts = Counter(exts)
+    for i, ext in enumerate(exts):
+        feats[i][26] = ext_counts[ext] / n
+
+    # Span rank
+    spans = [max(c.get("end_line", 0) - c.get("start_line", 0) + 1, 1) for c in candidates]
+    for i in range(n):
+        smaller = sum(1 for s in spans if s < spans[i])
+        feats[i][27] = smaller / (n - 1)
+
+    return feats
 
 
 # --- Dataset ---
@@ -191,7 +228,7 @@ class RankingDataset(Dataset):
         label = ex["label"]
 
         features = torch.tensor(
-            [extract_features(query, c) for c in candidates],
+            extract_all_features(query, candidates),
             dtype=torch.float32,
         )
         n = len(candidates)

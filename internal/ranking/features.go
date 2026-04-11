@@ -38,17 +38,26 @@ const (
 	FExtGo    // .go
 	FExtRust  // .rs
 	FExtPyTS // .py, .ts, .js
-	// = 26 features = NumFeatures
-	// Note: "other extension" is implicit when all ext features are 0.
+	// Cross-candidate features (set by ExtractAll, not ExtractFeatures)
+	FExtMajorityRatio // fraction of candidates sharing this extension
+	FSpanRank         // this candidate's span rank among all (0=smallest, 1=largest)
+	FFileSymbolCount  // log2(symbols in file + 1) / 10, proxy for file importance
+	// Name character features
+	FNameHasUnderscore // name contains underscore (C/Python convention)
+	FNameAllLower      // name is all lowercase
+	FNameStartsUpper   // name starts with uppercase (Go/Rust/Java convention)
+	FNameIsShort       // len(name) <= 3
+	// = 34 features = NumFeatures
 )
 
 // CandidateFeatures holds the raw info needed to extract features.
 type CandidateFeatures struct {
-	Name      string
-	Type      string // "function", "method", "struct", etc.
-	File      string // relative path from repo root
-	StartLine uint32
-	EndLine   uint32
+	Name            string
+	Type            string // "function", "method", "struct", etc.
+	File            string // relative path from repo root
+	StartLine       uint32
+	EndLine         uint32
+	FileSymbolCount int // total symbols in the same file (0 if unknown)
 }
 
 // ExtractFeatures computes the feature vector for a single candidate
@@ -179,17 +188,82 @@ func ExtractFeatures(query string, c CandidateFeatures) [NumFeatures]float32 {
 		f[FExtPyTS] = 1
 	}
 
+	// File symbol count (proxy for file importance)
+	if c.FileSymbolCount > 0 {
+		f[FFileSymbolCount] = clamp(float32(math.Log2(float64(c.FileSymbolCount+1)))/10.0, 0, 1)
+	}
+
+	// Name character features
+	if strings.Contains(c.Name, "_") {
+		f[FNameHasUnderscore] = 1
+	}
+	allLower := true
+	for _, r := range c.Name {
+		if r >= 'A' && r <= 'Z' {
+			allLower = false
+			break
+		}
+	}
+	if allLower {
+		f[FNameAllLower] = 1
+	}
+	if len(c.Name) > 0 && c.Name[0] >= 'A' && c.Name[0] <= 'Z' {
+		f[FNameStartsUpper] = 1
+	}
+	if len(c.Name) <= 3 {
+		f[FNameIsShort] = 1
+	}
+
 	return f
 }
 
 // ExtractAll builds the flat feature matrix for a batch of candidates.
-// Returns [n * NumFeatures]float32.
+// Returns [n * NumFeatures]float32. Computes cross-candidate features
+// (extension majority ratio, span rank) that require seeing all candidates.
 func ExtractAll(query string, candidates []CandidateFeatures) []float32 {
-	out := make([]float32, len(candidates)*NumFeatures)
+	n := len(candidates)
+	out := make([]float32, n*NumFeatures)
+
+	// Per-candidate features first
 	for i, c := range candidates {
 		f := ExtractFeatures(query, c)
 		copy(out[i*NumFeatures:], f[:])
 	}
+
+	if n < 2 {
+		return out
+	}
+
+	// Cross-candidate: extension majority ratio
+	extCount := map[string]int{}
+	for _, c := range candidates {
+		ext := strings.ToLower(filepath.Ext(c.File))
+		extCount[ext]++
+	}
+	for i, c := range candidates {
+		ext := strings.ToLower(filepath.Ext(c.File))
+		out[i*NumFeatures+FExtMajorityRatio] = float32(extCount[ext]) / float32(n)
+	}
+
+	// Cross-candidate: span rank (0=smallest, 1=largest)
+	spans := make([]int, n)
+	for i, c := range candidates {
+		spans[i] = int(c.EndLine) - int(c.StartLine) + 1
+		if spans[i] < 1 {
+			spans[i] = 1
+		}
+	}
+	// Count how many candidates have smaller span
+	for i := range candidates {
+		smaller := 0
+		for j := range candidates {
+			if spans[j] < spans[i] {
+				smaller++
+			}
+		}
+		out[i*NumFeatures+FSpanRank] = float32(smaller) / float32(n-1)
+	}
+
 	return out
 }
 

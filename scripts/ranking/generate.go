@@ -167,16 +167,23 @@ func main() {
 			deduped = sampled
 		}
 
+		// Count symbols per file for the FileSymbolCount feature
+		fileSymCount := map[string]int{}
+		for _, s := range deduped {
+			fileSymCount[s.File]++
+		}
+
 		// Build candidate features
 		candidates := make([]ranking.CandidateFeatures, len(deduped))
 		for i, s := range deduped {
 			rel, _ := filepath.Rel(absRoot, s.File)
 			candidates[i] = ranking.CandidateFeatures{
-				Name:      s.Name,
-				Type:      s.Type,
-				File:      rel,
-				StartLine: s.StartLine,
-				EndLine:   s.EndLine,
+				Name:            s.Name,
+				Type:            s.Type,
+				File:            rel,
+				StartLine:       s.StartLine,
+				EndLine:         s.EndLine,
+				FileSymbolCount: fileSymCount[s.File],
 			}
 		}
 
