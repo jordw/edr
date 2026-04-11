@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"path/filepath"
+
 	"github.com/jordw/edr/internal/edit"
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
@@ -634,24 +636,69 @@ func fileMtime(path string) string {
 
 // findCallersWithFallback tries semantic callers first, falls back to text-based refs.
 func findCallersWithFallback(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo) []index.SymbolInfo {
-	// For large repos, use trigram-narrowed search instead of full parse.
-	// parseCandidateFiles uses the trigram index to find files containing
-	// the symbol name, then only parses those files.
+	root := db.Root()
+	edrDir := db.EdrDir()
+	rel, _ := filepath.Rel(root, sym.File)
+
+	// Same-file callers (always fast, always accurate)
+	callers, _ := db.FindSameFileCallers(ctx, sym.Name, sym.File)
+
+	// Cross-file callers: use import graph when available.
+	// Only files that import the target's file (or its header) can be real callers.
+	graph := idx.ReadImportGraph(edrDir)
+	if graph != nil {
+		importerFiles := graph.Importers(rel)
+		// Also check importers of the corresponding header (for C/C++)
+		ext := strings.ToLower(filepath.Ext(rel))
+		if ext == ".h" || ext == ".hpp" {
+			// Header file: importers are direct
+		} else if ext == ".c" || ext == ".cc" || ext == ".cpp" || ext == ".cxx" {
+			// Source file: also check who imports the header
+			base := rel[:len(rel)-len(ext)]
+			for _, hext := range []string{".h", ".hpp"} {
+				importerFiles = append(importerFiles, graph.Importers(base+hext)...)
+			}
+		}
+
+		nameBytes := []byte(sym.Name)
+		seen := make(map[string]bool)
+		for _, importerRel := range importerFiles {
+			abs := filepath.Join(root, importerRel)
+			if abs == sym.File {
+				continue
+			}
+			src, err := os.ReadFile(abs)
+			if err != nil || !bytes.Contains(src, nameBytes) {
+				continue
+			}
+			fileSyms, _ := db.GetSymbolsByFile(ctx, abs)
+			for _, s := range fileSyms {
+				if s.Name == sym.Name {
+					continue
+				}
+				key := s.File + ":" + s.Name
+				if seen[key] || int(s.EndByte) > len(src) {
+					continue
+				}
+				if bytes.Contains(src[s.StartByte:s.EndByte], nameBytes) {
+					seen[key] = true
+					callers = append(callers, s)
+				}
+			}
+		}
+		return callers
+	}
+
+	// Fallback: trigram-based text search (no import graph)
 	files := 0
-	if h, err := idx.ReadHeader(db.EdrDir()); err == nil {
+	if h, err := idx.ReadHeader(edrDir); err == nil {
 		files = int(h.NumFiles)
 	} else {
 		files, _, _ = db.Stats(ctx)
 	}
 	if files > 1000 {
-		// Same-file callers first (fast)
-		callers, _ := db.FindSameFileCallers(ctx, sym.Name, sym.File)
-		// Cross-file callers: find files containing the symbol name
-		// via trigram-narrowed search, get all symbols from those files,
-		// then check which symbols' bodies reference it.
+		// Large repo without import graph: trigram-narrowed text search
 		nameMatches, _ := db.FilteredSymbols(ctx, "", "", sym.Name)
-		// Collect unique cross-file paths from name-matching results.
-		// parseCandidateFiles already narrowed to files containing the text.
 		crossFiles := make(map[string]bool)
 		for _, s := range nameMatches {
 			if s.File != sym.File {
@@ -683,30 +730,10 @@ func findCallersWithFallback(ctx context.Context, db index.SymbolStore, sym *ind
 		return callers
 	}
 
-	callers, err := db.FindSemanticCallers(ctx, sym.Name, sym.File)
-	if err == nil && len(callers) > 0 {
-		return callers
-	}
-	refs, _ := index.FindReferencesInFile(ctx, db, sym.Name, sym.File)
-	allSyms, _ := db.AllSymbols(ctx)
-	symMap := make(map[string][]index.SymbolInfo)
-	for _, s := range allSyms {
-		symMap[s.File] = append(symMap[s.File], s)
-	}
-	seen := make(map[string]bool)
-	for _, ref := range refs {
-		if ref.File == sym.File && ref.StartLine >= sym.StartLine && ref.EndLine <= sym.EndLine {
-			continue
-		}
-		for _, s := range symMap[ref.File] {
-			if ref.StartLine >= s.StartLine && ref.EndLine <= s.EndLine {
-				key := s.File + ":" + s.Name
-				if !seen[key] {
-					seen[key] = true
-					callers = append(callers, s)
-				}
-			}
-		}
+	// Small repo: full parse
+	semCallers, err := db.FindSemanticCallers(ctx, sym.Name, sym.File)
+	if err == nil && len(semCallers) > 0 {
+		return append(callers, semCallers...)
 	}
 	return callers
 }
