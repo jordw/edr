@@ -16,3 +16,12 @@
 {"repo":"rails","task":"find_ambiguous_names","steps":["focus new","focus create","focus find","focus save","focus destroy","focus run"]}
 {"repo":"edr","task":"find_dispatch_flow","steps":["focus Dispatch","focus runReadUnified","focus runSmartEdit","focus rankCandidates"]}
 {"repo":"edr","task":"navigate_index","steps":["focus RepoMap","focus parseCandidateFiles","focus RegexParse","focus SymbolStore"]}
+{"repo":"spring-framework","task":"find_core_types","steps":["focus ApplicationContext","focus BeanFactory","focus spring-beans/src/main/java/org/springframework/beans/factory/BeanFactory.java:BeanFactory","focus DispatcherServlet"]}
+{"repo":"spring-framework","task":"trace_request","steps":["focus DispatcherServlet","focus spring-webmvc/src/main/java/org/springframework/web/servlet/DispatcherServlet.java:DispatcherServlet --skeleton","focus doDispatch","focus getHandler"]}
+{"repo":"spring-framework","task":"find_ambiguous_names","steps":["focus init","focus create","focus configure","focus process","focus resolve","focus handle"]}
+{"repo":"tokio","task":"find_runtime_core","steps":["focus Runtime","focus tokio/src/runtime/runtime.rs:Runtime","focus spawn","focus tokio/src/runtime/handle.rs:spawn","focus Builder"]}
+{"repo":"tokio","task":"trace_task_lifecycle","steps":["focus spawn","focus poll","focus JoinHandle","focus wake"]}
+{"repo":"tokio","task":"find_ambiguous_names","steps":["focus new","focus poll","focus handle","focus read","focus write","focus run"]}
+{"repo":"react","task":"find_fiber_core","steps":["focus Fiber","focus packages/react-reconciler/src/ReactInternalTypes.js:Fiber","focus reconcileChildren","focus createElement"]}
+{"repo":"react","task":"trace_hooks","steps":["focus useState","focus packages/react/src/ReactHooks.js:useState","focus useEffect","focus useReducer"]}
+{"repo":"react","task":"find_ambiguous_names","steps":["focus render","focus create","focus update","focus dispatch","focus resolve","focus Component"]}
