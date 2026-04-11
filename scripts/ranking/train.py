@@ -341,12 +341,34 @@ def train(args):
     with open(args.input) as f:
         for line in f:
             line = line.strip()
-            if line:
+            if not line:
+                continue
+            try:
                 examples.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
 
     print(f"Loaded {len(examples)} examples")
 
-    dataset = RankingDataset(examples, max_candidates=args.max_candidates)
+    # Train/eval split: hold out entire repos for generalization measurement
+    if args.eval_repos:
+        eval_repos = set(args.eval_repos.split(","))
+        train_examples = [ex for ex in examples if ex.get("repo", "") not in eval_repos]
+        eval_examples = [ex for ex in examples if ex.get("repo", "") in eval_repos]
+        print(f"  Train: {len(train_examples)} examples ({len(examples) - len(eval_examples)} repos)")
+        print(f"  Eval:  {len(eval_examples)} examples (held-out repos: {', '.join(sorted(eval_repos))})")
+    else:
+        # Random 80/20 split as fallback
+        import random
+        random.seed(42)
+        random.shuffle(examples)
+        split = int(len(examples) * 0.8)
+        train_examples = examples[:split]
+        eval_examples = examples[split:]
+        print(f"  Train: {len(train_examples)} examples (80%)")
+        print(f"  Eval:  {len(eval_examples)} examples (20%)")
+
+    dataset = RankingDataset(train_examples, max_candidates=args.max_candidates)
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
                         collate_fn=collate_fn)
 
@@ -388,6 +410,27 @@ def train(args):
         avg_loss = total_loss / max(len(loader), 1)
         print(f"Epoch {epoch+1}/{args.epochs}: loss={avg_loss:.4f} acc={acc:.3f}")
 
+    # Eval on held-out data
+    if eval_examples:
+        model.eval()
+        eval_dataset = RankingDataset(eval_examples, max_candidates=args.max_candidates)
+        eval_loader = DataLoader(eval_dataset, batch_size=args.batch_size,
+                                 shuffle=False, collate_fn=collate_fn)
+        eval_correct = 0
+        eval_total = 0
+        with torch.no_grad():
+            for features, labels, lengths in eval_loader:
+                padding_mask = torch.arange(args.max_candidates).unsqueeze(0) >= lengths.unsqueeze(1)
+                scores = model(features, key_padding_mask=padding_mask)
+                scores = scores.masked_fill(padding_mask, float("-inf"))
+                preds = scores.argmax(dim=1)
+                eval_correct += (preds == labels).sum().item()
+                eval_total += len(labels)
+        eval_acc = eval_correct / max(eval_total, 1)
+        print(f"\nEval accuracy: {eval_acc:.3f} ({eval_correct}/{eval_total})")
+        print(f"Train accuracy: {acc:.3f}")
+        print(f"Gap: {acc - eval_acc:.3f}")
+
     # Export
     model.eval()
     export_weights(model, args.output)
@@ -403,4 +446,6 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--max-candidates", type=int, default=50)
+    parser.add_argument("--eval-repos", default=None,
+                        help="Comma-separated repo names to hold out for eval (e.g. 'kubernetes,react')")
     train(parser.parse_args())
