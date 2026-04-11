@@ -1,17 +1,17 @@
 {"repo":"linux","task":"find_scheduler_tick","steps":["focus sched_tick","focus kernel/sched/core.c:sched_tick","focus kernel/sched/core.c:sched_tick --expand deps","focus kernel/sched/sched.h:rq","focus task_struct"]}
 {"repo":"linux","task":"trace_timer_to_scheduler","steps":["focus update_process_times","orient kernel/time/ --grep tick --budget 40","focus kernel/time/timer.c:run_local_timers","focus sched_tick"]}
-{"repo":"linux","task":"find_ambiguous_names","steps":["focus init","focus lib/interval_tree.c:init","focus open","focus drivers/tty/synclink_gt.c:open","focus probe","focus drivers/media/dvb-frontends/mxl5xx.c:probe","focus config","focus rq"]}
+{"repo":"linux","task":"find_ambiguous_names","steps":["focus init","focus drivers/net/ethernet/freescale/fman/fman_dtsec.c:init","focus open","focus drivers/tty/synclink_gt.c:open","focus probe","focus drivers/media/dvb-frontends/mxl5xx.c:probe","focus config","focus rq"]}
 {"repo":"linux","task":"navigate_scheduler_structs","steps":["focus rq","focus kernel/sched/sched.h:rq","focus sched_class","focus kernel/sched/sched.h:sched_class","focus task_struct","focus include/linux/sched.h:task_struct --skeleton"]}
 {"repo":"vscode","task":"find_text_model","steps":["focus ITextModel","focus src/vs/editor/common/model.ts:ITextModel --sig","focus TextModel","focus IEditorContribution"]}
-{"repo":"vscode","task":"trace_command_execution","steps":["focus CommandsRegistry","focus registerCommand","focus executeCommand"]}
+{"repo":"vscode","task":"trace_command_execution","steps":["focus ICommandRegistry","focus src/vs/platform/commands/common/commands.ts:ICommandRegistry","focus registerCommand","focus executeCommand"]}
 {"repo":"vscode","task":"find_ambiguous_names","steps":["focus open","focus dispose","focus create","focus render","focus initialize"]}
 {"repo":"kubernetes","task":"find_pod_lifecycle","steps":["focus Pod","focus PodSpec","focus PodStatus","focus Container"]}
 {"repo":"kubernetes","task":"navigate_api_types","steps":["focus Deployment","focus ReplicaSet","focus Service","focus Ingress"]}
 {"repo":"kubernetes","task":"find_ambiguous_names","steps":["focus run","focus get","focus create","focus delete","focus watch","focus list"]}
-{"repo":"pytorch","task":"find_tensor_core","steps":["focus Tensor","focus TensorImpl","focus Storage","focus Allocator"]}
-{"repo":"pytorch","task":"trace_autograd","steps":["focus backward","focus autograd","focus Variable","focus grad"]}
+{"repo":"pytorch","task":"find_tensor_core","steps":["focus Tensor","focus torch/_inductor/lowering.py:tensor","focus Storage","focus torch/types.py:Storage"]}
+{"repo":"pytorch","task":"trace_autograd","steps":["focus backward","focus grad","focus torch/autograd/__init__.py:grad","focus Variable"]}
 {"repo":"pytorch","task":"find_ambiguous_names","steps":["focus forward","focus init","focus reset","focus clone","focus apply"]}
-{"repo":"rails","task":"find_activerecord_core","steps":["focus Base","focus ActiveRecord","focus Relation","focus ConnectionAdapter"]}
+{"repo":"rails","task":"find_activerecord_core","steps":["focus Base","focus AbstractAdapter","focus activerecord/lib/active_record/connection_adapters/abstract_adapter.rb:AbstractAdapter","focus Relation"]}
 {"repo":"rails","task":"trace_request","steps":["focus process","focus dispatch","focus call","focus render"]}
 {"repo":"rails","task":"find_ambiguous_names","steps":["focus new","focus create","focus find","focus save","focus destroy","focus run"]}
 {"repo":"edr","task":"find_dispatch_flow","steps":["focus Dispatch","focus runReadUnified","focus runSmartEdit","focus rankCandidates"]}
