@@ -25,7 +25,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 # Must match Go constants
-NUM_FEATURES = 40
+NUM_FEATURES = 30
 DIM = 16
 NUM_HEADS = 2
 HEAD_DIM = DIM // NUM_HEADS
@@ -75,37 +75,27 @@ class TransformerLayer(nn.Module):
 
 # --- Feature extraction (must match Go's ExtractFeatures) ---
 
+# Feature names must match Go feature constants in features.go.
+# No hard-coded directory names — all relative or structural.
 FEATURE_NAMES = [
     "case_exact", "case_match", "is_prefix", "is_suffix", "name_len_ratio",
     "type_func", "type_method", "type_struct", "type_iface", "type_other",
     "is_definition", "log_span",
-    "depth", "is_include", "is_core", "is_peripheral", "is_tools",
-    "is_test", "is_vendor", "is_doc", "is_sample", "is_scripts",
-    "ext_c", "ext_go", "ext_rust", "ext_py_ts",
-    "ext_majority_ratio", "span_rank", "file_symbol_count",
+    "depth", "depth_rank", "dir_popularity", "is_test_path", "name_in_path",
+    "ext_majority_ratio",
+    "span_rank", "max_span_ratio",
+    "file_symbol_count",
     "name_has_underscore", "name_all_lower", "name_starts_upper", "name_is_short",
-    "candidate_count", "peripheral_ratio", "core_ratio",
-    "query_len", "span_std_dev", "max_span_ratio",
+    "candidate_count", "query_len", "span_std_dev", "depth_std_dev", "ext_diversity",
 ]
 
-CORE_DIRS = {"kernel", "core", "init", "mm", "fs", "net", "block", "ipc",
-             "security", "internal", "pkg", "cmd", "src", "lib"}
-PERIPHERAL_DIRS = {"drivers", "plugins", "extensions", "addons", "contrib",
-                   "adapters", "connectors", "integrations"}
-TOOLS_DIRS = {"tools", "tool", "util", "utils", "hack", "misc"}
-VENDOR_DIRS = {"vendor", "node_modules", "third_party"}
-DOC_DIRS = {"docs", "doc", "documentation", "Documentation"}
-SAMPLE_DIRS = {"examples", "example", "samples", "sample", "demo", "demos"}
-SCRIPT_DIRS = {"scripts", "script", "build", "ci", "deploy"}
-
-C_EXTS = {".c", ".h", ".cc", ".cpp", ".hpp", ".cxx"}
-PY_TS_EXTS = {".py", ".ts", ".js", ".tsx", ".jsx"}
+TEST_PATTERNS = ["test/", "tests/", "testing/", "spec/", "__tests__/", "_test.", "test_"]
 
 DEFINITION_TYPES = {"struct", "class", "interface", "type", "trait", "enum"}
 
 
 def extract_features(query: str, candidate: dict) -> list[float]:
-    """Extract feature vector matching Go's ExtractFeatures."""
+    """Extract per-candidate features matching Go's ExtractFeatures."""
     f = [0.0] * NUM_FEATURES
     name = candidate.get("name", "")
     sym_type = candidate.get("type", "")
@@ -116,116 +106,113 @@ def extract_features(query: str, candidate: dict) -> list[float]:
     ql = query.lower()
     nl = name.lower()
 
-    # Name match
+    # Name match (0-4)
     f[0] = float(name == query)
     f[1] = float(nl == ql)
     f[2] = float(nl.startswith(ql))
     f[3] = float(nl.endswith(ql))
     f[4] = min(len(query) / max(len(name), 1), 1.0)
 
-    # Type one-hot
+    # Type one-hot (5-9)
     type_map = {"function": 5, "method": 6, "struct": 7, "class": 7,
                 "interface": 8, "trait": 8}
     idx = type_map.get(sym_type, 9)
     f[idx] = 1.0
 
-    # Definition
+    # Definition (10)
     f[10] = float(sym_type in DEFINITION_TYPES)
 
-    # Span
+    # Span (11)
     span = max(end - start + 1, 1)
     f[11] = min(math.log2(span) / 10.0, 1.0)
 
-    # Path
-    import os
+    # Depth (12)
     parts = file.replace("\\", "/").split("/")
-    f[12] = min(len(parts) - 1, 8) / 8.0  # depth
-    top = parts[0] if parts else ""
+    f[12] = min(len(parts) - 1, 8) / 8.0
 
-    f[13] = float(top == "include")
-    f[14] = float(top in CORE_DIRS)
-    f[15] = float(top in PERIPHERAL_DIRS)
-    f[16] = float(top in TOOLS_DIRS)
+    # depth_rank (13) — set by extract_all_features
+    # dir_popularity (14) — set by extract_all_features
 
+    # Test path (15) — structural, not dir-name based
     fl = file.lower()
-    f[17] = float(any(s in fl for s in ["test/", "tests/", "testing/", "spec/",
-                                         "__tests__/", "_test.", "test_"]))
-    f[18] = float(top in VENDOR_DIRS)
-    f[19] = float(top in DOC_DIRS)
-    f[20] = float(top in SAMPLE_DIRS)
-    f[21] = float(top in SCRIPT_DIRS)
+    f[15] = float(any(p in fl for p in TEST_PATTERNS))
 
-    # Extension
-    _, ext = os.path.splitext(file)
-    ext = ext.lower()
-    if ext in C_EXTS:
-        f[22] = 1.0
-    elif ext == ".go":
-        f[23] = 1.0
-    elif ext == ".rs":
-        f[24] = 1.0
-    elif ext in PY_TS_EXTS:
-        f[25] = 1.0
+    # Name in path (16)
+    if ql and ql in fl:
+        f[16] = 1.0
 
-    # Cross-candidate features (26-28) are set by extract_all_features below
-    # f[26] = ext_majority_ratio (set later)
-    # f[27] = span_rank (set later)
+    # ext_majority_ratio (17) — set by extract_all_features
+    # span_rank (18) — set by extract_all_features
+    # max_span_ratio (19) — set by extract_all_features
 
-    # File symbol count (28) — not available in training data, leave 0
+    # File symbol count (20) — not available in training data, leave 0
 
-    # Name character features
-    f[29] = float("_" in name)
-    f[30] = float(name == name.lower())
-    f[31] = float(len(name) > 0 and name[0].isupper())
-    f[32] = float(len(name) <= 3)
-    # f[33] unused (padding to 34)
+    # Name character features (21-24)
+    f[21] = float("_" in name)
+    f[22] = float(name == name.lower())
+    f[23] = float(len(name) > 0 and name[0].isupper())
+    f[24] = float(len(name) <= 3)
+
+    # Global context (25-29) — set by extract_all_features
 
     return f
 
 
 def extract_all_features(query: str, candidates: list[dict]) -> list[list[float]]:
     """Extract features for all candidates, including cross-candidate features."""
-    import os
+    import os, math as _math
+    from collections import Counter
+
     feats = [extract_features(query, c) for c in candidates]
     n = len(candidates)
     if n < 2:
         return feats
 
-    # Extension majority ratio
+    # Extension majority ratio (17)
     exts = [os.path.splitext(c.get("file", ""))[1].lower() for c in candidates]
-    from collections import Counter
     ext_counts = Counter(exts)
     for i, ext in enumerate(exts):
-        feats[i][26] = ext_counts[ext] / n
+        feats[i][17] = ext_counts[ext] / n
 
-    # Span rank + max span ratio
+    # Span rank (18) + max span ratio (19)
     spans = [max(c.get("end_line", 0) - c.get("start_line", 0) + 1, 1) for c in candidates]
     max_span = max(spans) if spans else 1
     for i in range(n):
         smaller = sum(1 for s in spans if s < spans[i])
-        feats[i][27] = smaller / (n - 1)
-        feats[i][39] = spans[i] / max_span  # max_span_ratio
+        feats[i][18] = smaller / (n - 1)
+        feats[i][19] = spans[i] / max_span
 
-    # Global context features
-    import math as _math
+    # Depth rank (13)
+    depths = [c.get("file", "").replace("\\", "/").count("/") for c in candidates]
+    for i in range(n):
+        shallower = sum(1 for d in depths if d < depths[i])
+        feats[i][13] = shallower / (n - 1)
+
+    # Dir popularity (14)
+    dirs = [c.get("file", "").replace("\\", "/").split("/")[0] for c in candidates]
+    dir_counts = Counter(dirs)
+    for i, d in enumerate(dirs):
+        feats[i][14] = dir_counts[d] / n
+
+    # Global context (25-29)
     cand_count = min(_math.log2(n) / 6.0, 1.0)
-    periph_count = sum(1 for f in feats if f[15] > 0)  # FIsPeripheral
-    core_count = sum(1 for f in feats if f[14] > 0)     # FIsCore
-    periph_ratio = periph_count / n
-    core_ratio = core_count / n
     query_len = min(len(query) / 20.0, 1.0)
 
     log_spans = [_math.log2(s) for s in spans]
     mean_ls = sum(log_spans) / n
-    var_ls = sum((ls - mean_ls) ** 2 for ls in log_spans) / n
-    span_std = min(_math.sqrt(var_ls) / 3.0, 1.0)
+    span_std = min(_math.sqrt(sum((ls - mean_ls) ** 2 for ls in log_spans) / n) / 3.0, 1.0)
+
+    mean_d = sum(depths) / n
+    depth_std = min(_math.sqrt(sum((d - mean_d) ** 2 for d in depths) / n) / 3.0, 1.0)
+
+    ext_diversity = min(len(ext_counts) / 5.0, 1.0)
 
     for i in range(n):
-        feats[i][34] = cand_count
-        feats[i][35] = periph_ratio
-        feats[i][36] = core_ratio
-        feats[i][37] = query_len
-        feats[i][38] = span_std
+        feats[i][25] = cand_count
+        feats[i][26] = query_len
+        feats[i][27] = span_std
+        feats[i][28] = depth_std
+        feats[i][29] = ext_diversity
 
     return feats
 

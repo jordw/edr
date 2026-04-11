@@ -11,7 +11,7 @@ import "math"
 
 // Model dimensions.
 const (
-	NumFeatures = 40 // input feature vector size
+	NumFeatures = 30 // input feature vector size
 	Dim         = 16 // embedding dimension
 	NumHeads    = 2  // attention heads
 	HeadDim     = Dim / NumHeads

@@ -4,57 +4,64 @@ import (
 	"math"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 // Feature indices into the flat feature vector.
+// Design principle: no hard-coded directory names. All features are
+// relative (how this candidate compares to others) or structural
+// (properties of the candidate itself). This ensures generalization
+// across repos with different layouts.
 const (
+	// --- Name match features (query-relative) ---
 	FCaseExact    = iota // 1 if name == query (case-sensitive)
 	FCaseMatch           // 1 if case-insensitive match
-	FIsPrefix            // 1 if query is prefix of name (case-insensitive)
+	FIsPrefix            // 1 if query is prefix of name
 	FIsSuffix            // 1 if query is suffix of name
 	FNameLenRatio        // len(query) / len(name), clamped to [0,1]
-	// Symbol type (one-hot)
+
+	// --- Symbol type (one-hot) ---
 	FTypeFunc
 	FTypeMethod
 	FTypeStruct
 	FTypeIface
 	FTypeOther
-	// Symbol properties
-	FIsDefinition // struct/class/interface/type
-	FLogSpan      // log2(span+1) / 10, clamped to [0,1]
-	// Path features
-	FDepth       // path separator count / 8, clamped to [0,1]
-	FIsInclude   // starts with include/
-	FIsCore      // core infrastructure directory
-	FIsPeripheral
-	FIsTools
-	FIsTest
-	FIsVendor
-	FIsDoc
-	FIsSample
-	FIsScripts
-	// File extension (one-hot)
-	FExtC     // .c or .h
-	FExtGo    // .go
-	FExtRust  // .rs
-	FExtPyTS // .py, .ts, .js
-	// Cross-candidate features (set by ExtractAll, not ExtractFeatures)
-	FExtMajorityRatio // fraction of candidates sharing this extension
-	FSpanRank         // this candidate's span rank among all (0=smallest, 1=largest)
-	FFileSymbolCount  // log2(symbols in file + 1) / 10, proxy for file importance
-	// Name character features
-	FNameHasUnderscore // name contains underscore (C/Python convention)
-	FNameAllLower      // name is all lowercase
-	FNameStartsUpper   // name starts with uppercase (Go/Rust/Java convention)
+
+	// --- Symbol properties ---
+	FIsDefinition // struct/class/interface/type/enum
+	FLogSpan      // log2(span+1) / 10
+
+	// --- Path features (relative, not category-based) ---
+	FDepth          // absolute depth / 8
+	FDepthRank      // depth rank among candidates (0=shallowest, 1=deepest) [cross-cand]
+	FDirPopularity  // fraction of candidates in the same top-level dir [cross-cand]
+	FIsTestPath     // contains test/tests/testing/spec/_test (structural, not dir name)
+	FNameInPath     // 1 if query appears in the file path (e.g. "open" in open.c)
+
+	// --- Extension features (relative) ---
+	FExtMajorityRatio // fraction of candidates sharing this extension [cross-cand]
+
+	// --- Span features (relative) ---
+	FSpanRank     // span rank among candidates (0=smallest, 1=largest) [cross-cand]
+	FMaxSpanRatio // this span / max span [cross-cand]
+
+	// --- File importance ---
+	FFileSymbolCount // log2(symbols in file + 1) / 10
+
+	// --- Name character features ---
+	FNameHasUnderscore // C/Python convention
+	FNameAllLower      // all lowercase
+	FNameStartsUpper   // Go/Rust/Java convention
 	FNameIsShort       // len(name) <= 3
-	// Global context features (set by ExtractAll)
-	FCandidateCount   // log2(total candidates) / 6, clamped
-	FPeripheralRatio  // fraction of candidates from peripheral paths
-	FCoreRatio        // fraction of candidates from core paths
-	FQueryLen         // len(query) / 20, clamped to [0,1]
-	FSpanStdDev       // std dev of log-spans / 3, how varied the candidates are
-	FMaxSpanRatio     // this candidate's span / max span among all candidates
-	// = 40 features = NumFeatures
+
+	// --- Global context (same for all candidates) ---
+	FCandidateCount // log2(total candidates) / 6
+	FQueryLen       // len(query) / 20
+	FSpanStdDev     // std dev of log-spans / 3, how varied candidates are
+	FDepthStdDev    // std dev of depths / 3, how spread out in the tree
+	FExtDiversity   // number of distinct extensions / 5 (language mix)
+
+	// = 30 features = NumFeatures
 )
 
 // CandidateFeatures holds the raw info needed to extract features.
@@ -67,14 +74,14 @@ type CandidateFeatures struct {
 	FileSymbolCount int // total symbols in the same file (0 if unknown)
 }
 
-// ExtractFeatures computes the feature vector for a single candidate
-// relative to a query. Returns a [NumFeatures]float32 slice.
+// ExtractFeatures computes per-candidate features (not cross-candidate).
+// Cross-candidate features are filled in by ExtractAll.
 func ExtractFeatures(query string, c CandidateFeatures) [NumFeatures]float32 {
 	var f [NumFeatures]float32
 	queryLower := strings.ToLower(query)
 	nameLower := strings.ToLower(c.Name)
 
-	// Name match features
+	// Name match
 	if c.Name == query {
 		f[FCaseExact] = 1
 	}
@@ -122,80 +129,22 @@ func ExtractFeatures(query string, c CandidateFeatures) [NumFeatures]float32 {
 	}
 	f[FLogSpan] = clamp(float32(math.Log2(float64(span)))/10.0, 0, 1)
 
-	// Path features
+	// Depth (absolute)
 	rel := c.File
 	depth := strings.Count(rel, string(filepath.Separator))
 	f[FDepth] = clamp(float32(depth)/8.0, 0, 1)
 
-	if strings.HasPrefix(rel, "include/") || strings.HasPrefix(rel, "include\\") {
-		f[FIsInclude] = 1
-	}
-
-	topDir := strings.SplitN(rel, string(filepath.Separator), 2)[0]
-
-	// Core infrastructure
-	switch topDir {
-	case "kernel", "core", "init", "mm", "fs", "net", "block", "ipc", "security",
-		"internal", "pkg", "cmd", "src", "lib":
-		f[FIsCore] = 1
-	}
-
-	// Peripheral
-	switch topDir {
-	case "drivers", "plugins", "extensions", "addons", "contrib",
-		"adapters", "connectors", "integrations":
-		f[FIsPeripheral] = 1
-	}
-
-	// Tools
-	switch topDir {
-	case "tools", "tool", "util", "utils", "hack", "misc":
-		f[FIsTools] = 1
-	}
-
-	// Test
+	// Test path detection (structural: look for patterns, not dir names)
 	if isTestFile(rel) {
-		f[FIsTest] = 1
+		f[FIsTestPath] = 1
 	}
 
-	// Vendor
-	switch topDir {
-	case "vendor", "node_modules", "third_party":
-		f[FIsVendor] = 1
+	// Name in path: query appears in the file path
+	if queryLower != "" && strings.Contains(strings.ToLower(rel), queryLower) {
+		f[FNameInPath] = 1
 	}
 
-	// Doc
-	switch topDir {
-	case "docs", "doc", "documentation", "Documentation":
-		f[FIsDoc] = 1
-	}
-
-	// Sample
-	switch topDir {
-	case "examples", "example", "samples", "sample", "demo", "demos":
-		f[FIsSample] = 1
-	}
-
-	// Scripts/build
-	switch topDir {
-	case "scripts", "script", "build", "ci", "deploy":
-		f[FIsScripts] = 1
-	}
-
-	// File extension (one-hot)
-	ext := strings.ToLower(filepath.Ext(rel))
-	switch ext {
-	case ".c", ".h", ".cc", ".cpp", ".hpp", ".cxx":
-		f[FExtC] = 1
-	case ".go":
-		f[FExtGo] = 1
-	case ".rs":
-		f[FExtRust] = 1
-	case ".py", ".ts", ".js", ".tsx", ".jsx":
-		f[FExtPyTS] = 1
-	}
-
-	// File symbol count (proxy for file importance)
+	// File symbol count
 	if c.FileSymbolCount > 0 {
 		f[FFileSymbolCount] = clamp(float32(math.Log2(float64(c.FileSymbolCount+1)))/10.0, 0, 1)
 	}
@@ -214,7 +163,7 @@ func ExtractFeatures(query string, c CandidateFeatures) [NumFeatures]float32 {
 	if allLower {
 		f[FNameAllLower] = 1
 	}
-	if len(c.Name) > 0 && c.Name[0] >= 'A' && c.Name[0] <= 'Z' {
+	if len(c.Name) > 0 && unicode.IsUpper(rune(c.Name[0])) {
 		f[FNameStartsUpper] = 1
 	}
 	if len(c.Name) <= 3 {
@@ -225,8 +174,7 @@ func ExtractFeatures(query string, c CandidateFeatures) [NumFeatures]float32 {
 }
 
 // ExtractAll builds the flat feature matrix for a batch of candidates.
-// Returns [n * NumFeatures]float32. Computes cross-candidate features
-// (extension majority ratio, span rank) that require seeing all candidates.
+// Computes cross-candidate features that require seeing all candidates.
 func ExtractAll(query string, candidates []CandidateFeatures) []float32 {
 	n := len(candidates)
 	out := make([]float32, n*NumFeatures)
@@ -241,7 +189,7 @@ func ExtractAll(query string, candidates []CandidateFeatures) []float32 {
 		return out
 	}
 
-	// Cross-candidate: extension majority ratio
+	// --- Cross-candidate: extension majority ratio ---
 	extCount := map[string]int{}
 	for _, c := range candidates {
 		ext := strings.ToLower(filepath.Ext(c.File))
@@ -252,7 +200,7 @@ func ExtractAll(query string, candidates []CandidateFeatures) []float32 {
 		out[i*NumFeatures+FExtMajorityRatio] = float32(extCount[ext]) / float32(n)
 	}
 
-	// Cross-candidate: span rank (0=smallest, 1=largest)
+	// --- Cross-candidate: span rank + max span ratio ---
 	spans := make([]int, n)
 	for i, c := range candidates {
 		spans[i] = int(c.EndLine) - int(c.StartLine) + 1
@@ -260,7 +208,6 @@ func ExtractAll(query string, candidates []CandidateFeatures) []float32 {
 			spans[i] = 1
 		}
 	}
-	// Count how many candidates have smaller span + max span ratio
 	maxSpan := 0
 	for _, s := range spans {
 		if s > maxSpan {
@@ -280,20 +227,34 @@ func ExtractAll(query string, candidates []CandidateFeatures) []float32 {
 		}
 	}
 
-	// Global context: candidate count, peripheral/core ratios, query len
-	candCount := clamp(float32(math.Log2(float64(n)))/6.0, 0, 1)
-	peripheralCount := 0
-	coreCount := 0
-	for i := range candidates {
-		if out[i*NumFeatures+FIsPeripheral] > 0 {
-			peripheralCount++
-		}
-		if out[i*NumFeatures+FIsCore] > 0 {
-			coreCount++
-		}
+	// --- Cross-candidate: depth rank ---
+	depths := make([]int, n)
+	for i, c := range candidates {
+		depths[i] = strings.Count(c.File, string(filepath.Separator))
 	}
-	periphRatio := float32(peripheralCount) / float32(n)
-	coreRatio := float32(coreCount) / float32(n)
+	for i := range candidates {
+		shallower := 0
+		for j := range candidates {
+			if depths[j] < depths[i] {
+				shallower++
+			}
+		}
+		out[i*NumFeatures+FDepthRank] = float32(shallower) / float32(n-1)
+	}
+
+	// --- Cross-candidate: dir popularity ---
+	dirCount := map[string]int{}
+	for _, c := range candidates {
+		dir := strings.SplitN(c.File, string(filepath.Separator), 2)[0]
+		dirCount[dir]++
+	}
+	for i, c := range candidates {
+		dir := strings.SplitN(c.File, string(filepath.Separator), 2)[0]
+		out[i*NumFeatures+FDirPopularity] = float32(dirCount[dir]) / float32(n)
+	}
+
+	// --- Global context ---
+	candCount := clamp(float32(math.Log2(float64(n)))/6.0, 0, 1)
 	queryLen := clamp(float32(len(query))/20.0, 0, 1)
 
 	// Span std dev
@@ -302,19 +263,35 @@ func ExtractAll(query string, candidates []CandidateFeatures) []float32 {
 		meanLogSpan += float32(math.Log2(float64(s)))
 	}
 	meanLogSpan /= float32(n)
-	variance := float32(0)
+	spanVar := float32(0)
 	for _, s := range spans {
 		d := float32(math.Log2(float64(s))) - meanLogSpan
-		variance += d * d
+		spanVar += d * d
 	}
-	spanStdDev := clamp(float32(math.Sqrt(float64(variance/float32(n))))/3.0, 0, 1)
+	spanStdDev := clamp(float32(math.Sqrt(float64(spanVar/float32(n))))/3.0, 0, 1)
+
+	// Depth std dev
+	meanDepth := float32(0)
+	for _, d := range depths {
+		meanDepth += float32(d)
+	}
+	meanDepth /= float32(n)
+	depthVar := float32(0)
+	for _, d := range depths {
+		diff := float32(d) - meanDepth
+		depthVar += diff * diff
+	}
+	depthStdDev := clamp(float32(math.Sqrt(float64(depthVar/float32(n))))/3.0, 0, 1)
+
+	// Extension diversity
+	extDiversity := clamp(float32(len(extCount))/5.0, 0, 1)
 
 	for i := range candidates {
 		out[i*NumFeatures+FCandidateCount] = candCount
-		out[i*NumFeatures+FPeripheralRatio] = periphRatio
-		out[i*NumFeatures+FCoreRatio] = coreRatio
 		out[i*NumFeatures+FQueryLen] = queryLen
 		out[i*NumFeatures+FSpanStdDev] = spanStdDev
+		out[i*NumFeatures+FDepthStdDev] = depthStdDev
+		out[i*NumFeatures+FExtDiversity] = extDiversity
 	}
 
 	return out

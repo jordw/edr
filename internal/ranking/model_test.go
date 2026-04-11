@@ -55,9 +55,9 @@ func TestScoreVariesByInput(t *testing.T) {
 	features := make([]float32, 3*NumFeatures)
 	// Make each candidate different
 	features[0*NumFeatures+FCaseExact] = 1
-	features[0*NumFeatures+FIsCore] = 1
-	features[1*NumFeatures+FIsPeripheral] = 1
-	features[2*NumFeatures+FIsTest] = 1
+	features[0*NumFeatures+FLogSpan] = 0.8
+	features[1*NumFeatures+FIsTestPath] = 1
+	features[2*NumFeatures+FNameIsShort] = 1
 	scores := Score(w, features, 3)
 	allSame := true
 	for i := 1; i < len(scores); i++ {
@@ -105,30 +105,27 @@ func TestFeatureExtraction(t *testing.T) {
 	if f[FTypeFunc] != 1 {
 		t.Error("expected TypeFunc=1")
 	}
-	if f[FIsPeripheral] != 1 {
-		t.Error("expected IsPeripheral=1 for drivers/")
-	}
-	if f[FExtC] != 1 {
-		t.Error("expected ExtC=1 for .c file")
+	if f[FDepth] <= 0 {
+		t.Error("expected positive Depth for drivers/media/dvb/mxl5xx.c")
 	}
 	if f[FLogSpan] <= 0 {
 		t.Error("expected positive LogSpan")
 	}
 }
 
-func TestFeatureExtractionCore(t *testing.T) {
-	f := ExtractFeatures("sched_tick", CandidateFeatures{
+func TestFeatureExtractionNameInPath(t *testing.T) {
+	f := ExtractFeatures("sched", CandidateFeatures{
 		Name:      "sched_tick",
 		Type:      "function",
 		File:      "kernel/sched/core.c",
 		StartLine: 5546,
 		EndLine:   5594,
 	})
-	if f[FIsCore] != 1 {
-		t.Error("expected IsCore=1 for kernel/")
+	if f[FNameInPath] != 1 {
+		t.Error("expected NameInPath=1 for 'sched' in kernel/sched/core.c")
 	}
-	if f[FIsPeripheral] != 0 {
-		t.Error("expected IsPeripheral=0 for kernel/")
+	if f[FNameHasUnderscore] != 1 {
+		t.Error("expected NameHasUnderscore=1 for sched_tick")
 	}
 }
 
