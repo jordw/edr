@@ -135,6 +135,7 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 	if err != nil {
 		return nil, err
 	}
+	idx.InvalidateSymbolCache()
 
 	s := idx.GetStatus(root, edrDir)
 	result := map[string]any{

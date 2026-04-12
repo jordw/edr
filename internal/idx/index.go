@@ -600,13 +600,20 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 		if err != nil {
 			continue
 		}
-		// Reuse old data if mtime matches — skip reading the file entirely.
+		// Reuse old data if mtime matches — skip trigram/symbol extraction.
+		// Still read file to extract per-symbol identifiers for the ref graph.
 		if od, ok := oldByPath[rel]; ok && od.entry.Mtime == info.ModTime().UnixNano() && len(od.tris) > 0 {
-			reused = append(reused, fileResult{
+			fr := fileResult{
 				entry: FileEntry{Path: rel, Mtime: info.ModTime().UnixNano(), Size: info.Size()},
 				tris:  od.tris,
 				syms:  od.syms,
-			})
+			}
+			if len(od.syms) > 0 {
+				if data, err := os.ReadFile(p); err == nil {
+					fr.symIdents = extractSymIdents(data, od.syms)
+				}
+			}
+			reused = append(reused, fr)
 			// Carry forward import edges for this unchanged file.
 			if oldGraph != nil {
 				if id, ok := oldGraph.fileIdx[rel]; ok {
@@ -679,7 +686,7 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 	// Start with reused results, append newly indexed ones.
 	results := make([]collected, 0, len(reused)+len(needIndex))
 	for _, r := range reused {
-		results = append(results, collected{entry: r.entry, tris: r.tris, syms: r.syms})
+		results = append(results, collected{entry: r.entry, tris: r.tris, syms: r.syms, symIdents: r.symIdents})
 	}
 	for r := range resultCh {
 		results = append(results, collected{entry: r.entry, tris: r.tris, syms: r.syms, raws: r.raws, symIdents: r.symIdents})
