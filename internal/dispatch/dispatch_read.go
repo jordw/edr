@@ -873,14 +873,12 @@ func symbolsToSignatures(ctx context.Context, syms []index.SymbolInfo) []related
 	var items []relatedSym
 	for _, s := range syms {
 		sig := index.ExtractSignatureCtx(ctx, s)
-		if sig != "" {
-			items = append(items, relatedSym{
-				File:      output.Rel(s.File),
-				Name:      s.Name,
-				Type:      s.Type,
-				Signature: sig,
-			})
-		}
+		items = append(items, relatedSym{
+			File:      output.Rel(s.File),
+			Name:      s.Name,
+			Type:      s.Type,
+			Signature: sig,
+		})
 	}
 	return items
 }

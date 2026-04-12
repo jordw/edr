@@ -434,6 +434,7 @@ func rebuildSmart(root, edrDir string, walkFn func(root string, fn func(path str
 	}
 
 	atomicWrite(filepath.Join(edrDir, MainFile), d.Marshal())
+	InvalidateSymbolCache()
 	if !timedOut {
 		ClearDirty(edrDir)
 	}

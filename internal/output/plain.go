@@ -264,8 +264,11 @@ func plainRead(w *os.File, op Op) {
 		for _, item := range slice {
 			file, _ := item["file"].(string)
 			sig, _ := item["signature"].(string)
+			name, _ := item["name"].(string)
 			if sig != "" {
 				fmt.Fprintf(w, "%s  %s\n", file, sig)
+			} else if name != "" {
+				fmt.Fprintf(w, "%s  %s\n", file, name)
 			}
 		}
 	}
