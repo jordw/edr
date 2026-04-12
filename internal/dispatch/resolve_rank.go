@@ -102,7 +102,7 @@ func heuristicRank(candidates []index.SymbolInfo, query, root string) []rankedCa
 
 		// 3. Name match quality.
 		if tier == tierExact && s.Name == query {
-			score += 8 // case-exact
+			score += 15 // case-exact (Pod vs pod)
 		}
 		if tier == tierPartial {
 			if strings.HasPrefix(nameLower, queryLower) {
@@ -112,20 +112,31 @@ func heuristicRank(candidates []index.SymbolInfo, query, root string) []rankedCa
 			}
 		}
 
-		// 4. Test/vendor penalty — these are never canonical.
+		// 4. Shape boost — match query casing to symbol type.
+		score += shapeBoost(s.Type, inferShape(query))
+
+		// 5. Test/vendor penalty — these are never canonical.
 		if isTestPath(rel) {
 			score -= 20
 		}
 		if isVendorPath(rel) {
-			score -= 20
+			score -= 50
 		}
 
-		// 5. Definition type boost.
+		// 6. Path signals — core infra up, peripheral down.
+		if isCoreInfraPath(rel) {
+			score += 5
+		}
+		if isPeripheralPath(rel) {
+			score -= 8
+		}
+
+		// 7. Definition type boost.
 		if isDefinitionType(s.Type) {
 			score += 3
 		}
 
-		// 6. Shallow depth tiebreaker — when import counts don't differentiate.
+		// 8. Shallow depth tiebreaker — when import counts don't differentiate.
 		depth := strings.Count(rel, string(filepath.Separator))
 		if depth <= 1 {
 			score += 4

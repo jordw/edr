@@ -346,7 +346,7 @@ func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo,
 	var candidates []SymbolInfo
 	for _, cf := range all {
 		for _, s := range cf.symbols {
-			if s.Name == name {
+			if strings.EqualFold(s.Name, name) {
 				candidates = append(candidates, s)
 			}
 		}

@@ -46,6 +46,12 @@ func resolveSymbolArgs(ctx context.Context, db index.SymbolStore, root string, a
 		// Try exact symbol resolution
 		sym, err := db.ResolveSymbol(ctx, query)
 		if err != nil {
+			// If the original query found ambiguous candidates, return them
+			// with the original query name (preserves case for ranking).
+			var origAmb *index.AmbiguousSymbolError
+			if errors.As(err, &origAmb) {
+				return nil, err
+			}
 			// Try case-normalized form: TaskStruct → task_struct, taskStruct → task_struct
 			if normalized := normalizeSymbolName(query); normalized != query {
 				sym2, err2 := db.ResolveSymbol(ctx, normalized)
@@ -53,9 +59,10 @@ func resolveSymbolArgs(ctx context.Context, db index.SymbolStore, root string, a
 					return sym2, nil
 				}
 				// If normalized form found candidates (even ambiguous), use that error
-				// so the ranking code can handle it
+				// but preserve the original query name for ranking
 				var ambErr *index.AmbiguousSymbolError
 				if errors.As(err2, &ambErr) {
+					ambErr.Name = query
 					return nil, err2
 				}
 			}
