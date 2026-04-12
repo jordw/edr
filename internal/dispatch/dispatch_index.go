@@ -69,143 +69,71 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 		}
 		return entries
 	}
-	// Collect imports from every file via the onFile hook.
-	// This fires for all files including reused ones (no second walk needed).
-	var importMu sync.Mutex
-	var rawImports [][2]string
-	type rawImp struct {
-		importerRel string
-		raw         string
-		ext         string
-	}
-	var collectedImports []rawImp
-	// Cache importer source content for symbol narrowing
-	importerContent := make(map[string][]byte) // rel path → first 8KB
-	var contentMu sync.Mutex
 
-	onFile := func(path string) {
-		ext := strings.ToLower(filepath.Ext(path))
-		// Skip extensions we don't have import patterns for
+	importExtractor := func(relPath string, data []byte) []string {
+		ext := strings.ToLower(filepath.Ext(relPath))
 		if !hasImportPatterns(ext) {
-			return
+			return nil
 		}
-		// Read only first 8KB — imports are at the top of the file
-		f, err := os.Open(path)
-		if err != nil {
-			return
+		imports := extractImportsForFile(data, ext)
+		if len(imports) == 0 {
+			return nil
 		}
-		data := make([]byte, 8192)
-		n, _ := f.Read(data)
-		f.Close()
-		if n == 0 {
-			return
+		raws := make([]string, len(imports))
+		for i, imp := range imports {
+			raws[i] = imp.Raw
 		}
-		data = data[:n]
-		imports := index.ExtractImports(data, ext)
-		if len(imports) > 0 {
-			rel, err := filepath.Rel(root, path)
-			if err != nil {
-				return
-			}
-			importMu.Lock()
-			for _, imp := range imports {
-				collectedImports = append(collectedImports, rawImp{rel, imp.Raw, ext})
-			}
-			importMu.Unlock()
-			// Cache content for symbol narrowing (package-level imports)
-			if needsSymbolNarrowing(ext) {
-				contentMu.Lock()
-				importerContent[rel] = data
-				contentMu.Unlock()
-			}
-		}
+		return raws
 	}
 
-	err := idx.BuildFullFromWalkWithHook(root, edrDir, index.WalkRepoFiles, nil, onFile, symbolExtractor)
+	importResolver := func(allFiles []string, imports []idx.ImportRecord, allSymbols []idx.SymbolEntry, symFiles []idx.FileEntry) [][2]string {
+		suffixIdx := index.BuildSuffixIndex(allFiles)
+		// Build symbol names per file for narrowing.
+		symsByFile := make(map[string][]string)
+		for _, s := range allSymbols {
+			if int(s.FileID) < len(symFiles) {
+				rel := symFiles[s.FileID].Path
+				symsByFile[rel] = append(symsByFile[rel], s.Name)
+			}
+		}
+
+		var edges [][2]string
+		for _, imp := range imports {
+			for _, raw := range imp.Raws {
+				resolved := index.ResolveImport(suffixIdx, raw, imp.ImporterRel, imp.Ext)
+				if !needsSymbolNarrowing(imp.Ext) || len(resolved) <= 1 {
+					for _, target := range resolved {
+						edges = append(edges, [2]string{imp.ImporterRel, target})
+					}
+					continue
+				}
+				if imp.Idents == nil {
+					for _, target := range resolved {
+						edges = append(edges, [2]string{imp.ImporterRel, target})
+					}
+					continue
+				}
+				matched := false
+				for _, target := range resolved {
+					for _, sym := range symsByFile[target] {
+						if imp.Idents[sym] {
+							edges = append(edges, [2]string{imp.ImporterRel, target})
+							matched = true
+							break
+						}
+					}
+				}
+				if !matched && len(resolved) > 0 {
+					edges = append(edges, [2]string{imp.ImporterRel, resolved[0]})
+				}
+			}
+		}
+		return edges
+	}
+
+	err := idx.BuildFullFromWalkWithImports(root, edrDir, index.WalkRepoFiles, nil, symbolExtractor, importExtractor, importResolver)
 	if err != nil {
 		return nil, err
-	}
-	// Resolve imports and build graph
-	if len(collectedImports) > 0 {
-		indexed := idx.IndexedPaths(edrDir)
-		var allFiles []string
-		for rel := range indexed {
-			allFiles = append(allFiles, rel)
-		}
-		sort.Strings(allFiles)
-		suffixIdx := index.BuildSuffixIndex(allFiles)
-		// Load symbols per file for narrowing package-level imports.
-		// For Go/Java/Python, only create edges to files whose symbols
-		// are actually referenced in the importer's source.
-		allSyms, symFiles := idx.LoadAllSymbols(edrDir)
-		symsByFile := make(map[string][]string) // rel path → symbol names
-		if allSyms != nil {
-			for _, s := range allSyms {
-				if int(s.FileID) < len(symFiles) {
-					rel := symFiles[s.FileID].Path
-					symsByFile[rel] = append(symsByFile[rel], s.Name)
-				}
-			}
-		}
-
-		// Pre-build identifier sets for importers that need symbol narrowing.
-		// This avoids repeated strings.Contains over 8KB source for every symbol.
-		identSets := make(map[string]map[string]bool) // rel → set of identifiers
-		for rel, src := range importerContent {
-			set := make(map[string]bool, 64)
-			// Extract word-like tokens: sequences of [a-zA-Z0-9_]
-			word := make([]byte, 0, 64)
-			for _, b := range src {
-				if (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' {
-					word = append(word, b)
-				} else {
-					if len(word) >= 2 {
-						set[string(word)] = true
-					}
-					word = word[:0]
-				}
-			}
-			if len(word) >= 2 {
-				set[string(word)] = true
-			}
-			identSets[rel] = set
-		}
-
-		for _, imp := range collectedImports {
-			resolved := index.ResolveImport(suffixIdx, imp.raw, imp.importerRel, imp.ext)
-			if !needsSymbolNarrowing(imp.ext) || len(resolved) <= 1 {
-				for _, target := range resolved {
-					rawImports = append(rawImports, [2]string{imp.importerRel, target})
-				}
-				continue
-			}
-			idents := identSets[imp.importerRel]
-			if idents == nil {
-				for _, target := range resolved {
-					rawImports = append(rawImports, [2]string{imp.importerRel, target})
-				}
-				continue
-			}
-			matched := false
-			for _, target := range resolved {
-				for _, sym := range symsByFile[target] {
-					if idents[sym] {
-						rawImports = append(rawImports, [2]string{imp.importerRel, target})
-						matched = true
-						break
-					}
-				}
-			}
-			if !matched {
-				if len(resolved) > 0 {
-					rawImports = append(rawImports, [2]string{imp.importerRel, resolved[0]})
-				}
-			}
-		}
-		if len(rawImports) > 0 {
-			graph := idx.BuildImportGraph(allFiles, rawImports)
-			idx.WriteImportGraph(edrDir, graph)
-		}
 	}
 
 	s := idx.GetStatus(root, edrDir)
@@ -222,6 +150,12 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 		graph := idx.ReadImportGraph(edrDir)
 		if graph != nil {
 			result["import_edges"] = len(graph.Edges)
+		}
+	}
+	if idx.HasRefGraph(edrDir) {
+		rg := idx.ReadRefGraph(edrDir)
+		if rg != nil {
+			result["ref_edges"] = len(rg.Edges)
 		}
 	}
 	return result, nil

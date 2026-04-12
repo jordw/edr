@@ -444,20 +444,57 @@ type SymbolExtractFn func(path string, data []byte) []SymbolEntry
 
 // ImportExtractFn extracts raw import strings from file content.
 // Called from worker goroutines — must be safe for concurrent use.
-// Returns raw import paths and an optional identifier set for symbol narrowing.
-type ImportExtractFn func(relPath string, data []byte) (raws []string, idents map[string]bool)
+type ImportExtractFn func(relPath string, data []byte) []string
 
 // ImportRecord holds raw imports extracted from a single file.
+// Idents is populated by the walk from per-symbol identifier extraction.
 type ImportRecord struct {
 	ImporterRel string
 	Ext         string
 	Raws        []string
-	Idents      map[string]bool
+	Idents      map[string]bool // file-level identifier set (union of symbol idents)
 }
 
 // ImportResolveFn resolves raw imports into (importer, imported) edge pairs.
 // Called once after the walk completes with the full file list and symbol table.
 type ImportResolveFn func(allFiles []string, imports []ImportRecord, allSymbols []SymbolEntry, symFiles []FileEntry) [][2]string
+
+// extractSymIdents tokenizes each symbol body into a set of identifiers.
+// Returns a slice parallel to syms — idents[i] contains tokens from syms[i].
+func extractSymIdents(data []byte, syms []SymbolEntry) [][]string {
+	idents := make([][]string, len(syms))
+	for i, s := range syms {
+		if int(s.EndByte) > len(data) || s.StartByte >= s.EndByte {
+			continue
+		}
+		idents[i] = tokenizeIdents(data[s.StartByte:s.EndByte])
+	}
+	return idents
+}
+
+// tokenizeIdents extracts unique identifier tokens (word-like sequences >= 2 chars).
+func tokenizeIdents(body []byte) []string {
+	seen := make(map[string]struct{}, 32)
+	word := make([]byte, 0, 64)
+	for _, b := range body {
+		if (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' {
+			word = append(word, b)
+		} else {
+			if len(word) >= 2 {
+				seen[string(word)] = struct{}{}
+			}
+			word = word[:0]
+		}
+	}
+	if len(word) >= 2 {
+		seen[string(word)] = struct{}{}
+	}
+	result := make([]string, 0, len(seen))
+	for s := range seen {
+		result = append(result, s)
+	}
+	return result
+}
 
 // BuildFullFromWalk builds a complete index by walking the repo. No time limit.
 func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(path string) error) error, progress func(int, int), extractSymbols ...SymbolExtractFn) error {
@@ -488,8 +525,8 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 		entry  FileEntry
 		tris   []Trigram
 		syms   []SymbolEntry
-		raws   []string        // raw import strings (nil if no import extraction)
-		idents map[string]bool // identifier set for symbol narrowing
+		raws      []string   // raw import strings (nil if no import extraction)
+		symIdents [][]string  // identifier tokens per symbol (parallel to syms)
 	}
 	workers := runtime.NumCPU()
 	if workers < 8 {
@@ -608,7 +645,10 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 					fr.syms = extractSymbols(pi.abs, data)
 				}
 				if extractImports != nil {
-					fr.raws, fr.idents = extractImports(pi.rel, data)
+					fr.raws = extractImports(pi.rel, data)
+				}
+				if len(fr.syms) > 0 {
+					fr.symIdents = extractSymIdents(data, fr.syms)
 				}
 				resultCh <- fr
 				if progress != nil {
@@ -630,11 +670,11 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 	}()
 
 	type collected struct {
-		entry  FileEntry
-		tris   []Trigram
-		syms   []SymbolEntry
-		raws   []string
-		idents map[string]bool
+		entry     FileEntry
+		tris      []Trigram
+		syms      []SymbolEntry
+		raws      []string
+		symIdents [][]string // per-symbol identifier tokens (parallel to syms)
 	}
 	// Start with reused results, append newly indexed ones.
 	results := make([]collected, 0, len(reused)+len(needIndex))
@@ -642,7 +682,7 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 		results = append(results, collected{entry: r.entry, tris: r.tris, syms: r.syms})
 	}
 	for r := range resultCh {
-		results = append(results, collected{entry: r.entry, tris: r.tris, syms: r.syms, raws: r.raws, idents: r.idents})
+		results = append(results, collected{entry: r.entry, tris: r.tris, syms: r.syms, raws: r.raws, symIdents: r.symIdents})
 	}
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].entry.Path < results[j].entry.Path
@@ -695,22 +735,36 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 		return fmt.Errorf("writing index: %w", err)
 	}
 
-	// Build and write import graph atomically with the trigram index.
+	// --- Post-walk phase: resolve imports and references from collected data ---
+
+	allRelPaths := make([]string, len(files))
+	for i := range files {
+		allRelPaths[i] = files[i].Path
+	}
+
+	// Build and write import graph.
 	if extractImports != nil && resolveImports != nil {
 		var importRecords []ImportRecord
 		for _, r := range results {
-			if len(r.raws) > 0 {
-				importRecords = append(importRecords, ImportRecord{
-					ImporterRel: r.entry.Path,
-					Ext:         strings.ToLower(filepath.Ext(r.entry.Path)),
-					Raws:        r.raws,
-					Idents:      r.idents,
-				})
+			if len(r.raws) == 0 {
+				continue
 			}
-		}
-		allRelPaths := make([]string, len(files))
-		for i := range files {
-			allRelPaths[i] = files[i].Path
+			// Compute file-level identifier set from per-symbol idents.
+			var fileIdents map[string]bool
+			if len(r.symIdents) > 0 {
+				fileIdents = make(map[string]bool, 64)
+				for _, si := range r.symIdents {
+					for _, id := range si {
+						fileIdents[id] = true
+					}
+				}
+			}
+			importRecords = append(importRecords, ImportRecord{
+				ImporterRel: r.entry.Path,
+				Ext:         strings.ToLower(filepath.Ext(r.entry.Path)),
+				Raws:        r.raws,
+				Idents:      fileIdents,
+			})
 		}
 		var resolvedEdges [][2]string
 		if len(importRecords) > 0 {
@@ -720,6 +774,38 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 		if len(allEdges) > 0 {
 			graph := BuildImportGraph(allRelPaths, allEdges)
 			WriteImportGraph(edrDir, graph)
+		}
+	}
+
+	// Build and write symbol reference graph.
+	if len(allSymbols) > 0 {
+		// Build global symbol name set for intersection.
+		nameToIDs := make(map[string][]uint32, len(allSymbols))
+		for i, s := range allSymbols {
+			nameToIDs[s.Name] = append(nameToIDs[s.Name], uint32(i))
+		}
+		// Iterate over per-symbol idents and emit reference edges.
+		var refs []RefEdge
+		symIdx := 0
+		for _, r := range results {
+			for j := range r.syms {
+				callerID := uint32(symIdx)
+				symIdx++
+				if j >= len(r.symIdents) {
+					continue
+				}
+				for _, ident := range r.symIdents[j] {
+					for _, calleeID := range nameToIDs[ident] {
+						if calleeID != callerID {
+							refs = append(refs, RefEdge{Caller: callerID, Callee: calleeID})
+						}
+					}
+				}
+			}
+		}
+		if len(refs) > 0 {
+			rg := BuildRefGraph(uint32(len(allSymbols)), refs)
+			WriteRefGraph(edrDir, rg)
 		}
 	}
 
