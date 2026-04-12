@@ -79,9 +79,6 @@ func freeFunction() -> Int {
 	// Known gaps documented inline:
 	//   - subscript inside Widget: not recorded
 	//   - computed property (var area) inside Point: not recorded
-	//   - extension Widget:Drawable produces no symbol due to protocol func
-	//     consuming the protocol closing brace (pre-existing parser quirk)
-	//   - freeFunction ends up parented to Drawable (same quirk)
 	want := []struct{ typ, name string }{
 		{"class", "Widget"},
 		{"method", "init"},
@@ -94,9 +91,11 @@ func freeFunction() -> Int {
 		// var area — known gap: not recorded
 		{"class", "Direction"},
 		{"function", "label"},
-		{"class", "Drawable"},        // protocol; also absorbs extension due to parser quirk
-		{"function", "draw"},         // protocol requirement (and extension draw)
-		{"function", "freeFunction"}, // parented to Drawable due to quirk
+		{"class", "Drawable"},
+		{"function", "draw"},          // protocol requirement (bodyless — terminates at newline)
+		{"impl", "Widget"},            // extension Widget: Drawable
+		{"function", "draw"},          // extension method
+		{"function", "freeFunction"},  // top-level, parent=-1
 	}
 
 	if len(r.Symbols) != len(want) {

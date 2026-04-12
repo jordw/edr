@@ -20,6 +20,8 @@ import (
 //   - attributes ([Attribute])
 //
 // Known gaps:
+//   - Expression-bodied property getters (public int X => ...) not recorded
+//   - Event declarations (public event EventHandler X) not recorded
 //   - Anonymous types and lambdas not tracked
 //   - Field declarations not recorded as symbols
 //   - Local functions inside methods not tracked

@@ -381,6 +381,7 @@ func (p *swiftParser) skipToFuncBodyOrEnd(symIdx ...int) {
 	if len(symIdx) > 0 {
 		idx = symIdx[0]
 	}
+	pastParams := false
 	for !p.s.EOF() {
 		p.skipWSAndComments()
 		if p.s.EOF() {
@@ -394,19 +395,36 @@ func (p *swiftParser) skipToFuncBodyOrEnd(symIdx ...int) {
 			return
 		case c == '(':
 			p.s.SkipBalanced('(', ')', swiftStringScanner)
+			pastParams = true
 		case c == '<':
 			p.s.SkipAngles()
 		case c == '-' && p.s.PeekAt(1) == '>':
-			// Return type arrow — keep scanning
 			p.s.Advance(2)
 		case c == ';':
-			// Abstract / protocol func requirement
+			if idx >= 0 {
+				p.result.Symbols[idx].EndLine = p.s.Line
+			}
 			p.s.Pos++
 			p.memberStart = true
 			return
 		case c == '\n':
+			if pastParams {
+				// Bodyless declaration (protocol requirement, etc.)
+				if idx >= 0 {
+					p.result.Symbols[idx].EndLine = p.s.Line
+				}
+				p.s.Next()
+				p.memberStart = true
+				return
+			}
 			p.s.Next()
 			p.memberStart = true
+		case c == '}':
+			// Hit closing brace of enclosing scope — bodyless declaration
+			if idx >= 0 {
+				p.result.Symbols[idx].EndLine = p.s.Line
+			}
+			return
 		case lexkit.DefaultIdentStart[c]:
 			p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 		default:

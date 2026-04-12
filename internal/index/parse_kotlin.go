@@ -19,6 +19,7 @@ import (
 //   - annotations (@Name, @Name(...))
 //
 // Known gaps:
+//   - typealias declarations not recognized
 //   - Anonymous object expressions not tracked
 //   - Lambda expressions not tracked
 //   - val/var property declarations not recorded as symbols

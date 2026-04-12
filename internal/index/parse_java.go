@@ -7,7 +7,7 @@ import (
 // ParseJava is a hand-written Java symbol + import extractor.
 //
 // Handles:
-//   - class / interface / enum / record / @interface (annotation type)
+//   - class / interface / enum / record (NOT @interface — see Known gaps)
 //   - methods + constructors (with visibility, static, abstract, etc.)
 //   - import statements (single and static)
 //   - package declaration
@@ -17,6 +17,7 @@ import (
 //   - annotations (@Name)
 //
 // Known gaps:
+//   - @interface annotation types (handleAnnotation consumes @interface)
 //   - Anonymous inner classes not tracked
 //   - Lambda expressions not tracked
 //   - Field declarations not recorded as symbols
