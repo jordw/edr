@@ -101,8 +101,8 @@ func (p *goParser) run() {
 		switch {
 		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
 			p.s.Next()
-		case lexkit.IsDefaultIdentStart(c):
-			word := p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont)
+		case lexkit.DefaultIdentStart[c]:
+			word := p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 			p.handleKeyword(word)
 		default:
 			p.s.Pos++
@@ -183,10 +183,10 @@ func (p *goParser) parseOneImport() {
 			alias = "_"
 			p.s.Pos++
 			p.s.SkipSpaces()
-		} else if lexkit.IsDefaultIdentStart(c) {
+		} else if lexkit.DefaultIdentStart[c] {
 			// Lookahead: is this an alias followed by a string, or something else?
 			save := p.s.Pos
-			id := p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont)
+			id := p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 			p.s.SkipSpaces()
 			if !p.s.EOF() && p.s.Peek() == '"' {
 				alias = string(id)
@@ -224,10 +224,10 @@ func (p *goParser) parseFunc() {
 		receiver = extractReceiverType(p.s.Src[recvStart:p.s.Pos])
 		p.s.SkipSpaces()
 	}
-	if p.s.EOF() || !lexkit.IsDefaultIdentStart(p.s.Peek()) {
+	if p.s.EOF() || !lexkit.DefaultIdentStart[p.s.Peek()] {
 		return
 	}
-	name := string(p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont))
+	name := string(p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont))
 	p.s.SkipSpaces()
 	if !p.s.EOF() && p.s.Peek() == '[' {
 		p.s.SkipBalanced('[', ']', goStringScanner)
@@ -328,10 +328,10 @@ func (p *goParser) parseType() {
 func (p *goParser) parseOneType() {
 	startLine := p.s.Line
 	p.s.SkipSpaces()
-	if p.s.EOF() || !lexkit.IsDefaultIdentStart(p.s.Peek()) {
+	if p.s.EOF() || !lexkit.DefaultIdentStart[p.s.Peek()] {
 		return
 	}
-	name := string(p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont))
+	name := string(p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont))
 	p.s.SkipSpaces()
 	if !p.s.EOF() && p.s.Peek() == '[' {
 		p.s.SkipBalanced('[', ']', goStringScanner)
@@ -344,10 +344,10 @@ func (p *goParser) parseOneType() {
 	}
 	// Detect kind by looking at the RHS: struct {, interface {, or other.
 	kind := "type"
-	if !p.s.EOF() && lexkit.IsDefaultIdentStart(p.s.Peek()) {
+	if !p.s.EOF() && lexkit.DefaultIdentStart[p.s.Peek()] {
 		save := p.s.Pos
 		saveLine := p.s.Line
-		kwd := p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont)
+		kwd := p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 		switch string(kwd) {
 		case "struct":
 			kind = "struct"
@@ -400,10 +400,10 @@ func (p *goParser) parseConstOrVar(kind string) {
 func (p *goParser) parseOneConstOrVar(kind string) {
 	startLine := p.s.Line
 	p.s.SkipSpaces()
-	if p.s.EOF() || !lexkit.IsDefaultIdentStart(p.s.Peek()) {
+	if p.s.EOF() || !lexkit.DefaultIdentStart[p.s.Peek()] {
 		return
 	}
-	name := string(p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont))
+	name := string(p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont))
 	p.skipToDeclEnd()
 	p.result.Symbols = append(p.result.Symbols, GoSymbol{
 		Type: kind, Name: name, StartLine: startLine, EndLine: p.s.Line,

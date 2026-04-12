@@ -165,7 +165,7 @@ func (p *rbParser) run() {
 				p.regexOK = true
 				p.stmtStart = false
 			}
-		case c == ':' && (lexkit.IsDefaultIdentStart(p.s.PeekAt(1)) || p.s.PeekAt(1) == '"' || p.s.PeekAt(1) == '\''):
+		case c == ':' && (lexkit.DefaultIdentStart[p.s.PeekAt(1)] || p.s.PeekAt(1) == '"' || p.s.PeekAt(1) == '\''):
 			p.s.Pos++
 			switch p.s.Peek() {
 			case '"':
@@ -173,12 +173,12 @@ func (p *rbParser) run() {
 			case '\'':
 				p.s.ScanSimpleString('\'')
 			default:
-				p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont)
+				p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 			}
 			p.regexOK = false
 			p.stmtStart = false
-		case lexkit.IsDefaultIdentStart(c):
-			word := p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont)
+		case lexkit.DefaultIdentStart[c]:
+			word := p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 			p.handleIdent(word)
 		case lexkit.IsASCIIDigit(c):
 			for !p.s.EOF() {
@@ -288,8 +288,8 @@ func (p *rbParser) parseDef() {
 	startLine := p.s.Line
 	p.s.SkipSpaces()
 	save := p.s.Pos
-	if !p.s.EOF() && lexkit.IsDefaultIdentStart(p.s.Peek()) {
-		_ = p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont)
+	if !p.s.EOF() && lexkit.DefaultIdentStart[p.s.Peek()] {
+		_ = p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 		ws := 0
 		for p.s.Pos+ws < len(p.s.Src) && (p.s.Src[p.s.Pos+ws] == ' ' || p.s.Src[p.s.Pos+ws] == '\t') {
 			ws++
@@ -320,12 +320,12 @@ func (p *rbParser) parseDef() {
 }
 
 func (p *rbParser) scanMethodName() string {
-	if p.s.EOF() || !lexkit.IsDefaultIdentStart(p.s.Peek()) {
+	if p.s.EOF() || !lexkit.DefaultIdentStart[p.s.Peek()] {
 		return ""
 	}
 	start := p.s.Pos
 	p.s.Pos++
-	for !p.s.EOF() && lexkit.IsDefaultIdentCont(p.s.Peek()) {
+	for !p.s.EOF() && lexkit.DefaultIdentCont[p.s.Peek()] {
 		p.s.Pos++
 	}
 	if !p.s.EOF() {
@@ -428,11 +428,11 @@ func (p *rbParser) tryHeredocTag() bool {
 		}
 		j++
 	}
-	if j >= len(src) || !lexkit.IsDefaultIdentStart(src[j]) {
+	if j >= len(src) || !lexkit.DefaultIdentStart[src[j]] {
 		return false
 	}
 	tagStart := j
-	for j < len(src) && lexkit.IsDefaultIdentCont(src[j]) {
+	for j < len(src) && lexkit.DefaultIdentCont[src[j]] {
 		j++
 	}
 	tag := string(src[tagStart:j])
@@ -470,10 +470,10 @@ func (p *rbParser) readHeredocBody(h rbHeredoc) {
 func (p *rbParser) scanQualifiedIdent() string {
 	start := p.s.Pos
 	for !p.s.EOF() {
-		if !lexkit.IsDefaultIdentStart(p.s.Peek()) {
+		if !lexkit.DefaultIdentStart[p.s.Peek()] {
 			break
 		}
-		for !p.s.EOF() && lexkit.IsDefaultIdentCont(p.s.Peek()) {
+		for !p.s.EOF() && lexkit.DefaultIdentCont[p.s.Peek()] {
 			p.s.Pos++
 		}
 		if p.s.Pos+1 < len(p.s.Src) && p.s.Peek() == ':' && p.s.PeekAt(1) == ':' {

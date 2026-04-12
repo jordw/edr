@@ -189,7 +189,7 @@ func (p *tsParser) run() {
 			p.regexOK = false
 			p.memberStart = false
 		case lexkit.IsDefaultIdentStart(c) || c == '$':
-			word := p.s.ScanIdent(tsIdentStart, tsIdentCont)
+			word := p.s.ScanIdentTable(&tsIdentStartTable, &tsIdentContTable)
 			p.handleIdent(word)
 		case lexkit.IsASCIIDigit(c):
 			for !p.s.EOF() {
@@ -213,13 +213,22 @@ func (p *tsParser) run() {
 	}
 }
 
-func tsIdentStart(c byte) bool {
-	return c == '_' || c == '$' || lexkit.IsASCIIAlpha(c) || c >= 0x80
+var (
+	tsIdentStartTable [256]bool
+	tsIdentContTable  [256]bool
+)
+
+func init() {
+	for i := 0; i < 256; i++ {
+		c := byte(i)
+		start := c == '_' || c == '$' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c >= 0x80
+		tsIdentStartTable[i] = start
+		tsIdentContTable[i] = start || (c >= '0' && c <= '9')
+	}
 }
 
-func tsIdentCont(c byte) bool {
-	return tsIdentStart(c) || lexkit.IsASCIIDigit(c)
-}
+func tsIdentStart(c byte) bool { return tsIdentStartTable[c] }
+func tsIdentCont(c byte) bool  { return tsIdentContTable[c] }
 
 func (p *tsParser) handleOpenBrace() {
 	p.s.Pos++
@@ -287,7 +296,7 @@ func (p *tsParser) handleIdent(word []byte) {
 			// `const enum Foo {...}` is a TS compile-time enum, not a var.
 			if string(word) == "const" && p.nextIdentIs("enum") {
 				p.skipWS()
-				p.s.ScanIdent(tsIdentStart, tsIdentCont) // consume 'enum'
+				p.s.ScanIdentTable(&tsIdentStartTable, &tsIdentContTable) // consume 'enum'
 				p.parseEnum()
 				return
 			}
@@ -351,7 +360,7 @@ func (p *tsParser) nextIdentIs(want string) bool {
 	if p.s.EOF() || !tsIdentStart(p.s.Peek()) {
 		return false
 	}
-	id := p.s.ScanIdent(tsIdentStart, tsIdentCont)
+	id := p.s.ScanIdentTable(&tsIdentStartTable, &tsIdentContTable)
 	return string(id) == want
 }
 
@@ -364,7 +373,7 @@ func (p *tsParser) looksLikeTypeAlias() bool {
 		p.s.Line = saveLine
 		return false
 	}
-	p.s.ScanIdent(tsIdentStart, tsIdentCont)
+	p.s.ScanIdentTable(&tsIdentStartTable, &tsIdentContTable)
 	p.skipWS()
 	if !p.s.EOF() && p.s.Peek() == '<' {
 		p.s.SkipAngles()
@@ -399,7 +408,7 @@ func (p *tsParser) parseFunction() {
 	}
 	var name string
 	if !p.s.EOF() && tsIdentStart(p.s.Peek()) {
-		name = string(p.s.ScanIdent(tsIdentStart, tsIdentCont))
+		name = string(p.s.ScanIdentTable(&tsIdentStartTable, &tsIdentContTable))
 	}
 	sym := -1
 	if name != "" && !p.inFunction() {
@@ -419,7 +428,7 @@ func (p *tsParser) parseClass() {
 	p.skipWS()
 	var name string
 	if !p.s.EOF() && tsIdentStart(p.s.Peek()) {
-		name = string(p.s.ScanIdent(tsIdentStart, tsIdentCont))
+		name = string(p.s.ScanIdentTable(&tsIdentStartTable, &tsIdentContTable))
 	}
 	sym := -1
 	if name != "" && !p.inFunction() {
@@ -439,7 +448,7 @@ func (p *tsParser) parseInterface() {
 	p.skipWS()
 	var name string
 	if !p.s.EOF() && tsIdentStart(p.s.Peek()) {
-		name = string(p.s.ScanIdent(tsIdentStart, tsIdentCont))
+		name = string(p.s.ScanIdentTable(&tsIdentStartTable, &tsIdentContTable))
 	}
 	sym := -1
 	if name != "" && !p.inFunction() {
@@ -462,7 +471,7 @@ func (p *tsParser) parseEnum() {
 	p.skipWS()
 	var name string
 	if !p.s.EOF() && tsIdentStart(p.s.Peek()) {
-		name = string(p.s.ScanIdent(tsIdentStart, tsIdentCont))
+		name = string(p.s.ScanIdentTable(&tsIdentStartTable, &tsIdentContTable))
 	}
 	sym := -1
 	if name != "" && !p.inFunction() {
@@ -485,7 +494,7 @@ func (p *tsParser) parseNamespace() {
 	p.skipWS()
 	var name string
 	if !p.s.EOF() && tsIdentStart(p.s.Peek()) {
-		name = string(p.s.ScanIdent(tsIdentStart, tsIdentCont))
+		name = string(p.s.ScanIdentTable(&tsIdentStartTable, &tsIdentContTable))
 	}
 	sym := -1
 	if name != "" && !p.inFunction() {
@@ -505,7 +514,7 @@ func (p *tsParser) parseTypeAlias() {
 	p.skipWS()
 	var name string
 	if !p.s.EOF() && tsIdentStart(p.s.Peek()) {
-		name = string(p.s.ScanIdent(tsIdentStart, tsIdentCont))
+		name = string(p.s.ScanIdentTable(&tsIdentStartTable, &tsIdentContTable))
 	}
 	if name != "" && !p.inFunction() {
 		parent := p.stack.NearestSym()
@@ -521,7 +530,7 @@ func (p *tsParser) parseVarDecl(kind string) {
 	startLine := p.s.Line
 	p.skipWS()
 	if !p.s.EOF() && tsIdentStart(p.s.Peek()) {
-		name := string(p.s.ScanIdent(tsIdentStart, tsIdentCont))
+		name := string(p.s.ScanIdentTable(&tsIdentStartTable, &tsIdentContTable))
 		if !p.inFunction() {
 			parent := p.stack.NearestSym()
 			p.result.Symbols = append(p.result.Symbols, TSSymbol{

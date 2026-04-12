@@ -234,6 +234,44 @@ func hasImportPatterns(ext string) bool {
 	return false
 }
 
+// extractImportsForFile uses hand-written parsers for languages that have
+// them, falling back to regex-based ExtractImports for the rest. Returns
+// []ImportEntry for compatibility with ResolveImport.
+func extractImportsForFile(data []byte, ext string) []index.ImportEntry {
+	switch ext {
+	case ".rb":
+		r := index.ParseRuby(data)
+		out := make([]index.ImportEntry, len(r.Imports))
+		for i, imp := range r.Imports {
+			out[i] = index.ImportEntry{Raw: imp.Path}
+		}
+		return out
+	case ".ts", ".tsx", ".mts", ".cts":
+		r := index.ParseTS(data)
+		out := make([]index.ImportEntry, len(r.Imports))
+		for i, imp := range r.Imports {
+			out[i] = index.ImportEntry{Raw: imp.Path}
+		}
+		return out
+	case ".go":
+		r := index.ParseGo(data)
+		out := make([]index.ImportEntry, len(r.Imports))
+		for i, imp := range r.Imports {
+			out[i] = index.ImportEntry{Raw: imp.Path}
+		}
+		return out
+	case ".py", ".pyi":
+		r := index.ParsePython(data)
+		out := make([]index.ImportEntry, len(r.Imports))
+		for i, imp := range r.Imports {
+			out[i] = index.ImportEntry{Raw: imp.Path}
+		}
+		return out
+	default:
+		return index.ExtractImports(data, ext)
+	}
+}
+
 func extractAllImports(root string) ([][2]string, []string) {
 	// Collect all file paths
 	var allFiles []string
@@ -275,8 +313,8 @@ func extractAllImports(root string) ([][2]string, []string) {
 				if err != nil {
 					continue
 				}
-				ext := filepath.Ext(rel)
-				imports := index.ExtractImports(data, ext)
+				ext := strings.ToLower(filepath.Ext(rel))
+				imports := extractImportsForFile(data, ext)
 				if len(imports) == 0 {
 					continue
 				}

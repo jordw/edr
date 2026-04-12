@@ -86,19 +86,27 @@ func (o *OnDemand) parseFile(absPath string) (*cachedFile, error) {
 	}
 
 	var syms []SymbolInfo
+	var imports []ImportInfo
 	switch strings.ToLower(filepath.Ext(absPath)) {
 	case ".rb":
-		syms = rubyToSymbolInfo(absPath, src, ParseRuby(src))
+		r := ParseRuby(src)
+		syms = rubyToSymbolInfo(absPath, src, r)
+		imports = rubyImportsToInfo(absPath, r)
 	case ".ts", ".tsx", ".mts", ".cts":
-		syms = tsToSymbolInfo(absPath, src, ParseTS(src))
+		r := ParseTS(src)
+		syms = tsToSymbolInfo(absPath, src, r)
+		imports = tsImportsToInfo(absPath, r)
 	case ".go":
-		syms = goToSymbolInfo(absPath, src, ParseGo(src))
+		r := ParseGo(src)
+		syms = goToSymbolInfo(absPath, src, r)
+		imports = goImportsToInfo(absPath, r)
 	case ".py", ".pyi":
-		syms = pythonToSymbolInfo(absPath, src, ParsePython(src))
+		r := ParsePython(src)
+		syms = pythonToSymbolInfo(absPath, src, r)
+		imports = pyImportsToInfo(absPath, r)
 	default:
 		syms = RegexParse(absPath, src)
 	}
-	var imports []ImportInfo // populated by a separate walk (import graph)
 
 	h := sha256.Sum256(src)
 

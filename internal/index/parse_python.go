@@ -92,15 +92,15 @@ func (p *pyParser) run() {
 			p.scanPyString()
 		case c == '"':
 			p.scanPyString()
-		case lexkit.IsDefaultIdentStart(c):
-			// Check for string prefix: r"...", b'...', f"...", rb"...", etc.
-			if pyMaybeStringPrefix(c) {
-				consumed := p.tryStringPrefix()
-				if consumed {
-					continue
-				}
+		case lexkit.DefaultIdentStart[c]:
+			// In body mode, fast-skip the ident without the full scan.
+			// String prefixes (r"...", f'...', etc.) don't need special
+			// handling — when we hit the quote byte next, scanPyString
+			// skips the body regardless of escape semantics.
+			p.s.Pos++
+			for p.s.Pos < len(p.s.Src) && lexkit.DefaultIdentCont[p.s.Src[p.s.Pos]] {
+				p.s.Pos++
 			}
-			p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont)
 		case lexkit.IsASCIIDigit(c):
 			for !p.s.EOF() && (lexkit.IsASCIIDigit(p.s.Peek()) || p.s.Peek() == '.' || p.s.Peek() == '_') {
 				p.s.Pos++
@@ -109,42 +109,6 @@ func (p *pyParser) run() {
 			p.s.Pos++
 		}
 	}
-}
-
-func pyMaybeStringPrefix(c byte) bool {
-	return c == 'r' || c == 'R' || c == 'b' || c == 'B' ||
-		c == 'f' || c == 'F' || c == 'u' || c == 'U'
-}
-
-// tryStringPrefix handles prefixed string literals (r"...", f'...',
-// rb'...', etc.). If the current ident is a valid prefix followed by a
-// string quote, it consumes both the prefix and the string and returns
-// true. Otherwise it does nothing and returns false.
-func (p *pyParser) tryStringPrefix() bool {
-	save := p.s.Pos
-	saveLine := p.s.Line
-	// Consume 1-2 prefix chars.
-	c1 := p.s.Peek()
-	if !pyMaybeStringPrefix(c1) {
-		return false
-	}
-	p.s.Pos++
-	if !p.s.EOF() && pyMaybeStringPrefix(p.s.Peek()) {
-		p.s.Pos++
-	}
-	if p.s.EOF() {
-		p.s.Pos = save
-		p.s.Line = saveLine
-		return false
-	}
-	next := p.s.Peek()
-	if next != '\'' && next != '"' {
-		p.s.Pos = save
-		p.s.Line = saveLine
-		return false
-	}
-	p.scanPyString()
-	return true
 }
 
 // scanPyString handles both single-line and triple-quoted strings.
@@ -199,16 +163,16 @@ func (p *pyParser) handleLineStart() {
 		}
 		return
 	}
-	if !lexkit.IsDefaultIdentStart(c) {
+	if !lexkit.DefaultIdentStart[c] {
 		return
 	}
-	word := p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont)
+	word := p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 	switch string(word) {
 	case "def":
 		p.parseDef(indent, false)
 	case "async":
 		p.s.SkipSpaces()
-		next := p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont)
+		next := p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 		if string(next) == "def" {
 			p.parseDef(indent, true)
 		}
@@ -260,10 +224,10 @@ func (p *pyParser) parseDef(indent int, isAsync bool) {
 	_ = isAsync
 	startLine := p.s.Line
 	p.s.SkipSpaces()
-	if p.s.EOF() || !lexkit.IsDefaultIdentStart(p.s.Peek()) {
+	if p.s.EOF() || !!p.s.EOF() && lexkit.DefaultIdentStart[p.s.Peek()] {
 		return
 	}
-	name := string(p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont))
+	name := string(p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont))
 	// Match regex convention: any def with an enclosing scope (class or
 	// function) is a "method". Only top-level defs are "function".
 	kind := "function"
@@ -283,10 +247,10 @@ func (p *pyParser) parseDef(indent int, isAsync bool) {
 func (p *pyParser) parseClass(indent int) {
 	startLine := p.s.Line
 	p.s.SkipSpaces()
-	if p.s.EOF() || !lexkit.IsDefaultIdentStart(p.s.Peek()) {
+	if p.s.EOF() || !!p.s.EOF() && lexkit.DefaultIdentStart[p.s.Peek()] {
 		return
 	}
-	name := string(p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont))
+	name := string(p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont))
 	parent := -1
 	if len(p.stack) > 0 {
 		parent = p.stack[len(p.stack)-1].symIdx
@@ -334,15 +298,15 @@ func (p *pyParser) parseImport() {
 	startLine := p.s.Line
 	p.s.SkipSpaces()
 	for !p.s.EOF() {
-		if !lexkit.IsDefaultIdentStart(p.s.Peek()) {
+		if !!p.s.EOF() && lexkit.DefaultIdentStart[p.s.Peek()] {
 			break
 		}
 		start := p.s.Pos
 		for !p.s.EOF() {
-			if !lexkit.IsDefaultIdentStart(p.s.Peek()) {
+			if !!p.s.EOF() && lexkit.DefaultIdentStart[p.s.Peek()] {
 				break
 			}
-			p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont)
+			p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 			if !p.s.EOF() && p.s.Peek() == '.' {
 				p.s.Pos++
 				continue
@@ -357,10 +321,10 @@ func (p *pyParser) parseImport() {
 		// Optional "as alias"
 		if !p.s.EOF() && p.s.Peek() == 'a' {
 			save := p.s.Pos
-			asWord := p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont)
+			asWord := p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 			if string(asWord) == "as" {
 				p.s.SkipSpaces()
-				p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont)
+				p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 			} else {
 				p.s.Pos = save
 			}
@@ -386,8 +350,8 @@ func (p *pyParser) parseFromImport() {
 	for !p.s.EOF() && p.s.Peek() == '.' {
 		p.s.Pos++
 	}
-	for !p.s.EOF() && lexkit.IsDefaultIdentStart(p.s.Peek()) {
-		p.s.ScanIdent(lexkit.IsDefaultIdentStart, lexkit.IsDefaultIdentCont)
+	for !p.s.EOF() && !p.s.EOF() && lexkit.DefaultIdentStart[p.s.Peek()] {
+		p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 		if !p.s.EOF() && p.s.Peek() == '.' {
 			p.s.Pos++
 			continue

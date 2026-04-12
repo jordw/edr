@@ -118,6 +118,54 @@ func goToSymbolInfo(file string, src []byte, r GoResult) []SymbolInfo {
 	return out
 }
 
+// rubyImportsToInfo converts Ruby imports to the canonical ImportInfo slice.
+func rubyImportsToInfo(file string, r RubyResult) []ImportInfo {
+	if len(r.Imports) == 0 {
+		return nil
+	}
+	out := make([]ImportInfo, len(r.Imports))
+	for i, imp := range r.Imports {
+		out[i] = ImportInfo{File: file, ImportPath: imp.Path}
+	}
+	return out
+}
+
+// tsImportsToInfo converts TS imports to ImportInfo.
+func tsImportsToInfo(file string, r TSResult) []ImportInfo {
+	if len(r.Imports) == 0 {
+		return nil
+	}
+	out := make([]ImportInfo, len(r.Imports))
+	for i, imp := range r.Imports {
+		out[i] = ImportInfo{File: file, ImportPath: imp.Path}
+	}
+	return out
+}
+
+// goImportsToInfo converts Go imports to ImportInfo, preserving aliases.
+func goImportsToInfo(file string, r GoResult) []ImportInfo {
+	if len(r.Imports) == 0 {
+		return nil
+	}
+	out := make([]ImportInfo, len(r.Imports))
+	for i, imp := range r.Imports {
+		out[i] = ImportInfo{File: file, ImportPath: imp.Path, Alias: imp.Alias}
+	}
+	return out
+}
+
+// pyImportsToInfo converts Python imports to ImportInfo.
+func pyImportsToInfo(file string, r PyResult) []ImportInfo {
+	if len(r.Imports) == 0 {
+		return nil
+	}
+	out := make([]ImportInfo, len(r.Imports))
+	for i, imp := range r.Imports {
+		out[i] = ImportInfo{File: file, ImportPath: imp.Path}
+	}
+	return out
+}
+
 // pythonToSymbolInfo converts a PyResult into []SymbolInfo.
 func pythonToSymbolInfo(file string, src []byte, r PyResult) []SymbolInfo {
 	if len(r.Symbols) == 0 {
