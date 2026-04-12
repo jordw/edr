@@ -104,6 +104,10 @@ func (o *OnDemand) parseFile(absPath string) (*cachedFile, error) {
 		r := ParsePython(src)
 		syms = pythonToSymbolInfo(absPath, src, r)
 		imports = pyImportsToInfo(absPath, r)
+	case ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hxx", ".hh":
+		r := ParseCpp(src)
+		syms = cppToSymbolInfo(absPath, src, r)
+		imports = cppImportsToInfo(absPath, r)
 	default:
 		syms = RegexParse(absPath, src)
 	}

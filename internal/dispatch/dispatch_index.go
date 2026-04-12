@@ -267,6 +267,13 @@ func extractImportsForFile(data []byte, ext string) []index.ImportEntry {
 			out[i] = index.ImportEntry{Raw: imp.Path}
 		}
 		return out
+	case ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hxx", ".hh":
+		r := index.ParseCpp(data)
+		out := make([]index.ImportEntry, len(r.Imports))
+		for i, imp := range r.Imports {
+			out[i] = index.ImportEntry{Raw: imp.Path}
+		}
+		return out
 	default:
 		return index.ExtractImports(data, ext)
 	}
