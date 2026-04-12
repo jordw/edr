@@ -88,7 +88,13 @@ func phpStringScanner(s *lexkit.Scanner) bool {
 			return true
 		}
 	case '#':
-		s.SkipLineComment()
+		if s.PeekAt(1) == '[' {
+			// PHP 8 attribute: #[Attr(...)], skip balanced brackets
+			s.Pos++
+			s.SkipBalanced('[', ']', nil)
+		} else {
+			s.SkipLineComment()
+		}
 		return true
 	}
 	return false
@@ -161,7 +167,12 @@ func (p *phpParser) run() {
 		case c == '/' && p.s.PeekAt(1) == '/':
 			p.s.SkipLineComment()
 		case c == '#':
-			p.s.SkipLineComment()
+			if p.s.PeekAt(1) == '[' {
+				p.s.Pos++
+				p.s.SkipBalanced('[', ']', phpStringScanner)
+			} else {
+				p.s.SkipLineComment()
+			}
 		case c == '/' && p.s.PeekAt(1) == '*':
 			p.s.Advance(2)
 			p.s.SkipBlockComment("*/")
@@ -427,9 +438,6 @@ func (p *phpParser) parseFunction() {
 
 	// Determine type: method if we're inside a class, function otherwise
 	symType := "function"
-	if p.currentKind() == phpClass {
-		symType = "method"
-	}
 
 	// Skip parameter list and return type until { or ;
 	for !p.s.EOF() {

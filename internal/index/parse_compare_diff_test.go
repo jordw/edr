@@ -285,6 +285,184 @@ func TestDiff_Java(t *testing.T) {
 		len(paths), regexTotal, handTotal, totalMissing)
 }
 
+func TestDiff_CSharp(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	root := home + "/Documents/GitHub/roslyn/src"
+	if _, err := os.Stat(root); err != nil { t.Skip("no roslyn") }
+	var paths []string
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() { return nil }
+		if strings.HasSuffix(path, ".cs") && !strings.Contains(path, "/test/") && !strings.Contains(path, "/Test") {
+			paths = append(paths, path)
+		}
+		return nil
+	})
+	sort.Strings(paths)
+	if len(paths) > 60 { paths = paths[:60] }
+	var totalMissing, totalExtra, regexTotal, handTotal int
+	for _, path := range paths {
+		src, err := os.ReadFile(path)
+		if err != nil { continue }
+		rs := RegexParse(path, src)
+		hs := csharpToSymbolInfo(path, src, ParseCSharp(src))
+		regexTotal += len(rs)
+		handTotal += len(hs)
+		regexNames := map[string]int{}
+		for _, s := range rs { regexNames[s.Type+":"+s.Name]++ }
+		handNames := map[string]int{}
+		for _, s := range hs { handNames[s.Type+":"+s.Name]++ }
+		var missing []string
+		for k, n := range regexNames {
+			if handNames[k] < n {
+				missing = append(missing, fmt.Sprintf("%s (-%d)", k, n-handNames[k]))
+			}
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			t.Logf("%s regex=%d hand=%d", filepath.Base(path), len(rs), len(hs))
+			t.Logf("  MISSING: %s", strings.Join(missing, ", "))
+			totalMissing += len(missing)
+		}
+		for k, n := range handNames {
+			if regexNames[k] < n { totalExtra++ }
+		}
+	}
+	t.Logf("csharp: %d files, regex=%d hand=%d, missing=%d, extra=%d",
+		len(paths), regexTotal, handTotal, totalMissing, totalExtra)
+}
+
+func TestDiff_Kotlin(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	root := home + "/Documents/GitHub/kotlin/compiler/frontend/src"
+	if _, err := os.Stat(root); err != nil { t.Skip("no kotlin") }
+	var paths []string
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() { return nil }
+		if strings.HasSuffix(path, ".kt") { paths = append(paths, path) }
+		return nil
+	})
+	sort.Strings(paths)
+	if len(paths) > 60 { paths = paths[:60] }
+	var totalMissing, totalExtra, regexTotal, handTotal int
+	for _, path := range paths {
+		src, err := os.ReadFile(path)
+		if err != nil { continue }
+		rs := RegexParse(path, src)
+		hs := kotlinToSymbolInfo(path, src, ParseKotlin(src))
+		regexTotal += len(rs)
+		handTotal += len(hs)
+		regexNames := map[string]int{}
+		for _, s := range rs { regexNames[s.Type+":"+s.Name]++ }
+		handNames := map[string]int{}
+		for _, s := range hs { handNames[s.Type+":"+s.Name]++ }
+		var missing []string
+		for k, n := range regexNames {
+			if handNames[k] < n {
+				missing = append(missing, fmt.Sprintf("%s (-%d)", k, n-handNames[k]))
+			}
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			t.Logf("%s regex=%d hand=%d", filepath.Base(path), len(rs), len(hs))
+			t.Logf("  MISSING: %s", strings.Join(missing, ", "))
+			totalMissing += len(missing)
+		}
+		for k, n := range handNames {
+			if regexNames[k] < n { totalExtra++ }
+		}
+	}
+	t.Logf("kotlin: %d files, regex=%d hand=%d, missing=%d, extra=%d",
+		len(paths), regexTotal, handTotal, totalMissing, totalExtra)
+}
+
+func TestDiff_Swift(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	root := home + "/Documents/GitHub/vapor/Sources"
+	if _, err := os.Stat(root); err != nil { t.Skip("no vapor") }
+	var paths []string
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() { return nil }
+		if strings.HasSuffix(path, ".swift") { paths = append(paths, path) }
+		return nil
+	})
+	sort.Strings(paths)
+	if len(paths) > 60 { paths = paths[:60] }
+	var totalMissing, totalExtra, regexTotal, handTotal int
+	for _, path := range paths {
+		src, err := os.ReadFile(path)
+		if err != nil { continue }
+		rs := RegexParse(path, src)
+		hs := swiftToSymbolInfo(path, src, ParseSwift(src))
+		regexTotal += len(rs)
+		handTotal += len(hs)
+		regexNames := map[string]int{}
+		for _, s := range rs { regexNames[s.Type+":"+s.Name]++ }
+		handNames := map[string]int{}
+		for _, s := range hs { handNames[s.Type+":"+s.Name]++ }
+		var missing []string
+		for k, n := range regexNames {
+			if handNames[k] < n {
+				missing = append(missing, fmt.Sprintf("%s (-%d)", k, n-handNames[k]))
+			}
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			t.Logf("%s regex=%d hand=%d", filepath.Base(path), len(rs), len(hs))
+			t.Logf("  MISSING: %s", strings.Join(missing, ", "))
+			totalMissing += len(missing)
+		}
+		for k, n := range handNames {
+			if regexNames[k] < n { totalExtra++ }
+		}
+	}
+	t.Logf("swift: %d files, regex=%d hand=%d, missing=%d, extra=%d",
+		len(paths), regexTotal, handTotal, totalMissing, totalExtra)
+}
+
+func TestDiff_PHP(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	root := home + "/Documents/GitHub/laravel/src"
+	if _, err := os.Stat(root); err != nil { t.Skip("no laravel") }
+	var paths []string
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() { return nil }
+		if strings.HasSuffix(path, ".php") { paths = append(paths, path) }
+		return nil
+	})
+	sort.Strings(paths)
+	if len(paths) > 60 { paths = paths[:60] }
+	var totalMissing, totalExtra, regexTotal, handTotal int
+	for _, path := range paths {
+		src, err := os.ReadFile(path)
+		if err != nil { continue }
+		rs := RegexParse(path, src)
+		hs := phpToSymbolInfo(path, src, ParsePHP(src))
+		regexTotal += len(rs)
+		handTotal += len(hs)
+		regexNames := map[string]int{}
+		for _, s := range rs { regexNames[s.Type+":"+s.Name]++ }
+		handNames := map[string]int{}
+		for _, s := range hs { handNames[s.Type+":"+s.Name]++ }
+		var missing []string
+		for k, n := range regexNames {
+			if handNames[k] < n {
+				missing = append(missing, fmt.Sprintf("%s (-%d)", k, n-handNames[k]))
+			}
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			t.Logf("%s regex=%d hand=%d", filepath.Base(path), len(rs), len(hs))
+			t.Logf("  MISSING: %s", strings.Join(missing, ", "))
+			totalMissing += len(missing)
+		}
+		for k, n := range handNames {
+			if regexNames[k] < n { totalExtra++ }
+		}
+	}
+	t.Logf("php: %d files, regex=%d hand=%d, missing=%d, extra=%d",
+		len(paths), regexTotal, handTotal, totalMissing, totalExtra)
+}
+
 func TestDiff_Rust(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	root := home + "/Documents/GitHub/tokio/tokio/src"

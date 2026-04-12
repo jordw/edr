@@ -344,11 +344,7 @@ func (p *swiftParser) parseFunc() {
 		return
 	}
 	name := string(p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont))
-	symType := "function"
-	if p.currentKind() == swiftTypeDecl {
-		symType = "method"
-	}
-	sym := p.recordFunc(name, symType, startLine)
+	sym := p.recordFunc(name, "function", startLine)
 	p.skipToFuncBodyOrEnd(sym)
 }
 
