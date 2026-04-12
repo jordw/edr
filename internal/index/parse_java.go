@@ -401,7 +401,23 @@ func (p *javaParser) tryParseMethod(firstWord []byte) {
 				p.parseTypeDecl(ws)
 				return
 			case "throws":
-				// Skip throws clause until { or ;
+				// Skip exception list: throws X, Y, Z
+				for !p.s.EOF() {
+					p.skipWSAndComments()
+					cc := p.s.Peek()
+					if cc == '{' || cc == ';' {
+						break
+					}
+					if cc == ',' || cc == '.' {
+						p.s.Pos++
+						continue
+					}
+					if lexkit.DefaultIdentStart[cc] {
+						p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
+						continue
+					}
+					break
+				}
 				continue
 			case "public", "private", "protected", "static", "final",
 				"abstract", "synchronized", "native", "default",
