@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jordw/edr/internal/edit"
+	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 )
@@ -51,58 +52,39 @@ func runExpand(ctx context.Context, db index.SymbolStore, root string, args []st
 	}
 
 	if showCallers {
-		callers, err := db.FindSemanticCallers(ctx, sym.Name, sym.File)
-		if err != nil || len(callers) == 0 {
-			// Fallback to text-based
-			refs, err := index.FindReferencesInFile(ctx, db, sym.Name, sym.File)
-			if err == nil {
-				allSyms, _ := db.AllSymbols(ctx)
-				symMap := make(map[string][]index.SymbolInfo)
-				for _, s := range allSyms {
-					symMap[s.File] = append(symMap[s.File], s)
-				}
-
-				seen := make(map[string]bool)
-				for _, ref := range refs {
-					if ref.File == sym.File && ref.StartLine >= sym.StartLine && ref.EndLine <= sym.EndLine {
-						continue
-					}
-					for _, s := range symMap[ref.File] {
-						if ref.StartLine >= s.StartLine && ref.EndLine <= s.EndLine {
-							key := s.File + ":" + s.Name
-							if !seen[key] {
-								seen[key] = true
-								csym := toOutputSymbol(&s, "")
-								if showSigs {
-									csym.Signature = index.ExtractSignatureCtx(ctx, s)
-								}
-								result.Callers = append(result.Callers, csym)
-							}
-						}
-					}
-				}
+		callers := findCallersWithFallback(ctx, db, sym)
+		for _, c := range callers {
+			csym := toOutputSymbol(&c, "")
+			if showSigs {
+				csym.Signature = index.ExtractSignatureCtx(ctx, c)
 			}
-		} else {
-			for _, c := range callers {
-				csym := toOutputSymbol(&c, "")
-				if showSigs {
-					csym.Signature = index.ExtractSignatureCtx(ctx, c)
-				}
-				result.Callers = append(result.Callers, csym)
-			}
+			result.Callers = append(result.Callers, csym)
 		}
 	}
 
 	if showDeps {
-		deps, err := index.FindDeps(ctx, db, sym)
-		if err == nil {
-			for _, d := range deps {
-				dsym := toOutputSymbol(&d, "")
-				if showSigs {
-					dsym.Signature = index.ExtractSignatureCtx(ctx, d)
+		// Try ref graph first for deps.
+		var deps []index.SymbolInfo
+		edrDir := db.EdrDir()
+		if rg := idx.ReadRefGraph(edrDir); rg != nil {
+			allSyms, symFiles := idx.LoadAllSymbols(edrDir)
+			if allSyms != nil {
+				targetIDs := refGraphSymbolIDs(sym, allSyms, symFiles, root)
+				for _, tid := range targetIDs {
+					deps = append(deps, refIDsToSymbolInfo(rg.Callees(tid), allSyms, symFiles, root)...)
 				}
-				result.Deps = append(result.Deps, dsym)
 			}
+		}
+		// Fall back to text-based if ref graph didn't produce results.
+		if len(deps) == 0 {
+			deps, _ = index.FindDeps(ctx, db, sym)
+		}
+		for _, d := range deps {
+			dsym := toOutputSymbol(&d, "")
+			if showSigs {
+				dsym.Signature = index.ExtractSignatureCtx(ctx, d)
+			}
+			result.Deps = append(result.Deps, dsym)
 		}
 	}
 

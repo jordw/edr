@@ -634,12 +634,97 @@ func fileMtime(path string) string {
 }
 
 
-// findCallersWithFallback tries semantic callers first, falls back to text-based refs.
+// refGraphSymbolIDs resolves the target symbol to its ref graph ID(s).
+// A symbol may have multiple IDs if defined in multiple files.
+func refGraphSymbolIDs(sym *index.SymbolInfo, allSyms []idx.SymbolEntry, symFiles []idx.FileEntry, root string) []uint32 {
+	symRel, _ := filepath.Rel(root, sym.File)
+	var ids []uint32
+	for i, s := range allSyms {
+		if s.Name != sym.Name {
+			continue
+		}
+		if int(s.FileID) < len(symFiles) && symFiles[s.FileID].Path == symRel {
+			if s.StartLine == sym.StartLine && s.EndLine == sym.EndLine {
+				return []uint32{uint32(i)} // exact match
+			}
+			ids = append(ids, uint32(i))
+		}
+	}
+	return ids
+}
+
+// refIDsToSymbolInfo converts ref graph symbol IDs back to index.SymbolInfo.
+func refIDsToSymbolInfo(ids []uint32, allSyms []idx.SymbolEntry, symFiles []idx.FileEntry, root string) []index.SymbolInfo {
+	var result []index.SymbolInfo
+	for _, id := range ids {
+		if int(id) >= len(allSyms) {
+			continue
+		}
+		s := allSyms[id]
+		if int(s.FileID) >= len(symFiles) {
+			continue
+		}
+		result = append(result, index.SymbolInfo{
+			Name:      s.Name,
+			Type:      s.Kind.String(),
+			File:      filepath.Join(root, symFiles[s.FileID].Path),
+			StartLine: s.StartLine,
+			EndLine:   s.EndLine,
+			StartByte: s.StartByte,
+			EndByte:   s.EndByte,
+		})
+	}
+	return result
+}
+
+// findCallersWithFallback tries the ref graph first, then import graph + text search.
 func findCallersWithFallback(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo) []index.SymbolInfo {
 	root := db.Root()
 	edrDir := db.EdrDir()
 	// Same-file callers (always fast, always accurate)
 	callers, _ := db.FindSameFileCallers(ctx, sym.Name, sym.File)
+
+	// Try ref graph first — O(log E) binary search, no file reads.
+	if rg := idx.ReadRefGraph(edrDir); rg != nil {
+		allSyms, symFiles := idx.LoadAllSymbols(edrDir)
+		if allSyms != nil {
+			targetIDs := refGraphSymbolIDs(sym, allSyms, symFiles, root)
+			if len(targetIDs) > 0 {
+				seen := make(map[string]bool)
+				// Mark same-file callers already found
+				for _, c := range callers {
+					seen[c.File+":"+c.Name] = true
+				}
+				for _, tid := range targetIDs {
+					for _, callerID := range rg.Callers(tid) {
+						if int(callerID) >= len(allSyms) {
+							continue
+						}
+						cs := allSyms[callerID]
+						if int(cs.FileID) >= len(symFiles) {
+							continue
+						}
+						absFile := filepath.Join(root, symFiles[cs.FileID].Path)
+						key := absFile + ":" + cs.Name
+						if seen[key] {
+							continue
+						}
+						seen[key] = true
+						callers = append(callers, index.SymbolInfo{
+							Name:      cs.Name,
+							Type:      cs.Kind.String(),
+							File:      absFile,
+							StartLine: cs.StartLine,
+							EndLine:   cs.EndLine,
+							StartByte: cs.StartByte,
+							EndByte:   cs.EndByte,
+						})
+					}
+				}
+				return callers
+			}
+		}
+	}
 
 	// Cross-file callers: use import graph when available.
 	// Find all files that declare/define this symbol, then check their importers.
@@ -818,15 +903,26 @@ func attachExpand(ctx context.Context, db index.SymbolStore, sym *index.SymbolIn
 	}
 
 	if showDeps {
-		deps, err := index.FindDeps(ctx, db, sym)
-		if err == nil && len(deps) > 0 {
-			if len(deps) > 10 {
-				deps = deps[:10]
+		var deps []index.SymbolInfo
+		edrDir := db.EdrDir()
+		if rg := idx.ReadRefGraph(edrDir); rg != nil {
+			allSyms, symFiles := idx.LoadAllSymbols(edrDir)
+			if allSyms != nil {
+				targetIDs := refGraphSymbolIDs(sym, allSyms, symFiles, db.Root())
+				for _, tid := range targetIDs {
+					deps = append(deps, refIDsToSymbolInfo(rg.Callees(tid), allSyms, symFiles, db.Root())...)
+				}
 			}
-			if items := symbolsToSignatures(ctx, deps); len(items) > 0 {
-				result["deps"] = items
-				result["deps_method"] = "heuristic"
-			}
+		}
+		if len(deps) == 0 {
+			deps, _ = index.FindDeps(ctx, db, sym)
+		}
+		if len(deps) > 10 {
+			deps = deps[:10]
+		}
+		if items := symbolsToSignatures(ctx, deps); len(items) > 0 {
+			result["deps"] = items
+			result["deps_method"] = "ref_graph"
 		}
 	}
 
