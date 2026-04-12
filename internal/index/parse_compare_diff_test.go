@@ -238,3 +238,49 @@ func TestDiff_Cpp(t *testing.T) {
 	t.Logf("cpp: %d files, regex=%d hand=%d, missing=%d, extra=%d",
 		len(paths), regexTotal, handTotal, totalMissing, totalExtra)
 }
+
+func TestDiff_Java(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	root := home + "/Documents/GitHub/spring-framework"
+	if _, err := os.Stat(root); err != nil {
+		t.Skip("no spring-framework")
+	}
+	var paths []string
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() { return nil }
+		if strings.HasSuffix(path, ".java") && !strings.Contains(path, "/test/") {
+			paths = append(paths, path)
+		}
+		return nil
+	})
+	sort.Strings(paths)
+	if len(paths) > 40 { paths = paths[:40] }
+	var totalMissing int
+	var regexTotal, handTotal int
+	for _, path := range paths {
+		src, err := os.ReadFile(path)
+		if err != nil { continue }
+		rs := RegexParse(path, src)
+		hs := javaToSymbolInfo(path, src, ParseJava(src))
+		regexTotal += len(rs)
+		handTotal += len(hs)
+		regexNames := map[string]int{}
+		for _, s := range rs { regexNames[s.Type+":"+s.Name]++ }
+		handNames := map[string]int{}
+		for _, s := range hs { handNames[s.Type+":"+s.Name]++ }
+		var missing []string
+		for k, n := range regexNames {
+			if handNames[k] < n {
+				missing = append(missing, fmt.Sprintf("%s (-%d)", k, n-handNames[k]))
+			}
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			t.Logf("%s regex=%d hand=%d", filepath.Base(path), len(rs), len(hs))
+			t.Logf("  MISSING: %s", strings.Join(missing, ", "))
+			totalMissing += len(missing)
+		}
+	}
+	t.Logf("java: %d files, regex=%d hand=%d, total missing=%d",
+		len(paths), regexTotal, handTotal, totalMissing)
+}

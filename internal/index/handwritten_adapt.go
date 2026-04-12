@@ -189,6 +189,39 @@ func cppToSymbolInfo(file string, src []byte, r CppResult) []SymbolInfo {
 	return out
 }
 
+func javaToSymbolInfo(file string, src []byte, r JavaResult) []SymbolInfo {
+	if len(r.Symbols) == 0 {
+		return nil
+	}
+	offsets := computeLineOffsets(src)
+	srcLen := len(src)
+	out := make([]SymbolInfo, len(r.Symbols))
+	for i, s := range r.Symbols {
+		out[i] = SymbolInfo{
+			Type:        s.Type,
+			Name:        s.Name,
+			File:        file,
+			StartLine:   uint32(s.StartLine),
+			EndLine:     uint32(s.EndLine),
+			StartByte:   lineStartByte(offsets, s.StartLine),
+			EndByte:     lineEndByte(offsets, s.EndLine, srcLen),
+			ParentIndex: s.Parent,
+		}
+	}
+	return out
+}
+
+func javaImportsToInfo(file string, r JavaResult) []ImportInfo {
+	if len(r.Imports) == 0 {
+		return nil
+	}
+	out := make([]ImportInfo, len(r.Imports))
+	for i, imp := range r.Imports {
+		out[i] = ImportInfo{File: file, ImportPath: imp.Path}
+	}
+	return out
+}
+
 func cppImportsToInfo(file string, r CppResult) []ImportInfo {
 	if len(r.Imports) == 0 {
 		return nil

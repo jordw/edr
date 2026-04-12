@@ -104,6 +104,10 @@ func (o *OnDemand) parseFile(absPath string) (*cachedFile, error) {
 		r := ParsePython(src)
 		syms = pythonToSymbolInfo(absPath, src, r)
 		imports = pyImportsToInfo(absPath, r)
+	case ".java":
+		r := ParseJava(src)
+		syms = javaToSymbolInfo(absPath, src, r)
+		imports = javaImportsToInfo(absPath, r)
 	case ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hxx", ".hh":
 		r := ParseCpp(src)
 		syms = cppToSymbolInfo(absPath, src, r)
