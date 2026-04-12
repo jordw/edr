@@ -108,6 +108,10 @@ func (o *OnDemand) parseFile(absPath string) (*cachedFile, error) {
 		r := ParseJava(src)
 		syms = javaToSymbolInfo(absPath, src, r)
 		imports = javaImportsToInfo(absPath, r)
+	case ".rs":
+		r := ParseRust(src)
+		syms = rustToSymbolInfo(absPath, src, r)
+		imports = rustImportsToInfo(absPath, r)
 	case ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hxx", ".hh":
 		r := ParseCpp(src)
 		syms = cppToSymbolInfo(absPath, src, r)
