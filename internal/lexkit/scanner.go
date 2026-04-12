@@ -23,6 +23,8 @@
 //	}
 package lexkit
 
+import "bytes"
+
 // Scanner is a byte-position cursor over source code that tracks line
 // numbers automatically.
 type Scanner struct {
@@ -124,8 +126,11 @@ func (s *Scanner) SkipSpacesAndNewlines() {
 // consuming the terminating '\n'. Call this after matching the comment
 // start marker (e.g., "//" or "#").
 func (s *Scanner) SkipLineComment() {
-	for s.Pos < len(s.Src) && s.Src[s.Pos] != '\n' {
-		s.Pos++
+	rest := s.Src[s.Pos:]
+	if i := bytes.IndexByte(rest, '\n'); i >= 0 {
+		s.Pos += i
+	} else {
+		s.Pos = len(s.Src)
 	}
 }
 
@@ -134,14 +139,27 @@ func (s *Scanner) SkipLineComment() {
 // Line for any newlines in the body. If the close marker is never found,
 // the scanner advances to EOF.
 func (s *Scanner) SkipBlockComment(close string) {
+	closeBytes := []byte(close)
 	for s.Pos < len(s.Src) {
-		if s.StartsWith(close) {
-			s.Advance(len(close))
+		rest := s.Src[s.Pos:]
+		i := bytes.Index(rest, closeBytes)
+		if i < 0 {
+			// Unterminated — count newlines to EOF
+			for _, c := range rest {
+				if c == '\n' {
+					s.Line++
+				}
+			}
+			s.Pos = len(s.Src)
 			return
 		}
-		if s.Src[s.Pos] == '\n' {
-			s.Line++
+		// Count newlines in the span before the close marker
+		for _, c := range rest[:i] {
+			if c == '\n' {
+				s.Line++
+			}
 		}
-		s.Pos++
+		s.Pos += i + len(close)
+		return
 	}
 }

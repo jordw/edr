@@ -15,8 +15,6 @@ import (
 var instructionFS embed.FS
 
 // Target represents an agent platform to configure.
-type Target string
-
 const (
 	TargetClaude  Target = "claude"
 	TargetCodex   Target = "codex"

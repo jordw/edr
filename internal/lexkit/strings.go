@@ -1,5 +1,7 @@
 package lexkit
 
+import "bytes"
+
 // ScanSimpleString scans a string literal starting at the opening quote
 // (Src[Pos] must equal quote) through the matching close quote. It
 // handles backslash escapes but does not recognize any interpolation
@@ -10,25 +12,50 @@ func (s *Scanner) ScanSimpleString(quote byte) {
 		return
 	}
 	s.Pos++ // opening quote
+	// Fast path: most strings have no escapes or newlines. Use
+	// bytes.IndexByte to find the closing quote in one SIMD-optimized
+	// call. If a backslash or newline appears first, fall through to
+	// the byte-by-byte slow path for that segment.
 	for s.Pos < len(s.Src) {
+		rest := s.Src[s.Pos:]
+		qi := bytes.IndexByte(rest, quote)
+		if qi < 0 {
+			// Unterminated string — advance to EOF counting newlines
+			s.Pos += len(rest)
+			for _, c := range rest {
+				if c == '\n' {
+					s.Line++
+				}
+			}
+			return
+		}
+		// Check if there's a backslash or newline before the quote
+		bi := bytes.IndexByte(rest[:qi], '\\')
+		ni := bytes.IndexByte(rest[:qi], '\n')
+		first := qi // nothing special before quote
+		if bi >= 0 && bi < first {
+			first = bi
+		}
+		if ni >= 0 && ni < first {
+			first = ni
+		}
+		if first == qi {
+			// No escapes or newlines — fast skip to closing quote
+			s.Pos += qi + 1
+			return
+		}
+		// Advance to the first special byte, count any newlines in between
+		s.Pos += first
 		c := s.Src[s.Pos]
 		if c == '\\' && s.Pos+1 < len(s.Src) {
 			if s.Src[s.Pos+1] == '\n' {
 				s.Line++
 			}
 			s.Pos += 2
-			continue
-		}
-		if c == '\n' {
+		} else if c == '\n' {
 			s.Line++
 			s.Pos++
-			continue
 		}
-		if c == quote {
-			s.Pos++
-			return
-		}
-		s.Pos++
 	}
 }
 
