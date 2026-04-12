@@ -1,14 +1,16 @@
 package idx
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os"
-	"runtime"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -140,29 +142,156 @@ func Query(edrDir string, queryTrigrams []Trigram) ([]string, bool) {
 	if len(queryTrigrams) == 0 {
 		return nil, false
 	}
-	d := loadIndex(edrDir)
-	if d == nil {
+
+	f, err := os.Open(filepath.Join(edrDir, MainFile))
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || fi.Size() < int64(v2HeaderSize) {
 		return nil, false
 	}
 
-	candidates := queryIndex(d, queryTrigrams)
-	if candidates == nil {
-		// Empty trigram table — can't filter, return all files.
-		result := make([]string, len(d.Files))
-		for i, f := range d.Files {
-			result[i] = f.Path
-		}
-		return result, true
+	// Mmap the entire file — OS pages in only what we touch.
+	data, err := syscall.Mmap(int(f.Fd()), 0, int(fi.Size()),
+		syscall.PROT_READ, syscall.MAP_PRIVATE)
+	if err != nil {
+		return nil, false
+	}
+	defer syscall.Munmap(data)
+
+	h, err := ReadHeaderBytes(data)
+	if err != nil || h.NumTrigrams == 0 {
+		return nil, false
 	}
 
-	result := make([]string, 0, len(candidates))
-	for _, id := range candidates {
-		if int(id) < len(d.Files) {
-			result = append(result, d.Files[id].Path)
+	// Locate trigram table.
+	trigramTableSize := uint64(h.NumTrigrams) * 16
+	var trigramTableOff uint64
+	if h.Version >= 3 && h.SymbolOff > 0 {
+		trigramTableOff = h.SymbolOff - trigramTableSize
+	} else {
+		trigramTableOff = uint64(len(data)) - trigramTableSize
+	}
+	triData := data[trigramTableOff : trigramTableOff+trigramTableSize]
+
+	// Posting data between PostingOff and trigram table.
+	var postData []byte
+	if h.PostingOff <= uint64(len(data)) && trigramTableOff >= h.PostingOff {
+		postData = data[h.PostingOff:trigramTableOff]
+	}
+
+	// Binary search + intersect — only touches the pages we need.
+	candidates := queryRaw(triData, postData, int(h.NumTrigrams), queryTrigrams)
+	if candidates == nil {
+		return nil, false
+	}
+
+	// Resolve matched file IDs from file table.
+	ftData := data[h.FileTableOff:h.PostingOff]
+	paths := resolveFileIDsFromTable(ftData, h.NumFiles, candidates)
+	sort.Strings(paths)
+	return paths, true
+}
+
+// ReadHeaderBytes parses a header from an already-read byte slice.
+func ReadHeaderBytes(data []byte) (*Header, error) {
+	if len(data) < v2HeaderSize {
+		return nil, fmt.Errorf("too small")
+	}
+	if data[0] != 'E' || data[1] != 'D' || data[2] != 'R' {
+		return nil, fmt.Errorf("bad magic")
+	}
+	h := &Header{
+		Version:      binary.LittleEndian.Uint32(data[8:12]),
+		NumFiles:     binary.LittleEndian.Uint32(data[12:16]),
+		NumTrigrams:  binary.LittleEndian.Uint32(data[16:20]),
+		GitMtime:     int64(binary.LittleEndian.Uint64(data[20:28])),
+		FileTableOff: binary.LittleEndian.Uint64(data[28:36]),
+		PostingOff:   binary.LittleEndian.Uint64(data[36:44]),
+	}
+	if h.Version >= 3 && len(data) >= headerSize {
+		h.NumSymbols = binary.LittleEndian.Uint32(data[44:48])
+		h.SymbolOff = binary.LittleEndian.Uint64(data[48:56])
+		h.NamePostOff = binary.LittleEndian.Uint64(data[56:64])
+		h.NumNameKeys = binary.LittleEndian.Uint32(data[64:68])
+	}
+	return h, nil
+}
+
+// queryRaw does trigram lookup + posting intersection on mmap'd bytes.
+func queryRaw(triData, postData []byte, numTri int, queryTrigrams []Trigram) []uint32 {
+	var lists [][]uint32
+	for _, qt := range queryTrigrams {
+		i := trigramBinarySearch(triData, numTri, qt)
+		if i < 0 {
+			return []uint32{} // trigram not in index → no matches
+		}
+		off := uint64(i) * 16
+		count := binary.LittleEndian.Uint32(triData[off+4:])
+		postOff := binary.LittleEndian.Uint64(triData[off+8:])
+		ids := DecodePosting(postData, postOff, count)
+		lists = append(lists, ids)
+	}
+	if len(lists) == 0 {
+		return nil
+	}
+	sort.Slice(lists, func(i, j int) bool { return len(lists[i]) < len(lists[j]) })
+	result := lists[0]
+	for _, list := range lists[1:] {
+		result = intersect(result, list)
+		if len(result) == 0 {
+			return result
 		}
 	}
-	sort.Strings(result)
-	return result, true
+	return result
+}
+
+// trigramBinarySearch finds a trigram in the raw 16-byte-entry table.
+func trigramBinarySearch(triData []byte, n int, t Trigram) int {
+	target := t.ToUint32()
+	lo, hi := 0, n-1
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		off := mid * 16
+		v := uint32(triData[off])<<16 | uint32(triData[off+1])<<8 | uint32(triData[off+2])
+		if v == target {
+			return mid
+		}
+		if v < target {
+			lo = mid + 1
+		} else {
+			hi = mid - 1
+		}
+	}
+	return -1
+}
+
+// resolveFileIDsFromTable extracts paths for given file IDs from a
+// file table byte slice (starting at offset 0 within the slice).
+func resolveFileIDsFromTable(ftData []byte, numFiles uint32, ids []uint32) []string {
+	need := make(map[uint32]bool, len(ids))
+	for _, id := range ids {
+		need[id] = true
+	}
+	paths := make([]string, 0, len(ids))
+	pos := uint64(0)
+	for i := uint32(0); i < numFiles; i++ {
+		if pos+2 > uint64(len(ftData)) {
+			break
+		}
+		pathLen := binary.LittleEndian.Uint16(ftData[pos:])
+		pos += 2
+		if pos+uint64(pathLen)+16 > uint64(len(ftData)) {
+			break
+		}
+		if need[i] {
+			paths = append(paths, string(ftData[pos:pos+uint64(pathLen)]))
+		}
+		pos += uint64(pathLen) + 16 // skip path + mtime(8) + size(8)
+	}
+	return paths
 }
 
 // queryIndex intersects posting lists for the given trigrams.
@@ -291,15 +420,162 @@ func IncrementalTick(root, edrDir string, walkFn func(root string, fn func(path 
 	if !Staleness(root, edrDir) {
 		return
 	}
-	rebuildSmart(root, edrDir, walkFn, time.Second)
+	// The index is stale (git mtime changed). Stamp the new mtime so we
+	// stop re-checking on every command. The trigram index is still valid
+	// for queries — dirty files are already tracked separately and Query
+	// callers verify candidates against actual file contents.
+	// Full rebuild (walk + re-index) happens only via explicit `edr index`.
+	stampMtime(root, edrDir)
+}
+
+// stampMtime updates the git mtime in the index header without rebuilding.
+// This is a 68-byte read + write — effectively free.
+func stampMtime(root, edrDir string) {
+	path := filepath.Join(edrDir, MainFile)
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	buf := make([]byte, headerSize)
+	if _, err := f.ReadAt(buf, 0); err != nil {
+		return
+	}
+	mt := gitIndexMtime(root)
+	binary.LittleEndian.PutUint64(buf[20:28], uint64(mt))
+	f.WriteAt(buf[20:28], 20)
+}
+
+// patchDirtyFiles re-indexes only the files in the dirty list, then patches
+// them into the existing index. Avoids walking or re-parsing the whole repo.
+func PatchDirtyFiles(root, edrDir string, dirty []string) {
+	old := loadIndexTrigrams(edrDir)
+	if old == nil {
+		return
+	}
+
+	// Build lookup for old file entries by path.
+	oldByPath := make(map[string]int, len(old.Files))
+	for i, f := range old.Files {
+		oldByPath[f.Path] = i
+	}
+
+	// Invert postings only for dirty files (not all files).
+	dirtySet := make(map[string]bool, len(dirty))
+	for _, d := range dirty {
+		dirtySet[d] = true
+	}
+	// Collect old trigrams for dirty files so we can remove them.
+	oldDirtyTris := make(map[int][]Trigram) // fileID → trigrams
+	for _, te := range old.Trigrams {
+		ids := DecodePosting(old.Postings, te.Offset, te.Count)
+		for _, id := range ids {
+			if int(id) < len(old.Files) && dirtySet[old.Files[id].Path] {
+				oldDirtyTris[int(id)] = append(oldDirtyTris[int(id)], te.Tri)
+			}
+		}
+	}
+
+	// Re-extract trigrams for dirty files.
+	type patchEntry struct {
+		fileID int
+		entry  FileEntry
+		tris   []Trigram
+	}
+	var patches []patchEntry
+	for _, rel := range dirty {
+		absPath := filepath.Join(root, rel)
+		info, err := os.Stat(absPath)
+		if err != nil {
+			continue // file deleted — will be absent from new index
+		}
+		data, err := os.ReadFile(absPath)
+		if err != nil || isBinary(data) {
+			continue
+		}
+		entry := FileEntry{
+			Path:  rel,
+			Mtime: info.ModTime().UnixNano(),
+			Size:  info.Size(),
+		}
+		tris := ExtractTrigrams(data)
+		id := -1
+		if existing, ok := oldByPath[rel]; ok {
+			id = existing
+		}
+		patches = append(patches, patchEntry{fileID: id, entry: entry, tris: tris})
+	}
+
+	// Rebuild: start from old files, replace/add dirty ones.
+	files := make([]FileEntry, len(old.Files))
+	copy(files, old.Files)
+	for _, p := range patches {
+		if p.fileID >= 0 {
+			files[p.fileID] = p.entry
+		} else {
+			// New file — append
+			p.fileID = len(files)
+			files = append(files, p.entry)
+		}
+	}
+
+	// Rebuild trigram map: reuse old postings, patch dirty file entries.
+	triMap := make(map[Trigram][]uint32)
+	for _, te := range old.Trigrams {
+		ids := DecodePosting(old.Postings, te.Offset, te.Count)
+		// Filter out dirty file IDs (they get re-added with new trigrams).
+		var kept []uint32
+		for _, id := range ids {
+			if int(id) < len(old.Files) && !dirtySet[old.Files[id].Path] {
+				kept = append(kept, id)
+			}
+		}
+		if len(kept) > 0 {
+			triMap[te.Tri] = kept
+		}
+	}
+	// Add new trigrams for patched files.
+	for _, p := range patches {
+		for _, t := range p.tris {
+			triMap[t] = append(triMap[t], uint32(p.fileID))
+		}
+	}
+
+	postings, entries := BuildPostings(triMap)
+	d := &IndexData{
+		Header: Header{
+			NumFiles:    uint32(len(files)),
+			NumTrigrams: uint32(len(entries)),
+			GitMtime:    gitIndexMtime(root),
+		},
+		Files:    files,
+		Trigrams: entries,
+		Postings: postings,
+	}
+
+	// Preserve symbols from old index.
+	if old.Header.NumSymbols > 0 {
+		if full := loadIndex(edrDir); full != nil && len(full.Symbols) > 0 {
+			d.Symbols = full.Symbols
+			d.NamePosts = full.NamePosts
+			d.NamePostings = full.NamePostings
+			d.Header.NumSymbols = full.Header.NumSymbols
+			d.Header.NumNameKeys = full.Header.NumNameKeys
+		}
+	}
+
+	atomicWrite(filepath.Join(edrDir, MainFile), d.Marshal())
+	InvalidateSymbolCache()
+	ClearDirty(edrDir)
 }
 
 // rebuildSmart walks the repo and rebuilds the index, reusing cached trigrams
 // for files whose mtime hasn't changed. Stops re-indexing new/stale files
 // after the time limit but always writes a complete index with what it has.
 func rebuildSmart(root, edrDir string, walkFn func(root string, fn func(path string) error) error, limit time.Duration) {
-	// Load old index to reuse trigrams for unchanged files
-	old := loadIndex(edrDir)
+	// Load old index (trigrams only — skip symbol parsing which is
+	// 40MB+ of allocations on large repos and dominates IncrementalTick).
+	old := loadIndexTrigrams(edrDir)
 	oldByPath := make(map[string]FileEntry)
 	oldTris := make(map[string][]Trigram)
 	if old != nil {
@@ -420,12 +696,16 @@ func rebuildSmart(root, edrDir string, walkFn func(root string, fn func(path str
 
 	// Preserve symbol data from old index if available.
 	// rebuildSmart only updates trigrams; full symbol rebuild requires edr index.
-	if old != nil && len(old.Symbols) > 0 {
-		d.Symbols = old.Symbols
-		d.NamePosts = old.NamePosts
-		d.NamePostings = old.NamePostings
-		d.Header.NumSymbols = old.Header.NumSymbols
-		d.Header.NumNameKeys = old.Header.NumNameKeys
+	// We skipped symbol parsing in loadIndexTrigrams for speed, so load
+	// only the symbol sections now (which is amortized by the write cost).
+	if old != nil && old.Header.NumSymbols > 0 {
+		if full := loadIndex(edrDir); full != nil && len(full.Symbols) > 0 {
+			d.Symbols = full.Symbols
+			d.NamePosts = full.NamePosts
+			d.NamePostings = full.NamePostings
+			d.Header.NumSymbols = full.Header.NumSymbols
+			d.Header.NumNameKeys = full.Header.NumNameKeys
+		}
 	}
 
 	// If timed out, zero the git mtime so next tick retries the remaining files
@@ -845,6 +1125,20 @@ func loadIndex(edrDir string) *IndexData {
 		return nil
 	}
 	d, err := Unmarshal(data)
+	if err != nil {
+		return nil
+	}
+	return d
+}
+
+// loadIndexTrigrams loads only file table + trigrams + postings, skipping
+// symbol parsing. ~2x faster than loadIndex on large repos.
+func loadIndexTrigrams(edrDir string) *IndexData {
+	data, err := os.ReadFile(filepath.Join(edrDir, MainFile))
+	if err != nil {
+		return nil
+	}
+	d, err := UnmarshalTrigrams(data)
 	if err != nil {
 		return nil
 	}

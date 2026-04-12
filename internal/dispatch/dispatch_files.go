@@ -49,11 +49,13 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 
 	dirty := idx.IsDirty(edrDir)
 	tris := idx.QueryTrigrams(strings.ToLower(pattern))
-	indexed := idx.IndexedPaths(edrDir)
+	h, _ := idx.ReadHeader(edrDir)
+	hasIndex := h != nil
 
-	if indexed != nil && len(tris) > 0 {
-		// Use index for trigram candidates — valid even when dirty for
-		// unchanged files. Dirty files are rescanned below.
+	if hasIndex && len(tris) > 0 {
+		// Use trigram index for candidates — avoids full Unmarshal of
+		// IndexedPaths which is O(all files + all symbols) and hangs
+		// on large repos (200MB+ index).
 		if candidates, ok := idx.Query(edrDir, tris); ok {
 			dirtySet := make(map[string]bool)
 			if dirty {
@@ -92,17 +94,12 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 				matches = append(matches, rel)
 			}
 		}
-	} else if !idx.IsComplete(root, edrDir) {
-		// Index is clean but incomplete — scan unindexed files.
+	} else if !hasIndex {
+		// No index at all — must walk.
 		index.WalkRepoFiles(root, func(path string) error {
 			rel, _ := filepath.Rel(root, path)
 			if rel == "" {
 				rel = path
-			}
-			if indexed != nil {
-				if _, ok := indexed[rel]; ok {
-					return nil // already handled by index
-				}
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -115,7 +112,7 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 		})
 	}
 
-	if indexed == nil {
+	if !hasIndex {
 		source = "scan"
 	}
 	sort.Strings(matches)

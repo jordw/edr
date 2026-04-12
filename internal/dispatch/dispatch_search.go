@@ -321,8 +321,9 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 			}
 			searchFile(rel, filepath.Join(root, rel))
 		}
-	} else if !complete {
-		// No index or incomplete clean index — walk unindexed files.
+	} else if !complete && candidates == nil {
+		// No index at all — must walk. Skip when index exists but is
+		// merely stale; trigram results are still valid.
 		index.WalkRepoFiles(root, func(path string) error {
 			if atLimit() {
 				return filepath.SkipAll

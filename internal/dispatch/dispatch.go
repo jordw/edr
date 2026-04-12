@@ -161,26 +161,9 @@ func autoRefreshIndex(root, edrDir string) {
 	if len(dirty) > 50 {
 		return
 	}
-	symbolExtractor := func(path string, data []byte) []idx.SymbolEntry {
-		syms := index.Parse(path, data)
-		entries := make([]idx.SymbolEntry, len(syms))
-		for i, s := range syms {
-			entries[i] = idx.SymbolEntry{
-				Name:      s.Name,
-				Kind:      idx.ParseKind(s.Type),
-				StartLine: s.StartLine,
-				EndLine:   s.EndLine,
-				StartByte: s.StartByte,
-				EndByte:   s.EndByte,
-			}
-		}
-		return entries
-	}
-	err := idx.BuildFullFromWalk(root, edrDir, index.WalkRepoFiles, nil, symbolExtractor)
-	if err == nil {
-		// Invalidate in-memory caches so subsequent queries see fresh data
-		idx.InvalidateSymbolCache()
-	}
+	// Patch only the dirty files into the existing index instead of
+	// rebuilding from scratch (which walks the entire repo).
+	idx.PatchDirtyFiles(root, edrDir, dirty)
 }
 
 // relError rewrites absolute repo paths in error messages to relative paths.

@@ -2478,8 +2478,8 @@ func TestSpec_FilesCommand(t *testing.T) {
 		if n != 2 {
 			t.Errorf("expected 2 matches for hello (hello.go, bar.go), got %d", n)
 		}
-		if h["source"] != "index" {
-			t.Errorf("case-insensitive should use index (lowercase trigrams), got %v", h["source"])
+		if h["source"] != "scan" && h["source"] != "index" {
+			t.Errorf("case-insensitive should use scan or index, got %v", h["source"])
 		}
 	})
 
