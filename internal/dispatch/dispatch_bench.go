@@ -125,7 +125,7 @@ func discoverBenchTargets(ctx context.Context, db index.SymbolStore, root string
 	dirSeen := map[string]bool{}
 
 	index.WalkRepoFiles(root, func(path string) error {
-		if !index.RegexSupported(path) {
+		if !index.Supported(path) {
 			return nil
 		}
 		rel, _ := filepath.Rel(root, path)

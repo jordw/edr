@@ -75,7 +75,7 @@ func (o *OnDemand) parseFile(absPath string) (*cachedFile, error) {
 	}
 	o.mu.RUnlock()
 
-	if !RegexSupported(absPath) {
+	if !Supported(absPath) {
 		// Not a parseable file — return empty result
 		return &cachedFile{mtime: mtime}, nil
 	}
@@ -92,7 +92,7 @@ func (o *OnDemand) parseFile(absPath string) (*cachedFile, error) {
 		r := ParseRuby(src)
 		syms = rubyToSymbolInfo(absPath, src, r)
 		imports = rubyImportsToInfo(absPath, r)
-	case ".ts", ".tsx", ".mts", ".cts":
+	case ".js", ".jsx", ".ts", ".tsx", ".mts", ".cts":
 		r := ParseTS(src)
 		syms = tsToSymbolInfo(absPath, src, r)
 		imports = tsImportsToInfo(absPath, r)
@@ -108,6 +108,10 @@ func (o *OnDemand) parseFile(absPath string) (*cachedFile, error) {
 		r := ParseJava(src)
 		syms = javaToSymbolInfo(absPath, src, r)
 		imports = javaImportsToInfo(absPath, r)
+	case ".cs":
+		r := ParseCSharp(src)
+		syms = csharpToSymbolInfo(absPath, src, r)
+		imports = csharpImportsToInfo(absPath, r)
 	case ".rs":
 		r := ParseRust(src)
 		syms = rustToSymbolInfo(absPath, src, r)
@@ -116,8 +120,18 @@ func (o *OnDemand) parseFile(absPath string) (*cachedFile, error) {
 		r := ParseCpp(src)
 		syms = cppToSymbolInfo(absPath, src, r)
 		imports = cppImportsToInfo(absPath, r)
-	default:
-		syms = RegexParse(absPath, src)
+	case ".kt", ".kts":
+		r := ParseKotlin(src)
+		syms = kotlinToSymbolInfo(absPath, src, r)
+		imports = kotlinImportsToInfo(absPath, r)
+	case ".swift":
+		r := ParseSwift(src)
+		syms = swiftToSymbolInfo(absPath, src, r)
+		imports = swiftImportsToInfo(absPath, r)
+	case ".php":
+		r := ParsePHP(src)
+		syms = phpToSymbolInfo(absPath, src, r)
+		imports = phpImportsToInfo(absPath, r)
 	}
 
 	h := sha256.Sum256(src)
@@ -278,7 +292,7 @@ func (o *OnDemand) parseAll(ctx context.Context) map[string]*cachedFile {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if RegexSupported(path) {
+		if Supported(path) {
 			ch <- path
 		}
 		return nil
@@ -324,7 +338,7 @@ func (o *OnDemand) parseDir(ctx context.Context, dir string) map[string]*cachedF
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if RegexSupported(path) {
+		if Supported(path) {
 			ch <- path
 		}
 		return nil
@@ -629,7 +643,7 @@ func (o *OnDemand) Stats(ctx context.Context) (files int, symbols int, err error
 
 	var fileCount int
 	WalkRepoFiles(o.root, func(path string) error {
-		if RegexSupported(path) {
+		if Supported(path) {
 			fileCount++
 		}
 		return nil
@@ -652,7 +666,7 @@ func (o *OnDemand) parseCandidateFiles(ctx context.Context, text string) map[str
 		if paths, ok := idx.Query(o.edrDir, tris); ok {
 			for _, rel := range paths {
 				abs := filepath.Join(o.root, rel)
-				if RegexSupported(abs) {
+				if Supported(abs) {
 					candidatePaths = append(candidatePaths, abs)
 				}
 			}
@@ -673,7 +687,7 @@ func (o *OnDemand) parseCandidateFiles(ctx context.Context, text string) map[str
 			if paths, ok := idx.Query(o.edrDir, tris); ok {
 				for _, rel := range paths {
 					abs := filepath.Join(o.root, rel)
-					if RegexSupported(abs) {
+					if Supported(abs) {
 						candidatePaths = append(candidatePaths, abs)
 					}
 				}
@@ -724,7 +738,7 @@ func (o *OnDemand) parseCandidateFiles(ctx context.Context, text string) map[str
 			continue
 		}
 		abs := filepath.Join(o.root, rel)
-		if RegexSupported(abs) {
+		if Supported(abs) {
 			walkPaths = append(walkPaths, abs)
 		}
 	}
@@ -792,7 +806,7 @@ func (o *OnDemand) parseCandidateFiles(ctx context.Context, text string) map[str
 func (o *OnDemand) FileCountExceeds(n int) bool {
 	count := 0
 	WalkRepoFiles(o.root, func(path string) error {
-		if RegexSupported(path) {
+		if Supported(path) {
 			count++
 			if count > n {
 				return filepath.SkipAll

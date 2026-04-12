@@ -232,10 +232,10 @@ func TestRegexByteOffsets(t *testing.T) {
 }
 
 func TestRegexUnsupportedExtension(t *testing.T) {
-	if RegexSupported("README.md") {
+	if Supported("README.md") {
 		t.Error("markdown should not be supported")
 	}
-	if RegexSupported("script.sh") {
+	if Supported("script.sh") {
 		t.Error("shell should not be supported (no patterns yet)")
 	}
 	syms := RegexParse("README.md", []byte("# Hello"))

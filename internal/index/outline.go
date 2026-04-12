@@ -20,11 +20,11 @@ func OutlineFile(path string, depth int) (string, error) {
 
 // OutlineFileFromSource is like OutlineFile but takes pre-loaded source bytes.
 func OutlineFileFromSource(path string, src []byte, depth int) (string, error) {
-	if !RegexSupported(path) {
+	if !Supported(path) {
 		return "", fmt.Errorf("unsupported language for %s", path)
 	}
 
-	syms := RegexParse(path, src)
+	syms := Parse(path, src)
 
 	if depth <= 1 {
 		// Signatures: one line per symbol

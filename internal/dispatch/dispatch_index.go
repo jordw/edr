@@ -55,7 +55,7 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 	}
 
 	symbolExtractor := func(path string, data []byte) []idx.SymbolEntry {
-		syms := index.RegexParse(path, data)
+		syms := index.Parse(path, data)
 		entries := make([]idx.SymbolEntry, len(syms))
 		for i, s := range syms {
 			entries[i] = idx.SymbolEntry{
@@ -228,7 +228,7 @@ func hasImportPatterns(ext string) bool {
 	switch ext {
 	case ".c", ".h", ".cc", ".cpp", ".hpp",
 		".go", ".py", ".js", ".ts", ".tsx", ".jsx",
-		".rs", ".rb", ".java":
+		".rs", ".rb", ".java", ".cs", ".swift", ".php":
 		return true
 	}
 	return false
@@ -281,8 +281,29 @@ func extractImportsForFile(data []byte, ext string) []index.ImportEntry {
 			out[i] = index.ImportEntry{Raw: imp.Path}
 		}
 		return out
+	case ".cs":
+		r := index.ParseCSharp(data)
+		out := make([]index.ImportEntry, len(r.Imports))
+		for i, imp := range r.Imports {
+			out[i] = index.ImportEntry{Raw: imp.Path}
+		}
+		return out
 	case ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hxx", ".hh":
 		r := index.ParseCpp(data)
+		out := make([]index.ImportEntry, len(r.Imports))
+		for i, imp := range r.Imports {
+			out[i] = index.ImportEntry{Raw: imp.Path}
+		}
+		return out
+	case ".swift":
+		r := index.ParseSwift(data)
+		out := make([]index.ImportEntry, len(r.Imports))
+		for i, imp := range r.Imports {
+			out[i] = index.ImportEntry{Raw: imp.Path}
+		}
+		return out
+	case ".php":
+		r := index.ParsePHP(data)
 		out := make([]index.ImportEntry, len(r.Imports))
 		for i, imp := range r.Imports {
 			out[i] = index.ImportEntry{Raw: imp.Path}

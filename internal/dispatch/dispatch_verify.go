@@ -160,7 +160,7 @@ func extractErrorContext(ctx context.Context, db index.SymbolStore, root, output
 		if err != nil {
 			continue
 		}
-		syms := index.RegexParse(absFile, data)
+		syms := index.Parse(absFile, data)
 		var best *index.SymbolInfo
 		for i := range syms {
 			s := &syms[i]

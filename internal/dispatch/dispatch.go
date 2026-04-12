@@ -162,7 +162,7 @@ func autoRefreshIndex(root, edrDir string) {
 		return
 	}
 	symbolExtractor := func(path string, data []byte) []idx.SymbolEntry {
-		syms := index.RegexParse(path, data)
+		syms := index.Parse(path, data)
 		entries := make([]idx.SymbolEntry, len(syms))
 		for i, s := range syms {
 			entries[i] = idx.SymbolEntry{

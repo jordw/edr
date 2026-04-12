@@ -366,7 +366,7 @@ func attachReadBack(ctx context.Context, db index.SymbolStore, result any) (any,
 	diff, _ := m["diff"].(string)
 	editLine := diffStartLine(diff)
 	if editLine > 0 {
-		syms := index.RegexParse(file, data)
+		syms := index.Parse(file, data)
 		var best *index.SymbolInfo
 		for i := range syms {
 			s := &syms[i]

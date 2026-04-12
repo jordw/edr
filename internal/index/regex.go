@@ -8,14 +8,6 @@ import (
 	"strings"
 )
 
-// ContainerStyle describes how a language delimits container bodies.
-type ContainerStyle int
-
-const (
-	ContainerBrace   ContainerStyle = iota // { } (Go, JS/TS, C, Rust, Java)
-	ContainerIndent                        // indentation (Python)
-	ContainerKeyword                       // closing keyword like "end" (Ruby, Lua)
-)
 
 // regexLang defines patterns and end-detection style for a language.
 type regexLang struct {
@@ -416,43 +408,10 @@ func regexLangForFile(path string) *regexLang {
 	return regexByExt[ext]
 }
 
-// RegexSupported returns true if the file extension has regex patterns.
-func RegexSupported(path string) bool {
-	return regexLangForFile(path) != nil
-}
 
-// LangContainer returns the container style for a file path.
-func LangContainer(path string) ContainerStyle {
-	lang := regexLangForFile(path)
-	if lang == nil {
-		return ContainerBrace
-	}
-	return lang.container
-}
 
-// LangContainerClose returns the closing token for a file path ("}", "end", "").
-func LangContainerClose(path string) string {
-	lang := regexLangForFile(path)
-	if lang == nil {
-		return "}"
-	}
-	return lang.containerClose
-}
 
-// LangMethodsOutside returns true if methods live outside the type (Go).
-func LangMethodsOutside(path string) bool {
-	lang := regexLangForFile(path)
-	return lang != nil && lang.methodsOutside
-}
 
-// LangID returns the language identifier for a file path, or "".
-func LangID(path string) string {
-	lang := regexLangForFile(path)
-	if lang == nil {
-		return ""
-	}
-	return lang.langID
-}
 
 // RegexParse extracts symbols from source code using regex patterns.
 // Returns SymbolInfo structs compatible with the rest of the index package.

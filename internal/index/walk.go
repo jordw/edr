@@ -745,7 +745,7 @@ func repoMapLazy(ctx context.Context, db SymbolStore, root, edrDir string, cfg r
 	// Build sorted rel-path list using the same order as RepoMap.
 	relPaths := make([]string, 0, len(indexed))
 	for rel := range indexed {
-		if RegexSupported(filepath.Join(root, rel)) {
+		if Supported(filepath.Join(root, rel)) {
 			relPaths = append(relPaths, rel)
 		}
 	}
@@ -782,7 +782,7 @@ func repoMapLazy(ctx context.Context, db SymbolStore, root, edrDir string, cfg r
 		if err != nil {
 			continue
 		}
-		syms := RegexParse(abs, src)
+		syms := Parse(abs, src)
 
 		// Filter out locals
 		if cfg.hideLocals && len(syms) > 0 {
@@ -858,7 +858,7 @@ func repoMapLazy(ctx context.Context, db SymbolStore, root, edrDir string, cfg r
 	if truncated && filesRendered*5 < totalFiles {
 		dirFiles := map[string]int{}
 		for _, rel := range relPaths {
-			if !RegexSupported(filepath.Join(root, rel)) {
+			if !Supported(filepath.Join(root, rel)) {
 				continue
 			}
 			dir := strings.SplitN(rel, string(filepath.Separator), 2)[0]

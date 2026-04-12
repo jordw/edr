@@ -27,7 +27,7 @@ func findReferencesTextBased(ctx context.Context, db SymbolStore, symbolName str
 
 	var refs []SymbolInfo
 	for _, file := range files {
-		if !RegexSupported(file) {
+		if !Supported(file) {
 			continue
 		}
 		src, err := CachedReadFile(ctx, file)
@@ -87,7 +87,7 @@ func FindDeps(ctx context.Context, db SymbolStore, sym *SymbolInfo) ([]SymbolInf
 
 // findDepsTextBased extracts identifiers from a symbol body and resolves them.
 func findDepsTextBased(ctx context.Context, db SymbolStore, sym *SymbolInfo) ([]SymbolInfo, error) {
-	if !RegexSupported(sym.File) {
+	if !Supported(sym.File) {
 		return nil, fmt.Errorf("unsupported language for %s", sym.File)
 	}
 
