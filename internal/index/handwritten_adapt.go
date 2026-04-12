@@ -411,6 +411,72 @@ func phpImportsToInfo(file string, r PhpResult) []ImportInfo {
 	return out
 }
 
+func luaToSymbolInfo(file string, src []byte, r LuaResult) []SymbolInfo {
+	if len(r.Symbols) == 0 {
+		return nil
+	}
+	offsets := computeLineOffsets(src)
+	srcLen := len(src)
+	out := make([]SymbolInfo, len(r.Symbols))
+	for i, s := range r.Symbols {
+		out[i] = SymbolInfo{
+			Type:        s.Type,
+			Name:        s.Name,
+			File:        file,
+			StartLine:   uint32(s.StartLine),
+			EndLine:     uint32(s.EndLine),
+			StartByte:   lineStartByte(offsets, s.StartLine),
+			EndByte:     lineEndByte(offsets, s.EndLine, srcLen),
+			ParentIndex: s.Parent,
+		}
+	}
+	return out
+}
+
+func luaImportsToInfo(file string, r LuaResult) []ImportInfo {
+	if len(r.Imports) == 0 {
+		return nil
+	}
+	out := make([]ImportInfo, len(r.Imports))
+	for i, imp := range r.Imports {
+		out[i] = ImportInfo{File: file, ImportPath: imp.Path}
+	}
+	return out
+}
+
+func zigToSymbolInfo(file string, src []byte, r ZigResult) []SymbolInfo {
+	if len(r.Symbols) == 0 {
+		return nil
+	}
+	offsets := computeLineOffsets(src)
+	srcLen := len(src)
+	out := make([]SymbolInfo, len(r.Symbols))
+	for i, s := range r.Symbols {
+		out[i] = SymbolInfo{
+			Type:        s.Type,
+			Name:        s.Name,
+			File:        file,
+			StartLine:   uint32(s.StartLine),
+			EndLine:     uint32(s.EndLine),
+			StartByte:   lineStartByte(offsets, s.StartLine),
+			EndByte:     lineEndByte(offsets, s.EndLine, srcLen),
+			ParentIndex: s.Parent,
+		}
+	}
+	return out
+}
+
+func zigImportsToInfo(file string, r ZigResult) []ImportInfo {
+	if len(r.Imports) == 0 {
+		return nil
+	}
+	out := make([]ImportInfo, len(r.Imports))
+	for i, imp := range r.Imports {
+		out[i] = ImportInfo{File: file, ImportPath: imp.Path}
+	}
+	return out
+}
+
 // pythonToSymbolInfo converts a PyResult into []SymbolInfo.
 func pythonToSymbolInfo(file string, src []byte, r PyResult) []SymbolInfo {
 	if len(r.Symbols) == 0 {

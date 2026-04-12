@@ -53,6 +53,8 @@ var langByExt = map[string]*langConfig{
 	".php":   {id: "php", container: ContainerBrace, containerClose: "}"},
 	".scala": {id: "scala", container: ContainerBrace, containerClose: "}"},
 	".sc":    {id: "scala", container: ContainerBrace, containerClose: "}"},
+	".lua":   {id: "lua", container: ContainerKeyword, containerClose: "end"},
+	".zig":   {id: "zig", container: ContainerBrace, containerClose: "}"},
 }
 
 func langForFile(path string) *langConfig {
@@ -119,6 +121,10 @@ func Parse(path string, src []byte) []SymbolInfo {
 		return phpToSymbolInfo(path, src, ParsePHP(src))
 	case ".scala", ".sc":
 		return scalaToSymbolInfo(path, src, ParseScala(src))
+	case ".lua":
+		return luaToSymbolInfo(path, src, ParseLua(src))
+	case ".zig":
+		return zigToSymbolInfo(path, src, ParseZig(src))
 	default:
 		return nil
 	}

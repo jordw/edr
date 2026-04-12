@@ -136,6 +136,14 @@ func (o *OnDemand) parseFile(absPath string) (*cachedFile, error) {
 		r := ParsePHP(src)
 		syms = phpToSymbolInfo(absPath, src, r)
 		imports = phpImportsToInfo(absPath, r)
+	case ".lua":
+		r := ParseLua(src)
+		syms = luaToSymbolInfo(absPath, src, r)
+		imports = luaImportsToInfo(absPath, r)
+	case ".zig":
+		r := ParseZig(src)
+		syms = zigToSymbolInfo(absPath, src, r)
+		imports = zigImportsToInfo(absPath, r)
 	}
 
 	h := sha256.Sum256(src)
