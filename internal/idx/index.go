@@ -440,10 +440,22 @@ func rebuildSmart(root, edrDir string, walkFn func(root string, fn func(path str
 }
 
 // BuildFullFromWalk builds a complete index by walking the repo. No time limit.
-// SymbolExtractFn extracts symbols from a file. Returns (name, kind, startLine, endLine, startByte, endByte) tuples.
+// SymbolExtractFn extracts symbols from a file's content.
 type SymbolExtractFn func(path string, data []byte) []SymbolEntry
 
+// OnFileFn is called for every file in the walk (including reused ones).
+// Receives the absolute path. Called sequentially during classification,
+// before parallel workers start.
+type OnFileFn func(path string)
+
 func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(path string) error) error, progress func(int, int), extractSymbols ...SymbolExtractFn) error {
+	return BuildFullFromWalkWithHook(root, edrDir, walkFn, progress, nil, extractSymbols...)
+}
+
+// BuildFullFromWalkWithHook is like BuildFullFromWalk but calls onFile for every
+// file encountered (including reused ones). This allows import extraction to
+// piggyback without changing the index format.
+func BuildFullFromWalkWithHook(root, edrDir string, walkFn func(root string, fn func(path string) error) error, progress func(int, int), onFile OnFileFn, extractSymbols ...SymbolExtractFn) error {
 	var paths []string
 	if err := walkFn(root, func(path string) error {
 		paths = append(paths, path)
@@ -526,7 +538,15 @@ func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(pat
 				tris:  od.tris,
 				syms:  od.syms,
 			})
+			// Still notify hook for reused files (import extraction)
+			if onFile != nil {
+				onFile(p)
+			}
 			continue
+		}
+		// Notify hook for files that need re-indexing too
+		if onFile != nil {
+			onFile(p)
 		}
 		needIndex = append(needIndex, pathInfo{rel: rel, abs: p, info: info})
 	}
