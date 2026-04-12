@@ -191,6 +191,15 @@ func (p *rustParser) run() {
 			p.s.Pos++
 		case lexkit.DefaultIdentStart[c]:
 			word := p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
+			// cfg-family macros (cfg!, cfg_if!, cfg_attr!, and project-
+			// specific cfg_*!) are conditional compilation gates whose
+			// bodies contain normal Rust code. Treat them as transparent
+			// by consuming the "!{" and letting the main loop parse the
+			// body. Other macros (lazy_static!, bitflags!, etc.) have
+			// custom DSLs and are NOT descended into.
+			if isCfgMacro(word) && p.tryCfgMacroBrace() {
+				continue
+			}
 			p.handleIdent(word)
 		default:
 			p.s.Pos++
@@ -256,6 +265,44 @@ func (p *rustParser) handleAttribute() {
 	if !p.s.EOF() && p.s.Peek() == '[' {
 		p.s.SkipBalanced('[', ']', rustStringScanner)
 	}
+}
+
+// isCfgMacro reports whether the identifier is a cfg-family macro name
+// whose body contains normal Rust code (not a custom DSL).
+func isCfgMacro(word []byte) bool {
+	s := string(word)
+	if s == "cfg" || s == "cfg_if" || s == "cfg_attr" {
+		return true
+	}
+	// Project-specific cfg_* macros (tokio's cfg_fs!, cfg_io_util!, etc.)
+	return len(s) > 4 && s[:4] == "cfg_"
+}
+
+// tryCfgMacroBrace checks if the scanner is at "!{" (or "! {") after
+// a cfg macro name. If so, consumes the "!" and pushes the "{" onto
+// the brace stack (via handleOpenBrace), returning true. The main loop
+// then parses the macro body as normal Rust. If not at "!", returns
+// false without advancing.
+func (p *rustParser) tryCfgMacroBrace() bool {
+	save := p.s.Pos
+	saveLine := p.s.Line
+	p.skipWSAndComments()
+	if p.s.EOF() || p.s.Peek() != '!' {
+		p.s.Pos = save
+		p.s.Line = saveLine
+		return false
+	}
+	p.s.Pos++ // consume !
+	p.skipWSAndComments()
+	if p.s.EOF() || p.s.Peek() != '{' {
+		p.s.Pos = save
+		p.s.Line = saveLine
+		return false
+	}
+	// Push a block scope for the macro body — the main loop will
+	// parse its contents and pop on the matching '}'.
+	p.handleOpenBrace()
+	return true
 }
 
 func (p *rustParser) handleIdent(word []byte) {
@@ -345,10 +392,6 @@ func (p *rustParser) parseFn() {
 	name := string(p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont))
 	kind := "function"
 	parent := p.stack.NearestSym()
-	k := p.currentKind()
-	if k == rustImpl || k == rustTrait {
-		kind = "method"
-	}
 	sym := len(p.result.Symbols)
 	p.result.Symbols = append(p.result.Symbols, RustSymbol{
 		Type: kind, Name: name, StartLine: startLine, Parent: parent,
@@ -430,7 +473,7 @@ func (p *rustParser) parseEnum() {
 	parent := p.stack.NearestSym()
 	sym := len(p.result.Symbols)
 	p.result.Symbols = append(p.result.Symbols, RustSymbol{
-		Type: "enum", Name: name, StartLine: startLine, Parent: parent,
+		Type: "type", Name: name, StartLine: startLine, Parent: parent,
 	})
 	// Skip to { then balanced-skip body
 	for !p.s.EOF() {
@@ -484,24 +527,58 @@ func (p *rustParser) parseTrait() {
 
 func (p *rustParser) parseImpl() {
 	// impl [<generics>] [Trait for] Type { ... }
-	// Don't record as symbol — just push scope
-	p.pendingScope = &lexkit.Scope[rustScopeKind]{Data: rustImpl, SymIdx: -1, OpenLine: p.s.Line}
+	// Record as "impl" symbol with the target type name (after optional
+	// "Trait for"). Regex: `^impl(?:<...>)?\s+(?:...\s+for\s+)?({ID}+)`
+	startLine := p.s.Line
+	p.skipWSAndComments()
+	if !p.s.EOF() && p.s.Peek() == '<' {
+		p.s.SkipAngles()
+		p.skipWSAndComments()
+	}
+	// Scan identifiers; if we see "for", the NEXT ident is the target.
+	var lastName string
 	for !p.s.EOF() {
 		p.skipWSAndComments()
 		c := p.s.Peek()
-		if c == '{' {
-			return
+		if c == '{' || c == ';' {
+			break
 		}
 		if c == '<' {
 			p.s.SkipAngles()
 			continue
 		}
-		if c == ';' {
-			p.s.Pos++
-			p.pendingScope = nil
-			return
+		if lexkit.DefaultIdentStart[c] {
+			w := string(p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont))
+			if w == "for" {
+				p.skipWSAndComments()
+				if !p.s.EOF() && lexkit.DefaultIdentStart[p.s.Peek()] {
+					lastName = string(p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont))
+				}
+				continue
+			}
+			lastName = w
+			continue
+		}
+		if c == ':' && p.s.PeekAt(1) == ':' {
+			p.s.Advance(2)
+			continue
 		}
 		p.s.Pos++
+	}
+	sym := -1
+	if lastName != "" {
+		sym = len(p.result.Symbols)
+		p.result.Symbols = append(p.result.Symbols, RustSymbol{
+			Type: "impl", Name: lastName, StartLine: startLine, Parent: p.stack.NearestSym(),
+		})
+	}
+	if !p.s.EOF() && p.s.Peek() == '{' {
+		p.pendingScope = &lexkit.Scope[rustScopeKind]{Data: rustImpl, SymIdx: sym, OpenLine: startLine}
+	} else if !p.s.EOF() && p.s.Peek() == ';' {
+		p.s.Pos++
+		if sym >= 0 {
+			p.result.Symbols[sym].EndLine = p.s.Line
+		}
 	}
 }
 

@@ -284,3 +284,51 @@ func TestDiff_Java(t *testing.T) {
 	t.Logf("java: %d files, regex=%d hand=%d, total missing=%d",
 		len(paths), regexTotal, handTotal, totalMissing)
 }
+
+func TestDiff_Rust(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	root := home + "/Documents/GitHub/tokio/tokio/src"
+	if _, err := os.Stat(root); err != nil { t.Skip("no tokio") }
+	var paths []string
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() { return nil }
+		if strings.HasSuffix(path, ".rs") { paths = append(paths, path) }
+		return nil
+	})
+	sort.Strings(paths)
+	if len(paths) > 60 { paths = paths[:60] }
+	var totalMissing, totalExtra, regexTotal, handTotal int
+	for _, path := range paths {
+		src, err := os.ReadFile(path)
+		if err != nil { continue }
+		rs := RegexParse(path, src)
+		hs := rustToSymbolInfo(path, src, ParseRust(src))
+		regexTotal += len(rs)
+		handTotal += len(hs)
+		regexNames := map[string]int{}
+		for _, s := range rs { regexNames[s.Type+":"+s.Name]++ }
+		handNames := map[string]int{}
+		for _, s := range hs { handNames[s.Type+":"+s.Name]++ }
+		var missing []string
+		for k, n := range regexNames {
+			if handNames[k] < n {
+				missing = append(missing, fmt.Sprintf("%s (-%d)", k, n-handNames[k]))
+			}
+		}
+		var extra []string
+		for k, n := range handNames {
+			if regexNames[k] < n {
+				extra = append(extra, fmt.Sprintf("%s (+%d)", k, n-regexNames[k]))
+			}
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			t.Logf("%s regex=%d hand=%d", filepath.Base(path), len(rs), len(hs))
+			t.Logf("  MISSING: %s", strings.Join(missing, ", "))
+			totalMissing += len(missing)
+		}
+		totalExtra += len(extra)
+	}
+	t.Logf("rust: %d files, regex=%d hand=%d, missing=%d, extra=%d",
+		len(paths), regexTotal, handTotal, totalMissing, totalExtra)
+}
