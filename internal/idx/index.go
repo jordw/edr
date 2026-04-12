@@ -602,7 +602,9 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 		}
 		// Reuse old data if mtime matches — skip trigram/symbol extraction.
 		// Still read file to extract per-symbol identifiers for the ref graph.
-		if od, ok := oldByPath[rel]; ok && od.entry.Mtime == info.ModTime().UnixNano() && len(od.tris) > 0 {
+		// Only reuse symbols if the old index actually had them (rebuildSmart omits symbols).
+		hasOldSyms := old != nil && old.Header.NumSymbols > 0
+		if od, ok := oldByPath[rel]; ok && od.entry.Mtime == info.ModTime().UnixNano() && len(od.tris) > 0 && (hasOldSyms || extractSymbols == nil) {
 			fr := fileResult{
 				entry: FileEntry{Path: rel, Mtime: info.ModTime().UnixNano(), Size: info.Size()},
 				tris:  od.tris,
