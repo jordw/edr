@@ -30,10 +30,10 @@ namespace MyApp.Models
 
         public abstract void DoWork();
 
-        // Expression-bodied property getter (known gap: not recorded as symbol)
+        // Expression-bodied property getter — correctly recorded as symbol
         public int Count => _items.Length;
 
-        // Event declaration (known gap: not recorded as symbol)
+        // Event declaration — correctly recorded as symbol
         public event EventHandler Changed;
 
         public interface ICallback
@@ -88,8 +88,8 @@ partial class Widget { }
 		{"method", "GetItems"},     // async method
 		{"method", "Create"},       // expression-bodied method
 		{"method", "DoWork"},       // abstract method
-		// Count (expression-bodied property) — known gap: not recorded
-		// Changed (event declaration) — known gap: not recorded
+		{"method", "Count"},        // expression-bodied property
+		{"method", "Changed"},      // event declaration
 		{"class", "ICallback"},     // nested interface
 		{"method", "OnComplete"},   // interface method
 		{"class", "Status"},        // enum

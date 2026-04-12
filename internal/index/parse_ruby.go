@@ -14,6 +14,7 @@ import (
 //   - Ruby 3.0 endless methods (def foo = expr)
 //   - nested blocks via class/module/def/if/unless/while/until/case/begin/for/do ... end
 //   - single-line modifier forms (x if y) do NOT open a block
+//   - =begin/=end block comments (pod comments)
 //   - require / require_relative / load imports
 //   - line comments (#), single/double/backtick strings, string interpolation
 //   - heredocs: <<TAG, <<-TAG, <<~TAG with optional quoted tags
@@ -22,7 +23,6 @@ import (
 //
 // Known gaps:
 //   - %q{} %Q{} %w[] %i[] literals
-//   - =begin/=end pod comments
 //   - class << self singleton class shorthand
 //   - complex operator method names (<=>, []=, +@) partially handled
 //   - __END__ sentinel
@@ -194,6 +194,44 @@ func (p *rbParser) run() {
 			p.s.Pos++
 			p.regexOK = false
 			p.stmtStart = false
+		case c == '=' && p.stmtStart:
+			// Check for =begin...=end block comment (Ruby pod comments).
+			// =begin must appear at the very start of a line (stmtStart == true).
+			src := p.s.Src
+			pos := p.s.Pos
+			end := pos
+			for end < len(src) && src[end] != '\n' {
+				end++
+			}
+			line := strings.TrimRight(string(src[pos:end]), "\r")
+			if line == "=begin" {
+				// Skip forward past the closing =end line.
+				p.s.Pos = end
+				if p.s.Pos < len(src) {
+					p.s.Pos++ // consume the '\n' after =begin
+				}
+				for !p.s.EOF() {
+					lineStart := p.s.Pos
+					lineEnd := lineStart
+					for lineEnd < len(src) && src[lineEnd] != '\n' {
+						lineEnd++
+					}
+					lineText := strings.TrimRight(string(src[lineStart:lineEnd]), "\r")
+					p.s.Pos = lineEnd
+					if p.s.Pos < len(src) {
+						p.s.Pos++ // consume '\n'
+					}
+					if lineText == "=end" {
+						break
+					}
+				}
+				p.stmtStart = true
+				p.regexOK = true
+			} else {
+				p.s.Pos++
+				p.regexOK = true
+				p.stmtStart = false
+			}
 		default:
 			p.s.Pos++
 			p.regexOK = true

@@ -128,6 +128,10 @@ func (o *OnDemand) parseFile(absPath string) (*cachedFile, error) {
 		r := ParseSwift(src)
 		syms = swiftToSymbolInfo(absPath, src, r)
 		imports = swiftImportsToInfo(absPath, r)
+	case ".scala", ".sc":
+		r := ParseScala(src)
+		syms = scalaToSymbolInfo(absPath, src, r)
+		imports = scalaImportsToInfo(absPath, r)
 	case ".php":
 		r := ParsePHP(src)
 		syms = phpToSymbolInfo(absPath, src, r)

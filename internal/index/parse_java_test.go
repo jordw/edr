@@ -47,8 +47,7 @@ public class Widget<T extends Comparable<T>> extends Base implements Serializabl
         default void defaultMethod() { System.out.println("default"); }
     }
 
-    // @interface (annotation type declaration) — known gap: parsed as annotation,
-    // not recorded as a symbol
+    // @interface (annotation type declaration) — correctly recorded as symbol
     @interface MyAnnotation { String value(); }
 
     public enum Status {
@@ -87,15 +86,14 @@ public class Widget<T extends Comparable<T>> extends Base implements Serializabl
 		{"interface", "Callback"},
 		{"method", "onEvent"},
 		{"method", "defaultMethod"}, // Java 8 default method in interface
+		{"interface", "MyAnnotation"}, // @interface annotation type declaration
+		{"method", "value"},           // annotation method inside MyAnnotation
 		{"enum", "Status"},
 		{"method", "label"},
 		{"class", "Point"},          // record
 		{"method", "distance"},
 		{"class", "Inner"},
 		{"method", "helper"},
-		// NOTE: @interface MyAnnotation is a known gap — the parser consumes
-		// @interface as an annotation named "interface" and does not record
-		// MyAnnotation as a symbol.
 	}
 	if len(r.Symbols) != len(want) {
 		t.Errorf("got %d symbols, want %d", len(r.Symbols), len(want))

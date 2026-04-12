@@ -51,6 +51,8 @@ var langByExt = map[string]*langConfig{
 	".kts":   {id: "kotlin", container: ContainerBrace, containerClose: "}"},
 	".swift": {id: "swift", container: ContainerBrace, containerClose: "}"},
 	".php":   {id: "php", container: ContainerBrace, containerClose: "}"},
+	".scala": {id: "scala", container: ContainerBrace, containerClose: "}"},
+	".sc":    {id: "scala", container: ContainerBrace, containerClose: "}"},
 }
 
 func langForFile(path string) *langConfig {
@@ -115,6 +117,8 @@ func Parse(path string, src []byte) []SymbolInfo {
 		return swiftToSymbolInfo(path, src, ParseSwift(src))
 	case ".php":
 		return phpToSymbolInfo(path, src, ParsePHP(src))
+	case ".scala", ".sc":
+		return scalaToSymbolInfo(path, src, ParseScala(src))
 	default:
 		return nil
 	}

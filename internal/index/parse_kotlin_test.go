@@ -67,7 +67,7 @@ object Singleton {
     fun instance() = this
 }
 
-// Type alias (known gap: not recorded as symbol)
+// Type alias — recorded as a "type" symbol
 typealias StringList = List<String>
 
 // Infix extension function
@@ -101,7 +101,7 @@ infix fun Int.plus(other: Int) = this + other
 		{"function", "shout"},
 		{"class", "Singleton"},      // standalone object
 		{"function", "instance"},    // method inside Singleton
-		// typealias StringList — known gap: not recorded
+		{"type", "StringList"},      // typealias
 		{"function", "plus"},        // infix fun Int.plus
 	}
 	if len(r.Symbols) != len(want) {

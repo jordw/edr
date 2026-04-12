@@ -33,7 +33,7 @@ public class Widget<T: Comparable>: Base, Codable {
         return name
     }
 
-    // subscript (known gap: not recorded as symbol)
+    // subscript — correctly recorded as symbol
     subscript(index: Int) -> T {
         return items[index]
     }
@@ -86,7 +86,7 @@ func freeFunction() -> Int {
 		{"function", "doWork"},
 		{"function", "create"},
 		{"function", "description"},
-		// subscript — known gap: not recorded
+		{"function", "subscript"},     // subscript declaration
 		{"class", "Point"},
 		// var area — known gap: not recorded
 		{"class", "Direction"},

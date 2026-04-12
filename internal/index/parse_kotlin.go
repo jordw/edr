@@ -10,6 +10,7 @@ import (
 //   - class / interface / object / enum class / data class / sealed class /
 //     sealed interface / companion object
 //   - fun declarations (top-level and member)
+//   - typealias declarations (recorded as type "type")
 //   - import statements (dotted path, optional alias ignored)
 //   - package declaration
 //   - generics in declarations
@@ -19,7 +20,6 @@ import (
 //   - annotations (@Name, @Name(...))
 //
 // Known gaps:
-//   - typealias declarations not recognized
 //   - Anonymous object expressions not tracked
 //   - Lambda expressions not tracked
 //   - val/var property declarations not recorded as symbols
@@ -274,6 +274,11 @@ func (p *kotlinParser) handleIdent(word []byte) {
 				// we need to call it directly here since we consumed the keyword.
 			}
 			p.parseTypeDecl("class")
+			return
+		}
+	case "typealias":
+		if !p.inFunction() {
+			p.parseTypealias()
 			return
 		}
 	case "fun":
@@ -608,6 +613,25 @@ func (p *kotlinParser) recordFunction(name string, startLine int) int {
 		Type: "function", Name: name, StartLine: startLine, Parent: parent,
 	})
 	return sym
+}
+
+// parseTypealias handles "typealias Name = Type" declarations.
+// Records the alias name as type "type".
+func (p *kotlinParser) parseTypealias() {
+	startLine := p.s.Line
+	p.skipWSAndComments()
+	if p.s.EOF() || !lexkit.DefaultIdentStart[p.s.Peek()] {
+		return
+	}
+	name := string(p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont))
+	parent := p.stack.NearestSym()
+	p.result.Symbols = append(p.result.Symbols, KotlinSymbol{
+		Type: "type", Name: name, StartLine: startLine, EndLine: startLine, Parent: parent,
+	})
+	// Skip to end of line / semicolon
+	for !p.s.EOF() && p.s.Peek() != '\n' && p.s.Peek() != ';' {
+		p.s.Pos++
+	}
 }
 
 func (p *kotlinParser) skipWSAndComments() {

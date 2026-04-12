@@ -11,6 +11,7 @@ import (
 //   - extension (→ type "impl")
 //   - func declarations (→ type "function" or "method" when nested in a type)
 //   - init / deinit (→ type "method")
+//   - subscript declarations (→ type "function", name "subscript")
 //   - import statements
 //   - modifiers: public, private, fileprivate, internal, open, final,
 //     static, class (as modifier), override, mutating
@@ -19,7 +20,7 @@ import (
 //   - comments: // and /* */
 //
 // Known gaps:
-//   - subscript, computed property bodies not tracked as symbols
+//   - Computed property bodies (var x: T { ... }) not tracked as symbols
 //   - Closure expressions not tracked
 
 type SwiftResult struct {
@@ -252,6 +253,11 @@ func (p *swiftParser) handleIdent(word []byte) {
 			p.parseDeinit()
 			return
 		}
+	case "subscript":
+		if !p.inFunction() {
+			p.parseSubscript()
+			return
+		}
 	case "public", "private", "fileprivate", "internal", "open",
 		"final", "static", "override", "mutating", "nonmutating",
 		"lazy", "weak", "unowned", "dynamic", "required", "convenience",
@@ -361,6 +367,14 @@ func (p *swiftParser) parseInitOrDeinit(keyword string) {
 func (p *swiftParser) parseDeinit() {
 	startLine := p.s.Line
 	sym := p.recordFunc("deinit", "method", startLine)
+	p.skipToFuncBodyOrEnd(sym)
+}
+
+// parseSubscript handles "subscript(params) -> ReturnType { ... }" declarations.
+// Records as a function symbol named "subscript".
+func (p *swiftParser) parseSubscript() {
+	startLine := p.s.Line
+	sym := p.recordFunc("subscript", "function", startLine)
 	p.skipToFuncBodyOrEnd(sym)
 }
 

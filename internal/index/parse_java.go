@@ -7,7 +7,7 @@ import (
 // ParseJava is a hand-written Java symbol + import extractor.
 //
 // Handles:
-//   - class / interface / enum / record (NOT @interface — see Known gaps)
+//   - class / interface / enum / record / @interface (annotation type)
 //   - methods + constructors (with visibility, static, abstract, etc.)
 //   - import statements (single and static)
 //   - package declaration
@@ -17,7 +17,6 @@ import (
 //   - annotations (@Name)
 //
 // Known gaps:
-//   - @interface annotation types (handleAnnotation consumes @interface)
 //   - Anonymous inner classes not tracked
 //   - Lambda expressions not tracked
 //   - Field declarations not recorded as symbols
@@ -216,7 +215,12 @@ func (p *javaParser) handleAnnotation() {
 	if p.s.EOF() || !lexkit.DefaultIdentStart[p.s.Peek()] {
 		return
 	}
-	p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
+	word := p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
+	// @interface is a Java annotation type declaration, not an annotation usage.
+	if string(word) == "interface" {
+		p.parseTypeDecl("interface")
+		return
+	}
 	// Skip optional annotation arguments
 	p.skipWSAndComments()
 	if !p.s.EOF() && p.s.Peek() == '(' {

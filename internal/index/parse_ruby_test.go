@@ -71,10 +71,7 @@ module Outer
   end
 end
 
-# =begin / =end block comment — known gap: the parser does NOT recognise
-# =begin...=end pod comments. Declarations inside them ARE recorded as if
-# they were real code. This test documents that behaviour so a fix is
-# immediately visible.
+# =begin / =end block comment — correctly skipped by the parser.
 =begin
 class CommentedOut
   def ghost
@@ -106,10 +103,7 @@ end
 		{"name=", "method"},
 		// %w[] contents do not produce symbols (method bodies are not scanned).
 		{"word_array_test", "method"},
-		// Known gap: =begin/=end is not recognised; declarations inside are
-		// parsed as real code and recorded.
-		{"CommentedOut", "class"},
-		{"ghost", "method"},
+		// =begin/=end block comments are correctly skipped — no CommentedOut or ghost.
 	}
 	if len(r.Symbols) != len(want) {
 		t.Errorf("got %d symbols, want %d", len(r.Symbols), len(want))

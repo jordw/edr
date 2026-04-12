@@ -9,6 +9,8 @@ import (
 // Handles:
 //   - class / struct / interface / enum / record / record struct
 //   - methods, constructors, properties (public int Foo { get; set; })
+//   - expression-bodied properties and methods (public int X => ...)
+//   - event declarations (public event EventHandler X)
 //   - using statements (imports)
 //   - namespace declarations (block-scoped and file-scoped: namespace Foo.Bar;)
 //   - modifiers: public, private, protected, internal, static, abstract,
@@ -20,8 +22,6 @@ import (
 //   - attributes ([Attribute])
 //
 // Known gaps:
-//   - Expression-bodied property getters (public int X => ...) not recorded
-//   - Event declarations (public event EventHandler X) not recorded
 //   - Anonymous types and lambdas not tracked
 //   - Field declarations not recorded as symbols
 //   - Local functions inside methods not tracked
@@ -298,6 +298,12 @@ func (p *csharpParser) handleIdent(word []byte) {
 	case "void", "var", "dynamic":
 		// return type keyword — next ident is likely a method name
 		return
+	case "event":
+		// Event declaration: [modifiers] event EventType EventName;
+		if p.memberStart && p.currentKind() == csClass && !p.inFunction() {
+			p.parseEventDecl()
+			return
+		}
 	}
 
 	// At class scope and memberStart: try to detect method or property
@@ -492,8 +498,8 @@ func (p *csharpParser) tryParseMember(firstWord []byte) {
 		case c == '<':
 			p.s.SkipAngles()
 		case c == '=':
-			if sawParen && lastName != "" && p.s.PeekAt(1) == '>' {
-				// Expression-bodied method: name(...) => expr;
+			if lastName != "" && p.s.PeekAt(1) == '>' {
+				// Expression-bodied member: name => expr; (property) or name(...) => expr; (method)
 				p.s.Advance(2)
 				sym := p.recordMethod(lastName, startLine)
 				p.skipToMemberEnd()
@@ -544,6 +550,47 @@ func (p *csharpParser) recordMethod(name string, startLine int) int {
 		Type: "method", Name: name, StartLine: startLine, Parent: parent,
 	})
 	return sym
+}
+
+// parseEventDecl handles "event EventType EventName;" declarations.
+// Called after the "event" keyword has been consumed.
+// Records the event name as a "method" symbol.
+func (p *csharpParser) parseEventDecl() {
+	startLine := p.s.Line
+	// Skip the event type name (may include generics)
+	p.skipWSAndComments()
+	if p.s.EOF() || !lexkit.DefaultIdentStart[p.s.Peek()] {
+		return
+	}
+	p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
+	// Skip optional generic type parameters
+	p.skipWSAndComments()
+	if !p.s.EOF() && p.s.Peek() == '<' {
+		p.s.SkipAngles()
+	}
+	// Read the event name
+	p.skipWSAndComments()
+	if p.s.EOF() || !lexkit.DefaultIdentStart[p.s.Peek()] {
+		return
+	}
+	name := string(p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont))
+	sym := p.recordMethod(name, startLine)
+	// Skip to semicolon or brace
+	for !p.s.EOF() {
+		c := p.s.Peek()
+		if c == ';' {
+			p.result.Symbols[sym].EndLine = p.s.Line
+			p.s.Pos++
+			p.memberStart = true
+			return
+		}
+		if c == '{' {
+			p.result.Symbols[sym].EndLine = p.s.Line
+			p.handleOpenBrace()
+			return
+		}
+		p.s.Pos++
+	}
 }
 
 func (p *csharpParser) skipToMemberEnd() {
