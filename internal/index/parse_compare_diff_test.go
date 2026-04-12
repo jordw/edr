@@ -175,3 +175,66 @@ func TestDiff_Python(t *testing.T) {
 	// don't fail — use this test to spot regressions, not enforce parity.
 	t.Logf("py files: total missing (vs buggy regex): %d", totalMissing)
 }
+
+func TestDiff_Cpp(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	root := home + "/Documents/GitHub/linux/kernel"
+	if _, err := os.Stat(root); err != nil {
+		t.Skip("no linux kernel")
+	}
+	var paths []string
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext == ".c" || ext == ".h" {
+			paths = append(paths, path)
+		}
+		return nil
+	})
+	sort.Strings(paths)
+	if len(paths) > 40 {
+		paths = paths[:40]
+	}
+	var totalMissing, totalExtra int
+	var regexTotal, handTotal int
+	for _, path := range paths {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		rs := RegexParse(path, src)
+		hs := cppToSymbolInfo(path, src, ParseCpp(src))
+		regexTotal += len(rs)
+		handTotal += len(hs)
+		regexNames := map[string]int{}
+		for _, s := range rs {
+			regexNames[s.Type+":"+s.Name]++
+		}
+		handNames := map[string]int{}
+		for _, s := range hs {
+			handNames[s.Type+":"+s.Name]++
+		}
+		var missing, extra []string
+		for k, n := range regexNames {
+			if handNames[k] < n {
+				missing = append(missing, fmt.Sprintf("%s (-%d)", k, n-handNames[k]))
+			}
+		}
+		for k, n := range handNames {
+			if regexNames[k] < n {
+				extra = append(extra, fmt.Sprintf("%s (+%d)", k, n-regexNames[k]))
+			}
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			t.Logf("%s regex=%d hand=%d", filepath.Base(path), len(rs), len(hs))
+			t.Logf("  MISSING: %s", strings.Join(missing, ", "))
+			totalMissing += len(missing)
+		}
+		totalExtra += len(extra)
+	}
+	t.Logf("cpp: %d files, regex=%d hand=%d, missing=%d, extra=%d",
+		len(paths), regexTotal, handTotal, totalMissing, totalExtra)
+}
