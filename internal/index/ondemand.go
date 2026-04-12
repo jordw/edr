@@ -85,8 +85,16 @@ func (o *OnDemand) parseFile(absPath string) (*cachedFile, error) {
 		return nil, err
 	}
 
-	syms := RegexParse(absPath, src)
-	var imports []ImportInfo // regex parser doesn't extract imports
+	var syms []SymbolInfo
+	switch strings.ToLower(filepath.Ext(absPath)) {
+	case ".rb":
+		syms = rubyToSymbolInfo(absPath, src, ParseRuby(src))
+	case ".ts", ".tsx", ".mts", ".cts":
+		syms = tsToSymbolInfo(absPath, src, ParseTS(src))
+	default:
+		syms = RegexParse(absPath, src)
+	}
+	var imports []ImportInfo // populated by a separate walk (import graph)
 
 	h := sha256.Sum256(src)
 
