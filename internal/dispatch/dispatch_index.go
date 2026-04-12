@@ -79,6 +79,9 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 		ext         string
 	}
 	var collectedImports []rawImp
+	// Cache importer source content for symbol narrowing
+	importerContent := make(map[string][]byte) // rel path → first 8KB
+	var contentMu sync.Mutex
 
 	onFile := func(path string) {
 		ext := strings.ToLower(filepath.Ext(path))
@@ -109,6 +112,12 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 				collectedImports = append(collectedImports, rawImp{rel, imp.Raw, ext})
 			}
 			importMu.Unlock()
+			// Cache content for symbol narrowing (package-level imports)
+			if needsSymbolNarrowing(ext) {
+				contentMu.Lock()
+				importerContent[rel] = data
+				contentMu.Unlock()
+			}
 		}
 	}
 
@@ -127,10 +136,54 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 		sort.Strings(allFiles)
 		suffixIdx := index.BuildSuffixIndex(allFiles)
 
+		// Load symbols per file for narrowing package-level imports.
+		// For Go/Java/Python, only create edges to files whose symbols
+		// are actually referenced in the importer's source.
+		allSyms, symFiles := idx.LoadAllSymbols(edrDir)
+		symsByFile := make(map[string][]string) // rel path → symbol names
+		if allSyms != nil {
+			for _, s := range allSyms {
+				if int(s.FileID) < len(symFiles) {
+					rel := symFiles[s.FileID].Path
+					symsByFile[rel] = append(symsByFile[rel], s.Name)
+				}
+			}
+		}
+
 		for _, imp := range collectedImports {
 			resolved := index.ResolveImport(suffixIdx, imp.raw, imp.importerRel, imp.ext)
+			if !needsSymbolNarrowing(imp.ext) || len(resolved) <= 1 {
+				// File-level import (C, TS, Ruby) or single target — keep as-is
+				for _, target := range resolved {
+					rawImports = append(rawImports, [2]string{imp.importerRel, target})
+				}
+				continue
+			}
+			// Package-level import: narrow to files whose symbols appear in importer
+			src := importerContent[imp.importerRel]
+			if src == nil {
+				// No cached content — keep all edges as fallback
+				for _, target := range resolved {
+					rawImports = append(rawImports, [2]string{imp.importerRel, target})
+				}
+				continue
+			}
+			srcStr := string(src)
+			matched := false
 			for _, target := range resolved {
-				rawImports = append(rawImports, [2]string{imp.importerRel, target})
+				for _, sym := range symsByFile[target] {
+					if len(sym) >= 2 && strings.Contains(srcStr, sym) {
+						rawImports = append(rawImports, [2]string{imp.importerRel, target})
+						matched = true
+						break
+					}
+				}
+			}
+			if !matched {
+				// No symbol matches — keep first file as fallback (likely the package entry point)
+				if len(resolved) > 0 {
+					rawImports = append(rawImports, [2]string{imp.importerRel, resolved[0]})
+				}
 			}
 		}
 		if len(rawImports) > 0 {
@@ -160,6 +213,16 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 
 // buildImportGraph is no longer used — imports are extracted during BuildFullFromWalk.
 // Kept as dead code reference until confirmed removable.
+// needsSymbolNarrowing returns true for languages with package-level imports
+// (Go, Java, Python) where one import resolves to multiple files.
+func needsSymbolNarrowing(ext string) bool {
+	switch ext {
+	case ".go", ".java", ".py":
+		return true
+	}
+	return false
+}
+
 // hasImportPatterns returns true if we have import extraction for this extension.
 func hasImportPatterns(ext string) bool {
 	switch ext {
