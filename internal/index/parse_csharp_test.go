@@ -30,6 +30,12 @@ namespace MyApp.Models
 
         public abstract void DoWork();
 
+        // Expression-bodied property getter (known gap: not recorded as symbol)
+        public int Count => _items.Length;
+
+        // Event declaration (known gap: not recorded as symbol)
+        public event EventHandler Changed;
+
         public interface ICallback
         {
             void OnComplete(string result);
@@ -61,6 +67,9 @@ public class TopLevel
 {
     public void Run() {}
 }
+
+// partial class — "partial" is a modifier; parser should still produce "class"
+partial class Widget { }
 `)
 	r := ParseCSharp(src)
 	for i, s := range r.Symbols {
@@ -70,37 +79,72 @@ public class TopLevel
 		t.Logf("imp[%d] %s L%d", i, imp.Path, imp.Line)
 	}
 
-	found := map[string]bool{}
-	for _, s := range r.Symbols {
-		found[s.Type+":"+s.Name] = true
+	// Strict ordered assertion — every symbol is verified.
+	want := []struct{ typ, name string }{
+		{"class", "MyApp.Models"},  // namespace block
+		{"class", "Widget"},        // generic class
+		{"method", "Widget"},       // constructor
+		{"method", "Name"},         // property
+		{"method", "GetItems"},     // async method
+		{"method", "Create"},       // expression-bodied method
+		{"method", "DoWork"},       // abstract method
+		// Count (expression-bodied property) — known gap: not recorded
+		// Changed (event declaration) — known gap: not recorded
+		{"class", "ICallback"},     // nested interface
+		{"method", "OnComplete"},   // interface method
+		{"class", "Status"},        // enum
+		{"class", "Point"},         // record
+		{"class", "Inner"},         // nested class
+		{"method", "Helper"},       // inner method
+		{"class", "Vector3"},       // struct
+		{"class", "FileScopedNs"},  // file-scoped namespace
+		{"class", "TopLevel"},      // top-level class
+		{"method", "Run"},          // method
+		{"class", "Widget"},        // partial class (second Widget)
 	}
-	mustHave := []string{
-		"class:Widget",
-		"method:Widget",
-		"method:GetItems",
-		"method:Create",
-		"method:DoWork",
-		"class:ICallback",
-		"method:OnComplete",
-		"class:Status",
-		"class:Point",
-		"class:Inner",
-		"method:Helper",
-		"class:Vector3",
-		"class:TopLevel",
-		"method:Run",
-	}
-	for _, want := range mustHave {
-		if !found[want] {
-			t.Errorf("missing symbol: %s", want)
+
+	if len(r.Symbols) != len(want) {
+		t.Errorf("got %d symbols, want %d", len(r.Symbols), len(want))
+		for i, s := range r.Symbols {
+			t.Logf("  [%d] %s %q", i, s.Type, s.Name)
 		}
 	}
-	if found["class:Fake"] {
-		t.Error("spurious Fake from string")
+	for i, w := range want {
+		if i >= len(r.Symbols) {
+			t.Errorf("symbol %d missing: want %s %q", i, w.typ, w.name)
+			continue
+		}
+		if r.Symbols[i].Type != w.typ || r.Symbols[i].Name != w.name {
+			t.Errorf("symbol %d: got %s %q, want %s %q",
+				i, r.Symbols[i].Type, r.Symbols[i].Name, w.typ, w.name)
+		}
+	}
+
+	if len(r.Symbols) > len(want) {
+		for i := len(want); i < len(r.Symbols); i++ {
+			t.Errorf("unexpected extra symbol %d: %s %q", i, r.Symbols[i].Type, r.Symbols[i].Name)
+		}
+	}
+
+	for _, s := range r.Symbols {
+		if s.Name == "Fake" {
+			t.Error("spurious Fake from string")
+		}
 	}
 
 	wantImps := []string{"System", "System.Collections.Generic", "System.Math"}
-	if len(r.Imports) < len(wantImps) {
-		t.Errorf("got %d imports, want at least %d", len(r.Imports), len(wantImps))
+	if len(r.Imports) != len(wantImps) {
+		t.Errorf("got %d imports, want %d", len(r.Imports), len(wantImps))
+		for _, imp := range r.Imports {
+			t.Logf("  import %q", imp.Path)
+		}
+	}
+	for i, w := range wantImps {
+		if i >= len(r.Imports) {
+			break
+		}
+		if r.Imports[i].Path != w {
+			t.Errorf("import %d: got %q want %q", i, r.Imports[i].Path, w)
+		}
 	}
 }

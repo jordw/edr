@@ -31,9 +31,29 @@ public:
 
     int getValue() const noexcept;
 
+    // operator overloading — known gap: operator keyword causes parser to skip
+    // the declaration via skipOperatorName(); no symbol is recorded
+    Widget operator+(const Widget& other) const { return *this; }
+
+    // friend declaration — friend is treated as modifier; helperFunc is
+    // recorded as a method symbol (known limitation: should be excluded)
+    friend void helperFunc(Widget& w);
+
+    // constexpr function inside class — constexpr is a modifier keyword
+    constexpr int square(int x) { return x * x; }
+
 private:
     int value_;
 };
+
+// multiple inheritance — colon and base list skipped until {
+class Multi : public Base, public Interface {
+public:
+    void multiMethod() {}
+};
+
+// forward declaration — no { so recorded as class with EndLine set, no body
+class Forward;
 
 template<typename T>
 class Container {
@@ -68,6 +88,12 @@ T genericFunc(T a, T b) {
     return a + b;
 }
 
+// constexpr free function
+constexpr int squareFree(int x) { return x * x; }
+
+// C++17 nested namespace shorthand
+namespace outer::middle::inner { }
+
 const char* rawStr = R"delim(
     this has "quotes" and
     class Fake inside
@@ -95,6 +121,12 @@ const char* rawStr = R"delim(
 		{"method", "method"},
 		{"method", "count"},
 		{"method", "getValue"},
+		// operator+ is a known gap: skipOperatorName() skips it, no symbol recorded
+		{"method", "helperFunc"}, // friend decl: friend is a modifier; helperFunc treated as method declaration
+		{"method", "square"},     // constexpr int square — constexpr is modifier keyword
+		{"class", "Multi"},       // multiple inheritance: colon + base list skipped until {
+		{"method", "multiMethod"},
+		{"class", "Forward"}, // forward declaration: no {, symbol recorded with EndLine set
 		{"class", "Container"},
 		{"method", "add"},
 		{"method", "get"},
@@ -102,9 +134,11 @@ const char* rawStr = R"delim(
 		{"enum", "Color"},
 		{"enum", "Direction"},
 		{"type", "IntVec"},
-		{"type", "void"}, // typedef void (*Callback)(int, int) — name inside parens, known gap
+		{"type", "void"},         // typedef void (*Callback)(int, int) — name inside parens, known gap
 		{"function", "freeFunction"},
 		{"function", "genericFunc"},
+		{"function", "squareFree"}, // constexpr free function
+		{"namespace", "outer::middle::inner"}, // C++17 nested namespace shorthand
 	}
 	if len(r.Symbols) != len(want) {
 		t.Errorf("got %d symbols, want %d", len(r.Symbols), len(want))

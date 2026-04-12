@@ -76,6 +76,22 @@ macro_rules! my_macro {
 
 pub unsafe fn dangerous() {}
 pub const fn compile_time() -> i32 { 42 }
+
+// where clause — parseFn skips the where clause as part of the return-type scan
+fn complex<T>(x: T) -> T where T: Clone + std::fmt::Debug { x }
+
+// associated type in trait — type alias inside trait body is recorded as "type" symbol
+trait HasOutput {
+    type Output;
+    fn produce(&self) -> Self::Output;
+}
+
+// #[cfg(test)] attribute on mod — attribute is consumed by handleAttribute,
+// then mod body is parsed normally; symbols inside are found
+#[cfg(test)]
+mod tests {
+    fn test_helper() {}
+}
 `)
 	r := ParseRust(src)
 	for i, s := range r.Symbols {
@@ -108,6 +124,12 @@ pub const fn compile_time() -> i32 { 42 }
 		{"macro", "my_macro"},
 		{"function", "dangerous"},
 		{"function", "compile_time"},
+		{"function", "complex"},    // where clause: parseFn scans past it to find {
+		{"interface", "HasOutput"}, // trait with associated type
+		{"type", "Output"},         // associated type — recorded as "type" symbol
+		{"function", "produce"},    // fn in trait with associated type return
+		{"class", "tests"},         // #[cfg(test)] mod — attribute consumed, mod parsed normally
+		{"function", "test_helper"}, // fn inside cfg(test) mod — found by descending into body
 	}
 	if len(r.Symbols) != len(want) {
 		t.Errorf("got %d symbols, want %d", len(r.Symbols), len(want))

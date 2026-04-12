@@ -439,23 +439,39 @@ func rebuildSmart(root, edrDir string, walkFn func(root string, fn func(path str
 	}
 }
 
-// BuildFullFromWalk builds a complete index by walking the repo. No time limit.
 // SymbolExtractFn extracts symbols from a file's content.
 type SymbolExtractFn func(path string, data []byte) []SymbolEntry
 
-// OnFileFn is called for every file in the walk (including reused ones).
-// Receives the absolute path. Called sequentially during classification,
-// before parallel workers start.
-type OnFileFn func(path string)
+// ImportExtractFn extracts raw import strings from file content.
+// Called from worker goroutines — must be safe for concurrent use.
+// Returns raw import paths and an optional identifier set for symbol narrowing.
+type ImportExtractFn func(relPath string, data []byte) (raws []string, idents map[string]bool)
 
-func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(path string) error) error, progress func(int, int), extractSymbols ...SymbolExtractFn) error {
-	return BuildFullFromWalkWithHook(root, edrDir, walkFn, progress, nil, extractSymbols...)
+// ImportRecord holds raw imports extracted from a single file.
+type ImportRecord struct {
+	ImporterRel string
+	Ext         string
+	Raws        []string
+	Idents      map[string]bool
 }
 
-// BuildFullFromWalkWithHook is like BuildFullFromWalk but calls onFile for every
-// file encountered (including reused ones). This allows import extraction to
-// piggyback without changing the index format.
-func BuildFullFromWalkWithHook(root, edrDir string, walkFn func(root string, fn func(path string) error) error, progress func(int, int), onFile OnFileFn, extractSymbols ...SymbolExtractFn) error {
+// ImportResolveFn resolves raw imports into (importer, imported) edge pairs.
+// Called once after the walk completes with the full file list and symbol table.
+type ImportResolveFn func(allFiles []string, imports []ImportRecord, allSymbols []SymbolEntry, symFiles []FileEntry) [][2]string
+
+// BuildFullFromWalk builds a complete index by walking the repo. No time limit.
+func BuildFullFromWalk(root, edrDir string, walkFn func(root string, fn func(path string) error) error, progress func(int, int), extractSymbols ...SymbolExtractFn) error {
+	var symFn SymbolExtractFn
+	if len(extractSymbols) > 0 {
+		symFn = extractSymbols[0]
+	}
+	return BuildFullFromWalkWithImports(root, edrDir, walkFn, progress, symFn, nil, nil)
+}
+
+// BuildFullFromWalkWithImports builds a complete trigram index and optionally
+// an import graph in a single walk. Import extraction runs in the worker pool
+// (no redundant file reads) and the graph is written atomically with the index.
+func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, fn func(path string) error) error, progress func(int, int), extractSymbols SymbolExtractFn, extractImports ImportExtractFn, resolveImports ImportResolveFn) error {
 	var paths []string
 	if err := walkFn(root, func(path string) error {
 		paths = append(paths, path)
@@ -469,9 +485,11 @@ func BuildFullFromWalkWithHook(root, edrDir string, walkFn func(root string, fn 
 
 	gitMt := gitIndexMtime(root)
 	type fileResult struct {
-		entry FileEntry
-		tris  []Trigram
-		syms  []SymbolEntry // v3: extracted symbols
+		entry  FileEntry
+		tris   []Trigram
+		syms   []SymbolEntry
+		raws   []string        // raw import strings (nil if no import extraction)
+		idents map[string]bool // identifier set for symbol narrowing
 	}
 	workers := runtime.NumCPU()
 	if workers < 8 {
@@ -514,6 +532,19 @@ func BuildFullFromWalkWithHook(root, edrDir string, walkFn func(root string, fn 
 		}
 	}
 
+	// Load old import graph to carry forward edges for reused files.
+	var oldGraph *ImportGraphData
+	if extractImports != nil {
+		oldGraph = ReadImportGraph(edrDir)
+	}
+	var oldForward map[uint32][]uint32
+	if oldGraph != nil {
+		oldForward = make(map[uint32][]uint32, len(oldGraph.Files))
+		for _, e := range oldGraph.Edges {
+			oldForward[e.Importer] = append(oldForward[e.Importer], e.Imported)
+		}
+	}
+
 	// Pre-compute relative paths and stat info. Classify as reusable or needing re-index.
 	type pathInfo struct {
 		rel  string
@@ -522,6 +553,7 @@ func BuildFullFromWalkWithHook(root, edrDir string, walkFn func(root string, fn 
 	}
 	var needIndex []pathInfo
 	var reused []fileResult
+	var oldEdges [][2]string // carried-forward import edges for reused files
 	for _, p := range paths {
 		rel, _ := filepath.Rel(root, p)
 		if rel == "" {
@@ -538,15 +570,17 @@ func BuildFullFromWalkWithHook(root, edrDir string, walkFn func(root string, fn 
 				tris:  od.tris,
 				syms:  od.syms,
 			})
-			// Still notify hook for reused files (import extraction)
-			if onFile != nil {
-				onFile(p)
+			// Carry forward import edges for this unchanged file.
+			if oldGraph != nil {
+				if id, ok := oldGraph.fileIdx[rel]; ok {
+					for _, importedID := range oldForward[id] {
+						if int(importedID) < len(oldGraph.Files) {
+							oldEdges = append(oldEdges, [2]string{rel, oldGraph.Files[importedID]})
+						}
+					}
+				}
 			}
 			continue
-		}
-		// Notify hook for files that need re-indexing too
-		if onFile != nil {
-			onFile(p)
 		}
 		needIndex = append(needIndex, pathInfo{rel: rel, abs: p, info: info})
 	}
@@ -570,8 +604,11 @@ func BuildFullFromWalkWithHook(root, edrDir string, walkFn func(root string, fn 
 				}
 				entry := FileEntry{Path: pi.rel, Mtime: pi.info.ModTime().UnixNano(), Size: pi.info.Size()}
 				fr := fileResult{entry: entry, tris: ExtractTrigrams(data)}
-				if len(extractSymbols) > 0 && extractSymbols[0] != nil {
-					fr.syms = extractSymbols[0](pi.abs, data)
+				if extractSymbols != nil {
+					fr.syms = extractSymbols(pi.abs, data)
+				}
+				if extractImports != nil {
+					fr.raws, fr.idents = extractImports(pi.rel, data)
 				}
 				resultCh <- fr
 				if progress != nil {
@@ -593,9 +630,11 @@ func BuildFullFromWalkWithHook(root, edrDir string, walkFn func(root string, fn 
 	}()
 
 	type collected struct {
-		entry FileEntry
-		tris  []Trigram
-		syms  []SymbolEntry
+		entry  FileEntry
+		tris   []Trigram
+		syms   []SymbolEntry
+		raws   []string
+		idents map[string]bool
 	}
 	// Start with reused results, append newly indexed ones.
 	results := make([]collected, 0, len(reused)+len(needIndex))
@@ -603,7 +642,7 @@ func BuildFullFromWalkWithHook(root, edrDir string, walkFn func(root string, fn 
 		results = append(results, collected{entry: r.entry, tris: r.tris, syms: r.syms})
 	}
 	for r := range resultCh {
-		results = append(results, collected{entry: r.entry, tris: r.tris, syms: r.syms})
+		results = append(results, collected{entry: r.entry, tris: r.tris, syms: r.syms, raws: r.raws, idents: r.idents})
 	}
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].entry.Path < results[j].entry.Path
@@ -655,6 +694,35 @@ func BuildFullFromWalkWithHook(root, edrDir string, walkFn func(root string, fn 
 	if err := atomicWrite(filepath.Join(edrDir, MainFile), d.Marshal()); err != nil {
 		return fmt.Errorf("writing index: %w", err)
 	}
+
+	// Build and write import graph atomically with the trigram index.
+	if extractImports != nil && resolveImports != nil {
+		var importRecords []ImportRecord
+		for _, r := range results {
+			if len(r.raws) > 0 {
+				importRecords = append(importRecords, ImportRecord{
+					ImporterRel: r.entry.Path,
+					Ext:         strings.ToLower(filepath.Ext(r.entry.Path)),
+					Raws:        r.raws,
+					Idents:      r.idents,
+				})
+			}
+		}
+		allRelPaths := make([]string, len(files))
+		for i := range files {
+			allRelPaths[i] = files[i].Path
+		}
+		var resolvedEdges [][2]string
+		if len(importRecords) > 0 {
+			resolvedEdges = resolveImports(allRelPaths, importRecords, allSymbols, files)
+		}
+		allEdges := append(oldEdges, resolvedEdges...)
+		if len(allEdges) > 0 {
+			graph := BuildImportGraph(allRelPaths, allEdges)
+			WriteImportGraph(edrDir, graph)
+		}
+	}
+
 	ClearDirty(edrDir)
 	return nil
 }

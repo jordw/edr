@@ -49,6 +49,11 @@ data class Widget<T : Comparable<T>>(
         data class Success(val data: String) : Result()
         data class Failure(val error: String) : Result()
     }
+
+    // suspend function
+    suspend fun fetch(): String {
+        return ""
+    }
 }
 
 // Top-level function
@@ -56,6 +61,17 @@ fun topLevel(x: Int): Int = x * 2
 
 // Extension function
 fun String.shout(): String = uppercase()
+
+// Standalone object declaration
+object Singleton {
+    fun instance() = this
+}
+
+// Type alias (known gap: not recorded as symbol)
+typealias StringList = List<String>
+
+// Infix extension function
+infix fun Int.plus(other: Int) = this + other
 `)
 	r := ParseKotlin(src)
 	for i, s := range r.Symbols {
@@ -80,8 +96,13 @@ fun String.shout(): String = uppercase()
 		{"class", "Result"},
 		{"class", "Success"},
 		{"class", "Failure"},
+		{"function", "fetch"},       // suspend fun
 		{"function", "topLevel"},
 		{"function", "shout"},
+		{"class", "Singleton"},      // standalone object
+		{"function", "instance"},    // method inside Singleton
+		// typealias StringList — known gap: not recorded
+		{"function", "plus"},        // infix fun Int.plus
 	}
 	if len(r.Symbols) != len(want) {
 		t.Errorf("got %d symbols, want %d", len(r.Symbols), len(want))
@@ -91,11 +112,17 @@ fun String.shout(): String = uppercase()
 	}
 	for i, w := range want {
 		if i >= len(r.Symbols) {
-			break
+			t.Errorf("symbol %d missing: want %s %q", i, w.typ, w.name)
+			continue
 		}
 		if r.Symbols[i].Type != w.typ || r.Symbols[i].Name != w.name {
 			t.Errorf("symbol %d: got %s %q, want %s %q",
 				i, r.Symbols[i].Type, r.Symbols[i].Name, w.typ, w.name)
+		}
+	}
+	if len(r.Symbols) > len(want) {
+		for i := len(want); i < len(r.Symbols); i++ {
+			t.Errorf("unexpected extra symbol %d: %s %q", i, r.Symbols[i].Type, r.Symbols[i].Name)
 		}
 	}
 

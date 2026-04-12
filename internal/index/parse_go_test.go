@@ -65,6 +65,27 @@ func (b Bar) Other() {}
 func FnGeneric[T any](x T) T {
 	return x
 }
+
+// func init() — known gap: the parser records it as a function even though
+// init functions are not callable by user code. Filtering them out would
+// require a post-parse step. The test documents what the parser actually
+// produces so a future fix can be detected immediately.
+func init() {
+	_ = "setup"
+}
+
+// Blank identifier in a const block — known gap: the parser records "_"
+// as a constant name. The blank identifier is a valid identifier token so
+// the parser captures it; a callers that care should filter it out.
+const (
+	_ = iota
+	First
+	Second
+)
+
+// Pointer receiver on a non-struct type — should work identically to a
+// value receiver: receiver type is "Bar" (the '*' is stripped).
+func (b *Bar) PtrMethod() {}
 `)
 	r := ParseGo(src)
 	for i, s := range r.Symbols {
@@ -91,9 +112,22 @@ func FnGeneric[T any](x T) T {
 		{"method", "Method", "Foo"},
 		{"method", "Other", "Bar"},
 		{"function", "FnGeneric", ""},
+		// Known gap: init functions are recorded even though they are not
+		// callable by user code. The parser has no special-case for "init".
+		{"function", "init", ""},
+		// Known gap: blank identifier "_" is recorded as a constant name.
+		// The parser treats "_" as a normal identifier token.
+		{"constant", "_", ""},
+		{"constant", "First", ""},
+		{"constant", "Second", ""},
+		// Pointer receiver: '*' is stripped, receiver type is "Bar".
+		{"method", "PtrMethod", "Bar"},
 	}
 	if len(r.Symbols) != len(want) {
 		t.Errorf("got %d symbols, want %d", len(r.Symbols), len(want))
+		for i, s := range r.Symbols {
+			t.Logf("  [%d] %s %s recv=%q", i, s.Type, s.Name, s.Receiver)
+		}
 	}
 	for i, w := range want {
 		if i >= len(r.Symbols) {

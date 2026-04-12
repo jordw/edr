@@ -32,11 +32,19 @@ public class Widget<T: Comparable>: Base, Codable {
     public override func description() -> String {
         return name
     }
+
+    // subscript (known gap: not recorded as symbol)
+    subscript(index: Int) -> T {
+        return items[index]
+    }
 }
 
 public struct Point {
     var x: Double
     var y: Double
+
+    // computed property (known gap: not recorded as symbol)
+    var area: Double { return x * y }
 }
 
 public enum Direction {
@@ -67,27 +75,71 @@ func freeFunction() -> Int {
 		t.Logf("imp[%d] %s L%d", i, imp.Path, imp.Line)
 	}
 
-	found := map[string]bool{}
-	for _, s := range r.Symbols {
-		found[s.Type+":"+s.Name] = true
+	// Strict ordered assertion — every symbol is verified.
+	// Known gaps documented inline:
+	//   - subscript inside Widget: not recorded
+	//   - computed property (var area) inside Point: not recorded
+	//   - extension Widget:Drawable produces no symbol due to protocol func
+	//     consuming the protocol closing brace (pre-existing parser quirk)
+	//   - freeFunction ends up parented to Drawable (same quirk)
+	want := []struct{ typ, name string }{
+		{"class", "Widget"},
+		{"method", "init"},
+		{"method", "deinit"},
+		{"function", "doWork"},
+		{"function", "create"},
+		{"function", "description"},
+		// subscript — known gap: not recorded
+		{"class", "Point"},
+		// var area — known gap: not recorded
+		{"class", "Direction"},
+		{"function", "label"},
+		{"class", "Drawable"},        // protocol; also absorbs extension due to parser quirk
+		{"function", "draw"},         // protocol requirement (and extension draw)
+		{"function", "freeFunction"}, // parented to Drawable due to quirk
 	}
-	mustHave := []string{
-		"class:Widget",
-		"class:Point",
-		"class:Direction",
-		"class:Drawable",
-		// Note: freeFunction may be labeled "method" if protocol scope
-		// doesn't close properly on bodyless declarations. Known gap.
-	}
-	for _, want := range mustHave {
-		if !found[want] {
-			t.Errorf("missing symbol: %s", want)
+
+	if len(r.Symbols) != len(want) {
+		t.Errorf("got %d symbols, want %d", len(r.Symbols), len(want))
+		for i, s := range r.Symbols {
+			t.Logf("  [%d] %s %q", i, s.Type, s.Name)
 		}
 	}
-	if found["class:Fake"] || found["class:AlsoFake"] {
-		t.Error("spurious symbol from comment/string")
+	for i, w := range want {
+		if i >= len(r.Symbols) {
+			t.Errorf("symbol %d missing: want %s %q", i, w.typ, w.name)
+			continue
+		}
+		if r.Symbols[i].Type != w.typ || r.Symbols[i].Name != w.name {
+			t.Errorf("symbol %d: got %s %q, want %s %q",
+				i, r.Symbols[i].Type, r.Symbols[i].Name, w.typ, w.name)
+		}
 	}
-	if len(r.Imports) < 2 {
-		t.Errorf("got %d imports, want at least 2", len(r.Imports))
+	if len(r.Symbols) > len(want) {
+		for i := len(want); i < len(r.Symbols); i++ {
+			t.Errorf("unexpected extra symbol %d: %s %q", i, r.Symbols[i].Type, r.Symbols[i].Name)
+		}
+	}
+
+	for _, s := range r.Symbols {
+		if s.Name == "Fake" || s.Name == "AlsoFake" {
+			t.Errorf("spurious symbol from comment/string: %+v", s)
+		}
+	}
+
+	if len(r.Imports) != 2 {
+		t.Errorf("got %d imports, want 2", len(r.Imports))
+		for _, imp := range r.Imports {
+			t.Logf("  import %q", imp.Path)
+		}
+	}
+	wantImps := []string{"Foundation", "UIKit"}
+	for i, w := range wantImps {
+		if i >= len(r.Imports) {
+			break
+		}
+		if r.Imports[i].Path != w {
+			t.Errorf("import %d: got %q want %q", i, r.Imports[i].Path, w)
+		}
 	}
 }

@@ -54,6 +54,29 @@ def outer():
     def inner():
         pass
     return inner
+
+class Container:
+    # @property decorator — the decorator line is skipped and the def is
+    # recorded as a method under its declared name.
+    @property
+    def value(self):
+        return self._value
+
+    # Nested class inside a class — recorded as a class with Container as
+    # parent.
+    class Inner:
+        def inner_method(self):
+            pass
+
+def with_match(x):
+    # match/case statement (Python 3.10+) — negative test. 'match' and
+    # 'case' are soft keywords in Python; the parser must not produce
+    # symbols for them or for identifiers in case patterns.
+    match x:
+        case 1:
+            pass
+        case 2:
+            pass
 `)
 	r := ParsePython(src)
 	for i, s := range r.Symbols {
@@ -76,9 +99,20 @@ def outer():
 		{"method", "nested_helper"},
 		{"function", "outer"},
 		{"method", "inner"},
+		{"class", "Container"},
+		// @property decorator: the decorator is skipped, method is recorded normally.
+		{"method", "value"},
+		// Nested class: recorded as a class with Container as parent.
+		{"class", "Inner"},
+		{"method", "inner_method"},
+		// match/case: does not produce symbols (match/case are soft keywords).
+		{"function", "with_match"},
 	}
 	if len(r.Symbols) != len(want) {
 		t.Errorf("got %d symbols, want %d", len(r.Symbols), len(want))
+		for i, s := range r.Symbols {
+			t.Logf("  [%d] %s %q parent=%d", i, s.Type, s.Name, s.Parent)
+		}
 	}
 	for i, w := range want {
 		if i >= len(r.Symbols) {

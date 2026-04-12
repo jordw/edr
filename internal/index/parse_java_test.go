@@ -8,6 +8,7 @@ func TestParseJava_Fixture(t *testing.T) {
 import java.util.List;
 import java.util.Map;
 import static java.util.Collections.emptyList;
+import java.util.*;
 
 // class Fake — should not match
 /* class AlsoFake */
@@ -16,6 +17,8 @@ public class Widget<T extends Comparable<T>> extends Base implements Serializabl
 
     private static final int MAX = 100;
     private String name;
+
+    static { System.out.println("init"); }
 
     public Widget(String name) {
         this.name = name;
@@ -37,9 +40,16 @@ public class Widget<T extends Comparable<T>> extends Base implements Serializabl
 
     public abstract void abstractMethod();
 
+    void throwsMethod() throws IOException { }
+
     public interface Callback {
         void onEvent(String event);
+        default void defaultMethod() { System.out.println("default"); }
     }
+
+    // @interface (annotation type declaration) — known gap: parsed as annotation,
+    // not recorded as a symbol
+    @interface MyAnnotation { String value(); }
 
     public enum Status {
         ACTIVE, INACTIVE;
@@ -68,19 +78,24 @@ public class Widget<T extends Comparable<T>> extends Base implements Serializabl
 
 	want := []struct{ typ, name string }{
 		{"class", "Widget"},
-		{"method", "Widget"},       // constructor
+		{"method", "Widget"},        // constructor
 		{"method", "doSomething"},
 		{"method", "toString"},
 		{"method", "wrap"},
 		{"method", "abstractMethod"},
+		{"method", "throwsMethod"},  // throws clause — parser handles since recent fix
 		{"interface", "Callback"},
 		{"method", "onEvent"},
+		{"method", "defaultMethod"}, // Java 8 default method in interface
 		{"enum", "Status"},
 		{"method", "label"},
-		{"class", "Point"},         // record
+		{"class", "Point"},          // record
 		{"method", "distance"},
 		{"class", "Inner"},
 		{"method", "helper"},
+		// NOTE: @interface MyAnnotation is a known gap — the parser consumes
+		// @interface as an annotation named "interface" and does not record
+		// MyAnnotation as a symbol.
 	}
 	if len(r.Symbols) != len(want) {
 		t.Errorf("got %d symbols, want %d", len(r.Symbols), len(want))
@@ -99,9 +114,14 @@ public class Widget<T extends Comparable<T>> extends Base implements Serializabl
 		if s.Name == "Fake" || s.Name == "AlsoFake" || s.Name == "trap" || s.Name == "MAX" || s.Name == "name" {
 			t.Errorf("spurious symbol: %+v", s)
 		}
+		// static initializer blocks must not produce symbols
+		if s.Type == "method" && s.Name == "static" {
+			t.Errorf("static initializer block recorded as symbol: %+v", s)
+		}
 	}
 
-	wantImps := []string{"java.util.List", "java.util.Map", "java.util.Collections.emptyList"}
+	// Wildcard import java.util.* should be captured as-is
+	wantImps := []string{"java.util.List", "java.util.Map", "java.util.Collections.emptyList", "java.util.*"}
 	if len(r.Imports) != len(wantImps) {
 		t.Errorf("got %d imports, want %d", len(r.Imports), len(wantImps))
 	}

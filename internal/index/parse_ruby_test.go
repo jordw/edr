@@ -48,7 +48,39 @@ module Outer
   module Helpers
     def self.noop; end
   end
+
+  class Extra
+    # Method with ! suffix (bang method)
+    def save!
+      true
+    end
+
+    # Setter method with = suffix
+    def name=(val)
+      @name = val
+    end
+
+    # %w[] word array containing def/class keywords — negative test.
+    # Known gap: %w[] is not parsed as a literal; however, these keywords
+    # appear inside a method body which the parser never descends into for
+    # symbol extraction, so no spurious symbols are produced.
+    def word_array_test
+      words = %w[def foo class Bar]
+      words
+    end
+  end
 end
+
+# =begin / =end block comment — known gap: the parser does NOT recognise
+# =begin...=end pod comments. Declarations inside them ARE recorded as if
+# they were real code. This test documents that behaviour so a fix is
+# immediately visible.
+=begin
+class CommentedOut
+  def ghost
+  end
+end
+=end
 `)
 	r := ParseRuby(src)
 
@@ -67,9 +99,20 @@ end
 		{"each", "method"},
 		{"Helpers", "module"},
 		{"noop", "method"},
+		{"Extra", "class"},
+		// Bang method — parser captures the trailing '!' as part of the name.
+		{"save!", "method"},
+		// Setter method — parser captures the trailing '=' as part of the name.
+		{"name=", "method"},
+		// %w[] contents do not produce symbols (method bodies are not scanned).
+		{"word_array_test", "method"},
+		// Known gap: =begin/=end is not recognised; declarations inside are
+		// parsed as real code and recorded.
+		{"CommentedOut", "class"},
+		{"ghost", "method"},
 	}
 	if len(r.Symbols) != len(want) {
-		t.Fatalf("got %d symbols, want %d", len(r.Symbols), len(want))
+		t.Errorf("got %d symbols, want %d", len(r.Symbols), len(want))
 		for i, s := range r.Symbols {
 			t.Logf("  [%d] %s %s L%d-%d parent=%d", i, s.Type, s.Name, s.StartLine, s.EndLine, s.Parent)
 		}
@@ -82,6 +125,7 @@ end
 			t.Errorf("symbol %d: got %s %q, want %s %q", i, r.Symbols[i].Type, r.Symbols[i].Name, w.typ, w.name)
 		}
 	}
+	// Strings and heredocs must not produce symbols.
 	for _, s := range r.Symbols {
 		if s.Name == "Fake" || s.Name == "foo" {
 			t.Errorf("spurious symbol from string/heredoc: %+v", s)

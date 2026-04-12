@@ -72,7 +72,24 @@ func TestParseTS_Fixture(t *testing.T) {
 		"\n" +
 		"const inner = () => {\n" +
 		"  function nestedShouldNotLeak() {}\n" +
-		"};\n")
+		"};\n" +
+		"\n" +
+		// export default class — the 'default' keyword is skipped and the
+		// class is recorded under its declared name.
+		"export default class DefaultWidget {\n" +
+		"  greet(): string { return 'hi'; }\n" +
+		"}\n" +
+		"\n" +
+		// abstract class + abstract method — 'abstract' is treated as a
+		// modifier and stripped; both the class and its abstract method
+		// are recorded normally.
+		"abstract class AbstractBase {\n" +
+		"  abstract doWork(): void;\n" +
+		"}\n" +
+		"\n" +
+		// const enum — the 'const' modifier before 'enum' is stripped and
+		// the enum is recorded under its name like a regular enum.
+		"const enum Direction { Up, Down }\n")
 
 	r := ParseTS(src)
 	for i, s := range r.Symbols {
@@ -98,9 +115,21 @@ func TestParseTS_Fixture(t *testing.T) {
 		{"namespace", "Util"},
 		{"function", "noop"},
 		{"const", "inner"},
+		// export default class: recorded with declared name, 'default' stripped.
+		{"class", "DefaultWidget"},
+		{"method", "greet"},
+		// abstract class: 'abstract' treated as modifier, class recorded normally.
+		{"class", "AbstractBase"},
+		// abstract method: recorded as a regular method.
+		{"method", "doWork"},
+		// const enum: 'const' modifier stripped, recorded as enum.
+		{"enum", "Direction"},
 	}
 	if len(r.Symbols) != len(want) {
 		t.Errorf("got %d symbols, want %d", len(r.Symbols), len(want))
+		for i, s := range r.Symbols {
+			t.Logf("  [%d] %s %q", i, s.Type, s.Name)
+		}
 	}
 	for i, w := range want {
 		if i >= len(r.Symbols) {
