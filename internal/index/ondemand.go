@@ -91,6 +91,10 @@ func (o *OnDemand) parseFile(absPath string) (*cachedFile, error) {
 		syms = rubyToSymbolInfo(absPath, src, ParseRuby(src))
 	case ".ts", ".tsx", ".mts", ".cts":
 		syms = tsToSymbolInfo(absPath, src, ParseTS(src))
+	case ".go":
+		syms = goToSymbolInfo(absPath, src, ParseGo(src))
+	case ".py", ".pyi":
+		syms = pythonToSymbolInfo(absPath, src, ParsePython(src))
 	default:
 		syms = RegexParse(absPath, src)
 	}

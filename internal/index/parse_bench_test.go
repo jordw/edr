@@ -111,6 +111,68 @@ func BenchmarkTS_Regex(b *testing.B) {
 	b.ReportMetric(float64(syms)/float64(b.N), "syms/op")
 }
 
+func BenchmarkGo_Regex(b *testing.B) {
+	files := collectFiles("../..", ".go", 500)
+	if len(files) == 0 { b.Skip("no files") }
+	var total int
+	for _, f := range files { total += len(f) }
+	b.SetBytes(int64(total / len(files)))
+	b.ResetTimer()
+	var syms int
+	for i := 0; i < b.N; i++ {
+		s := RegexParse("file.go", files[i%len(files)])
+		syms += len(s)
+	}
+	b.ReportMetric(float64(syms)/float64(b.N), "syms/op")
+}
+
+func BenchmarkPython_Regex(b *testing.B) {
+	home, _ := os.UserHomeDir()
+	files := collectFiles(home+"/Documents/GitHub/pytorch/torch", ".py", 1000)
+	if len(files) == 0 { b.Skip("no files") }
+	var total int
+	for _, f := range files { total += len(f) }
+	b.SetBytes(int64(total / len(files)))
+	b.ResetTimer()
+	var syms int
+	for i := 0; i < b.N; i++ {
+		s := RegexParse("file.py", files[i%len(files)])
+		syms += len(s)
+	}
+	b.ReportMetric(float64(syms)/float64(b.N), "syms/op")
+}
+
+func BenchmarkPython_Handwritten(b *testing.B) {
+	home, _ := os.UserHomeDir()
+	files := collectFiles(home+"/Documents/GitHub/pytorch/torch", ".py", 1000)
+	if len(files) == 0 { b.Skip("no files") }
+	var total int
+	for _, f := range files { total += len(f) }
+	b.SetBytes(int64(total / len(files)))
+	b.ResetTimer()
+	var syms int
+	for i := 0; i < b.N; i++ {
+		r := ParsePython(files[i%len(files)])
+		syms += len(r.Symbols)
+	}
+	b.ReportMetric(float64(syms)/float64(b.N), "syms/op")
+}
+
+func BenchmarkGo_Handwritten(b *testing.B) {
+	files := collectFiles("../..", ".go", 500)
+	if len(files) == 0 { b.Skip("no files") }
+	var total int
+	for _, f := range files { total += len(f) }
+	b.SetBytes(int64(total / len(files)))
+	b.ResetTimer()
+	var syms int
+	for i := 0; i < b.N; i++ {
+		r := ParseGo(files[i%len(files)])
+		syms += len(r.Symbols)
+	}
+	b.ReportMetric(float64(syms)/float64(b.N), "syms/op")
+}
+
 func BenchmarkTS_Handwritten(b *testing.B) {
 	files := collectFiles(tsRepo(), ".ts", 2000)
 	if len(files) == 0 {

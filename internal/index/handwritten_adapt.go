@@ -86,3 +86,51 @@ func tsToSymbolInfo(file string, src []byte, r TSResult) []SymbolInfo {
 	}
 	return out
 }
+
+// goToSymbolInfo converts a GoResult into []SymbolInfo. GoSymbol has no
+// Parent field since Go methods are linked to their receiver type by
+// name (not index), so ParentIndex is always -1.
+func goToSymbolInfo(file string, src []byte, r GoResult) []SymbolInfo {
+	if len(r.Symbols) == 0 {
+		return nil
+	}
+	offsets := computeLineOffsets(src)
+	srcLen := len(src)
+	out := make([]SymbolInfo, len(r.Symbols))
+	for i, s := range r.Symbols {
+		out[i] = SymbolInfo{
+			Type:        s.Type,
+			Name:        s.Name,
+			File:        file,
+			StartLine:   uint32(s.StartLine),
+			EndLine:     uint32(s.EndLine),
+			StartByte:   lineStartByte(offsets, s.StartLine),
+			EndByte:     lineEndByte(offsets, s.EndLine, srcLen),
+			ParentIndex: -1,
+		}
+	}
+	return out
+}
+
+// pythonToSymbolInfo converts a PyResult into []SymbolInfo.
+func pythonToSymbolInfo(file string, src []byte, r PyResult) []SymbolInfo {
+	if len(r.Symbols) == 0 {
+		return nil
+	}
+	offsets := computeLineOffsets(src)
+	srcLen := len(src)
+	out := make([]SymbolInfo, len(r.Symbols))
+	for i, s := range r.Symbols {
+		out[i] = SymbolInfo{
+			Type:        s.Type,
+			Name:        s.Name,
+			File:        file,
+			StartLine:   uint32(s.StartLine),
+			EndLine:     uint32(s.EndLine),
+			StartByte:   lineStartByte(offsets, s.StartLine),
+			EndByte:     lineEndByte(offsets, s.EndLine, srcLen),
+			ParentIndex: s.Parent,
+		}
+	}
+	return out
+}
