@@ -41,7 +41,9 @@ func lineEndByte(offsets []uint32, line int, srcLen int) uint32 {
 
 // rubyToSymbolInfo converts a RubyResult into []SymbolInfo. Byte
 // offsets are derived from the line offset table since the Ruby parser
-// tracks only line numbers.
+// tracks only line numbers. Ruby "module" is mapped to SymbolInfo type
+// "class" to match the ecosystem convention (resolve_rank treats
+// "class" as a shape-containing container; "module" is unknown).
 func rubyToSymbolInfo(file string, src []byte, r RubyResult) []SymbolInfo {
 	if len(r.Symbols) == 0 {
 		return nil
@@ -50,8 +52,12 @@ func rubyToSymbolInfo(file string, src []byte, r RubyResult) []SymbolInfo {
 	srcLen := len(src)
 	out := make([]SymbolInfo, len(r.Symbols))
 	for i, s := range r.Symbols {
+		typ := s.Type
+		if typ == "module" {
+			typ = "class"
+		}
 		out[i] = SymbolInfo{
-			Type:        s.Type,
+			Type:        typ,
 			Name:        s.Name,
 			File:        file,
 			StartLine:   uint32(s.StartLine),

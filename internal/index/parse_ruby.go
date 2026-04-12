@@ -268,6 +268,12 @@ func (p *rbParser) parseClassOrModule(kind string) {
 		p.regexOK = false
 		return
 	}
+	// For `class Foo::Bar::Baz`, Ruby is defining `Baz` inside the
+	// Foo::Bar namespace. Emit just the leaf name so symbol search finds
+	// the actual class rather than the namespace prefix.
+	if i := strings.LastIndex(name, "::"); i >= 0 {
+		name = name[i+2:]
+	}
 	parent := p.stack.NearestSym()
 	idx := len(p.result.Symbols)
 	p.result.Symbols = append(p.result.Symbols, RubySymbol{

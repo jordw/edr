@@ -82,6 +82,55 @@ func TestDiff_Go(t *testing.T) {
 	})
 }
 
+func TestDiff_Ruby(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	root := home + "/Documents/GitHub/rails"
+	if _, err := os.Stat(root); err != nil { t.Skip("no rails") }
+	var paths []string
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() { return nil }
+		if strings.HasSuffix(path, ".rb") { paths = append(paths, path) }
+		return nil
+	})
+	sort.Strings(paths)
+	if len(paths) > 60 { paths = paths[:60] }
+	totalMissing := 0
+	for _, path := range paths {
+		src, err := os.ReadFile(path)
+		if err != nil { continue }
+		rs := RegexParse(path, src)
+		hs := rubyToSymbolInfo(path, src, ParseRuby(src))
+		regexNames := map[string]int{}
+		for _, s := range rs { regexNames[s.Type+":"+s.Name]++ }
+		handNames := map[string]int{}
+		for _, s := range hs { handNames[s.Type+":"+s.Name]++ }
+		var missing []string
+		for k, n := range regexNames {
+			if handNames[k] < n {
+				missing = append(missing, fmt.Sprintf("%s (-%d)", k, n-handNames[k]))
+			}
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			t.Logf("%s regex=%d hand=%d", path, len(rs), len(hs))
+			t.Logf("  MISSING: %s", strings.Join(missing, ", "))
+			totalMissing += len(missing)
+		}
+	}
+	// Remaining "missing" are regex bugs the hand-written parser
+	// correctly handles:
+	//   1. `class Foo::Bar::Baz` — regex truncates the qualified name to
+	//      the first segment; hand-written emits the leaf name (the
+	//      actual class being defined).
+	//   2. `def self.foo` — regex captures `self` as the method name;
+	//      hand-written captures `foo`.
+	//   3. Heredoc bodies at column 0 confuse regex's `regexFindIndentEnd`,
+	//      truncating the enclosing class scope and leaving nested defs
+	//      with no parent (labeled `function` instead of `method`).
+	// Informational only — regex is not a fair ground truth here.
+	t.Logf("ruby files: total missing (vs buggy regex): %d", totalMissing)
+}
+
 func TestDiff_Python(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	root := home + "/Documents/GitHub/pytorch/torch"
