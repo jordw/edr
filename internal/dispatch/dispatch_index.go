@@ -125,7 +125,6 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 	if err != nil {
 		return nil, err
 	}
-
 	// Resolve imports and build graph
 	if len(collectedImports) > 0 {
 		indexed := idx.IndexedPaths(edrDir)
@@ -135,7 +134,6 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 		}
 		sort.Strings(allFiles)
 		suffixIdx := index.BuildSuffixIndex(allFiles)
-
 		// Load symbols per file for narrowing package-level imports.
 		// For Go/Java/Python, only create edges to files whose symbols
 		// are actually referenced in the importer's source.
@@ -150,29 +148,48 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 			}
 		}
 
+		// Pre-build identifier sets for importers that need symbol narrowing.
+		// This avoids repeated strings.Contains over 8KB source for every symbol.
+		identSets := make(map[string]map[string]bool) // rel → set of identifiers
+		for rel, src := range importerContent {
+			set := make(map[string]bool, 64)
+			// Extract word-like tokens: sequences of [a-zA-Z0-9_]
+			word := make([]byte, 0, 64)
+			for _, b := range src {
+				if (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' {
+					word = append(word, b)
+				} else {
+					if len(word) >= 2 {
+						set[string(word)] = true
+					}
+					word = word[:0]
+				}
+			}
+			if len(word) >= 2 {
+				set[string(word)] = true
+			}
+			identSets[rel] = set
+		}
+
 		for _, imp := range collectedImports {
 			resolved := index.ResolveImport(suffixIdx, imp.raw, imp.importerRel, imp.ext)
 			if !needsSymbolNarrowing(imp.ext) || len(resolved) <= 1 {
-				// File-level import (C, TS, Ruby) or single target — keep as-is
 				for _, target := range resolved {
 					rawImports = append(rawImports, [2]string{imp.importerRel, target})
 				}
 				continue
 			}
-			// Package-level import: narrow to files whose symbols appear in importer
-			src := importerContent[imp.importerRel]
-			if src == nil {
-				// No cached content — keep all edges as fallback
+			idents := identSets[imp.importerRel]
+			if idents == nil {
 				for _, target := range resolved {
 					rawImports = append(rawImports, [2]string{imp.importerRel, target})
 				}
 				continue
 			}
-			srcStr := string(src)
 			matched := false
 			for _, target := range resolved {
 				for _, sym := range symsByFile[target] {
-					if len(sym) >= 2 && strings.Contains(srcStr, sym) {
+					if idents[sym] {
 						rawImports = append(rawImports, [2]string{imp.importerRel, target})
 						matched = true
 						break
@@ -180,7 +197,6 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 				}
 			}
 			if !matched {
-				// No symbol matches — keep first file as fallback (likely the package entry point)
 				if len(resolved) > 0 {
 					rawImports = append(rawImports, [2]string{imp.importerRel, resolved[0]})
 				}
