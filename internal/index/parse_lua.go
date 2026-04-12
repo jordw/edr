@@ -196,9 +196,10 @@ func (p *luaParser) handleIdent(word []byte) {
 		p.handleLocal()
 	case "require":
 		p.parseRequire()
-	case "if", "for", "while", "do":
-		// These open keyword-terminated blocks we don't track as symbols.
-		// We still push a depth counter so "end" tokens are balanced.
+	case "if", "do":
+		// Block openers balanced by "end". Note: while/for are NOT here
+		// because their "do" keyword is the actual block opener — counting
+		// both would double-increment.
 		p.blockDepth++
 	case "repeat":
 		// repeat...until — until doesn't use "end", but we track the depth
@@ -318,7 +319,7 @@ func (p *luaParser) skipFunctionBody() {
 		case lexkit.DefaultIdentStart[c]:
 			w := p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 			switch string(w) {
-			case "function", "if", "for", "while", "do":
+			case "function", "if", "do":
 				depth++
 			case "repeat":
 				depth++ // repeat...until pair

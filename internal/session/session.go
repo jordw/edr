@@ -958,6 +958,12 @@ func (s *Session) ProcessReadResult(cmd string, result map[string]any, flags map
 		if v, ok := result["sym"]; ok {
 			deduped["sym"] = v
 		}
+		// Preserve expand data (callers/deps) even on unchanged reads.
+		for _, key := range []string{"callers", "callers_method", "deps", "deps_method"} {
+			if v, ok := result[key]; ok {
+				deduped[key] = v
+			}
+		}
 		return deduped
 	}
 	return nil
