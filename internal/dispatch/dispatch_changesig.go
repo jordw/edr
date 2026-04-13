@@ -143,6 +143,9 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 		}
 
 		sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
+		// Deduplicate overlapping spans (e.g. a method and its containing class
+		// can both be returned as references).
+		spans = deduplicateSpans(spans)
 		newData := transformCallSites(data, spans, callRe, sym.Name, addParam != "", callarg, atIdx, removeIdx)
 		if !bytes.Equal(data, newData) {
 			edits = append(edits, fileEdit{file: file, oldData: data, newData: newData})
@@ -153,6 +156,7 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 	// We already replaced the param list; now find calls to the function elsewhere in that file.
 	if defSpans, ok := refFileSpans[sym.File]; ok {
 		sort.Slice(defSpans, func(i, j int) bool { return defSpans[i].start < defSpans[j].start })
+		defSpans = deduplicateSpans(defSpans)
 		transformed := transformCallSites(newDefData, defSpans, callRe, sym.Name, addParam != "", callarg, atIdx, removeIdx)
 		if !bytes.Equal(newDefData, transformed) {
 			edits[0].newData = transformed
@@ -400,4 +404,29 @@ func transformCallSites(data []byte, spans []sigSpan, callRe *regexp.Regexp, fun
 	}
 
 	return result
+}
+
+// deduplicateSpans removes spans that are fully contained within another span.
+// Input must be sorted by start offset.
+func deduplicateSpans(spans []sigSpan) []sigSpan {
+	if len(spans) <= 1 {
+		return spans
+	}
+	out := []sigSpan{spans[0]}
+	for _, s := range spans[1:] {
+		prev := &out[len(out)-1]
+		if s.start >= prev.start && s.end <= prev.end {
+			// s is fully inside prev — skip it
+			continue
+		}
+		if s.start < prev.end {
+			// Overlapping — merge by extending prev
+			if s.end > prev.end {
+				prev.end = s.end
+			}
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
