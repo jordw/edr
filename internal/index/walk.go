@@ -608,6 +608,17 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 	truncated := false
 	filesRendered := 0
 	shownSymbols := 0
+	// When budget is active, sort symbols within each file by importance
+	// so truncation keeps the most useful symbols visible.
+	if budgetChars > 0 {
+		for file, syms := range byFile {
+			sort.SliceStable(syms, func(i, j int) bool {
+				return symbolImportance(syms[i]) > symbolImportance(syms[j])
+			})
+			byFile[file] = syms
+		}
+	}
+
 	var mapFiles []MapFileEntry
 	for _, file := range fileOrder {
 		syms := byFile[file]
@@ -976,6 +987,17 @@ func repoMapFromSymbolIndex(root, edrDir string, cfg repoMapConfig, budgetChars 
 	totalFiles := len(fileIDs)
 	totalSymbols := len(allSyms)
 
+	// When budget is active, sort symbols within each file by importance.
+	if budgetChars > 0 {
+		for _, fs := range byFile {
+			sort.SliceStable(fs.syms, func(i, j int) bool {
+				si := symbolTypeImportance(fs.syms[i].Kind.String(), int(fs.syms[i].EndLine)-int(fs.syms[i].StartLine))
+				sj := symbolTypeImportance(fs.syms[j].Kind.String(), int(fs.syms[j].EndLine)-int(fs.syms[j].StartLine))
+				return si > sj
+			})
+		}
+	}
+
 	// Render with budget
 	var b strings.Builder
 	var mapFiles []MapFileEntry
@@ -1086,6 +1108,43 @@ func isCodeFile(rel string) bool {
 		return true
 	}
 	return false
+}
+
+// symbolImportance returns a score for sorting symbols within a file.
+// Higher scores appear first when budget truncation is active.
+// Interfaces, classes, and structs rank highest; single-line consts lowest.
+func symbolImportance(s SymbolInfo) int {
+	return symbolTypeImportance(s.Type, int(s.EndLine)-int(s.StartLine))
+}
+
+// symbolTypeImportance scores a symbol by its type string and line span.
+func symbolTypeImportance(symType string, span int) int {
+	score := 0
+	switch symType {
+	case "interface", "trait":
+		score = 60
+	case "class", "struct":
+		score = 50
+	case "type", "enum":
+		score = 40
+	case "function", "method":
+		score = 30
+	case "impl", "module":
+		score = 20
+	case "variable", "property":
+		score = 10
+	case "constant":
+		score = 5
+	default:
+		score = 15
+	}
+	// Multi-line symbols are more substantial than single-line ones.
+	if span > 5 {
+		score += 10
+	} else if span > 0 {
+		score += 3
+	}
+	return score
 }
 
 func isTestOrBenchFile(rel string) bool {
