@@ -2999,3 +2999,84 @@ func TestSpec_ChangeSigCrossFile(t *testing.T) {
 		t.Errorf("util.go call site not updated:\n%s", string(utilData))
 	}
 }
+
+func TestSpec_ChangeSigPython(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"lib.py":  "def compute(a, b):\n    return a * b\n",
+		"main.py": "from lib import compute\n\ndef run():\n    compute(3, 4)\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"changesig", "lib.py:compute", "--add", "scale=1.0", "--callarg", "1.0")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	libData, _ := os.ReadFile(filepath.Join(dir, "lib.py"))
+	if !strings.Contains(string(libData), "def compute(a, b, scale=1.0)") {
+		t.Errorf("Python definition not updated:\n%s", string(libData))
+	}
+
+	mainData, _ := os.ReadFile(filepath.Join(dir, "main.py"))
+	if !strings.Contains(string(mainData), "compute(3, 4, 1.0)") {
+		t.Errorf("Python call site not updated:\n%s", string(mainData))
+	}
+}
+
+func TestSpec_ChangeSigRust(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"lib.rs":  "pub fn compute(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+		"main.rs": "mod lib;\n\nfn main() {\n    lib::compute(3, 4);\n}\n\nfn helper() -> i32 {\n    lib::compute(1, 2)\n}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"changesig", "lib.rs:compute", "--add", "scale: f64", "--callarg", "1.0")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	libData, _ := os.ReadFile(filepath.Join(dir, "lib.rs"))
+	if !strings.Contains(string(libData), "pub fn compute(a: i32, b: i32, scale: f64)") {
+		t.Errorf("Rust definition not updated:\n%s", string(libData))
+	}
+
+	mainData, _ := os.ReadFile(filepath.Join(dir, "main.rs"))
+	if !strings.Contains(string(mainData), "lib::compute(3, 4, 1.0)") {
+		t.Errorf("Rust call site not updated:\n%s", string(mainData))
+	}
+}
+
+func TestSpec_ChangeSigTypeScript(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"lib.ts":  "export function validate(input: string, strict: boolean): boolean {\n    return input.length > 0\n}\n",
+		"app.ts":  "import { validate } from \"./lib\"\n\nfunction run() {\n    validate(\"test\", true)\n}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"changesig", "lib.ts:validate", "--add", "logger: Logger", "--callarg", "console")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	libData, _ := os.ReadFile(filepath.Join(dir, "lib.ts"))
+	if !strings.Contains(string(libData), "function validate(input: string, strict: boolean, logger: Logger)") {
+		t.Errorf("TypeScript definition not updated:\n%s", string(libData))
+	}
+
+	appData, _ := os.ReadFile(filepath.Join(dir, "app.ts"))
+	if !strings.Contains(string(appData), "validate(\"test\", true, console)") {
+		t.Errorf("TypeScript call site not updated:\n%s", string(appData))
+	}
+}
