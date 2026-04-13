@@ -115,12 +115,24 @@ func heuristicRank(candidates []index.SymbolInfo, query, root string) []rankedCa
 		// 4. Shape boost — match query casing to symbol type.
 		score += shapeBoost(s.Type, inferShape(query))
 
-		// 5. Test/vendor penalty — these are never canonical.
+		// 5. Test/vendor/sample/tools penalty — these are never canonical.
 		if isTestPath(rel) {
 			score -= 20
 		}
 		if isVendorPath(rel) {
 			score -= 50
+		}
+		if isSamplePath(rel) {
+			score -= 15
+		}
+		if isToolsPath(rel) {
+			score -= 10
+		}
+		if isDocPath(rel) {
+			score -= 10
+		}
+		if isScriptsPath(rel) {
+			score -= 10
 		}
 
 		// 6. Path signals — core infra up, peripheral down.
@@ -331,7 +343,9 @@ func isTestPath(rel string) bool {
 	base := filepath.Base(lower)
 	return strings.Contains(base, "_test.") ||
 		strings.Contains(base, ".test.") ||
-		strings.HasPrefix(base, "test_")
+		strings.HasPrefix(base, "test_") ||
+		strings.Contains(base, "benchmark") ||
+		strings.Contains(base, "_bench.")
 }
 
 func isDocPath(rel string) bool {
