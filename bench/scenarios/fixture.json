@@ -84,8 +84,23 @@
     },
     "rename_symbol": {
       "type": "rename",
+      "file": "internal/worker.go",
       "old_name": "HandlerFunc",
       "new_name": "TaskHandlerFunc"
+    },
+    "extract_function": {
+      "type": "extract",
+      "file": "main.go",
+      "symbol": "Start",
+      "name": "startWorkers",
+      "lines": "96-98"
+    },
+    "move_symbol": {
+      "type": "move",
+      "file": "main.go",
+      "symbol": "handleStats",
+      "dest_file": "internal/worker.go",
+      "dest_after": "AggregateStats"
     },
     "refs_impact": {
       "type": "refs",

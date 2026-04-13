@@ -74,8 +74,25 @@ type ScenarioEdit struct {
 
 type ScenarioRename struct {
 	Type    string `json:"type"`
+	File    string `json:"file"`
 	OldName string `json:"old_name"`
 	NewName string `json:"new_name"`
+}
+
+type ScenarioExtract struct {
+	Type   string `json:"type"`
+	File   string `json:"file"`
+	Symbol string `json:"symbol"`
+	Name   string `json:"name"`
+	Lines  string `json:"lines"`
+}
+
+type ScenarioMove struct {
+	Type      string `json:"type"`
+	File      string `json:"file"`
+	Symbol    string `json:"symbol"`
+	DestFile  string `json:"dest_file"`
+	DestAfter string `json:"dest_after"`
 }
 
 type ScenarioRefsImpact struct {
@@ -358,5 +375,99 @@ func TestScenarioDispatch(t *testing.T) {
 			t.Errorf("read_lines should return lines [1,30], got %v", result.Lines)
 		}
 		t.Logf("read_lines: %dB lines=%v", len(out), result.Lines)
+	})
+
+	t.Run("rename_symbol", func(t *testing.T) {
+		var s ScenarioRename
+		if err := scenario.GetScenario("rename_symbol", &s); err != nil {
+			t.Fatal(err)
+		}
+		out, err := dispatchJSON(ctx, db, "rename", []string{s.File + ":" + s.OldName}, map[string]any{
+			"new_name": s.NewName,
+			"dry_run":  true,
+		})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		var result struct {
+			Status      string   `json:"status"`
+			OldName     string   `json:"old_name"`
+			NewName     string   `json:"new_name"`
+			Occurrences int      `json:"occurrences"`
+			Files       []string `json:"files_changed"`
+		}
+		json.Unmarshal(out, &result)
+		if result.Status != "dry_run" {
+			t.Errorf("rename should be dry_run, got %q", result.Status)
+		}
+		if result.OldName != s.OldName || result.NewName != s.NewName {
+			t.Errorf("names: %q → %q, want %q → %q", result.OldName, result.NewName, s.OldName, s.NewName)
+		}
+		if result.Occurrences < 2 {
+			t.Errorf("expected at least 2 occurrences of %s, got %d", s.OldName, result.Occurrences)
+		}
+		t.Logf("rename_symbol: %dB %s→%s occurrences=%d files=%v",
+			len(out), result.OldName, result.NewName, result.Occurrences, result.Files)
+	})
+
+	t.Run("extract_function", func(t *testing.T) {
+		var s ScenarioExtract
+		if err := scenario.GetScenario("extract_function", &s); err != nil {
+			t.Fatal(err)
+		}
+		out, err := dispatchJSON(ctx, db, "extract", []string{s.File + ":" + s.Symbol}, map[string]any{
+			"name":    s.Name,
+			"lines":   s.Lines,
+			"dry_run": true,
+		})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		var result struct {
+			Status string `json:"status"`
+			File   string `json:"file"`
+			Diff   string `json:"diff"`
+		}
+		json.Unmarshal(out, &result)
+		if result.Status != "dry_run" {
+			t.Errorf("extract should be dry_run, got %q", result.Status)
+		}
+		if result.Diff == "" {
+			t.Error("extract should return a diff")
+		}
+		if !strings.Contains(result.Diff, s.Name) {
+			t.Errorf("diff should contain new function name %q", s.Name)
+		}
+		t.Logf("extract_function: %dB file=%s diff=%dB", len(out), result.File, len(result.Diff))
+	})
+
+	t.Run("move_symbol", func(t *testing.T) {
+		var s ScenarioMove
+		if err := scenario.GetScenario("move_symbol", &s); err != nil {
+			t.Fatal(err)
+		}
+		out, err := dispatchJSON(ctx, db, "edit", []string{s.File + ":" + s.Symbol}, map[string]any{
+			"move_after": s.DestFile + ":" + s.DestAfter,
+			"dry_run":    true,
+		})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		var result struct {
+			Status string `json:"status"`
+			Diff   string `json:"diff"`
+			Dest   string `json:"dest"`
+		}
+		json.Unmarshal(out, &result)
+		if result.Status != "dry_run" {
+			t.Errorf("move should be dry_run, got %q", result.Status)
+		}
+		if result.Diff == "" {
+			t.Error("move should return a diff")
+		}
+		if !strings.Contains(result.Diff, s.Symbol) {
+			t.Errorf("diff should reference moved symbol %q", s.Symbol)
+		}
+		t.Logf("move_symbol: %dB dest=%s diff=%dB", len(out), result.Dest, len(result.Diff))
 	})
 }
