@@ -389,10 +389,18 @@ func (p *cppParser) parseClassOrStruct(kind string) {
 			return
 		}
 	}
+	// Scan the preamble (base-class list, template args, attributes) up to { or ;.
+	// If we hit * or ( the "struct name" is actually a type in a variable/parameter
+	// declaration (e.g. "struct task_struct *fork_idle(...)"), not a definition.
+	isDefinition := true
 	for !p.s.EOF() {
 		p.skipWSAndComments()
 		c := p.s.Peek()
 		if c == '{' || c == ';' {
+			break
+		}
+		if c == '*' || c == '(' || c == ')' || c == '=' {
+			isDefinition = false
 			break
 		}
 		if c == '<' {
@@ -400,6 +408,9 @@ func (p *cppParser) parseClassOrStruct(kind string) {
 			continue
 		}
 		p.s.Pos++
+	}
+	if !isDefinition {
+		return
 	}
 	parent := p.stack.NearestSym()
 	sym := len(p.result.Symbols)

@@ -99,6 +99,15 @@ const char* rawStr = R"delim(
     class Fake inside
 )delim";
 
+// struct used as return type — should NOT create a struct symbol
+struct task_struct *fork_idle(int cpu) {
+    struct task_struct *task;
+    return task;
+}
+
+// struct used as variable declaration
+struct rq *rq = get_rq(cpu);
+
 } // namespace inner
 } // namespace outer
 `)
@@ -137,8 +146,9 @@ const char* rawStr = R"delim(
 		{"type", "void"},         // typedef void (*Callback)(int, int) — name inside parens, known gap
 		{"function", "freeFunction"},
 		{"function", "genericFunc"},
-		{"function", "squareFree"}, // constexpr free function
-		{"namespace", "outer::middle::inner"}, // C++17 nested namespace shorthand
+		{"function", "squareFree"},             // constexpr free function
+		{"namespace", "outer::middle::inner"},  // C++17 nested namespace shorthand
+		{"function", "fork_idle"},              // struct return type — not a struct definition
 	}
 	if len(r.Symbols) != len(want) {
 		t.Errorf("got %d symbols, want %d", len(r.Symbols), len(want))
@@ -154,7 +164,7 @@ const char* rawStr = R"delim(
 	}
 
 	for _, s := range r.Symbols {
-		if s.Name == "Fake" || s.Name == "MACRO" || s.Name == "value_" {
+		if s.Name == "Fake" || s.Name == "MACRO" || s.Name == "value_" || s.Name == "task_struct" || (s.Name == "rq" && s.Type == "struct") {
 			t.Errorf("spurious symbol: %+v", s)
 		}
 	}

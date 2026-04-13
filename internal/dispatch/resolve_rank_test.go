@@ -133,6 +133,32 @@ func TestRankCandidates_NameMatchQuality(t *testing.T) {
 	}
 }
 
+func TestRankCandidates_LargeDefinitionBeatsDeclarations(t *testing.T) {
+	// A large struct definition (like task_struct in sched.h) should rank above
+	// many small 1-line variable declarations that the parser also tags as "struct".
+	root := setupTestGraph(t,
+		[]string{"include/sched.h", "init/init_task.c", "arch/process.c", "kernel/exit.c"},
+		[][2]string{
+			{"init/init_task.c", "include/sched.h"},
+			{"arch/process.c", "include/sched.h"},
+			{"kernel/exit.c", "include/sched.h"},
+		},
+	)
+	candidates := []index.SymbolInfo{
+		{Name: "task_struct", Type: "struct", File: filepath.Join(root, "include/sched.h"), StartLine: 820, EndLine: 1647},
+		{Name: "task_struct", Type: "struct", File: filepath.Join(root, "init/init_task.c"), StartLine: 96, EndLine: 262},
+		{Name: "task_struct", Type: "struct", File: filepath.Join(root, "arch/process.c"), StartLine: 42, EndLine: 42},
+		{Name: "task_struct", Type: "struct", File: filepath.Join(root, "kernel/exit.c"), StartLine: 586, EndLine: 586},
+	}
+	ranked := rankCandidates(candidates, "task_struct", root)
+	if len(ranked) < 4 {
+		t.Fatalf("expected 4 candidates, got %d", len(ranked))
+	}
+	if ranked[0].Rel != "include/sched.h" {
+		t.Errorf("expected include/sched.h first (largest definition body), got %s (score %d)", ranked[0].Rel, ranked[0].Score)
+	}
+}
+
 func TestRankCandidates_NoGraph(t *testing.T) {
 	// Should still work without an import graph (no edr dir).
 	// Definition type tiebreaker differentiates.

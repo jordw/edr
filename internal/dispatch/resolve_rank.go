@@ -46,16 +46,34 @@ func heuristicRank(candidates []index.SymbolInfo, query, root string) []rankedCa
 		popScores = idx.ReadPopularity(edrDir, int(h.NumSymbols))
 	}
 
-	var ranked []rankedCandidate
-	seen := map[string]bool{}
-
-	for _, s := range candidates {
+	// Deduplicate: when the same file has multiple symbols with the same name
+	// (e.g. a forward declaration and the actual definition), keep the one
+	// with the largest span — it is most likely the real definition.
+	type dedupEntry struct {
+		idx  int
+		span uint32
+	}
+	bestByKey := map[string]dedupEntry{}
+	for i, s := range candidates {
 		rel, _ := filepath.Rel(root, s.File)
 		key := rel + ":" + s.Name
-		if seen[key] {
+		span := s.EndLine - s.StartLine
+		if prev, ok := bestByKey[key]; !ok || span > prev.span {
+			bestByKey[key] = dedupEntry{idx: i, span: span}
+		}
+	}
+	dedupAllowed := map[int]bool{}
+	for _, e := range bestByKey {
+		dedupAllowed[e.idx] = true
+	}
+
+	var ranked []rankedCandidate
+
+	for i, s := range candidates {
+		if !dedupAllowed[i] {
 			continue
 		}
-		seen[key] = true
+		rel, _ := filepath.Rel(root, s.File)
 
 		nameLower := strings.ToLower(s.Name)
 
@@ -88,17 +106,29 @@ func heuristicRank(candidates []index.SymbolInfo, query, root string) []rankedCa
 			}
 		}
 
-		// Tiebreakers (small signals that only matter when popularity is equal)
+		// Definition body boost: a multi-line struct/class/interface is much
+		// more likely to be THE definition than a 1-line variable declaration
+		// that the regex parser also tags as "struct". Scale by log of span.
+		if isDefinitionType(s.Type) {
+			span := int(s.EndLine - s.StartLine)
+			if span >= 3 {
+				// log2(827) ≈ 10 → bonus ≈ 50; log2(3) ≈ 1.6 → bonus ≈ 8
+				score += int(5 * math.Log2(float64(span)))
+			}
+			// Header-file boost: in C/C++ projects, canonical type definitions
+			// live in headers. A struct in a .h file is almost certainly THE
+			// definition, not a usage.
+			if isHeaderFile(rel) {
+				score += 20
+			}
+		}
 
 		// Name match quality
 		if tier == tierExact && s.Name == query {
 			score += 3 // case-exact match
 		}
 
-		// Definition type + shape synergy
-		if isDefinitionType(s.Type) {
-			score += 3
-		}
+		// Shape synergy: PascalCase query + definition type
 		if inferShape(query) == shapeType && isDefinitionType(s.Type) {
 			score += 3
 		}
@@ -247,6 +277,15 @@ func headerImportCount(graph *idx.ImportGraphData, rel string) int {
 		}
 	}
 	return best
+}
+
+func isHeaderFile(rel string) bool {
+	ext := strings.ToLower(filepath.Ext(rel))
+	switch ext {
+	case ".h", ".hpp", ".hxx", ".hh":
+		return true
+	}
+	return false
 }
 
 func isDefinitionType(t string) bool {
