@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.5.0 — 2026-04-12
+## v0.4.0 — 2026-04-12
 
 ### Semantic code editing
 
@@ -20,7 +20,7 @@ All four instruction files (Claude, Cursor, Codex, generic) now document rename,
 - 3 new scenario tests (`bench/scenario_test.go`) running rename/extract/move against the multi-language testdata repo (Go, Python, Java, Ruby, Rust, TypeScript, C).
 - 10 new spec tests (`cmd/spec_cli_test.go`) for transport contract validation.
 
-## v0.4.0 — 2026-03-29
+## v0.3.7 — 2026-03-29
 
 ### Breaking changes (surface only — old names still work)
 
