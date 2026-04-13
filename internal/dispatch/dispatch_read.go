@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -954,6 +955,17 @@ func attachExpand(ctx context.Context, db index.SymbolStore, sym *index.SymbolIn
 		if len(deps) == 0 {
 			deps, _ = index.FindDeps(ctx, db, sym)
 		}
+		// Sort: cross-file deps first (more useful for navigation),
+		// same-file deps last.
+		symFile := sym.File
+		sort.SliceStable(deps, func(i, j int) bool {
+			iSame := deps[i].File == symFile
+			jSame := deps[j].File == symFile
+			if iSame != jSame {
+				return !iSame // cross-file first
+			}
+			return false
+		})
 		if len(deps) > 10 {
 			deps = deps[:10]
 		}
