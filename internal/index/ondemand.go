@@ -409,7 +409,7 @@ func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo,
 		}
 	}
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("symbol %q not found", name)
+		return nil, fmt.Errorf("symbol %q not found (try: edr files %q for text search)", name, name)
 	}
 	if len(candidates) == 1 {
 		return &candidates[0], nil
