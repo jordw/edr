@@ -251,7 +251,7 @@ func TestSpec_HelpSurface(t *testing.T) {
 		t.Errorf("edr --help wrote to stderr: %q", stderr)
 	}
 
-	expected := []string{"bench", "edit", "files", "focus", "index", "orient", "setup", "status", "undo"}
+	expected := []string{"bench", "edit", "files", "focus", "index", "orient", "rename", "setup", "status", "undo"}
 	cmdRe := regexp.MustCompile(`(?m)^\s{2}(\w+)\s`)
 	matches := cmdRe.FindAllStringSubmatch(stdout, -1)
 
@@ -1642,11 +1642,11 @@ func TestSpec_InstructionQuality(t *testing.T) {
 		}
 	}
 
-	// Spec: instructions MUST be under 700 tokens (~2800 bytes).
+	// Spec: instructions MUST be under 850 tokens (~3400 bytes).
 	// Use rough estimate: ceil(bytes / 4).
 	tokens := (len(data) + 3) / 4
-	if tokens > 750 {
-		t.Errorf("instructions should be under 750 tokens, estimated %d", tokens)
+	if tokens > 850 {
+		t.Errorf("instructions should be under 850 tokens, estimated %d", tokens)
 	}
 }
 
@@ -2570,4 +2570,132 @@ func TestSpec_FilesCommand(t *testing.T) {
 			t.Fatalf("expected all matches in body, got %d", len(lines))
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Rename
+// ---------------------------------------------------------------------------
+
+func TestSpec_RenameBasic(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc Hello() {\n\tprintln(\"hello\")\n}\n\nfunc main() {\n\tHello()\n}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"rename", "main.go:Hello", "--to", "Greet")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if len(result.Ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(result.Ops))
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+	if h["from"] != "Hello" {
+		t.Errorf("from = %v, want Hello", h["from"])
+	}
+	if h["to"] != "Greet" {
+		t.Errorf("to = %v, want Greet", h["to"])
+	}
+	n := h["n"]
+	if n == nil || n.(float64) < 2 {
+		t.Errorf("expected at least 2 occurrences, got %v", n)
+	}
+
+	// Verify file was actually changed.
+	data, _ := os.ReadFile(filepath.Join(dir, "main.go"))
+	content := string(data)
+	if strings.Contains(content, "Hello") {
+		t.Errorf("file still contains Hello after rename")
+	}
+	if !strings.Contains(content, "Greet") {
+		t.Errorf("file does not contain Greet after rename")
+	}
+}
+
+func TestSpec_RenameDryRun(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc Hello() {}\n\nfunc main() { Hello() }\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"rename", "main.go:Hello", "--to", "Greet", "--dry-run")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "dry_run" {
+		t.Errorf("status = %v, want dry_run", h["status"])
+	}
+
+	// File should NOT be changed.
+	data, _ := os.ReadFile(filepath.Join(dir, "main.go"))
+	if strings.Contains(string(data), "Greet") {
+		t.Errorf("dry-run should not modify file")
+	}
+}
+
+func TestSpec_RenameNoop(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc Hello() {}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"rename", "main.go:Hello", "--to", "Hello")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "noop" {
+		t.Errorf("status = %v, want noop", h["status"])
+	}
+}
+
+func TestSpec_RenameCrossFile(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"go.mod":  "module example.com/test\n\ngo 1.21\n",
+		"lib.go":  "package main\n\nfunc Compute(x int) int {\n\treturn x * 2\n}\n",
+		"main.go": "package main\n\nfunc main() {\n\tprintln(Compute(5))\n}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"rename", "lib.go:Compute", "--to", "Calculate")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	// Check both files changed.
+	libData, _ := os.ReadFile(filepath.Join(dir, "lib.go"))
+	if strings.Contains(string(libData), "Compute") {
+		t.Errorf("lib.go still contains Compute")
+	}
+	if !strings.Contains(string(libData), "Calculate") {
+		t.Errorf("lib.go missing Calculate")
+	}
+
+	mainData, _ := os.ReadFile(filepath.Join(dir, "main.go"))
+	if strings.Contains(string(mainData), "Compute") {
+		t.Errorf("main.go still contains Compute")
+	}
+	if !strings.Contains(string(mainData), "Calculate") {
+		t.Errorf("main.go missing Calculate")
+	}
+}
+
+func TestSpec_RenameMissingTo(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc Hello() {}\n",
+	})
+
+	_, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"rename", "main.go:Hello")
+	if exit == 0 {
+		t.Errorf("rename without --to should fail")
+	}
 }

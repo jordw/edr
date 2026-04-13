@@ -40,6 +40,12 @@ edr edit file.go --content "..." --mkdir           # create file
 edr edit file.go --old "x" --new "y" --verify     # edit + build check
 edr edit --where Symbol --old "x" --new "y"        # auto-resolve file
 
+## Rename symbols — `edr rename`
+
+edr rename file.go:OldName --to NewName        # rename across all references
+edr rename file.go:OldName --to NewName --dry-run  # preview without applying
+edr rename file.go:OldName --to NewName --verify   # rename + build check
+
 ### Assertions (batch)
 edr --edit f.go --old "Foo" --new "Bar" --assert-symbol-exists f.go:Bar
 

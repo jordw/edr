@@ -24,6 +24,7 @@ func init() {
 	rootCmd.AddCommand(orientCmd)
 	rootCmd.AddCommand(focusCmd)
 	rootCmd.AddCommand(editCmd)
+	rootCmd.AddCommand(renameCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(undoCmd)
 	rootCmd.AddCommand(setupCmd)
@@ -368,6 +369,15 @@ var editCmd = &cobra.Command{
 }
 
 func init() { cmdspec.RegisterFlags(editCmd.Flags(), "edit") }
+
+var renameCmd = &cobra.Command{
+	Use:   "rename <file:symbol> --to <new_name>",
+	Short: ToolDesc["rename"],
+	Args:  cobra.RangeArgs(1, 2),
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "rename", args) },
+}
+
+func init() { cmdspec.RegisterFlags(renameCmd.Flags(), "rename") }
 
 var statusCmd = &cobra.Command{
 	Use:     "status",

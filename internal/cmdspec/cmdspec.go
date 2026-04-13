@@ -149,6 +149,16 @@ var Registry = []*Spec{
 			{Name: "no_verify", Type: FlagBool, Default: false, Desc: "Deprecated: verify is now opt-in"},
 		},
 	},
+	{
+		Name: "rename", Desc: "Rename a symbol across all references. Semantic find-and-replace.",
+		Category: CatWrite, MinArgs: 1, MaxArgs: 2, FileScoped: true,
+		DiffEdit: true,
+		Flags: []FlagSpec{
+			{Name: "new_name", Alias: "to", Type: FlagString, Default: "", Desc: "New name for the symbol (required)"},
+			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
+			{Name: "verify", Type: FlagBool, Default: false, Desc: "Run build verification after rename"},
+		},
+	},
 	// --- Internal commands (dispatch-only, no CLI surface) ---
 	{
 		Name: "search", Desc: "Internal: symbol and text search, used by batch -s.",
