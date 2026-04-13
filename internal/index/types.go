@@ -17,6 +17,7 @@ type SymbolInfo struct {
 	Body        string // raw source text of the symbol
 	ParentIndex int    // index into symbols slice at parse time; -1 = no parent
 	IndexID     uint32 // position in the symbol index (for popularity lookup); 0 = unset
+	Receiver    string // for methods: the type name of the receiver/parent class (e.g. "Server" for Go method, "Foo" for a method inside class Foo)
 }
 
 // FileError records a per-file failure during parsing.

@@ -36,11 +36,27 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 		}, nil
 	}
 
-	// Build a word-boundary regex for the old name.
-	pattern := `\b` + regexp.QuoteMeta(oldName) + `\b`
-	re, err := regexp.Compile(pattern)
+	// Build regex patterns for the old name.
+	// For methods (non-empty Receiver), use a dot-prefixed pattern at call sites
+	// to match .spawn( but not mod spawn or ::spawn.
+	isMethod := sym.Receiver != ""
+	quotedName := regexp.QuoteMeta(oldName)
+
+	defPattern := `\b` + quotedName + `\b`
+	defRe, err := regexp.Compile(defPattern)
 	if err != nil {
 		return nil, fmt.Errorf("rename: invalid symbol name for regex: %w", err)
+	}
+
+	// Call-site regex: for methods, require a dot prefix.
+	var callRe *regexp.Regexp
+	if isMethod {
+		callRe, err = regexp.Compile(`\.` + quotedName + `\b`)
+		if err != nil {
+			return nil, fmt.Errorf("rename: invalid symbol name for regex: %w", err)
+		}
+	} else {
+		callRe = defRe
 	}
 
 	// Find all symbols that reference the target.
@@ -50,14 +66,17 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 	}
 
 	// Build a map of file → symbol byte ranges to replace within.
-	// The definition symbol is always included, with its span extended
-	// backwards to cover preceding doc comments that may contain the name.
-	type span struct{ start, end uint32 }
+	// Definition span uses defRe (matches bare name in declaration).
+	// Reference spans use callRe (matches .name for methods).
+	type span struct {
+		start, end uint32
+		isDef      bool
+	}
 	fileSpans := map[string][]span{}
 	defStart := expandToDocComment(sym.File, sym.StartByte)
-	fileSpans[sym.File] = append(fileSpans[sym.File], span{defStart, sym.EndByte})
+	fileSpans[sym.File] = append(fileSpans[sym.File], span{defStart, sym.EndByte, true})
 	for _, ref := range refs {
-		fileSpans[ref.File] = append(fileSpans[ref.File], span{ref.StartByte, ref.EndByte})
+		fileSpans[ref.File] = append(fileSpans[ref.File], span{ref.StartByte, ref.EndByte, false})
 	}
 
 	// Sort files for deterministic output.
@@ -111,9 +130,17 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 			}
 			// Copy unchanged region before this span.
 			buf.Write(data[pos:start])
-			// Replace within the span.
+			// Replace within the span using the appropriate regex.
 			region := data[start:end]
-			replaced := re.ReplaceAll(region, []byte(newName))
+			re := callRe
+			repl := []byte("." + newName)
+			if s.isDef {
+				re = defRe
+				repl = []byte(newName)
+			} else if !isMethod {
+				repl = []byte(newName)
+			}
+			replaced := re.ReplaceAll(region, repl)
 			count += len(re.FindAll(region, -1))
 			buf.Write(replaced)
 			pos = end

@@ -146,6 +146,9 @@ func (o *OnDemand) parseFile(absPath string) (*cachedFile, error) {
 		imports = zigImportsToInfo(absPath, r)
 	}
 
+	// Resolve receiver types for methods whose parent is a class/struct.
+	resolveReceivers(syms)
+
 	h := sha256.Sum256(src)
 
 	// Strip bodies — they account for ~80% of cache memory.

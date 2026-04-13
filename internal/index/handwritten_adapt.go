@@ -39,6 +39,28 @@ func lineEndByte(offsets []uint32, line int, srcLen int) uint32 {
 	return offsets[line]
 }
 
+// resolveReceivers populates the Receiver field for methods whose
+// ParentIndex points to a class, struct, interface, or impl block.
+func resolveReceivers(syms []SymbolInfo) {
+	for i := range syms {
+		s := &syms[i]
+		if s.Receiver != "" || s.ParentIndex < 0 || s.ParentIndex >= len(syms) {
+			continue
+		}
+		if s.Type != "method" && s.Type != "function" {
+			continue
+		}
+		parent := &syms[s.ParentIndex]
+		switch parent.Type {
+		case "class", "struct", "interface", "impl", "trait", "enum", "module":
+			s.Receiver = parent.Name
+			if s.Type == "function" {
+				s.Type = "method"
+			}
+		}
+	}
+}
+
 // rubyToSymbolInfo converts a RubyResult into []SymbolInfo. Byte
 // offsets are derived from the line offset table since the Ruby parser
 // tracks only line numbers. Ruby "module" is mapped to SymbolInfo type
@@ -113,6 +135,7 @@ func goToSymbolInfo(file string, src []byte, r GoResult) []SymbolInfo {
 			StartByte:   lineStartByte(offsets, s.StartLine),
 			EndByte:     lineEndByte(offsets, s.EndLine, srcLen),
 			ParentIndex: -1,
+			Receiver:    s.Receiver,
 		}
 	}
 	return out
