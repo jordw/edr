@@ -171,6 +171,19 @@ var Registry = []*Spec{
 			{Name: "verify", Type: FlagBool, Default: false, Desc: "Run build verification after extract"},
 		},
 	},
+	{
+		Name: "changesig", Desc: "Add or remove a parameter from a function and update all call sites.",
+		Category: CatWrite, MinArgs: 1, MaxArgs: 2, FileScoped: true,
+		DiffEdit: true,
+		Flags: []FlagSpec{
+			{Name: "add", Type: FlagString, Default: "", Desc: "Parameter declaration to add (e.g. \"ctx context.Context\")"},
+			{Name: "at", Type: FlagInt, Default: -1, Desc: "Position to insert/remove (0-indexed; -1 = end)"},
+			{Name: "callarg", Type: FlagString, Default: "", Desc: "Argument value to insert at call sites"},
+			{Name: "remove", Type: FlagInt, Default: -1, Desc: "Position of parameter to remove (0-indexed)"},
+			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
+			{Name: "verify", Type: FlagBool, Default: false, Desc: "Run build verification after change"},
+		},
+	},
 	// --- Internal commands (dispatch-only, no CLI surface) ---
 	{
 		Name: "search", Desc: "Internal: symbol and text search, used by batch -s.",

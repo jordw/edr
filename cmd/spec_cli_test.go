@@ -251,7 +251,7 @@ func TestSpec_HelpSurface(t *testing.T) {
 		t.Errorf("edr --help wrote to stderr: %q", stderr)
 	}
 
-	expected := []string{"bench", "edit", "extract", "files", "focus", "index", "orient", "rename", "setup", "status", "undo"}
+	expected := []string{"bench", "changesig", "edit", "extract", "files", "focus", "index", "orient", "rename", "setup", "status", "undo"}
 	cmdRe := regexp.MustCompile(`(?m)^\s{2}(\w+)\s`)
 	matches := cmdRe.FindAllStringSubmatch(stdout, -1)
 

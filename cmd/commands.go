@@ -26,6 +26,7 @@ func init() {
 	rootCmd.AddCommand(editCmd)
 	rootCmd.AddCommand(renameCmd)
 	rootCmd.AddCommand(extractCmd)
+	rootCmd.AddCommand(changesigCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(undoCmd)
 	rootCmd.AddCommand(setupCmd)
@@ -388,6 +389,15 @@ var extractCmd = &cobra.Command{
 }
 
 func init() { cmdspec.RegisterFlags(extractCmd.Flags(), "extract") }
+
+var changesigCmd = &cobra.Command{
+	Use:   "changesig <file:symbol> --add \"param type\" --callarg \"value\"",
+	Short: ToolDesc["changesig"],
+	Args:  cobra.RangeArgs(1, 2),
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "changesig", args) },
+}
+
+func init() { cmdspec.RegisterFlags(changesigCmd.Flags(), "changesig") }
 
 var statusCmd = &cobra.Command{
 	Use:     "status",

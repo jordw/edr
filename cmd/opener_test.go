@@ -30,6 +30,7 @@ func TestOpenerAlignment(t *testing.T) {
 		{"focusCmd", "focus"},
 		{"renameCmd", "rename"},
 		{"extractCmd", "extract"},
+		{"changesigCmd", "changesig"},
 		{"indexCmd", "index"},
 		{"filesCmd", "files"},
 	}
