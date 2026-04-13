@@ -608,6 +608,10 @@ func (p *cppParser) tryParseDeclaration(firstWord []byte) {
 				name := p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 				lastName = "~" + string(name)
 			}
+		case c == '}':
+			// Don't consume closing braces — return so the main loop
+			// can pop the scope stack correctly.
+			return
 		case c == '[':
 			p.s.SkipBalanced('[', ']', cppStringScanner)
 		case lexkit.DefaultIdentStart[c]:

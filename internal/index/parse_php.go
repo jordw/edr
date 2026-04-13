@@ -446,6 +446,9 @@ func (p *phpParser) parseFunction() {
 		if c == '{' {
 			break
 		}
+		if c == '}' {
+			return
+		}
 		if c == ';' {
 			// Abstract method declaration
 			p.s.Pos++

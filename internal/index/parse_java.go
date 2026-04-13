@@ -431,6 +431,8 @@ func (p *javaParser) tryParseMethod(firstWord []byte) {
 			default:
 				lastName = ws
 			}
+		case c == '}':
+			return
 		case c == '\n':
 			p.s.Next()
 		default:
