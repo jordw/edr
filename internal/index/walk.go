@@ -619,11 +619,34 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 		}
 	}
 
+	// When budget is tight relative to file count, cap symbols per file
+	// so the budget spreads across files (breadth-first) rather than
+	// dumping all symbols from one file (depth-first).
+	const estCharsPerSymbol = 45
+	maxPerFile := 0 // 0 = unlimited
+	if budgetChars > 0 && len(fileOrder) > 1 {
+		estTotalSymbols := budgetChars / estCharsPerSymbol
+		if estTotalSymbols < len(fileOrder) {
+			// Very tight: show 1 symbol per file to maximize coverage
+			maxPerFile = 1
+		} else {
+			// Moderate: distribute evenly across files
+			maxPerFile = estTotalSymbols / len(fileOrder)
+			if maxPerFile < 2 {
+				maxPerFile = 2
+			}
+		}
+	}
+
 	var mapFiles []MapFileEntry
 	for _, file := range fileOrder {
 		syms := byFile[file]
 		if len(syms) == 0 {
 			continue
+		}
+		if budgetChars > 0 && b.Len() >= budgetChars {
+			truncated = true
+			break
 		}
 		rel, _ := filepath.Rel(root, file)
 		if rel == "" {
@@ -631,9 +654,12 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 		}
 		fmt.Fprintf(&b, "\n%s\n", rel)
 		entry := MapFileEntry{File: rel}
-		for _, sym := range syms {
+		for i, sym := range syms {
 			if budgetChars > 0 && b.Len() >= budgetChars {
 				truncated = true
+				break
+			}
+			if maxPerFile > 0 && i >= maxPerFile {
 				break
 			}
 			me := MapSymbolEntry{
@@ -657,9 +683,6 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 		}
 		mapFiles = append(mapFiles, entry)
 		filesRendered++
-		if truncated {
-			break
-		}
 	}
 
 	// Count totals (filtered, not rendered)
@@ -962,7 +985,9 @@ func repoMapFromSymbolIndex(root, edrDir string, cfg repoMapConfig, budgetChars 
 		fs.syms = append(fs.syms, s)
 	}
 
-	// Sort file IDs by render order
+	// Sort file IDs by render order: code first, non-test first,
+	// then by import count (most-imported first), then shallow, then alpha.
+	importGraph := idx.ReadImportGraph(edrDir)
 	fileIDs := make([]uint32, 0, len(byFile))
 	for id, fs := range byFile {
 		if len(fs.syms) > 0 {
@@ -978,6 +1003,15 @@ func repoMapFromSymbolIndex(root, edrDir string, cfg repoMapConfig, budgetChars 
 		ti := isTestOrBenchFile(ri)
 		tj := isTestOrBenchFile(rj)
 		if ti != tj { return !ti }
+		if importGraph != nil {
+			ii := importGraph.Inbound(ri)
+			ij := importGraph.Inbound(rj)
+			if ii != ij { return ii > ij }
+		}
+		// More symbols = more substantial file
+		si := len(byFile[fileIDs[i]].syms)
+		sj := len(byFile[fileIDs[j]].syms)
+		if si != sj { return si > sj }
 		di := strings.Count(ri, string(filepath.Separator))
 		dj := strings.Count(rj, string(filepath.Separator))
 		if di != dj { return di < dj }
@@ -998,20 +1032,44 @@ func repoMapFromSymbolIndex(root, edrDir string, cfg repoMapConfig, budgetChars 
 		}
 	}
 
-	// Render with budget
+	// Render with budget.
+	// When budget is tight relative to file count, cap symbols per file
+	// so the budget spreads across files (breadth-first) rather than
+	// dumping all symbols from one file (depth-first).
+	const estCharsPerSymbol = 45
+	maxPerFile := 0 // 0 = unlimited
+	if budgetChars > 0 && len(fileIDs) > 1 {
+		estTotalSymbols := budgetChars / estCharsPerSymbol
+		targetFiles := len(fileIDs)
+		if targetFiles > estTotalSymbols/2 {
+			targetFiles = estTotalSymbols / 2
+		}
+		if targetFiles < 2 {
+			targetFiles = 2
+		}
+		maxPerFile = estTotalSymbols / targetFiles
+		if maxPerFile < 2 {
+			maxPerFile = 2
+		}
+	}
+
 	var b strings.Builder
 	var mapFiles []MapFileEntry
 	filesRendered := 0
 	shownSymbols := 0
 
 	for _, fid := range fileIDs {
+		if budgetChars > 0 && b.Len() >= budgetChars {
+			break
+		}
 		fs := byFile[fid]
 		entry := MapFileEntry{File: fs.rel}
 		fmt.Fprintf(&b, "\n%s\n", fs.rel)
-		budgetHit := false
-		for _, s := range fs.syms {
+		for i, s := range fs.syms {
 			if budgetChars > 0 && b.Len() >= budgetChars {
-				budgetHit = true
+				break
+			}
+			if maxPerFile > 0 && i >= maxPerFile {
 				break
 			}
 			fmt.Fprintf(&b, "  %s %s [%d-%d]\n", s.Kind, s.Name, s.StartLine, s.EndLine)
@@ -1023,9 +1081,6 @@ func repoMapFromSymbolIndex(root, edrDir string, cfg repoMapConfig, budgetChars 
 		}
 		mapFiles = append(mapFiles, entry)
 		filesRendered++
-		if budgetHit {
-			break
-		}
 	}
 
 	// Use header for accurate total file count
