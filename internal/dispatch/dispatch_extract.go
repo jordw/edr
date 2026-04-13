@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/jordw/edr/internal/edit"
@@ -74,8 +75,9 @@ func runExtract(ctx context.Context, db index.SymbolStore, root string, args []s
 		}
 	}
 
-	// Build the new function body.
-	newFunc := fmt.Sprintf("func %s() {\n%s\n}\n", newName, strings.Join(deindented, "\n"))
+	// Build the new function body using language-appropriate syntax.
+	ext := strings.ToLower(filepath.Ext(sym.File))
+	newFunc := buildExtractedFunction(ext, newName, deindented)
 
 	// Build the call expression that replaces the extracted lines.
 	if callExpr == "" {
@@ -157,4 +159,40 @@ func detectMinIndent(lines [][]byte) string {
 		}
 	}
 	return min
+}
+
+// buildExtractedFunction wraps the deindented lines in a function declaration
+// appropriate for the file's language.
+func buildExtractedFunction(ext, name string, body []string) string {
+	joined := strings.Join(body, "\n")
+
+	switch ext {
+	case ".py", ".pyi":
+		// Python: def name():\n    body
+		return fmt.Sprintf("def %s():\n%s\n", name, joined)
+
+	case ".rb":
+		// Ruby: def name\n  body\nend
+		return fmt.Sprintf("def %s\n%s\nend\n", name, joined)
+
+	case ".rs":
+		// Rust: fn name() {\n    body\n}
+		return fmt.Sprintf("fn %s() {\n%s\n}\n", name, joined)
+
+	case ".java", ".kt", ".kts", ".scala", ".sc":
+		// Java/Kotlin/Scala: void name() {\n    body\n}
+		return fmt.Sprintf("void %s() {\n%s\n}\n", name, joined)
+
+	case ".js", ".jsx", ".ts", ".tsx", ".mts", ".cts":
+		// JavaScript/TypeScript: function name() {\n    body\n}
+		return fmt.Sprintf("function %s() {\n%s\n}\n", name, joined)
+
+	case ".c", ".h", ".cpp", ".cc", ".hpp", ".cxx", ".hxx", ".hh":
+		// C/C++: void name() {\n    body\n}
+		return fmt.Sprintf("void %s() {\n%s\n}\n", name, joined)
+
+	default:
+		// Go and fallback: func name() {\n    body\n}
+		return fmt.Sprintf("func %s() {\n%s\n}\n", name, joined)
+	}
 }
