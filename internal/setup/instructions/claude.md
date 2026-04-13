@@ -14,11 +14,8 @@ Run `edr status` between tasks or after failures.
 ## Search — `edr files` and `edr orient`
 
 edr files "pattern"                         # fulltext across ALL files (use this first)
-edr files "TODO"                             # fulltext (searches all file types)
 edr orient --grep "TestSpec"                # symbols by NAME (regex)
 edr orient --body "http.Get"               # symbols whose body contains text (parsed only)
-
-`edr files` searches all text. `orient --body` only searches inside parsed symbol bodies.
 
 ## Orient — structural overview
 
@@ -51,6 +48,11 @@ edr edit --where Symbol --old "x" --new "y"        # auto-resolve file
 
 edr rename file.go:OldName --to NewName            # rename across all references
 edr rename file.go:OldName --to NewName --dry-run  # preview without applying
+
+## Change signature — `edr changesig`
+
+edr changesig file.go:Func --add "ctx context.Context" --at 0 --callarg "ctx"
+edr changesig file.go:Func --remove 1
 
 ## Extract — `edr extract`
 

@@ -45,6 +45,11 @@ edr edit --where Symbol --old "x" --new "y"        # auto-resolve file
 edr rename file.go:OldName --to NewName            # rename across all references
 edr rename file.go:OldName --to NewName --dry-run  # preview without applying
 
+## Change signature — `edr changesig`
+
+edr changesig file.go:Func --add "ctx context.Context" --at 0 --callarg "ctx"
+edr changesig file.go:Func --remove 1
+
 ## Extract — `edr extract`
 
 edr extract file.go:Func --name NewFunc --lines 10-20              # extract into new function
