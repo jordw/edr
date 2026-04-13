@@ -849,9 +849,15 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 			}
 		}
 		// Reconstruct per-file symbols.
+		// Validate byte ranges: skip symbols whose offsets exceed the
+		// file size (ghosts from prior corrupt indices).
 		for _, s := range old.Symbols {
 			if int(s.FileID) < len(old.Files) {
-				d := oldByPath[old.Files[s.FileID].Path]
+				f := old.Files[s.FileID]
+				if int64(s.EndByte) > f.Size {
+					continue
+				}
+				d := oldByPath[f.Path]
 				d.syms = append(d.syms, s)
 			}
 		}

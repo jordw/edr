@@ -173,6 +173,17 @@ func loadSymbolIndexCached(edrDir string) (*IndexData, []FileEntry) {
 	if err != nil {
 		return nil, nil
 	}
+	// Filter out ghost symbols: entries whose byte offsets exceed
+	// their file's size (from prior corrupt indices).
+	n := 0
+	for _, s := range symbols {
+		if int(s.FileID) < len(files) && int64(s.EndByte) <= files[s.FileID].Size {
+			symbols[n] = s
+			n++
+		}
+	}
+	symbols = symbols[:n]
+
 	symIdxDir = edrDir
 	symIdxFiles = files
 	symIdxData = &IndexData{
