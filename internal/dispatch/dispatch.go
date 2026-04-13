@@ -428,11 +428,19 @@ func runRepoMap(ctx context.Context, db index.SymbolStore, flags map[string]any)
 		if stats.BudgetUsed > 0 {
 			result["budget_used"] = stats.BudgetUsed
 		}
-		if len(stats.DirSummary) > 0 {
+		// Only suggest --dir when there are real subdirectories to drill into.
+		hasSubdirs := false
+		for _, d := range stats.DirSummary {
+			if d.Dir != "." {
+				hasSubdirs = true
+				break
+			}
+		}
+		if hasSubdirs {
 			result["dirs"] = stats.DirSummary
 			result["hint"] = fmt.Sprintf("showing %d/%d symbols; use --dir <name> to drill into a directory", stats.ShownSymbols, stats.TotalSymbols)
 		} else {
-			result["hint"] = fmt.Sprintf("showing %d/%d symbols; use --dir, --type, --lang, or --grep to narrow scope", stats.ShownSymbols, stats.TotalSymbols)
+			result["hint"] = fmt.Sprintf("showing %d/%d symbols; use --type, --lang, or --grep to narrow scope", stats.ShownSymbols, stats.TotalSymbols)
 		}
 	}
 	return result, nil
