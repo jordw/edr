@@ -51,7 +51,15 @@ edr edit --where Symbol --old "x" --new "y"        # auto-resolve file
 
 edr rename file.go:OldName --to NewName            # rename across all references
 edr rename file.go:OldName --to NewName --dry-run  # preview without applying
-edr rename file.go:OldName --to NewName --verify   # rename + build check
+
+## Extract — `edr extract`
+
+edr extract file.go:Func --name NewFunc --lines 10-20              # extract into new function
+edr extract file.go:Func --name NewFunc --lines 10-20 --call "NewFunc(x)"  # custom call
+
+## Cross-file move
+
+edr edit file.go:Func --move-after other.go:Target  # move to another file
 
 ## Batch — combine operations in one call
 

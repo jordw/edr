@@ -159,6 +159,18 @@ var Registry = []*Spec{
 			{Name: "verify", Type: FlagBool, Default: false, Desc: "Run build verification after rename"},
 		},
 	},
+	{
+		Name: "extract", Desc: "Extract lines from a function into a new function.",
+		Category: CatWrite, MinArgs: 1, MaxArgs: 2, FileScoped: true,
+		DiffEdit: true,
+		Flags: []FlagSpec{
+			{Name: "name", Type: FlagString, Default: "", Desc: "Name for the extracted function (required)"},
+			{Name: "lines", Type: FlagString, Default: "", Desc: "Line range to extract (e.g. 10-20)"},
+			{Name: "call", Type: FlagString, Default: "", Desc: "Replacement call expression (default: name())"},
+			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
+			{Name: "verify", Type: FlagBool, Default: false, Desc: "Run build verification after extract"},
+		},
+	},
 	// --- Internal commands (dispatch-only, no CLI surface) ---
 	{
 		Name: "search", Desc: "Internal: symbol and text search, used by batch -s.",

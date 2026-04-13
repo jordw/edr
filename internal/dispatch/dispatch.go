@@ -109,6 +109,8 @@ func Dispatch(ctx context.Context, db index.SymbolStore, cmd string, args []stri
 		}
 	case "rename":
 		result, err = runRename(ctx, db, root, args, flags)
+	case "extract":
+		result, err = runExtract(ctx, db, root, args, flags)
 	case "search":
 		result, err = runSearchUnified(ctx, db, root, args, flags)
 	// --- Internal: used by edit routing and auto-verify ---

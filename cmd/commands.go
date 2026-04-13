@@ -25,6 +25,7 @@ func init() {
 	rootCmd.AddCommand(focusCmd)
 	rootCmd.AddCommand(editCmd)
 	rootCmd.AddCommand(renameCmd)
+	rootCmd.AddCommand(extractCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(undoCmd)
 	rootCmd.AddCommand(setupCmd)
@@ -378,6 +379,15 @@ var renameCmd = &cobra.Command{
 }
 
 func init() { cmdspec.RegisterFlags(renameCmd.Flags(), "rename") }
+
+var extractCmd = &cobra.Command{
+	Use:   "extract <file:symbol> --name <func_name> --lines <start-end>",
+	Short: ToolDesc["extract"],
+	Args:  cobra.RangeArgs(1, 2),
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "extract", args) },
+}
+
+func init() { cmdspec.RegisterFlags(extractCmd.Flags(), "extract") }
 
 var statusCmd = &cobra.Command{
 	Use:     "status",

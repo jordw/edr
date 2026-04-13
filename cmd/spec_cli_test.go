@@ -251,7 +251,7 @@ func TestSpec_HelpSurface(t *testing.T) {
 		t.Errorf("edr --help wrote to stderr: %q", stderr)
 	}
 
-	expected := []string{"bench", "edit", "files", "focus", "index", "orient", "rename", "setup", "status", "undo"}
+	expected := []string{"bench", "edit", "extract", "files", "focus", "index", "orient", "rename", "setup", "status", "undo"}
 	cmdRe := regexp.MustCompile(`(?m)^\s{2}(\w+)\s`)
 	matches := cmdRe.FindAllStringSubmatch(stdout, -1)
 
@@ -2697,5 +2697,146 @@ func TestSpec_RenameMissingTo(t *testing.T) {
 		"rename", "main.go:Hello")
 	if exit == 0 {
 		t.Errorf("rename without --to should fail")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Extract
+// ---------------------------------------------------------------------------
+
+func TestSpec_ExtractBasic(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc process() {\n\ta := 1\n\tb := 2\n\tc := a + b\n\tprintln(c)\n}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"extract", "main.go:process", "--name", "compute", "--lines", "4-6")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, "main.go"))
+	content := string(data)
+	if !strings.Contains(content, "func compute()") {
+		t.Errorf("extracted function not found in file")
+	}
+	if !strings.Contains(content, "compute()") {
+		t.Errorf("call to extracted function not found")
+	}
+}
+
+func TestSpec_ExtractDryRun(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc process() {\n\ta := 1\n\tb := 2\n\tc := a + b\n\tprintln(c)\n}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"extract", "main.go:process", "--name", "compute", "--lines", "4-6", "--dry-run")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "dry_run" {
+		t.Errorf("status = %v, want dry_run", h["status"])
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, "main.go"))
+	if strings.Contains(string(data), "compute") {
+		t.Errorf("dry-run should not modify file")
+	}
+}
+
+func TestSpec_ExtractWithCall(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc process() {\n\ta := 1\n\tb := 2\n\tc := a + b\n\tprintln(c)\n}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"extract", "main.go:process", "--name", "compute", "--lines", "4-6", "--call", "c := compute(a, b)")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, "main.go"))
+	if !strings.Contains(string(data), "c := compute(a, b)") {
+		t.Errorf("custom call expression not found in file")
+	}
+}
+
+func TestSpec_ExtractMissingName(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc process() {\n\ta := 1\n}\n",
+	})
+
+	_, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"extract", "main.go:process", "--lines", "4-4")
+	if exit == 0 {
+		t.Errorf("extract without --name should fail")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cross-file move
+// ---------------------------------------------------------------------------
+
+func TestSpec_MoveAcrossFiles(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"a.go": "package main\n\nfunc Alpha() {\n\tprintln(\"alpha\")\n}\n\nfunc Beta() {\n\tprintln(\"beta\")\n}\n",
+		"b.go": "package main\n\nfunc Gamma() {\n\tprintln(\"gamma\")\n}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"edit", "a.go:Beta", "--move-after", "b.go:Gamma")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	aData, _ := os.ReadFile(filepath.Join(dir, "a.go"))
+	if strings.Contains(string(aData), "Beta") {
+		t.Errorf("a.go should no longer contain Beta")
+	}
+
+	bData, _ := os.ReadFile(filepath.Join(dir, "b.go"))
+	if !strings.Contains(string(bData), "func Beta()") {
+		t.Errorf("b.go should contain Beta after move")
+	}
+}
+
+func TestSpec_MoveAcrossFilesDryRun(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"a.go": "package main\n\nfunc Alpha() {\n\tprintln(\"alpha\")\n}\n\nfunc Beta() {\n\tprintln(\"beta\")\n}\n",
+		"b.go": "package main\n\nfunc Gamma() {\n\tprintln(\"gamma\")\n}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"edit", "a.go:Beta", "--move-after", "b.go:Gamma", "--dry-run")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "dry_run" {
+		t.Errorf("status = %v, want dry_run", h["status"])
+	}
+
+	// Files should NOT be modified.
+	aData, _ := os.ReadFile(filepath.Join(dir, "a.go"))
+	if !strings.Contains(string(aData), "Beta") {
+		t.Errorf("dry-run should not remove Beta from a.go")
+	}
+	bData, _ := os.ReadFile(filepath.Join(dir, "b.go"))
+	if strings.Contains(string(bData), "Beta") {
+		t.Errorf("dry-run should not add Beta to b.go")
 	}
 }

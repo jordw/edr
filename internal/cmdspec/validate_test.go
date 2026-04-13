@@ -11,7 +11,7 @@ import (
 func TestPublicCommandSurface(t *testing.T) {
 	// These are the commands that should appear in edr --help
 	expected := map[string]bool{
-		"orient": true, "focus": true, "edit": true, "rename": true,
+		"orient": true, "focus": true, "edit": true, "rename": true, "extract": true,
 		"status": true, "undo": true, "setup": true,
 		"index": true,
 		"files": true,

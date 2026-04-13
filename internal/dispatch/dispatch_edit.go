@@ -483,14 +483,26 @@ func smartEditMoveAfter(ctx context.Context, db index.SymbolStore, root string, 
 		return nil, fmt.Errorf("source symbol: %w", err)
 	}
 
-	// Resolve target symbol in the same file
-	tgtSym, err := db.GetSymbol(ctx, srcSym.File, targetName)
-	if err != nil {
-		return nil, fmt.Errorf("target symbol: %w", err)
+	// Resolve target symbol — check if target specifies a different file (cross-file move).
+	var tgtSym *index.SymbolInfo
+	if parts := splitFileSymbol(targetName); parts != nil {
+		tgtFile, err := db.ResolvePath(parts[0])
+		if err != nil {
+			return nil, fmt.Errorf("target file: %w", err)
+		}
+		tgtSym, err = db.GetSymbol(ctx, tgtFile, parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("target symbol: %w", err)
+		}
+	} else {
+		tgtSym, err = db.GetSymbol(ctx, srcSym.File, targetName)
+		if err != nil {
+			return nil, fmt.Errorf("target symbol: %w", err)
+		}
 	}
 
 	if srcSym.File != tgtSym.File {
-		return nil, fmt.Errorf("--move-after: source and target must be in the same file (got %s and %s)", output.Rel(srcSym.File), output.Rel(tgtSym.File))
+		return smartEditMoveAcrossFiles(ctx, db, srcSym, tgtSym, dryRun)
 	}
 
 	data, err := os.ReadFile(srcSym.File)
@@ -559,6 +571,86 @@ func smartEditMoveAfter(ctx context.Context, db index.SymbolStore, root string, 
 		"old_hash": hash,
 		"symbol":   srcSym.Name,
 		"after":    tgtSym.Name,
+	}, nil
+}
+
+// smartEditMoveAcrossFiles moves a symbol from one file to another, placing it
+// after the target symbol. Uses Transaction for atomic two-file writes.
+func smartEditMoveAcrossFiles(_ context.Context, db index.SymbolStore, srcSym, tgtSym *index.SymbolInfo, dryRun bool) (any, error) {
+	srcData, err := os.ReadFile(srcSym.File)
+	if err != nil {
+		return nil, fmt.Errorf("move: read source: %w", err)
+	}
+	dstData, err := os.ReadFile(tgtSym.File)
+	if err != nil {
+		return nil, fmt.Errorf("move: read dest: %w", err)
+	}
+
+	// Cut the symbol from source (include trailing newline).
+	srcStart := int(srcSym.StartByte)
+	srcEnd := int(srcSym.EndByte)
+	if srcEnd < len(srcData) && srcData[srcEnd] == '\n' {
+		srcEnd++
+	}
+	// Also consume one leading blank line to avoid double-spacing.
+	if srcStart > 0 && srcData[srcStart-1] == '\n' {
+		srcStart--
+	}
+	srcBody := string(srcData[int(srcSym.StartByte):int(srcSym.EndByte)])
+
+	// Remove from source.
+	newSrc := make([]byte, 0, len(srcData)-(srcEnd-srcStart))
+	newSrc = append(newSrc, srcData[:srcStart]...)
+	newSrc = append(newSrc, srcData[srcEnd:]...)
+
+	// Insert into dest after target symbol.
+	tgtEnd := int(tgtSym.EndByte)
+	if tgtEnd < len(dstData) && dstData[tgtEnd] == '\n' {
+		tgtEnd++
+	}
+	insertion := "\n" + srcBody + "\n"
+	newDst := make([]byte, 0, len(dstData)+len(insertion))
+	newDst = append(newDst, dstData[:tgtEnd]...)
+	newDst = append(newDst, []byte(insertion)...)
+	newDst = append(newDst, dstData[tgtEnd:]...)
+
+	srcDiff := edit.UnifiedDiff(output.Rel(srcSym.File), srcData, newSrc)
+	dstDiff := edit.UnifiedDiff(output.Rel(tgtSym.File), dstData, newDst)
+	combinedDiff := srcDiff + dstDiff
+
+	if dryRun {
+		return map[string]any{
+			"file":   output.Rel(srcSym.File),
+			"status": "dry_run",
+			"diff":   combinedDiff,
+			"symbol": srcSym.Name,
+			"after":  tgtSym.Name,
+			"dest":   output.Rel(tgtSym.File),
+		}, nil
+	}
+
+	// Atomic commit via Transaction.
+	srcHash := edit.HashBytes(srcData)
+	dstHash := edit.HashBytes(dstData)
+	tx := edit.NewTransaction()
+	tx.Add(srcSym.File, 0, uint32(len(srcData)), string(newSrc), srcHash)
+	tx.Add(tgtSym.File, 0, uint32(len(dstData)), string(newDst), dstHash)
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("move: %w", err)
+	}
+
+	idx.MarkDirty(db.EdrDir(), output.Rel(srcSym.File))
+	idx.MarkDirty(db.EdrDir(), output.Rel(tgtSym.File))
+	newHash, _ := edit.FileHash(tgtSym.File)
+
+	return map[string]any{
+		"file":   output.Rel(srcSym.File),
+		"status": "applied",
+		"diff":   combinedDiff,
+		"hash":   newHash,
+		"symbol": srcSym.Name,
+		"after":  tgtSym.Name,
+		"dest":   output.Rel(tgtSym.File),
 	}, nil
 }
 
