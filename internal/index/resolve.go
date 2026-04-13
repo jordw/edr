@@ -13,14 +13,21 @@ func importsReach(imports []ImportInfo, targetFile, importingFile, root string) 
 		return true
 	}
 
+	langID := LangID(importingFile)
+	targetLangID := LangID(targetFile)
+
+	// Cross-language files cannot import each other.
+	if langID != "" && targetLangID != "" && !langFamilyMatch(langID, targetLangID) {
+		return false
+	}
+
 	// Same directory = same package in Go, same module scope in most languages
 	if filepath.Dir(targetFile) == filepath.Dir(importingFile) {
 		return true
 	}
 
-	langID := LangID(importingFile)
 	if langID == "" {
-		return true // unknown lang, be permissive
+		return false // unknown lang — deny rather than allow false positives
 	}
 
 	for _, imp := range imports {
@@ -41,6 +48,10 @@ func importReachesFile(imp ImportInfo, targetFile, importingFile, root, langID s
 		return pythonImportReaches(imp, targetFile, importingFile, root)
 	case "java", "kotlin", "scala":
 		return jvmImportReaches(imp, targetFile, root)
+	case "c", "cpp":
+		return cIncludeReaches(imp, targetFile, importingFile)
+	case "ruby":
+		return rubyRequireReaches(imp, targetFile, importingFile, root)
 	case "csharp":
 		return csharpImportReaches(imp, targetFile, root)
 	case "php":
@@ -48,7 +59,7 @@ func importReachesFile(imp ImportInfo, targetFile, importingFile, root, langID s
 	case "swift":
 		return swiftImportReaches(imp, targetFile, root)
 	default:
-		return true // unknown language, be permissive
+		return false // unknown language — deny rather than allow false positives
 	}
 }
 
@@ -104,35 +115,63 @@ func goImportReaches(imp ImportInfo, targetFile, root string) bool {
 func jsImportReaches(imp ImportInfo, targetFile, importingFile, root string) bool {
 	importPath := imp.ImportPath
 
-	// Skip node_modules imports (no relative path prefix)
-	if !strings.HasPrefix(importPath, ".") {
+	if strings.HasPrefix(importPath, ".") {
+		// Relative import — resolve against the importing file's directory.
+		importDir := filepath.Dir(importingFile)
+		resolved := filepath.Join(importDir, importPath)
+		if jsPathMatches(resolved, targetFile) {
+			return true
+		}
 		return false
 	}
 
-	// Resolve relative to importing file
-	importDir := filepath.Dir(importingFile)
-	resolved := filepath.Join(importDir, importPath)
+	// Non-relative import (package name like "react" or "@scope/pkg/path").
+	// In monorepos the package name often matches a directory under root.
+	// Match if the target file lives under a directory whose name matches
+	// the first segment of the import path (e.g. "react" → packages/react/).
+	segments := strings.SplitN(importPath, "/", 2)
+	pkgName := segments[0]
+	if strings.HasPrefix(pkgName, "@") && len(segments) > 1 {
+		// Scoped package: @scope/name
+		rest := strings.SplitN(segments[1], "/", 2)
+		pkgName = segments[0] + "/" + rest[0]
+	}
 
-	// Try various extensions
+	rel, err := filepath.Rel(root, targetFile)
+	if err != nil {
+		return false
+	}
+	relSlash := filepath.ToSlash(rel)
+
+	// Check if the target path contains a directory matching the package name.
+	// e.g. "react" matches "packages/react/src/jsx/ReactJSXElement.js"
+	parts := strings.Split(relSlash, "/")
+	for _, p := range parts {
+		if p == pkgName || p == filepath.Base(pkgName) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// jsPathMatches checks if a resolved JS/TS import path could refer to the target file,
+// trying common extensions and index files.
+func jsPathMatches(resolved, targetFile string) bool {
 	extensions := []string{"", ".ts", ".tsx", ".js", ".jsx"}
 	indexFiles := []string{"/index.ts", "/index.tsx", "/index.js", "/index.jsx"}
-
 	targetClean := filepath.Clean(targetFile)
 
 	for _, ext := range extensions {
-		candidate := filepath.Clean(resolved + ext)
-		if candidate == targetClean {
+		if filepath.Clean(resolved+ext) == targetClean {
 			return true
 		}
 	}
-
 	for _, idx := range indexFiles {
-		candidate := filepath.Clean(resolved + idx)
-		if candidate == targetClean {
+		if filepath.Clean(resolved+idx) == targetClean {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -275,4 +314,64 @@ func pythonImportReaches(imp ImportInfo, targetFile, importingFile, root string)
 		}
 	}
 	return match
+}
+
+// langFamilyMatch returns true if two language IDs belong to the same family
+// (e.g. "c" and "cpp" are the same family, "javascript" and "typescript" are the same family).
+func langFamilyMatch(a, b string) bool {
+	return langFamily(a) == langFamily(b)
+}
+
+func langFamily(id string) string {
+	switch id {
+	case "c", "cpp":
+		return "c"
+	case "javascript", "typescript":
+		return "js"
+	case "java", "kotlin", "scala":
+		return "jvm"
+	default:
+		return id
+	}
+}
+
+// cIncludeReaches checks if a C/C++ #include could refer to the target file.
+func cIncludeReaches(imp ImportInfo, targetFile, importingFile string) bool {
+	includePath := imp.ImportPath
+	if includePath == "" {
+		return false
+	}
+
+	// Resolve relative to the including file's directory.
+	dir := filepath.Dir(importingFile)
+	resolved := filepath.Clean(filepath.Join(dir, includePath))
+	if resolved == filepath.Clean(targetFile) {
+		return true
+	}
+
+	// Also check if the include path matches the target's basename
+	// (common for project headers included from various directories).
+	return filepath.Base(includePath) == filepath.Base(targetFile)
+}
+
+// rubyRequireReaches checks if a Ruby require/require_relative could refer to the target file.
+func rubyRequireReaches(imp ImportInfo, targetFile, importingFile, root string) bool {
+	reqPath := imp.ImportPath
+
+	// require_relative: the Alias field is set to "relative" by the Ruby parser
+	// for require_relative calls. Otherwise, check if the path starts with "./"
+	if imp.Alias == "relative" || strings.HasPrefix(reqPath, "./") || strings.HasPrefix(reqPath, "../") {
+		dir := filepath.Dir(importingFile)
+		resolved := filepath.Clean(filepath.Join(dir, reqPath))
+		target := filepath.Clean(strings.TrimSuffix(targetFile, ".rb"))
+		return resolved == target || resolved+".rb" == filepath.Clean(targetFile)
+	}
+
+	// require uses load path — match by suffix
+	rel, err := filepath.Rel(root, targetFile)
+	if err != nil {
+		return false
+	}
+	rel = strings.TrimSuffix(rel, ".rb")
+	return strings.HasSuffix(filepath.ToSlash(rel), reqPath)
 }
