@@ -49,20 +49,25 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 		return nil, fmt.Errorf("rename: finding references: %w", err)
 	}
 
-	// Collect the set of files to scan. Always include the definition file.
-	fileSet := map[string]bool{sym.File: true}
+	// Build a map of file → symbol byte ranges to replace within.
+	// The definition symbol is always included, with its span extended
+	// backwards to cover preceding doc comments that may contain the name.
+	type span struct{ start, end uint32 }
+	fileSpans := map[string][]span{}
+	defStart := expandToDocComment(sym.File, sym.StartByte)
+	fileSpans[sym.File] = append(fileSpans[sym.File], span{defStart, sym.EndByte})
 	for _, ref := range refs {
-		fileSet[ref.File] = true
+		fileSpans[ref.File] = append(fileSpans[ref.File], span{ref.StartByte, ref.EndByte})
 	}
 
 	// Sort files for deterministic output.
-	files := make([]string, 0, len(fileSet))
-	for f := range fileSet {
+	files := make([]string, 0, len(fileSpans))
+	for f := range fileSpans {
 		files = append(files, f)
 	}
 	sort.Strings(files)
 
-	// For each file, find and replace all word-boundary matches.
+	// For each file, replace only within the identified symbol spans.
 	type fileEdit struct {
 		file    string
 		oldData []byte
@@ -82,16 +87,49 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 			continue
 		}
 
-		newBytes := re.ReplaceAll(data, []byte(newName))
-		if bytes.Equal(data, newBytes) {
+		spans := fileSpans[file]
+		// Sort spans by start offset for a single forward pass.
+		sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
+
+		// Build new file content: copy unchanged regions verbatim,
+		// apply regex replacement only within span ranges.
+		var buf bytes.Buffer
+		pos := 0
+		count := 0
+		for _, s := range spans {
+			start := int(s.start)
+			end := int(s.end)
+			if start > len(data) {
+				start = len(data)
+			}
+			if end > len(data) {
+				end = len(data)
+			}
+			if start < pos {
+				// Overlapping or out-of-order span; skip.
+				continue
+			}
+			// Copy unchanged region before this span.
+			buf.Write(data[pos:start])
+			// Replace within the span.
+			region := data[start:end]
+			replaced := re.ReplaceAll(region, []byte(newName))
+			count += len(re.FindAll(region, -1))
+			buf.Write(replaced)
+			pos = end
+		}
+		// Copy remainder after last span.
+		buf.Write(data[pos:])
+
+		newData := buf.Bytes()
+		if bytes.Equal(data, newData) {
 			continue
 		}
 
-		count := countReplacements(data, newBytes, re, oldName, newName)
 		edits = append(edits, fileEdit{
 			file:    file,
 			oldData: data,
-			newData: newBytes,
+			newData: newData,
 			count:   count,
 		})
 		totalOccurrences += count
@@ -146,8 +184,38 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 	return result, nil
 }
 
-// countReplacements counts how many word-boundary matches of oldName were
-// replaced by comparing the regex match count on original data.
-func countReplacements(oldData, _ []byte, re *regexp.Regexp, _, _ string) int {
-	return len(re.FindAll(oldData, -1))
+// expandToDocComment scans backwards from startByte to include preceding
+// comment lines (// or #) that are part of the symbol's documentation.
+func expandToDocComment(file string, startByte uint32) uint32 {
+	data, err := os.ReadFile(file)
+	if err != nil || startByte == 0 {
+		return startByte
+	}
+
+	pos := int(startByte)
+	for pos > 0 {
+		// Skip backwards over the newline before startByte.
+		nl := pos - 1
+		if nl < 0 || data[nl] != '\n' {
+			break
+		}
+		// Find the start of the previous line.
+		lineStart := nl
+		for lineStart > 0 && data[lineStart-1] != '\n' {
+			lineStart--
+		}
+		line := bytes.TrimSpace(data[lineStart:nl])
+		if len(line) >= 2 && line[0] == '/' && line[1] == '/' {
+			pos = lineStart
+		} else if len(line) >= 1 && line[0] == '#' {
+			pos = lineStart
+		} else if len(line) >= 2 && line[0] == '/' && line[1] == '*' {
+			pos = lineStart
+		} else if len(line) >= 3 && bytes.HasPrefix(line, []byte("///")) {
+			pos = lineStart
+		} else {
+			break
+		}
+	}
+	return uint32(pos)
 }
