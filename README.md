@@ -1,4 +1,4 @@
-# edr — code editing tools for agents
+# edr — semantic code editing for agents
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -10,6 +10,9 @@ Instead of raw files and grep output, edr returns structured code context:
 - **`focus file:Symbol`** — reads a symbol, not the whole file. Includes relevant surrounding context.
 - **`focus SymbolName`** — resolves likely matches and opens the best candidate.
 - **`edit --old X --new Y --verify`** — diff, updated context, and verification feedback.
+- **`rename file:Symbol --to NewName`** — cross-file semantic rename via import graph.
+- **`extract file:Func --name NewFunc --lines 10-20`** — extract lines into a new function.
+- **`edit file:Func --move-after other.go:Target`** — move a symbol across files atomically.
 - **`edr --orient cmd/ --focus file:Sym --edit ...`** — survey, inspect, and mutate in one call when needed.
 - Repeated reads are deduplicated so agents do less work.
 
@@ -121,6 +124,9 @@ Without edr, agents grep to find code, read line ranges, guess what's relevant, 
 | `focus file:Symbol` | Symbol body + dependency signatures |
 | `focus SymbolName` | Ranked resolution, auto-opens best match |
 | `edit --old X --new Y --verify` | Diff + updated context + verification feedback |
+| `rename file:Sym --to New` | Cross-file rename with diffs and occurrence count |
+| `extract file:Func --lines N-M` | New function + call replacement + diff |
+| `edit file:Sym --move-after B.go:Tgt` | Atomic two-file move with diffs |
 | Re-read unchanged file | Deduplicated (zero output, zero waste) |
 
 Under the hood:
@@ -139,6 +145,8 @@ Under the hood:
 | `orient [path]` | Structural overview of a directory or project (replaces `map`) |
 | `focus file[:Symbol]` | Read file or symbol with context (replaces `read`) |
 | `edit file` | Edit, write, create files. `--verify` to check build. |
+| `rename file:Symbol` | Rename a symbol across all references (import-graph-aware) |
+| `extract file:Symbol` | Extract lines from a function into a new function |
 | `status` | Repo root, index coverage, undo, build state, warnings |
 | `undo` | Revert last edit/write (auto-checkpointed) |
 | `files "pattern"` | Find files containing text (trigram-accelerated) |
@@ -176,7 +184,7 @@ edr reads and edits any text file. Symbol-aware features (symbol reads, `--signa
 
 ## Limitations
 
-- **Structural navigation, not code analysis.** edr finds functions and classes by pattern, not by parsing or type-checking. This means it works instantly, on broken code, with zero config — but it does not have type information. It may miss unusual syntax (e.g. deeply nested anonymous functions).
+- **Structural navigation, not full code analysis.** edr finds functions, classes, and references by pattern and import graph — not by type-checking. This means it works instantly, on broken code, with zero config — but rename/extract operate on names, not types. It may miss unusual syntax (e.g. deeply nested anonymous functions).
 - **macOS and Linux only.** Windows is not planned.
 - **Pure Go.** No CGO, no C compiler needed. Single ~6MB binary.
 
