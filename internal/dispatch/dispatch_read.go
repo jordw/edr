@@ -677,6 +677,47 @@ func refIDsToSymbolInfo(ids []uint32, allSyms []idx.SymbolEntry, symFiles []idx.
 	return result
 }
 
+// refGraphCallees resolves a symbol's callees via the v2 name-based ref graph.
+// Looks up the name hashes this symbol references, then resolves each to symbol
+// IDs using the name posting index (O(log N) per name).
+func refGraphCallees(rg *idx.RefGraphData, callerID uint32, allSyms []idx.SymbolEntry, symFiles []idx.FileEntry, root string) []index.SymbolInfo {
+	nameHashes := rg.CalleeNames(callerID)
+	if len(nameHashes) == 0 {
+		return nil
+	}
+	edrDir := index.HomeEdrDir(root)
+
+	var result []index.SymbolInfo
+	seen := make(map[string]bool)
+	for _, h := range nameHashes {
+		entries := idx.LookupSymbolsByHash(edrDir, h)
+		if len(entries) > 5 {
+			continue // too ambiguous, skip
+		}
+		for _, s := range entries {
+			if int(s.FileID) >= len(symFiles) {
+				continue
+			}
+			absFile := filepath.Join(root, symFiles[s.FileID].Path)
+			key := absFile + ":" + s.Name
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			result = append(result, index.SymbolInfo{
+				Name:      s.Name,
+				Type:      s.Kind.String(),
+				File:      absFile,
+				StartLine: s.StartLine,
+				EndLine:   s.EndLine,
+				StartByte: s.StartByte,
+				EndByte:   s.EndByte,
+			})
+		}
+	}
+	return result
+}
+
 // findCallersWithFallback tries the ref graph first, then import graph + text search.
 func findCallersWithFallback(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo) []index.SymbolInfo {
 	root := db.Root()
@@ -684,42 +725,40 @@ func findCallersWithFallback(ctx context.Context, db index.SymbolStore, sym *ind
 	// Same-file callers (always fast, always accurate)
 	callers, _ := db.FindSameFileCallers(ctx, sym.Name, sym.File)
 
-	// Try ref graph first — O(log E) binary search, no file reads.
+	// Try ref graph first — O(log N) binary search by name hash.
 	if rg := idx.ReadRefGraph(edrDir); rg != nil {
 		allSyms, symFiles := idx.LoadAllSymbols(edrDir)
 		if allSyms != nil {
-			targetIDs := refGraphSymbolIDs(sym, allSyms, symFiles, root)
-			if len(targetIDs) > 0 {
+			nameHash := idx.NameHash(sym.Name)
+			callerIDs := rg.CallersByName(nameHash)
+			if len(callerIDs) > 0 {
 				seen := make(map[string]bool)
-				// Mark same-file callers already found
 				for _, c := range callers {
 					seen[c.File+":"+c.Name] = true
 				}
-				for _, tid := range targetIDs {
-					for _, callerID := range rg.Callers(tid) {
-						if int(callerID) >= len(allSyms) {
-							continue
-						}
-						cs := allSyms[callerID]
-						if int(cs.FileID) >= len(symFiles) {
-							continue
-						}
-						absFile := filepath.Join(root, symFiles[cs.FileID].Path)
-						key := absFile + ":" + cs.Name
-						if seen[key] {
-							continue
-						}
-						seen[key] = true
-						callers = append(callers, index.SymbolInfo{
-							Name:      cs.Name,
-							Type:      cs.Kind.String(),
-							File:      absFile,
-							StartLine: cs.StartLine,
-							EndLine:   cs.EndLine,
-							StartByte: cs.StartByte,
-							EndByte:   cs.EndByte,
-						})
+				for _, callerID := range callerIDs {
+					if int(callerID) >= len(allSyms) {
+						continue
 					}
+					cs := allSyms[callerID]
+					if int(cs.FileID) >= len(symFiles) {
+						continue
+					}
+					absFile := filepath.Join(root, symFiles[cs.FileID].Path)
+					key := absFile + ":" + cs.Name
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+					callers = append(callers, index.SymbolInfo{
+						Name:      cs.Name,
+						Type:      cs.Kind.String(),
+						File:      absFile,
+						StartLine: cs.StartLine,
+						EndLine:   cs.EndLine,
+						StartByte: cs.StartByte,
+						EndByte:   cs.EndByte,
+					})
 				}
 				return callers
 			}
@@ -908,7 +947,7 @@ func attachExpand(ctx context.Context, db index.SymbolStore, sym *index.SymbolIn
 			if allSyms != nil {
 				targetIDs := refGraphSymbolIDs(sym, allSyms, symFiles, db.Root())
 				for _, tid := range targetIDs {
-					deps = append(deps, refIDsToSymbolInfo(rg.Callees(tid), allSyms, symFiles, db.Root())...)
+					deps = append(deps, refGraphCallees(rg, tid, allSyms, symFiles, db.Root())...)
 				}
 			}
 		}

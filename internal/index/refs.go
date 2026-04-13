@@ -266,8 +266,11 @@ func extractIdentifiers(body string) []string {
 	return result
 }
 
-// builtinNames contains Go builtins and common names that should not be treated as dependencies.
+// builtinNames contains language builtins, keywords, and common short identifiers
+// that should not be treated as cross-file dependencies. Covers Go, C/C++, Rust,
+// Python, JavaScript/TypeScript, and Java.
 var builtinNames = map[string]bool{
+	// Go builtins and keywords
 	"bool": true, "byte": true, "complex64": true, "complex128": true,
 	"error": true, "float32": true, "float64": true, "int": true,
 	"int8": true, "int16": true, "int32": true, "int64": true,
@@ -280,4 +283,80 @@ var builtinNames = map[string]bool{
 	"println": true, "real": true, "recover": true,
 	"nil": true, "true": true, "false": true, "iota": true,
 	"err": true, "ok": true, "ctx": true, "_": true,
+
+	// C/C++ keywords and common types
+	"void": true, "char": true, "short": true, "long": true,
+	"signed": true, "unsigned": true, "float": true, "double": true,
+	"struct": true, "union": true, "enum": true, "typedef": true,
+	"const": true, "static": true, "extern": true, "volatile": true,
+	"inline": true, "register": true, "auto": true, "sizeof": true,
+	"if": true, "else": true, "for": true, "while": true, "do": true,
+	"switch": true, "case": true, "default": true, "break": true,
+	"continue": true, "return": true, "goto": true,
+	"NULL": true, "size_t": true, "ssize_t": true, "ptrdiff_t": true,
+	"int8_t": true, "int16_t": true, "int32_t": true, "int64_t": true,
+	"uint8_t": true, "uint16_t": true, "uint32_t": true, "uint64_t": true,
+	"u8": true, "u16": true, "u32": true, "u64": true,
+	"s8": true, "s16": true, "s32": true, "s64": true,
+	"__u8": true, "__u16": true, "__u32": true, "__u64": true,
+	"__s8": true, "__s16": true, "__s32": true, "__s64": true,
+	"ifdef": true, "ifndef": true, "endif": true, "define": true,
+	"include": true, "pragma": true, "undef": true,
+	"class": true, "namespace": true, "template": true, "typename": true,
+	"virtual": true, "override": true, "final": true, "explicit": true,
+	"public": true, "private": true, "protected": true, "friend": true,
+	"this": true, "nullptr": true, "throw": true, "catch": true, "try": true,
+	"noexcept": true, "constexpr": true, "decltype": true,
+	"static_cast": true, "dynamic_cast": true, "reinterpret_cast": true,
+
+	// Rust keywords
+	"fn": true, "let": true, "mut": true, "ref": true, "self": true,
+	"Self": true, "impl": true, "trait": true, "pub": true, "mod": true,
+	"crate": true, "super": true, "where": true, "async": true,
+	"await": true, "move": true, "dyn": true, "unsafe": true,
+	"match": true, "loop": true, "in": true, "as": true, "use": true,
+	"type": true, "Some": true, "None": true, "Ok": true, "Err": true,
+	"Box": true, "Vec": true, "String": true, "str": true,
+	"i8": true, "i16": true, "i32": true, "i64": true, "i128": true,
+	"f32": true, "f64": true, "usize": true, "isize": true,
+
+	// Python keywords and builtins
+	"def": true, "import": true, "from": true,
+	"and": true, "or": true, "not": true, "is": true,
+	"with": true, "yield": true, "raise": true, "except": true,
+	"finally": true, "pass": true, "lambda": true, "global": true,
+	"nonlocal": true, "assert": true, "elif": true,
+	"True": true, "False": true, "cls": true,
+	"range": true, "list": true, "dict": true, "set": true, "tuple": true,
+	"isinstance": true, "getattr": true, "setattr": true, "hasattr": true,
+	"property": true, "staticmethod": true, "classmethod": true,
+
+	// JavaScript/TypeScript keywords
+	"var": true, "function": true, "typeof": true,
+	"instanceof": true, "undefined": true, "arguments": true,
+	"export": true, "require": true, "module": true, "extends": true,
+	"implements": true, "interface": true, "abstract": true,
+	"constructor": true, "prototype": true, "toString": true,
+	"valueOf": true, "apply": true, "call": true, "bind": true,
+	"Promise": true, "Array": true, "Object": true, "Map": true,
+	"Set": true, "number": true, "boolean": true,
+	"never": true, "unknown": true, "readonly": true, "declare": true,
+	"keyof": true, "infer": true,
+
+	// Common short identifiers (too generic to be useful deps)
+	"of": true, "to": true, "on": true, "at": true, "by": true,
+	"up": true, "no": true, "id": true, "fd": true, "rc": true,
+	"op": true, "nr": true, "sz": true, "ch": true, "tx": true,
+	"rx": true, "wp": true, "rw": true, "tp": true, "bp": true,
+	"sb": true, "db": true, "cb": true, "io": true, "fs": true,
+	"os": true, "ip": true, "hw": true, "sw": true, "mm": true,
+	"np": true, "sp": true, "pp": true, "dp": true, "tt": true,
+	"xx": true, "cc": true, "ll": true, "ss": true,
+	"val": true, "tmp": true, "buf": true, "ret": true, "res": true,
+	"src": true, "dst": true, "msg": true, "cmd": true, "cfg": true,
+	"max": true, "min": true, "pos": true, "off": true, "end": true,
+	"key": true, "idx": true, "cnt": true, "ptr": true, "cur": true,
+	"old": true, "out": true, "got": true, "arg": true, "abs": true,
+	"log": true, "dev": true, "cpu": true, "irq": true, "skb": true,
+	"get": true, "put": true, "add": true, "sub": true, "run": true,
 }

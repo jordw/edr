@@ -156,7 +156,8 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 	if idx.HasRefGraph(edrDir) {
 		rg := idx.ReadRefGraph(edrDir)
 		if rg != nil {
-			result["ref_edges"] = len(rg.Edges)
+			result["ref_names"] = len(rg.ForwardNames)
+				result["ref_inv_entries"] = len(rg.InvEntries)
 		}
 	}
 	return result, nil

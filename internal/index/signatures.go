@@ -20,7 +20,7 @@ func ExtractSignatureCtx(ctx context.Context, sym SymbolInfo) string {
 // ExtractSignatureFromSource is like ExtractSignature but takes pre-loaded source bytes,
 // avoiding redundant file reads when processing multiple symbols from the same file.
 func ExtractSignatureFromSource(sym SymbolInfo, src []byte) string {
-	if int(sym.EndByte) > len(src) {
+	if int(sym.EndByte) > len(src) || sym.StartByte > sym.EndByte {
 		return sym.Type + " " + sym.Name
 	}
 	body := string(src[sym.StartByte:sym.EndByte])

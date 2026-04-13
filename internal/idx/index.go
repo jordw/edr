@@ -553,14 +553,19 @@ func PatchDirtyFiles(root, edrDir string, dirty []string) {
 		Postings: postings,
 	}
 
-	// Preserve symbols from old index.
+	// Preserve symbols from old index, remapping FileIDs to the new file table.
+	// Symbols from dirty files are dropped (they're stale).
 	if old.Header.NumSymbols > 0 {
 		if full := loadIndex(edrDir); full != nil && len(full.Symbols) > 0 {
-			d.Symbols = full.Symbols
-			d.NamePosts = full.NamePosts
-			d.NamePostings = full.NamePostings
-			d.Header.NumSymbols = full.Header.NumSymbols
-			d.Header.NumNameKeys = full.Header.NumNameKeys
+			remapped := remapSymbols(full.Symbols, full.Files, files, dirtySet)
+			if len(remapped) > 0 {
+				namePostData, namePosts := BuildNamePostings(remapped)
+				d.Symbols = remapped
+				d.NamePosts = namePosts
+				d.NamePostings = namePostData
+				d.Header.NumSymbols = uint32(len(remapped))
+				d.Header.NumNameKeys = uint32(len(namePosts))
+			}
 		}
 	}
 
@@ -694,17 +699,19 @@ func rebuildSmart(root, edrDir string, walkFn func(root string, fn func(path str
 		Postings: postings,
 	}
 
-	// Preserve symbol data from old index if available.
+	// Preserve symbol data from old index if available, remapping FileIDs.
 	// rebuildSmart only updates trigrams; full symbol rebuild requires edr index.
-	// We skipped symbol parsing in loadIndexTrigrams for speed, so load
-	// only the symbol sections now (which is amortized by the write cost).
 	if old != nil && old.Header.NumSymbols > 0 {
 		if full := loadIndex(edrDir); full != nil && len(full.Symbols) > 0 {
-			d.Symbols = full.Symbols
-			d.NamePosts = full.NamePosts
-			d.NamePostings = full.NamePostings
-			d.Header.NumSymbols = full.Header.NumSymbols
-			d.Header.NumNameKeys = full.Header.NumNameKeys
+			remapped := remapSymbols(full.Symbols, full.Files, d.Files)
+			if len(remapped) > 0 {
+				namePostData, namePosts := BuildNamePostings(remapped)
+				d.Symbols = remapped
+				d.NamePosts = namePosts
+				d.NamePostings = namePostData
+				d.Header.NumSymbols = uint32(len(remapped))
+				d.Header.NumNameKeys = uint32(len(namePosts))
+			}
 		}
 	}
 
@@ -891,9 +898,9 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 				tris:  od.tris,
 				syms:  od.syms,
 			}
-			if len(od.syms) > 0 {
+			if len(fr.syms) > 0 {
 				if data, err := os.ReadFile(p); err == nil {
-					fr.symIdents = extractSymIdents(data, od.syms)
+					fr.symIdents = extractSymIdents(data, fr.syms)
 				}
 			}
 			reused = append(reused, fr)
@@ -912,6 +919,12 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 		needIndex = append(needIndex, pathInfo{rel: rel, abs: p, info: info})
 	}
 	total = len(needIndex) + len(reused)
+
+	// Fast path: nothing changed — skip rebuild entirely.
+	if len(needIndex) == 0 && old != nil && old.Header.NumSymbols > 0 {
+		ClearDirty(edrDir)
+		return nil
+	}
 
 	// Worker pool — only processes files that actually need re-indexing.
 	var wg sync.WaitGroup
@@ -1067,36 +1080,21 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 		}
 	}
 
-	// Build and write symbol reference graph.
+	// Build and write symbol reference graph (v2: name-based).
 	if len(allSymbols) > 0 {
-		// Build global symbol name set for intersection.
-		nameToIDs := make(map[string][]uint32, len(allSymbols))
-		for i, s := range allSymbols {
-			nameToIDs[s.Name] = append(nameToIDs[s.Name], uint32(i))
-		}
-		// Iterate over per-symbol idents and emit reference edges.
-		var refs []RefEdge
+		// Flatten per-symbol idents into a single slice parallel to allSymbols.
+		perSymIdents := make([][]string, len(allSymbols))
 		symIdx := 0
 		for _, r := range results {
 			for j := range r.syms {
-				callerID := uint32(symIdx)
+				if j < len(r.symIdents) {
+					perSymIdents[symIdx] = r.symIdents[j]
+				}
 				symIdx++
-				if j >= len(r.symIdents) {
-					continue
-				}
-				for _, ident := range r.symIdents[j] {
-					for _, calleeID := range nameToIDs[ident] {
-						if calleeID != callerID {
-							refs = append(refs, RefEdge{Caller: callerID, Callee: calleeID})
-						}
-					}
-				}
 			}
 		}
-		if len(refs) > 0 {
-			rg := BuildRefGraph(uint32(len(allSymbols)), refs)
-			WriteRefGraph(edrDir, rg)
-		}
+		rg := BuildRefGraphV2(uint32(len(allSymbols)), perSymIdents)
+		WriteRefGraph(edrDir, rg)
 	}
 
 	ClearDirty(edrDir)
@@ -1117,6 +1115,36 @@ func IndexedPaths(edrDir string) map[string]struct{} {
 		m[f.Path] = struct{}{}
 	}
 	return m
+}
+
+// remapSymbols translates symbol FileIDs from oldFiles to newFiles.
+// Symbols whose file was removed or is in the skip set are dropped.
+func remapSymbols(symbols []SymbolEntry, oldFiles, newFiles []FileEntry, skip ...map[string]bool) []SymbolEntry {
+	newIDByPath := make(map[string]uint32, len(newFiles))
+	for i, f := range newFiles {
+		newIDByPath[f.Path] = uint32(i)
+	}
+	var skipSet map[string]bool
+	if len(skip) > 0 {
+		skipSet = skip[0]
+	}
+	remapped := make([]SymbolEntry, 0, len(symbols))
+	for _, s := range symbols {
+		if int(s.FileID) >= len(oldFiles) {
+			continue
+		}
+		oldPath := oldFiles[s.FileID].Path
+		if skipSet != nil && skipSet[oldPath] {
+			continue
+		}
+		newID, ok := newIDByPath[oldPath]
+		if !ok {
+			continue // file removed
+		}
+		s.FileID = newID
+		remapped = append(remapped, s)
+	}
+	return remapped
 }
 
 func loadIndex(edrDir string) *IndexData {
@@ -1162,6 +1190,165 @@ func atomicWrite(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// Changes holds the result of comparing indexed file metadata against the
+// filesystem. Modified files have a different mtime or size than the index.
+// Deleted files no longer exist on disk. New files exist in directories
+// whose mtime changed but are not in the index.
+type Changes struct {
+	Modified []string // relative paths — mtime or size differs
+	Deleted  []string // relative paths — file no longer exists
+	New      []string // relative paths — not in index
+}
+
+// Empty returns true if no changes were detected.
+func (c *Changes) Empty() bool {
+	return len(c.Modified) == 0 && len(c.Deleted) == 0 && len(c.New) == 0
+}
+
+// StatChanges loads the file table from the index and parallel-stats every
+// file to find modifications, deletions, and new files. Costs ~66ms on a
+// 93K-file repo (Linux kernel). Returns nil if no index exists.
+func StatChanges(root, edrDir string) *Changes {
+	// Mmap the index and walk the file table in-place — avoids reading
+	// 5MB into heap and allocating 93K FileEntry structs.
+	f, err := os.Open(filepath.Join(edrDir, MainFile))
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || fi.Size() < int64(v2HeaderSize) {
+		return nil
+	}
+	data, err := syscall.Mmap(int(f.Fd()), 0, int(fi.Size()),
+		syscall.PROT_READ, syscall.MAP_PRIVATE)
+	if err != nil {
+		return nil
+	}
+	defer syscall.Munmap(data)
+
+	h, err := ReadHeaderBytes(data)
+	if err != nil || h.NumFiles == 0 {
+		return nil
+	}
+
+	// Parse file entries from mmap into lightweight path+mtime+size slices.
+	type fileRef struct {
+		path  string
+		mtime int64
+		size  int64
+	}
+	numFiles := int(h.NumFiles)
+	refs := make([]fileRef, 0, numFiles)
+	ftData := data[h.FileTableOff:h.PostingOff]
+	pos := 0
+	for i := 0; i < numFiles; i++ {
+		if pos+2 > len(ftData) {
+			break
+		}
+		pathLen := int(binary.LittleEndian.Uint16(ftData[pos:]))
+		pos += 2
+		if pos+pathLen+16 > len(ftData) {
+			break
+		}
+		p := string(ftData[pos : pos+pathLen])
+		pos += pathLen
+		mtime := int64(binary.LittleEndian.Uint64(ftData[pos:]))
+		pos += 8
+		size := int64(binary.LittleEndian.Uint64(ftData[pos:]))
+		pos += 8
+		refs = append(refs, fileRef{path: p, mtime: mtime, size: size})
+	}
+
+	if len(refs) == 0 {
+		return nil
+	}
+
+	type statResult struct {
+		rel     string
+		deleted bool
+		changed bool
+	}
+
+	// Parallel stat all indexed files.
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 4 {
+		workers = 4
+	}
+	ch := make(chan int, 256)
+	results := make([]statResult, len(refs))
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ri := range ch {
+				ref := &refs[ri]
+				abs := filepath.Join(root, ref.path)
+				info, err := os.Lstat(abs)
+				if err != nil {
+					results[ri] = statResult{rel: ref.path, deleted: true}
+				} else if info.ModTime().UnixNano() != ref.mtime || info.Size() != ref.size {
+					results[ri] = statResult{rel: ref.path, changed: true}
+				}
+			}
+		}()
+	}
+	for i := range refs {
+		ch <- i
+	}
+	close(ch)
+	wg.Wait()
+
+	// Build directory mtime map and indexed set for new-file detection.
+	indexedDirs := make(map[string]int64, 4096)
+	indexedSet := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		indexedSet[ref.path] = struct{}{}
+		dir := filepath.Dir(ref.path)
+		if ref.mtime > indexedDirs[dir] {
+			indexedDirs[dir] = ref.mtime
+		}
+	}
+
+	c := &Changes{}
+	for _, r := range results {
+		switch {
+		case r.deleted:
+			c.Deleted = append(c.Deleted, r.rel)
+		case r.changed:
+			c.Modified = append(c.Modified, r.rel)
+		}
+	}
+
+	// Scan directories for new files. A directory with a changed mtime
+	// has had files created or deleted. We check every indexed directory.
+	for dir, maxMtime := range indexedDirs {
+		info, err := os.Stat(filepath.Join(root, dir))
+		if err != nil {
+			continue
+		}
+		if info.ModTime().UnixNano() <= maxMtime {
+			continue
+		}
+		entries, err := os.ReadDir(filepath.Join(root, dir))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			rel := filepath.Join(dir, e.Name())
+			if _, indexed := indexedSet[rel]; !indexed {
+				c.New = append(c.New, rel)
+			}
+		}
+	}
+
+	return c
 }
 
 func isBinary(data []byte) bool {

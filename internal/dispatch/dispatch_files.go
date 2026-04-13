@@ -42,30 +42,37 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 	searchBytes := []byte(pattern)
 	searchLower := []byte(strings.ToLower(pattern))
 
-	// Query trigram index for indexed files, scan unindexed files.
-	// This gives correct results even with a partial index.
+	// Query trigram index + stat-check for changed files.
 	var matches []string
 	source := "scan"
 
-	dirty := idx.IsDirty(edrDir)
 	tris := idx.QueryTrigrams(strings.ToLower(pattern))
 	h, _ := idx.ReadHeader(edrDir)
 	hasIndex := h != nil
 
+	// Stat all indexed files to find modifications, deletions, and new files.
+	// ~150ms on 93K-file repos — always correct, no stale dirty tracking.
+	var changes *idx.Changes
+	if hasIndex {
+		changes = idx.StatChanges(root, edrDir)
+	}
+
 	if hasIndex && len(tris) > 0 {
-		// Use trigram index for candidates — avoids full Unmarshal of
-		// IndexedPaths which is O(all files + all symbols) and hangs
-		// on large repos (200MB+ index).
 		if candidates, ok := idx.Query(edrDir, tris); ok {
-			dirtySet := make(map[string]bool)
-			if dirty {
-				for _, f := range idx.DirtyFiles(edrDir) {
-					dirtySet[f] = true
+			// Build set of changed files to skip in trigram results
+			// (they get rescanned below with current content).
+			changedSet := make(map[string]bool)
+			if changes != nil {
+				for _, f := range changes.Modified {
+					changedSet[f] = true
+				}
+				for _, f := range changes.Deleted {
+					changedSet[f] = true
 				}
 			}
 			for _, rel := range candidates {
-				if dirtySet[rel] {
-					continue // will be rescanned below
+				if changedSet[rel] {
+					continue // rescanned below
 				}
 				data, err := os.ReadFile(filepath.Join(root, rel))
 				if err != nil {
@@ -76,16 +83,13 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 				}
 			}
 			source = "index"
-			if dirty {
-				source = "index+dirty"
-			}
 		}
 	}
 
-	// Scan files not covered by the index.
-	if dirty {
-		// Only scan dirty files — the index covers the rest.
-		for _, rel := range idx.DirtyFiles(edrDir) {
+	// Scan changed + new files — their trigrams may be stale or absent.
+	if changes != nil && !changes.Empty() {
+		scanList := append(changes.Modified, changes.New...)
+		for _, rel := range scanList {
 			data, err := os.ReadFile(filepath.Join(root, rel))
 			if err != nil {
 				continue
@@ -93,6 +97,9 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 			if fileMatches(data, searchBytes, searchLower, caseSensitive) {
 				matches = append(matches, rel)
 			}
+		}
+		if source == "index" {
+			source = "index+stat"
 		}
 	} else if !hasIndex {
 		// No index at all — must walk.

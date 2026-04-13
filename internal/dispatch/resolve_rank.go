@@ -176,10 +176,15 @@ func shouldAutoResolve(ranked []rankedCandidate, query string) bool {
 	if top.Tier != tierExact {
 		return false
 	}
-	// Short/common name rule: require higher confidence
+	// Short/common name rule: require higher confidence.
+	// Names ≤ 6 chars are likely to be common/ambiguous across large repos
+	// (e.g. "config", "init", "open", "probe") even if the index only
+	// returns a few candidates after stale filtering.
 	minGap := 20
 	if len(query) <= 3 {
 		minGap = 40
+	} else if len(query) <= 6 {
+		minGap = 30
 	}
 	if len(ranked) == 1 {
 		return true

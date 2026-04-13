@@ -14,7 +14,7 @@ Run `edr status` between tasks or after failures.
 ## Search — `edr files` and `edr orient`
 
 edr files "pattern"                         # fulltext across ALL files (use this first)
-edr files "TODO" --include "*.go"           # fulltext with glob filter
+edr files "TODO"                             # fulltext (searches all file types)
 edr orient --grep "TestSpec"                # symbols by NAME (regex)
 edr orient --body "http.Get"               # symbols whose body contains text (parsed only)
 
@@ -52,7 +52,7 @@ edr edit --where Symbol --old "x" --new "y"        # auto-resolve file
 Chain with `-f -o -s -e -w`. File carries forward. Edit includes read-back.
 
 edr --focus f.go:Func --edit --old "x" --new "y"
-edr --search "TODO" --include "*.go"
+edr --search "TODO"
 edr --focus f.go:Func --expand callers
 
 ## Other commands

@@ -553,7 +553,15 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 		fileOrder = fileOrder[:n]
 	}
 
-	// Sort files for budget-friendly output: code first, non-test before test, shallower first, alpha
+	// Sort files for budget-friendly output: most relevant first.
+	// Signals: code > non-code, non-test > test, more symbols > fewer,
+	// more importers > fewer, shallower > deeper.
+	symCount := make(map[string]int, len(fileOrder))
+	for _, f := range fileOrder {
+		symCount[f] = len(byFile[f])
+	}
+	edrDir := HomeEdrDir(root)
+	importGraph := idx.ReadImportGraph(edrDir)
 	sort.SliceStable(fileOrder, func(i, j int) bool {
 		ri, _ := filepath.Rel(root, fileOrder[i])
 		rj, _ := filepath.Rel(root, fileOrder[j])
@@ -572,6 +580,20 @@ func RepoMap(ctx context.Context, db SymbolStore, opts ...RepoMapOption) (string
 		dj := strings.Count(rj, string(filepath.Separator))
 		if di != dj {
 			return di < dj
+		}
+		// Import count: files imported by many others are more important
+		if importGraph != nil {
+			ii := importGraph.Inbound(ri)
+			ij := importGraph.Inbound(rj)
+			if ii != ij {
+				return ii > ij
+			}
+		}
+		// Symbol count: files with more symbols are more substantial
+		si := symCount[fileOrder[i]]
+		sj := symCount[fileOrder[j]]
+		if si != sj {
+			return si > sj
 		}
 		return ri < rj
 	})

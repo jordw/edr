@@ -391,10 +391,9 @@ func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo,
 		if len(candidates) == 1 {
 			return &candidates[0], nil
 		}
-		if best := preferDefinition(candidates); best != nil {
-			return best, nil
-		}
 		if len(candidates) > 0 {
+			// Always go through ranking for multiple candidates.
+			// preferDefinition is too aggressive for common names.
 			return nil, &AmbiguousSymbolError{Name: name, Root: o.root, Candidates: candidates}
 		}
 		// All entries were from dirty files — fall through to parse
@@ -414,10 +413,6 @@ func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo,
 	}
 	if len(candidates) == 1 {
 		return &candidates[0], nil
-	}
-	// Prefer definitions over other types
-	if best := preferDefinition(candidates); best != nil {
-		return best, nil
 	}
 	return nil, &AmbiguousSymbolError{Name: name, Root: o.root, Candidates: candidates}
 }

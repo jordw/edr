@@ -269,35 +269,41 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 		return totalMatches >= limit || (budget > 0 && budgetUsed >= budget)
 	}
 
-	// Trigram pre-filter: for literal (non-regex) searches, use the index
-	// to skip files that can't contain the pattern.
+	// Trigram pre-filter + stat-check for changed files.
 	edrDir := db.EdrDir()
-	var indexed map[string]struct{}
 	var candidates map[string]struct{}
-	dirty := idx.IsDirty(edrDir)
-	var dirtySet map[string]bool
-	if dirty {
-		dirtySet = make(map[string]bool)
-		for _, f := range idx.DirtyFiles(edrDir) {
-			dirtySet[f] = true
+	h, _ := idx.ReadHeader(edrDir)
+	hasIndex := h != nil
+
+	var changes *idx.Changes
+	if hasIndex {
+		changes = idx.StatChanges(root, edrDir)
+	}
+
+	changedSet := make(map[string]bool)
+	if changes != nil {
+		for _, f := range changes.Modified {
+			changedSet[f] = true
+		}
+		for _, f := range changes.Deleted {
+			changedSet[f] = true
 		}
 	}
-	if !isRegex {
+
+	if !isRegex && hasIndex {
 		tris := idx.QueryTrigrams(strings.ToLower(pattern))
-		indexed = idx.IndexedPaths(edrDir)
-		if indexed != nil && len(tris) > 0 {
+		if len(tris) > 0 {
 			if paths, ok := idx.Query(edrDir, tris); ok {
 				candidates = make(map[string]struct{}, len(paths))
 				for _, p := range paths {
 					candidates[p] = struct{}{}
 				}
-				// Search indexed candidates (skip dirty — rescanned below)
 				for _, rel := range paths {
 					if atLimit() {
 						break
 					}
-					if dirtySet[rel] {
-						continue
+					if changedSet[rel] {
+						continue // rescanned below
 					}
 					if !includeExcludeFilter(rel) {
 						continue
@@ -308,11 +314,10 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 		}
 	}
 
-	// Scan files not covered by the index.
-	complete := candidates != nil && idx.IsComplete(root, edrDir)
-	if dirty && candidates != nil {
-		// Index used for unchanged files above; only scan dirty files.
-		for _, rel := range idx.DirtyFiles(edrDir) {
+	// Scan changed + new files — their trigrams may be stale or absent.
+	if changes != nil && !changes.Empty() {
+		scanList := append(changes.Modified, changes.New...)
+		for _, rel := range scanList {
 			if atLimit() {
 				break
 			}
@@ -321,9 +326,8 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 			}
 			searchFile(rel, filepath.Join(root, rel))
 		}
-	} else if !complete && candidates == nil {
-		// No index at all — must walk. Skip when index exists but is
-		// merely stale; trigram results are still valid.
+	} else if !hasIndex {
+		// No index at all — must walk.
 		index.WalkRepoFiles(root, func(path string) error {
 			if atLimit() {
 				return filepath.SkipAll
@@ -331,11 +335,6 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 			rel, _ := filepath.Rel(root, path)
 			if rel == "" {
 				rel = path
-			}
-			if candidates != nil {
-				if _, ok := indexed[rel]; ok {
-					return nil
-				}
 			}
 			if !includeExcludeFilter(rel) {
 				return nil
@@ -348,12 +347,9 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 	// Determine search source for provenance
 	searchSource := "scan"
 	if candidates != nil {
-		if dirty {
-			searchSource = "index+dirty"
-		} else if complete {
-			searchSource = "index"
-		} else {
-			searchSource = "index+scan"
+		searchSource = "index"
+		if changes != nil && !changes.Empty() {
+			searchSource = "index+stat"
 		}
 	}
 

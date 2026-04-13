@@ -87,13 +87,9 @@ func Dispatch(ctx context.Context, db index.SymbolStore, cmd string, args []stri
 	root := db.Root()
 	setRootOnce.Do(func() { output.SetRoot(root) })
 
-	// Auto-refresh stale index for read-only commands.
-	// BuildFullFromWalk skips unchanged files (mtime check), so this is
-	// fast when only a few files are dirty — typically sub-second.
-	edrDir := db.EdrDir()
-	if edrDir != "" && idx.IsDirty(edrDir) && isReadCommand(cmd) {
-		autoRefreshIndex(root, edrDir)
-	}
+	// Read commands (files, search) use idx.StatChanges at query time
+	// to detect modified/new/deleted files — no synchronous index
+	// patching needed here.
 
 	var result any
 	var err error
@@ -135,35 +131,6 @@ func Dispatch(ctx context.Context, db index.SymbolStore, cmd string, args []stri
 		return nil, relError(root, err)
 	}
 	return result, nil
-}
-
-// isReadCommand returns true for commands that depend on index freshness.
-func isReadCommand(cmd string) bool {
-	switch cmd {
-	case "orient", "map", "focus", "read", "search", "files":
-		return true
-	}
-	return false
-}
-
-// autoRefreshIndex rebuilds the index for dirty files only.
-// BuildFullFromWalk reuses data for unchanged files (mtime match),
-// so this is fast when only a few files changed.
-func autoRefreshIndex(root, edrDir string) {
-	dirty := idx.DirtyFiles(edrDir)
-	if len(dirty) == 0 {
-		// Dirty flag set but no specific files — could be legacy "1" marker
-		// or external changes. Don't auto-rebuild (too expensive without knowing what changed).
-		return
-	}
-	// Only auto-rebuild if a small number of files changed.
-	// For large-scale changes (git checkout, branch switch), let the user run edr index.
-	if len(dirty) > 50 {
-		return
-	}
-	// Patch only the dirty files into the existing index instead of
-	// rebuilding from scratch (which walks the entire repo).
-	idx.PatchDirtyFiles(root, edrDir, dirty)
 }
 
 // relError rewrites absolute repo paths in error messages to relative paths.

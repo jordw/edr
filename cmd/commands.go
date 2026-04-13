@@ -246,6 +246,32 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 			} else {
 				env.SetVerify(verifyResult)
 			}
+			// Auto-undo on verify failure: restore the pre-edit checkpoint
+			// so agents don't proceed with broken code.
+			verifyStatus := ""
+			if vm, ok := env.Verify.(map[string]any); ok {
+				verifyStatus, _ = vm["status"].(string)
+			}
+			if verifyStatus == "failed" {
+				sessDir := filepath.Join(edrDir, "sessions")
+				cpID := session.LatestAutoCheckpoint(sessDir)
+				if cpID != "" {
+					dirtyFiles := sess.GetDirtyFiles()
+					if _, _, _, restoreErr := sess.RestoreCheckpoint(sessDir, root, cpID, false, dirtyFiles); restoreErr == nil {
+						session.DropCheckpoint(sessDir, cpID)
+						if vm, ok := env.Verify.(map[string]any); ok {
+							vm["auto_undone"] = true
+						}
+						// Update the existing op result to reflect the undo
+						if len(env.Ops) > 0 {
+							lastOp := env.Ops[len(env.Ops)-1]
+							lastOp["status"] = "reverted"
+							lastOp["msg"] = "edit applied then reverted: verify failed"
+							delete(lastOp, "read_back")
+						}
+					}
+				}
+			}
 		} else if dryRun {
 			env.SetVerify(map[string]any{"status": "skipped", "reason": "dry run"})
 		}

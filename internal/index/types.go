@@ -62,7 +62,12 @@ func (e *AmbiguousSymbolError) Error() string {
 }
 
 // preferDefinition picks the struct/class/type definition from a list of same-name symbols.
+// Only auto-picks when there are few total candidates AND few non-type candidates,
+// so common names like "config" fall through to the ranking shortlist.
 func preferDefinition(results []SymbolInfo) *SymbolInfo {
+	if len(results) > 5 {
+		return nil // too many candidates; let ranking handle it
+	}
 	typeKinds := map[string]bool{
 		"type": true, "struct": true, "class": true,
 		"enum": true, "interface": true, "module": true,
@@ -74,6 +79,12 @@ func preferDefinition(results []SymbolInfo) *SymbolInfo {
 		}
 	}
 	if len(types) == 1 {
+		// Only auto-resolve when the type definition is the clear majority.
+		// If there are many non-type candidates, let ranking decide.
+		nonTypes := len(results) - 1
+		if nonTypes > 2 {
+			return nil
+		}
 		return &results[types[0]]
 	}
 	return nil

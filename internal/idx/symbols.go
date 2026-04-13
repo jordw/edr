@@ -99,6 +99,36 @@ func QuerySymbolsByName(d *IndexData, name string) []SymbolEntry {
 	return nil
 }
 
+// QuerySymbolsByHash returns symbols matching a pre-computed name hash.
+// Unlike QuerySymbolsByName, this cannot verify exact name match (hash collision guard),
+// so results may include hash collisions. Callers should verify names if needed.
+func QuerySymbolsByHash(d *IndexData, h uint64) []SymbolEntry {
+	if len(d.NamePosts) == 0 {
+		return nil
+	}
+	lo, hi := 0, len(d.NamePosts)-1
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		if d.NamePosts[mid].NameHash == h {
+			np := d.NamePosts[mid]
+			ids := DecodePosting(d.NamePostings, np.Offset, np.Count)
+			var results []SymbolEntry
+			for _, id := range ids {
+				if int(id) < len(d.Symbols) {
+					results = append(results, d.Symbols[id])
+				}
+			}
+			return results
+		}
+		if d.NamePosts[mid].NameHash < h {
+			lo = mid + 1
+		} else {
+			hi = mid - 1
+		}
+	}
+	return nil
+}
+
 // AllIndexedSymbols returns all symbols from a loaded index.
 func AllIndexedSymbols(d *IndexData) []SymbolEntry {
 	return d.Symbols
@@ -151,6 +181,19 @@ func loadSymbolIndexCached(edrDir string) (*IndexData, []FileEntry) {
 		NamePostings: namePostings,
 	}
 	return symIdxData, symIdxFiles
+}
+
+// LookupSymbolsByHash queries symbols by pre-computed name hash.
+// Returns nil if no symbol index is available.
+func LookupSymbolsByHash(edrDir string, h uint64) []SymbolEntry {
+	if !HasSymbolIndex(edrDir) {
+		return nil
+	}
+	d, _ := loadSymbolIndexCached(edrDir)
+	if d == nil {
+		return nil
+	}
+	return QuerySymbolsByHash(d, h)
 }
 
 // LookupSymbols queries symbols by exact name using the lightweight symbol index.

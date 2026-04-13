@@ -71,7 +71,7 @@ func runExpand(ctx context.Context, db index.SymbolStore, root string, args []st
 			if allSyms != nil {
 				targetIDs := refGraphSymbolIDs(sym, allSyms, symFiles, root)
 				for _, tid := range targetIDs {
-					deps = append(deps, refIDsToSymbolInfo(rg.Callees(tid), allSyms, symFiles, root)...)
+					deps = append(deps, refGraphCallees(rg, tid, allSyms, symFiles, root)...)
 				}
 			}
 		}

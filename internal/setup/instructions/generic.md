@@ -60,7 +60,7 @@ File carries forward between operations. Short aliases: `-f -o -s -e -w`.
 
 edr --orient cmd/ --focus f.go --sig          # map dir + read sigs
 edr --focus f.go:Func --edit --old "x" --new "y"  # read + edit (includes read-back)
-edr --search "TODO" --include "*.go"          # text search
+edr --search "TODO"                              # text search
 edr --focus f.go:Func --expand callers        # symbol + callers
 edr --write new.go --content "pkg main" --mkdir  # create file
 

@@ -1400,7 +1400,7 @@ func TestSpec_VerifyFailedAfterAppliedEdit(t *testing.T) {
 		"go.mod":   "module test\n\ngo 1.21\n",
 	})
 
-	// Introduce a compile error.
+	// Introduce a compile error — edit should be auto-reverted.
 	result, _, _, exit := specRun(t, binary, dir, nil,
 		"edit", "hello.go", "--old-text", "func main() {}", "--new-text", "func main( {}", "--verify")
 	if exit != 1 {
@@ -1408,8 +1408,8 @@ func TestSpec_VerifyFailedAfterAppliedEdit(t *testing.T) {
 	}
 	if len(result.Ops) > 0 {
 		h := result.Ops[0].Header
-		if h["status"] != "applied" {
-			t.Errorf("edit status should be applied even when verify fails, got %v", h["status"])
+		if h["status"] != "reverted" {
+			t.Errorf("edit status should be reverted when verify fails, got %v", h["status"])
 		}
 	}
 	if result.Verify == nil {
@@ -1417,6 +1417,14 @@ func TestSpec_VerifyFailedAfterAppliedEdit(t *testing.T) {
 	}
 	if result.Verify["verify"] != "failed" {
 		t.Errorf("verify = %v, want failed", result.Verify["verify"])
+	}
+	// File should be restored to original content.
+	data, err := os.ReadFile(filepath.Join(dir, "hello.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "func main() {}") {
+		t.Errorf("file should be restored after verify failure, got: %s", data)
 	}
 }
 
