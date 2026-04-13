@@ -55,6 +55,70 @@ impl Client {
 }
 `), 0644)
 
+	os.WriteFile(filepath.Join(tmp, "main.js"), []byte(`class Server {
+    start() {}
+    stop() {}
+}
+
+function freeFunction() {}
+
+class Client {
+    start() {}
+}
+`), 0644)
+
+	os.WriteFile(filepath.Join(tmp, "main.ts"), []byte(`class Server {
+    start(): void {}
+    stop(): void {}
+}
+
+function freeFunction(): void {}
+
+class Client {
+    start(): void {}
+}
+`), 0644)
+
+	os.WriteFile(filepath.Join(tmp, "Main.java"), []byte(`class Server {
+    void start() {}
+    void stop() {}
+}
+
+class Client {
+    void start() {}
+}
+`), 0644)
+
+	os.WriteFile(filepath.Join(tmp, "main.cpp"), []byte(`class Server {
+public:
+    void start() {}
+    void stop() {}
+};
+
+void freeFunction() {}
+
+class Client {
+public:
+    void start() {}
+};
+`), 0644)
+
+	os.WriteFile(filepath.Join(tmp, "main.rb"), []byte(`class Server
+  def start
+  end
+  def stop
+  end
+end
+
+def free_function
+end
+
+class Client
+  def start
+  end
+end
+`), 0644)
+
 	db := index.NewOnDemand(tmp)
 	defer db.Close()
 	ctx := context.Background()
@@ -74,6 +138,26 @@ impl Client {
 			"stop": "Server",
 		}},
 		{"main.rs", map[string]string{
+			"Server": "", "Client": "", "free_function": "",
+			"stop": "Server",
+		}},
+		{"main.js", map[string]string{
+			"Server": "", "Client": "", "freeFunction": "",
+			"stop": "Server",
+		}},
+		{"main.ts", map[string]string{
+			"Server": "", "Client": "", "freeFunction": "",
+			"stop": "Server",
+		}},
+		{"Main.java", map[string]string{
+			"Server": "", "Client": "",
+			"stop": "Server",
+		}},
+		{"main.cpp", map[string]string{
+			"Server": "", "Client": "", "freeFunction": "",
+			"stop": "Server",
+		}},
+		{"main.rb", map[string]string{
 			"Server": "", "Client": "", "free_function": "",
 			"stop": "Server",
 		}},
