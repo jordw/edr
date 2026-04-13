@@ -950,17 +950,40 @@ func (o *OnDemand) symbolNotFoundError(_ context.Context, name, file string) err
 		return fmt.Errorf("symbol %q not found in %s (no symbols found)", name, file)
 	}
 
-	// Find closest match
+	// Find closest match using a combined score:
+	// prefix/substring containment is a much stronger signal than
+	// edit distance alone (e.g. "sched_tick" → "sched_tick_RENAMED"
+	// should beat "sched_tick" → "sched_fork").
+	nameLower := strings.ToLower(name)
+	// Two-pass search: first try prefix/substring matches (always better),
+	// then fall back to levenshtein.
 	best := ""
-	bestDist := len(name) + 1
+	bestExtra := len(name) + 1
 	for _, a := range available {
-		d := levenshtein(strings.ToLower(name), strings.ToLower(a))
-		if d < bestDist {
-			bestDist = d
-			best = a
+		aLower := strings.ToLower(a)
+		if strings.HasPrefix(aLower, nameLower) || strings.Contains(aLower, nameLower) {
+			extra := len(a) - len(name)
+			if best == "" || extra < bestExtra {
+				bestExtra = extra
+				best = a
+			}
 		}
 	}
-	if best != "" && bestDist <= 3 {
+	if best == "" {
+		// Fallback: levenshtein
+		bestDist := len(name) + 1
+		for _, a := range available {
+			d := levenshtein(nameLower, strings.ToLower(a))
+			if d < bestDist {
+				bestDist = d
+				best = a
+			}
+		}
+		if bestDist > 3 {
+			best = ""
+		}
+	}
+	if best != "" {
 		return fmt.Errorf("symbol %q not found in %s — did you mean %q?", name, file, best)
 	}
 	return fmt.Errorf("symbol %q not found in %s", name, file)

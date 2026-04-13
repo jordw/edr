@@ -967,6 +967,15 @@ func suggestSimilarNames(ctx context.Context, db index.SymbolStore, query, dir, 
 	}
 	var candidates []suggestion
 	for lower, original := range nameSet {
+		if lower == queryLower {
+			continue // exact match, not a suggestion
+		}
+		// Prefix/substring containment: much stronger signal than edit distance.
+		if strings.HasPrefix(lower, queryLower) || strings.Contains(lower, queryLower) {
+			extra := len(lower) - queryLen
+			candidates = append(candidates, suggestion{original, extra})
+			continue
+		}
 		nameLen := len(lower)
 		// Length pre-filter: skip names too different in length.
 		diff := queryLen - nameLen
