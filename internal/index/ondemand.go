@@ -364,7 +364,7 @@ func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo,
 	// Fast path: use symbol index if available.
 	// With per-file dirty tracking, we use indexed results for clean files
 	// and skip entries from dirty files (they'll be found by parseCandidateFiles).
-	if entries := idx.LookupSymbols(o.edrDir, name); len(entries) > 0 {
+	if entries := idx.LookupSymbolsWithIDs(o.edrDir, name); len(entries) > 0 {
 		_, files := idx.LoadAllSymbols(o.edrDir)
 		// Load dirty set once instead of per-candidate disk reads.
 		dirtyList := idx.DirtyFiles(o.edrDir)
@@ -387,6 +387,7 @@ func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo,
 				File:      absPath,
 				StartLine: e.StartLine, EndLine: e.EndLine,
 				StartByte: e.StartByte, EndByte: e.EndByte,
+				IndexID:   e.IndexID,
 			})
 		}
 		if len(candidates) == 1 {

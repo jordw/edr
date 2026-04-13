@@ -1,6 +1,7 @@
 package dispatch
 
 import (
+	"math"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -27,18 +28,23 @@ type rankedCandidate struct {
 }
 
 // rankCandidates scores and sorts symbol candidates for smart focus resolution.
-// Uses import graph for file importance + span size + name match + test penalty.
 func rankCandidates(candidates []index.SymbolInfo, query, root string, _ ...string) []rankedCandidate {
 	return heuristicRank(candidates, query, root)
 }
 
-// heuristicRank scores candidates using import graph + structural signals.
+// heuristicRank scores candidates using popularity scores (when available)
+// or import graph + structural signals as fallback.
 func heuristicRank(candidates []index.SymbolInfo, query, root string) []rankedCandidate {
 	queryLower := strings.ToLower(query)
 
-	// Load import graph (cached) for file importance signal
 	edrDir := index.HomeEdrDir(root)
 	graph := idx.ReadImportGraph(edrDir)
+
+	// Load popularity scores (parallel to symbol table, computed at index time).
+	var popScores []uint16
+	if h, err := idx.ReadHeader(edrDir); err == nil && h.NumSymbols > 0 {
+		popScores = idx.ReadPopularity(edrDir, int(h.NumSymbols))
+	}
 
 	var ranked []rankedCandidate
 	seen := map[string]bool{}
@@ -65,95 +71,36 @@ func heuristicRank(candidates []index.SymbolInfo, query, root string) []rankedCa
 
 		var score int
 
-		// 1. Import count — the primary signal.
-		// Files imported by many others are canonical/authoritative.
-		// For C/C++ source files, inherit the count of their corresponding
-		// header (the .c implements the .h, so they share importance).
-		inbound := 0
-		if graph != nil {
-			inbound = graph.Inbound(rel)
-			if inbound == 0 {
-				inbound = headerImportCount(graph, rel)
+		if popScores != nil && s.IndexID > 0 && int(s.IndexID) < len(popScores) {
+			// --- Primary path: popularity score ---
+			score = int(popScores[s.IndexID])
+		} else {
+			// --- Fallback: log-scaled import count ---
+			inbound := 0
+			if graph != nil {
+				inbound = graph.Inbound(rel)
+				if inbound == 0 {
+					inbound = headerImportCount(graph, rel)
+				}
+			}
+			if inbound > 0 {
+				score = int(8 * math.Log2(1+float64(inbound)))
 			}
 		}
-		switch {
-		case inbound >= 100:
-			score += 30 // heavily imported (core header/module)
-		case inbound >= 20:
-			score += 20
-		case inbound >= 5:
-			score += 12
-		case inbound >= 1:
-			score += 5
-		}
 
-		// 2. Span size — larger implementations over stubs.
-		span := int(s.EndLine - s.StartLine)
-		switch {
-		case span >= 100:
-			score += 12
-		case span >= 30:
-			score += 8
-		case span >= 10:
-			score += 4
-		case span <= 1:
-			score -= 8 // forward declaration or stub
-		}
+		// Tiebreakers (small signals that only matter when popularity is equal)
 
-		// 3. Name match quality.
+		// Name match quality
 		if tier == tierExact && s.Name == query {
-			score += 15 // case-exact (Pod vs pod)
-		}
-		if tier == tierPartial {
-			if strings.HasPrefix(nameLower, queryLower) {
-				score += 10
-			} else if strings.HasSuffix(nameLower, queryLower) {
-				score += 3
-			}
+			score += 3 // case-exact match
 		}
 
-		// 4. Shape boost — match query casing to symbol type.
-		score += shapeBoost(s.Type, inferShape(query))
-
-		// 5. Test/vendor/sample/tools penalty — these are never canonical.
-		if isTestPath(rel) {
-			score -= 20
-		}
-		if isVendorPath(rel) {
-			score -= 50
-		}
-		if isSamplePath(rel) {
-			score -= 15
-		}
-		if isToolsPath(rel) {
-			score -= 10
-		}
-		if isDocPath(rel) {
-			score -= 10
-		}
-		if isScriptsPath(rel) {
-			score -= 10
-		}
-
-		// 6. Path signals — core infra up, peripheral down.
-		if isCoreInfraPath(rel) {
-			score += 5
-		}
-		if isPeripheralPath(rel) {
-			score -= 8
-		}
-
-		// 7. Definition type boost.
+		// Definition type + shape synergy
 		if isDefinitionType(s.Type) {
 			score += 3
 		}
-
-		// 8. Shallow depth tiebreaker — when import counts don't differentiate.
-		depth := strings.Count(rel, string(filepath.Separator))
-		if depth <= 1 {
-			score += 4
-		} else if depth <= 2 {
-			score += 2
+		if inferShape(query) == shapeType && isDefinitionType(s.Type) {
+			score += 3
 		}
 
 		ranked = append(ranked, rankedCandidate{
@@ -188,23 +135,25 @@ func shouldAutoResolve(ranked []rankedCandidate, query string) bool {
 	if top.Tier != tierExact {
 		return false
 	}
-	// Short/common name rule: require higher confidence.
-	// Names ≤ 6 chars are likely to be common/ambiguous across large repos
-	// (e.g. "config", "init", "open", "probe") even if the index only
-	// returns a few candidates after stale filtering.
-	minGap := 20
-	if len(query) <= 3 {
-		minGap = 40
-	} else if len(query) <= 6 {
-		minGap = 30
-	}
 	if len(ranked) == 1 {
 		return true
 	}
 	if ranked[1].Tier > tierExact {
 		return true // only tier 1 result
 	}
-	return top.Score-ranked[1].Score >= minGap
+	// Require a meaningful score gap for auto-resolve.
+	minGap := 20
+	if len(query) <= 3 {
+		minGap = 40
+	} else if len(query) <= 6 {
+		minGap = 30
+	}
+	gap := top.Score - ranked[1].Score
+	// For high popularity scores, also accept a 2x ratio
+	if top.Score > 50 && gap > 0 && top.Score >= ranked[1].Score*2 {
+		return true
+	}
+	return gap >= minGap
 }
 
 // buildShortlist constructs a structured result for ambiguous resolution.
@@ -274,28 +223,8 @@ func inferShape(query string) nameShape {
 	return shapeUnknown
 }
 
-func shapeBoost(symbolType string, shape nameShape) int {
-	switch shape {
-	case shapeConst:
-		if symbolType == "constant" || symbolType == "variable" || symbolType == "type" {
-			return 5
-		}
-	case shapeType:
-		if symbolType == "struct" || symbolType == "class" || symbolType == "interface" || symbolType == "type" {
-			return 5
-		}
-	case shapeFunction:
-		if symbolType == "function" || symbolType == "method" {
-			return 5
-		}
-	}
-	return 0
-}
-
 // headerImportCount returns the import count of the corresponding header file
-// for C/C++ source files. E.g., for "kernel/sched/core.c", checks
-// "kernel/sched/core.h", "include/linux/core.h", etc.
-// Returns 0 for non-C files or if no matching header is found.
+// for C/C++ source files.
 func headerImportCount(graph *idx.ImportGraphData, rel string) int {
 	ext := strings.ToLower(filepath.Ext(rel))
 	switch ext {
@@ -305,15 +234,12 @@ func headerImportCount(graph *idx.ImportGraphData, rel string) int {
 	}
 	base := rel[:len(rel)-len(ext)]
 
-	// Try direct header: foo.c → foo.h
 	for _, hext := range []string{".h", ".hpp"} {
 		if n := graph.Inbound(base + hext); n > 0 {
 			return n
 		}
 	}
 
-	// Try include/ variants: kernel/sched/core.c → include/linux/core.h
-	// Just check what the .c file itself includes and pick the most-imported one.
 	best := 0
 	for _, imported := range graph.Imports(rel) {
 		if n := graph.Inbound(imported); n > best {
@@ -326,114 +252,6 @@ func headerImportCount(graph *idx.ImportGraphData, rel string) int {
 func isDefinitionType(t string) bool {
 	switch t {
 	case "struct", "class", "interface", "type", "enum", "impl":
-		return true
-	}
-	return false
-}
-
-func isTestPath(rel string) bool {
-	lower := strings.ToLower(rel)
-	// Directory-based patterns
-	for _, seg := range []string{"test/", "tests/", "testing/", "spec/", "__tests__/"} {
-		if strings.Contains(lower, seg) || strings.HasPrefix(lower, seg) {
-			return true
-		}
-	}
-	// File-based patterns
-	base := filepath.Base(lower)
-	return strings.Contains(base, "_test.") ||
-		strings.Contains(base, ".test.") ||
-		strings.HasPrefix(base, "test_") ||
-		strings.Contains(base, "benchmark") ||
-		strings.Contains(base, "_bench.")
-}
-
-func isDocPath(rel string) bool {
-	ext := filepath.Ext(rel)
-	if ext == ".md" || ext == ".rst" || ext == ".txt" {
-		return true
-	}
-	lower := strings.ToLower(rel)
-	return strings.HasPrefix(lower, "doc") || strings.Contains(lower, "/doc/")
-}
-
-func isVendorPath(rel string) bool {
-	return strings.HasPrefix(rel, "vendor/") ||
-		strings.HasPrefix(rel, "node_modules/") ||
-		strings.HasPrefix(rel, "third_party/")
-}
-
-// isCoreInfraPath returns true for directories that typically hold primary
-// definitions and core infrastructure rather than consumers or bindings.
-func isCoreInfraPath(rel string) bool {
-	parts := strings.SplitN(rel, string(filepath.Separator), 2)
-	if len(parts) == 0 {
-		return false
-	}
-	switch parts[0] {
-	// C/C++ kernel/system patterns
-	case "kernel", "core", "init", "mm", "fs", "net", "block", "ipc", "security":
-		return true
-	// Go/general patterns
-	case "internal", "pkg", "cmd":
-		return true
-	// General source patterns (only at top level)
-	case "src", "lib":
-		return true
-	}
-	return false
-}
-
-// isToolsPath returns true for tooling/utility directories that are
-// not primary source code.
-func isToolsPath(rel string) bool {
-	parts := strings.SplitN(rel, string(filepath.Separator), 2)
-	if len(parts) == 0 {
-		return false
-	}
-	switch parts[0] {
-	case "tools", "tool", "util", "utils", "hack", "misc":
-		return true
-	}
-	return false
-}
-
-// isPeripheralPath returns true for directories that contain many definitions
-// of common names (open, init, probe, config, etc.) but are leaf code rather
-// than core infrastructure. Cross-language: applies to any project layout.
-func isPeripheralPath(rel string) bool {
-	parts := strings.SplitN(rel, string(filepath.Separator), 2)
-	if len(parts) == 0 {
-		return false
-	}
-	switch parts[0] {
-	case "drivers", "plugins", "extensions", "addons", "contrib":
-		return true
-	case "adapters", "connectors", "integrations":
-		return true
-	}
-	return false
-}
-
-func isSamplePath(rel string) bool {
-	return strings.HasPrefix(rel, "samples/") ||
-		strings.HasPrefix(rel, "examples/") ||
-		strings.HasPrefix(rel, "tools/testing/") ||
-		strings.HasPrefix(rel, "tools/selftests/") ||
-		strings.Contains(rel, "/testdata/") ||
-		strings.Contains(rel, "/example/") ||
-		strings.Contains(rel, "/bench/")
-}
-
-// isScriptsPath returns true for build/dev utility directories that contain
-// re-declarations of core types but are not primary source code.
-func isScriptsPath(rel string) bool {
-	parts := strings.SplitN(rel, string(filepath.Separator), 2)
-	if len(parts) == 0 {
-		return false
-	}
-	switch parts[0] {
-	case "scripts", "script", "build", "ci", "hack", "deploy":
 		return true
 	}
 	return false

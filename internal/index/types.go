@@ -14,8 +14,9 @@ type SymbolInfo struct {
 	EndLine   uint32
 	StartByte uint32
 	EndByte   uint32
-	Body      string // raw source text of the symbol
-	ParentIndex int  // index into symbols slice at parse time; -1 = no parent
+	Body        string // raw source text of the symbol
+	ParentIndex int    // index into symbols slice at parse time; -1 = no parent
+	IndexID     uint32 // position in the symbol index (for popularity lookup); 0 = unset
 }
 
 // FileError records a per-file failure during parsing.

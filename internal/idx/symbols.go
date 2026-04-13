@@ -64,6 +64,46 @@ func appendVarint(buf []byte, v uint32) []byte {
 }
 
 // QuerySymbolsByName looks up symbols by exact name in a loaded index.
+// SymbolWithID pairs a symbol entry with its index position in the symbol table.
+type SymbolWithID struct {
+	SymbolEntry
+	IndexID uint32
+}
+
+// QuerySymbolsWithIDs is like QuerySymbolsByName but also returns each symbol's
+// index position for popularity score lookups.
+func QuerySymbolsWithIDs(d *IndexData, name string) []SymbolWithID {
+	if len(d.NamePosts) == 0 {
+		return nil
+	}
+	h := NameHash(name)
+	lo, hi := 0, len(d.NamePosts)-1
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		if d.NamePosts[mid].NameHash == h {
+			np := d.NamePosts[mid]
+			ids := DecodePosting(d.NamePostings, np.Offset, np.Count)
+			nameLower := strings.ToLower(name)
+			var results []SymbolWithID
+			for _, id := range ids {
+				if int(id) < len(d.Symbols) {
+					s := d.Symbols[id]
+					if strings.ToLower(s.Name) == nameLower {
+						results = append(results, SymbolWithID{SymbolEntry: s, IndexID: id})
+					}
+				}
+			}
+			return results
+		}
+		if d.NamePosts[mid].NameHash < h {
+			lo = mid + 1
+		} else {
+			hi = mid - 1
+		}
+	}
+	return nil
+}
+
 func QuerySymbolsByName(d *IndexData, name string) []SymbolEntry {
 	if len(d.NamePosts) == 0 {
 		return nil
@@ -218,6 +258,18 @@ func LookupSymbols(edrDir, name string) []SymbolEntry {
 		return nil
 	}
 	return QuerySymbolsByName(d, name)
+}
+
+// LookupSymbolsWithIDs returns matching symbols with their index positions.
+func LookupSymbolsWithIDs(edrDir, name string) []SymbolWithID {
+	if !HasSymbolIndex(edrDir) {
+		return nil
+	}
+	d, _ := loadSymbolIndexCached(edrDir)
+	if d == nil {
+		return nil
+	}
+	return QuerySymbolsWithIDs(d, name)
 }
 
 // LoadAllSymbols loads all symbols and file entries from the lightweight symbol index.

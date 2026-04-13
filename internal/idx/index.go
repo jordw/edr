@@ -571,6 +571,9 @@ func PatchDirtyFiles(root, edrDir string, dirty []string) {
 
 	atomicWrite(filepath.Join(edrDir, MainFile), d.Marshal())
 	InvalidateSymbolCache()
+	// Popularity scores are stale after patching — remove so they get
+	// recomputed on the next full index build.
+	os.Remove(filepath.Join(edrDir, PopularityFile))
 	ClearDirty(edrDir)
 }
 
@@ -1101,6 +1104,15 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 		}
 		rg := BuildRefGraphV2(uint32(len(allSymbols)), perSymIdents)
 		WriteRefGraph(edrDir, rg)
+	}
+
+	// Compute and write per-symbol popularity scores.
+	// Requires both import graph and ref graph.
+	importGraph := ReadImportGraph(edrDir)
+	refGraph := ReadRefGraph(edrDir)
+	if importGraph != nil && refGraph != nil && len(allSymbols) > 0 {
+		popScores := ComputePopularity(allSymbols, files, importGraph, refGraph)
+		WritePopularity(edrDir, popScores)
 	}
 
 	ClearDirty(edrDir)

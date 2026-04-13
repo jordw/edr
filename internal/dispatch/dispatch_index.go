@@ -163,13 +163,14 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 	return result, nil
 }
 
-// buildImportGraph is no longer used — imports are extracted during BuildFullFromWalk.
-// Kept as dead code reference until confirmed removable.
-// needsSymbolNarrowing returns true for languages with package-level imports
-// (Go, Java, Python) where one import resolves to multiple files.
+// needsSymbolNarrowing returns true for languages where one import path
+// resolves to multiple files but the importer only uses symbols from some.
+// Go is excluded: Go imports a package (= directory), so all files in the
+// package should get edges — narrowing drops canonical definition files
+// like types.go when the importer uses few symbols.
 func needsSymbolNarrowing(ext string) bool {
 	switch ext {
-	case ".go", ".java", ".py":
+	case ".java", ".py":
 		return true
 	}
 	return false

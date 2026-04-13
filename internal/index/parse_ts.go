@@ -308,7 +308,15 @@ func (p *tsParser) handleIdent(word []byte) {
 			p.parseImport()
 			return
 		}
-	case "export", "default", "declare", "abstract":
+	case "export":
+		// Check for re-export: export { ... } from "..." or export * from "..."
+		// These are treated as imports (the re-exported module is a dependency).
+		if atMember && kind == tsFile {
+			p.maybeParseReExport()
+		}
+		p.regexOK = true
+		return
+	case "default", "declare", "abstract":
 		p.regexOK = true
 		return
 	}
@@ -578,6 +586,72 @@ func (p *tsParser) parseMethod(name string) {
 		}
 		p.s.Pos++
 	}
+}
+
+// maybeParseReExport checks if an export statement is a re-export
+// (export { ... } from "..." or export * from "...") and records the
+// path as an import. Restores scanner position if not a re-export.
+func (p *tsParser) maybeParseReExport() {
+	savedPos := p.s.Pos
+	savedLine := p.s.Line
+	// Only re-exports start with { or * after optional whitespace/"type".
+	// export function/class/const/etc. are declarations, not re-exports.
+	p.skipWS()
+	if p.s.EOF() {
+		p.s.Pos = savedPos
+		p.s.Line = savedLine
+		return
+	}
+	// Allow "export type { ... } from ..."
+	if p.s.Pos+4 < len(p.s.Src) && string(p.s.Src[p.s.Pos:p.s.Pos+4]) == "type" {
+		next := p.s.Pos + 4
+		for next < len(p.s.Src) && (p.s.Src[next] == ' ' || p.s.Src[next] == '\t') {
+			next++
+		}
+		if next < len(p.s.Src) && p.s.Src[next] == '{' {
+			p.s.Pos = next
+		}
+	}
+	c := p.s.Peek()
+	if c != '{' && c != '*' {
+		p.s.Pos = savedPos
+		p.s.Line = savedLine
+		return
+	}
+	depth := 0
+	for !p.s.EOF() {
+		c := p.s.Peek()
+		if c == ';' || (c == '\n' && depth == 0) {
+			break
+		}
+		if c == '{' {
+			depth++
+			p.s.Pos++
+			continue
+		}
+		if c == '}' {
+			depth--
+			p.s.Pos++
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote := c
+			p.s.Pos++
+			start := p.s.Pos
+			for !p.s.EOF() && p.s.Peek() != quote && p.s.Peek() != '\n' {
+				p.s.Pos++
+			}
+			path := string(p.s.Src[start:p.s.Pos])
+			if !p.s.EOF() && p.s.Peek() == quote {
+				p.s.Pos++
+			}
+			p.result.Imports = append(p.result.Imports, TSImport{Path: path, Line: savedLine})
+			return
+		}
+		p.s.Pos++
+	}
+	p.s.Pos = savedPos
+	p.s.Line = savedLine
 }
 
 func (p *tsParser) parseImport() {
