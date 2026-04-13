@@ -1153,3 +1153,319 @@ func NewFunc() {}
 		t.Errorf("symbol lookup after rebuild: got %q, want Goodbye", readResult.Symbol)
 	}
 }
+
+// setupSemanticRepo creates a temp repo with cross-file references for
+// testing rename, extract, and cross-file move.
+func setupSemanticRepo(tb testing.TB) (index.SymbolStore, string) {
+	tb.Helper()
+	tmp := tb.TempDir()
+
+	os.WriteFile(filepath.Join(tmp, "lib.go"), []byte(`package main
+
+func Compute(x, y int) int {
+	sum := x + y
+	product := x * y
+	return sum + product
+}
+
+func Helper() int {
+	return 42
+}
+`), 0644)
+
+	os.WriteFile(filepath.Join(tmp, "main.go"), []byte(`package main
+
+import "fmt"
+
+func main() {
+	result := Compute(3, 4)
+	fmt.Println(result)
+	fmt.Println(Helper())
+}
+`), 0644)
+
+	os.WriteFile(filepath.Join(tmp, "util.go"), []byte(`package main
+
+func Wrapper() int {
+	return Compute(1, 2) + Compute(3, 4)
+}
+`), 0644)
+
+	db := index.NewOnDemand(tmp)
+	tb.Cleanup(func() { db.Close() })
+	output.SetRoot(db.Root())
+	return db, tmp
+}
+
+// --- Correctness: Rename ---
+
+func TestCorrectnessRenameBasic(t *testing.T) {
+	db, tmp := setupSemanticRepo(t)
+	ctx := context.Background()
+
+	var result struct {
+		OldName     string   `json:"old_name"`
+		NewName     string   `json:"new_name"`
+		Status      string   `json:"status"`
+		Occurrences int      `json:"occurrences"`
+		Files       []string `json:"files_changed"`
+	}
+	dispatchResult(t, ctx, db, "rename", []string{"lib.go:Compute"}, map[string]any{
+		"new_name": "Calculate",
+	}, &result)
+
+	if result.Status != "applied" {
+		t.Fatalf("status = %q, want applied", result.Status)
+	}
+	if result.OldName != "Compute" || result.NewName != "Calculate" {
+		t.Errorf("names: %q → %q", result.OldName, result.NewName)
+	}
+	if result.Occurrences < 4 {
+		t.Errorf("expected at least 4 occurrences (def + 3 calls), got %d", result.Occurrences)
+	}
+	if len(result.Files) < 2 {
+		t.Errorf("expected at least 2 files changed, got %d", len(result.Files))
+	}
+
+	// Verify all files were updated.
+	for _, f := range []string{"lib.go", "main.go", "util.go"} {
+		data, _ := os.ReadFile(filepath.Join(tmp, f))
+		if strings.Contains(string(data), "Compute") {
+			t.Errorf("%s still contains Compute after rename", f)
+		}
+		if f != "main.go" { // main.go only has the call, not a second reference in some files
+			if !strings.Contains(string(data), "Calculate") {
+				t.Errorf("%s missing Calculate after rename", f)
+			}
+		}
+	}
+}
+
+func TestCorrectnessRenameDryRun(t *testing.T) {
+	db, tmp := setupSemanticRepo(t)
+	ctx := context.Background()
+
+	var result struct {
+		Status string `json:"status"`
+	}
+	dispatchResult(t, ctx, db, "rename", []string{"lib.go:Compute"}, map[string]any{
+		"new_name": "Calculate",
+		"dry_run":  true,
+	}, &result)
+
+	if result.Status != "dry_run" {
+		t.Fatalf("status = %q, want dry_run", result.Status)
+	}
+
+	// File should be unchanged.
+	data, _ := os.ReadFile(filepath.Join(tmp, "lib.go"))
+	if !strings.Contains(string(data), "Compute") {
+		t.Error("dry-run should not modify files")
+	}
+}
+
+func TestCorrectnessRenameNoop(t *testing.T) {
+	db, _ := setupSemanticRepo(t)
+	ctx := context.Background()
+
+	var result struct {
+		Status string `json:"status"`
+	}
+	dispatchResult(t, ctx, db, "rename", []string{"lib.go:Compute"}, map[string]any{
+		"new_name": "Compute",
+	}, &result)
+
+	if result.Status != "noop" {
+		t.Errorf("status = %q, want noop", result.Status)
+	}
+}
+
+func TestCorrectnessRenameThenRead(t *testing.T) {
+	db, _ := setupSemanticRepo(t)
+	ctx := context.Background()
+
+	// Rename, then verify the symbol store sees the new name.
+	dispatchResult(t, ctx, db, "rename", []string{"lib.go:Compute"}, map[string]any{
+		"new_name": "Calculate",
+	}, nil)
+
+	var readResult struct {
+		Symbol string `json:"symbol"`
+	}
+	dispatchResult(t, ctx, db, "read", []string{"lib.go:Calculate"}, nil, &readResult)
+	if readResult.Symbol != "Calculate" {
+		t.Errorf("after rename, read lib.go:Calculate got symbol %q", readResult.Symbol)
+	}
+
+	// Old name should fail.
+	errMsg := dispatchError(t, ctx, db, "read", []string{"lib.go:Compute"}, nil)
+	if !strings.Contains(errMsg, "not found") {
+		t.Errorf("expected not-found error for old name, got: %s", errMsg)
+	}
+}
+
+// --- Correctness: Extract ---
+
+func TestCorrectnessExtractBasic(t *testing.T) {
+	db, tmp := setupSemanticRepo(t)
+	ctx := context.Background()
+
+	var result struct {
+		File   string `json:"file"`
+		Status string `json:"status"`
+	}
+	// Extract lines 4-5 (sum and product) from Compute.
+	dispatchResult(t, ctx, db, "extract", []string{"lib.go:Compute"}, map[string]any{
+		"name":  "computePartials",
+		"lines": "4-5",
+	}, &result)
+
+	if result.Status != "applied" {
+		t.Fatalf("status = %q, want applied", result.Status)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(tmp, "lib.go"))
+	content := string(data)
+	if !strings.Contains(content, "func computePartials()") {
+		t.Error("extracted function not found")
+	}
+	if !strings.Contains(content, "computePartials()") {
+		t.Error("call to extracted function not found")
+	}
+}
+
+func TestCorrectnessExtractWithCall(t *testing.T) {
+	db, tmp := setupSemanticRepo(t)
+	ctx := context.Background()
+
+	dispatchResult(t, ctx, db, "extract", []string{"lib.go:Compute"}, map[string]any{
+		"name":  "computePartials",
+		"lines": "4-5",
+		"call":  "sum, product := computePartials(x, y)",
+	}, nil)
+
+	data, _ := os.ReadFile(filepath.Join(tmp, "lib.go"))
+	if !strings.Contains(string(data), "sum, product := computePartials(x, y)") {
+		t.Error("custom call expression not applied")
+	}
+}
+
+func TestCorrectnessExtractDryRun(t *testing.T) {
+	db, tmp := setupSemanticRepo(t)
+	ctx := context.Background()
+
+	var result struct {
+		Status string `json:"status"`
+	}
+	dispatchResult(t, ctx, db, "extract", []string{"lib.go:Compute"}, map[string]any{
+		"name":    "computePartials",
+		"lines":   "4-5",
+		"dry_run": true,
+	}, &result)
+
+	if result.Status != "dry_run" {
+		t.Fatalf("status = %q, want dry_run", result.Status)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(tmp, "lib.go"))
+	if strings.Contains(string(data), "computePartials") {
+		t.Error("dry-run should not modify files")
+	}
+}
+
+func TestCorrectnessExtractOutOfRange(t *testing.T) {
+	db, _ := setupSemanticRepo(t)
+	ctx := context.Background()
+
+	errMsg := dispatchError(t, ctx, db, "extract", []string{"lib.go:Compute"}, map[string]any{
+		"name":  "bad",
+		"lines": "1-2",
+	})
+	if !strings.Contains(errMsg, "outside symbol") {
+		t.Errorf("expected outside-symbol error, got: %s", errMsg)
+	}
+}
+
+// --- Correctness: Cross-file move ---
+
+func TestCorrectnessMoveAcrossFiles(t *testing.T) {
+	db, tmp := setupSemanticRepo(t)
+	ctx := context.Background()
+
+	var result struct {
+		File   string `json:"file"`
+		Status string `json:"status"`
+		Dest   string `json:"dest"`
+		Symbol string `json:"symbol"`
+	}
+	dispatchResult(t, ctx, db, "edit", []string{"lib.go:Helper"}, map[string]any{
+		"move_after": "util.go:Wrapper",
+	}, &result)
+
+	if result.Status != "applied" {
+		t.Fatalf("status = %q, want applied", result.Status)
+	}
+	if result.Dest != "util.go" {
+		t.Errorf("dest = %q, want util.go", result.Dest)
+	}
+
+	// Helper should be gone from lib.go.
+	libData, _ := os.ReadFile(filepath.Join(tmp, "lib.go"))
+	if strings.Contains(string(libData), "func Helper()") {
+		t.Error("lib.go should not contain Helper after move")
+	}
+
+	// Helper should be in util.go.
+	utilData, _ := os.ReadFile(filepath.Join(tmp, "util.go"))
+	if !strings.Contains(string(utilData), "func Helper()") {
+		t.Error("util.go should contain Helper after move")
+	}
+}
+
+func TestCorrectnessMoveAcrossFilesDryRun(t *testing.T) {
+	db, tmp := setupSemanticRepo(t)
+	ctx := context.Background()
+
+	var result struct {
+		Status string `json:"status"`
+	}
+	dispatchResult(t, ctx, db, "edit", []string{"lib.go:Helper"}, map[string]any{
+		"move_after": "util.go:Wrapper",
+		"dry_run":    true,
+	}, &result)
+
+	if result.Status != "dry_run" {
+		t.Fatalf("status = %q, want dry_run", result.Status)
+	}
+
+	libData, _ := os.ReadFile(filepath.Join(tmp, "lib.go"))
+	if !strings.Contains(string(libData), "func Helper()") {
+		t.Error("dry-run should not remove Helper from lib.go")
+	}
+}
+
+func TestCorrectnessMoveThenRead(t *testing.T) {
+	db, _ := setupSemanticRepo(t)
+	ctx := context.Background()
+
+	// Move Helper from lib.go to util.go.
+	dispatchResult(t, ctx, db, "edit", []string{"lib.go:Helper"}, map[string]any{
+		"move_after": "util.go:Wrapper",
+	}, nil)
+
+	// Symbol should now be found in util.go.
+	var readResult struct {
+		File   string `json:"file"`
+		Symbol string `json:"symbol"`
+	}
+	dispatchResult(t, ctx, db, "read", []string{"util.go:Helper"}, nil, &readResult)
+	if readResult.Symbol != "Helper" {
+		t.Errorf("after move, read util.go:Helper got %q", readResult.Symbol)
+	}
+
+	// Old location should fail.
+	errMsg := dispatchError(t, ctx, db, "read", []string{"lib.go:Helper"}, nil)
+	if !strings.Contains(errMsg, "not found") {
+		t.Errorf("expected not-found for old location, got: %s", errMsg)
+	}
+}
