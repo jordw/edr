@@ -95,6 +95,13 @@
       "name": "startWorkers",
       "lines": "96-98"
     },
+    "changesig_add": {
+      "type": "changesig",
+      "file": "internal/worker.go",
+      "symbol": "NewWorker",
+      "add": "logger Logger",
+      "callarg": "nil"
+    },
     "move_symbol": {
       "type": "move",
       "file": "main.go",

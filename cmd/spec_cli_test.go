@@ -2840,3 +2840,162 @@ func TestSpec_MoveAcrossFilesDryRun(t *testing.T) {
 		t.Errorf("dry-run should not add Beta to b.go")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ChangeSig
+// ---------------------------------------------------------------------------
+
+func TestSpec_ChangeSigAddParam(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"lib.go":  "package main\n\nfunc Process(x int) error {\n\treturn nil\n}\n",
+		"main.go": "package main\n\nfunc main() {\n\tProcess(42)\n\t_ = Process(100)\n}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"changesig", "lib.go:Process", "--add", "ctx context.Context", "--at", "0", "--callarg", "ctx")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	// Verify definition changed.
+	libData, _ := os.ReadFile(filepath.Join(dir, "lib.go"))
+	if !strings.Contains(string(libData), "func Process(ctx context.Context, x int)") {
+		t.Errorf("definition not updated:\n%s", string(libData))
+	}
+
+	// Verify call sites changed.
+	mainData, _ := os.ReadFile(filepath.Join(dir, "main.go"))
+	if !strings.Contains(string(mainData), "Process(ctx, 42)") {
+		t.Errorf("call site not updated:\n%s", string(mainData))
+	}
+	if !strings.Contains(string(mainData), "Process(ctx, 100)") {
+		t.Errorf("second call site not updated:\n%s", string(mainData))
+	}
+}
+
+func TestSpec_ChangeSigAddParamEnd(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"lib.go":  "package main\n\nfunc Process(x int) error {\n\treturn nil\n}\n",
+		"main.go": "package main\n\nfunc main() {\n\tProcess(42)\n}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"changesig", "lib.go:Process", "--add", "opts string", "--callarg", "\"\"")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	libData, _ := os.ReadFile(filepath.Join(dir, "lib.go"))
+	if !strings.Contains(string(libData), "func Process(x int, opts string)") {
+		t.Errorf("param not appended to definition:\n%s", string(libData))
+	}
+
+	mainData, _ := os.ReadFile(filepath.Join(dir, "main.go"))
+	if !strings.Contains(string(mainData), "Process(42, \"\")") {
+		t.Errorf("arg not appended to call site:\n%s", string(mainData))
+	}
+}
+
+func TestSpec_ChangeSigRemoveParam(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"lib.go":  "package main\n\nfunc Process(x int, y string) error {\n\treturn nil\n}\n",
+		"main.go": "package main\n\nfunc main() {\n\tProcess(42, \"hello\")\n}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"changesig", "lib.go:Process", "--remove", "1")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	libData, _ := os.ReadFile(filepath.Join(dir, "lib.go"))
+	if !strings.Contains(string(libData), "func Process(x int)") {
+		t.Errorf("param not removed from definition:\n%s", string(libData))
+	}
+
+	mainData, _ := os.ReadFile(filepath.Join(dir, "main.go"))
+	if !strings.Contains(string(mainData), "Process(42)") {
+		t.Errorf("arg not removed from call site:\n%s", string(mainData))
+	}
+}
+
+func TestSpec_ChangeSigDryRun(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"lib.go":  "package main\n\nfunc Process(x int) error {\n\treturn nil\n}\n",
+		"main.go": "package main\n\nfunc main() {\n\tProcess(42)\n}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"changesig", "lib.go:Process", "--add", "ctx context.Context", "--at", "0", "--callarg", "ctx", "--dry-run")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "dry_run" {
+		t.Errorf("status = %v, want dry_run", h["status"])
+	}
+
+	// Files should NOT be modified.
+	libData, _ := os.ReadFile(filepath.Join(dir, "lib.go"))
+	if strings.Contains(string(libData), "ctx") {
+		t.Errorf("dry-run should not modify definition")
+	}
+}
+
+func TestSpec_ChangeSigMissingFlags(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"lib.go": "package main\n\nfunc Process(x int) error {\n\treturn nil\n}\n",
+	})
+
+	_, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"changesig", "lib.go:Process")
+	if exit == 0 {
+		t.Errorf("changesig without --add or --remove should fail")
+	}
+}
+
+func TestSpec_ChangeSigCrossFile(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"lib.go":  "package main\n\nfunc Compute(a, b int) int {\n\treturn a + b\n}\n",
+		"main.go": "package main\n\nfunc main() {\n\tCompute(1, 2)\n}\n",
+		"util.go": "package main\n\nfunc wrap() int {\n\treturn Compute(3, 4)\n}\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"changesig", "lib.go:Compute", "--add", "scale float64", "--callarg", "1.0")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["status"] != "applied" {
+		t.Errorf("status = %v, want applied", h["status"])
+	}
+
+	// All three files should be updated.
+	libData, _ := os.ReadFile(filepath.Join(dir, "lib.go"))
+	if !strings.Contains(string(libData), "func Compute(a, b int, scale float64)") {
+		t.Errorf("definition not updated:\n%s", string(libData))
+	}
+
+	mainData, _ := os.ReadFile(filepath.Join(dir, "main.go"))
+	if !strings.Contains(string(mainData), "Compute(1, 2, 1.0)") {
+		t.Errorf("main.go call site not updated:\n%s", string(mainData))
+	}
+
+	utilData, _ := os.ReadFile(filepath.Join(dir, "util.go"))
+	if !strings.Contains(string(utilData), "Compute(3, 4, 1.0)") {
+		t.Errorf("util.go call site not updated:\n%s", string(utilData))
+	}
+}

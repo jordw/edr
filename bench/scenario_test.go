@@ -95,6 +95,14 @@ type ScenarioMove struct {
 	DestAfter string `json:"dest_after"`
 }
 
+type ScenarioChangeSig struct {
+	Type    string `json:"type"`
+	File    string `json:"file"`
+	Symbol  string `json:"symbol"`
+	Add     string `json:"add"`
+	Callarg string `json:"callarg"`
+}
+
 type ScenarioRefsImpact struct {
 	Type    string   `json:"type"`
 	Pattern string   `json:"pattern"`
@@ -469,5 +477,37 @@ func TestScenarioDispatch(t *testing.T) {
 			t.Errorf("diff should reference moved symbol %q", s.Symbol)
 		}
 		t.Logf("move_symbol: %dB dest=%s diff=%dB", len(out), result.Dest, len(result.Diff))
+	})
+
+	t.Run("changesig_add", func(t *testing.T) {
+		var s ScenarioChangeSig
+		if err := scenario.GetScenario("changesig_add", &s); err != nil {
+			t.Fatal(err)
+		}
+		out, err := dispatchJSON(ctx, db, "changesig", []string{s.File + ":" + s.Symbol}, map[string]any{
+			"add":     s.Add,
+			"callarg": s.Callarg,
+			"dry_run": true,
+		})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		var result struct {
+			Status  string `json:"status"`
+			File    string `json:"file"`
+			Diff    string `json:"diff"`
+			Message string `json:"message"`
+		}
+		json.Unmarshal(out, &result)
+		if result.Status != "dry_run" {
+			t.Errorf("changesig should be dry_run, got %q", result.Status)
+		}
+		if result.Diff == "" {
+			t.Error("changesig should return a diff")
+		}
+		if !strings.Contains(result.Diff, s.Add) {
+			t.Errorf("diff should contain new param %q", s.Add)
+		}
+		t.Logf("changesig_add: %dB file=%s msg=%s diff=%dB", len(out), result.File, result.Message, len(result.Diff))
 	})
 }
