@@ -505,9 +505,31 @@ func (o *OnDemand) FilteredSymbols(ctx context.Context, dir, symbolType, namePat
 		}
 	}
 
-	// Fast path: use symbol index when available and no dir filter
-	if absDir == "" && idx.HasSymbolIndex(o.edrDir) && !idx.IsDirty(o.edrDir) {
-		return o.filteredSymbolsFromIndex(namePattern, symbolType)
+	// Fast path: use symbol index when available
+	if idx.HasSymbolIndex(o.edrDir) {
+		if !idx.IsDirty(o.edrDir) {
+			results, err := o.filteredSymbolsFromIndex(namePattern, symbolType)
+			if err != nil {
+				return nil, err
+			}
+			// Apply dir filter on index results
+			if absDir != "" {
+				n := 0
+				for _, s := range results {
+					if strings.HasPrefix(s.File, absDir) {
+						results[n] = s
+						n++
+					}
+				}
+				results = results[:n]
+			}
+			return results, nil
+		}
+		// Dirty index: use index for clean files, re-parse only dirty ones.
+		dirtyFiles := idx.DirtyFiles(o.edrDir)
+		if len(dirtyFiles) > 0 {
+			return o.filteredSymbolsDirtyPatch(ctx, absDir, symbolType, namePattern, dirtyFiles)
+		}
 	}
 
 	var parsed map[string]*cachedFile
@@ -539,6 +561,73 @@ func (o *OnDemand) FilteredSymbols(ctx context.Context, dir, symbolType, namePat
 }
 
 // filteredSymbolsFromIndex reads symbols directly from the persistent index.
+// filteredSymbolsDirtyPatch uses the symbol index for clean files and
+// re-parses only the dirty files, then merges and filters the results.
+func (o *OnDemand) filteredSymbolsDirtyPatch(ctx context.Context, absDir, symbolType, namePattern string, dirtyFiles []string) ([]SymbolInfo, error) {
+	allSyms, files := idx.LoadAllSymbols(o.edrDir)
+	if allSyms == nil {
+		return nil, nil
+	}
+
+	// Build set of dirty file paths (relative) for fast lookup.
+	dirtySet := make(map[string]bool, len(dirtyFiles))
+	for _, f := range dirtyFiles {
+		dirtySet[f] = true
+	}
+
+	lowerPattern := strings.ToLower(namePattern)
+	var results []SymbolInfo
+
+	// Add symbols from the index, skipping dirty files.
+	for _, s := range allSyms {
+		rel := ""
+		if int(s.FileID) < len(files) {
+			rel = files[s.FileID].Path
+		}
+		if dirtySet[rel] {
+			continue
+		}
+		absFile := filepath.Join(o.root, rel)
+		if absDir != "" && !strings.HasPrefix(absFile, absDir) {
+			continue
+		}
+		if symbolType != "" && s.Kind.String() != symbolType {
+			continue
+		}
+		if namePattern != "" && !strings.Contains(strings.ToLower(s.Name), lowerPattern) {
+			continue
+		}
+		results = append(results, SymbolInfo{
+			Name: s.Name, Type: s.Kind.String(), File: absFile,
+			StartLine: s.StartLine, EndLine: s.EndLine,
+			StartByte: s.StartByte, EndByte: s.EndByte,
+		})
+	}
+
+	// Re-parse dirty files and add their symbols.
+	for _, rel := range dirtyFiles {
+		absFile := filepath.Join(o.root, rel)
+		if absDir != "" && !strings.HasPrefix(absFile, absDir) {
+			continue
+		}
+		cf, err := o.parseFile(absFile)
+		if err != nil {
+			continue // file may have been deleted
+		}
+		for _, s := range cf.symbols {
+			if symbolType != "" && s.Type != symbolType {
+				continue
+			}
+			if namePattern != "" && !strings.Contains(strings.ToLower(s.Name), lowerPattern) {
+				continue
+			}
+			results = append(results, s)
+		}
+	}
+
+	return results, nil
+}
+
 func (o *OnDemand) filteredSymbolsFromIndex(namePattern, symbolType string) ([]SymbolInfo, error) {
 	allSyms, files := idx.LoadAllSymbols(o.edrDir)
 	if allSyms == nil {
