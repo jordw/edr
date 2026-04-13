@@ -366,21 +366,22 @@ func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo,
 	// and skip entries from dirty files (they'll be found by parseCandidateFiles).
 	if entries := idx.LookupSymbols(o.edrDir, name); len(entries) > 0 {
 		_, files := idx.LoadAllSymbols(o.edrDir)
+		// Load dirty set once instead of per-candidate disk reads.
+		dirtyList := idx.DirtyFiles(o.edrDir)
+		dirtySet := make(map[string]bool, len(dirtyList))
+		for _, f := range dirtyList {
+			dirtySet[f] = true
+		}
 		var candidates []SymbolInfo
 		for _, e := range entries {
 			rel := ""
 			if int(e.FileID) < len(files) {
 				rel = files[e.FileID].Path
 			}
-			// Skip entries from dirty files — they may be stale
-			if idx.IsDirtyFile(o.edrDir, rel) {
+			if dirtySet[rel] {
 				continue
 			}
 			absPath := filepath.Join(o.root, rel)
-			// Validate byte offsets against actual file size to catch stale index entries.
-			if fi, err := os.Stat(absPath); err != nil || int64(e.EndByte) > fi.Size() {
-				continue
-			}
 			candidates = append(candidates, SymbolInfo{
 				Name: e.Name, Type: e.Kind.String(),
 				File:      absPath,
