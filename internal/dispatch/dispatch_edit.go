@@ -586,8 +586,9 @@ func smartEditMoveAcrossFiles(_ context.Context, db index.SymbolStore, srcSym, t
 		return nil, fmt.Errorf("move: read dest: %w", err)
 	}
 
-	// Cut the symbol from source (include trailing newline).
-	srcStart := int(srcSym.StartByte)
+	// Expand to include any doc comment preceding the symbol.
+	docStart := int(expandToDocComment(srcSym.File, srcSym.StartByte))
+	srcStart := docStart
 	srcEnd := int(srcSym.EndByte)
 	if srcEnd < len(srcData) && srcData[srcEnd] == '\n' {
 		srcEnd++
@@ -596,12 +597,35 @@ func smartEditMoveAcrossFiles(_ context.Context, db index.SymbolStore, srcSym, t
 	if srcStart > 0 && srcData[srcStart-1] == '\n' {
 		srcStart--
 	}
-	srcBody := string(srcData[int(srcSym.StartByte):int(srcSym.EndByte)])
+	srcBody := string(srcData[docStart:int(srcSym.EndByte)])
 
 	// Remove from source.
 	newSrc := make([]byte, 0, len(srcData)-(srcEnd-srcStart))
 	newSrc = append(newSrc, srcData[:srcStart]...)
 	newSrc = append(newSrc, srcData[srcEnd:]...)
+
+	// Collapse runs of 3+ consecutive newlines down to 2 at the splice point.
+	// This prevents artifacts like *//** when a doc comment block ended just
+	// before the removed symbol and another begins right after.
+	if srcStart > 0 && srcStart < len(newSrc) {
+		i := srcStart
+		// Count consecutive newlines around the splice.
+		start := i
+		for start > 0 && newSrc[start-1] == '\n' {
+			start--
+		}
+		end := i
+		for end < len(newSrc) && newSrc[end] == '\n' {
+			end++
+		}
+		nlCount := end - start
+		if nlCount > 2 {
+			// Keep exactly 2 newlines (one blank line).
+			cut := nlCount - 2
+			copy(newSrc[start+2:], newSrc[end:])
+			newSrc = newSrc[:len(newSrc)-cut]
+		}
+	}
 
 	// Insert into dest after target symbol.
 	tgtEnd := int(tgtSym.EndByte)

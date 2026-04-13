@@ -302,6 +302,42 @@ func DropCheckpoint(sessDir, cpID string) error {
 	return os.Remove(path)
 }
 
+// PatchCheckpointFiles adds file snapshots to an existing checkpoint. Files
+// already present are not overwritten. This is used after multi-file mutations
+// (rename, changesig) to add pre-mutation content for secondary files that
+// weren't known at checkpoint creation time.
+func PatchCheckpointFiles(sessDir, cpID, repoRoot string, oldContents map[string][]byte) error {
+	cp, err := loadCheckpoint(sessDir, cpID)
+	if err != nil {
+		return err
+	}
+
+	// Build set of files already in checkpoint
+	existing := make(map[string]bool, len(cp.Files))
+	for _, f := range cp.Files {
+		existing[f.Path] = true
+	}
+
+	// Add missing files
+	changed := false
+	for rel, content := range oldContents {
+		if existing[rel] {
+			continue
+		}
+		cp.Files = append(cp.Files, FileSnapshot{
+			Path:    rel,
+			Content: content,
+		})
+		changed = true
+	}
+
+	if !changed {
+		return nil
+	}
+
+	return saveCheckpoint(sessDir, cp)
+}
+
 // DiffCheckpoint returns the files that differ between the checkpoint and current disk state.
 type FileDiff struct {
 	Path    string `json:"path"`

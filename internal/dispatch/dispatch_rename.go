@@ -177,13 +177,16 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 		Occurrences: totalOccurrences,
 	}
 
+	result.OldContents = make(map[string][]byte, len(edits))
 	for _, fe := range edits {
-		diff := edit.UnifiedDiff(output.Rel(fe.file), fe.oldData, fe.newData)
-		result.FilesChanged = append(result.FilesChanged, output.Rel(fe.file))
+		rel := output.Rel(fe.file)
+		diff := edit.UnifiedDiff(rel, fe.oldData, fe.newData)
+		result.FilesChanged = append(result.FilesChanged, rel)
 		result.Diffs = append(result.Diffs, output.RenameDiff{
-			File: output.Rel(fe.file),
+			File: rel,
 			Diff: diff,
 		})
+		result.OldContents[rel] = fe.oldData
 	}
 
 	if dryRun {
@@ -239,6 +242,9 @@ func expandToDocComment(file string, startByte uint32) uint32 {
 		} else if len(line) >= 2 && line[0] == '/' && line[1] == '*' {
 			pos = lineStart
 		} else if len(line) >= 3 && bytes.HasPrefix(line, []byte("///")) {
+			pos = lineStart
+		} else if len(line) >= 1 && line[0] == '*' {
+			// Middle or end of a block comment (/** ... */).
 			pos = lineStart
 		} else {
 			break

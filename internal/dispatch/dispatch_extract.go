@@ -77,11 +77,27 @@ func runExtract(ctx context.Context, db index.SymbolStore, root string, args []s
 
 	// Build the new function body using language-appropriate syntax.
 	ext := strings.ToLower(filepath.Ext(sym.File))
-	newFunc := buildExtractedFunction(ext, newName, deindented)
+
+	// Parse parameters from the --call expression if provided.
+	// E.g. --call "helper(rq, flags)" => params = "rq, flags"
+	var params string
+	if callExpr != "" {
+		if lp := strings.Index(callExpr, "("); lp >= 0 {
+			if rp := strings.LastIndex(callExpr, ")"); rp > lp {
+				params = strings.TrimSpace(callExpr[lp+1 : rp])
+			}
+		}
+	}
+
+	newFunc := buildExtractedFunction(ext, newName, params, deindented)
 
 	// Build the call expression that replaces the extracted lines.
 	if callExpr == "" {
 		callExpr = newName + "()"
+	}
+	// Add statement terminator for languages that need it.
+	if needsSemicolon(ext) && !strings.HasSuffix(callExpr, ";") {
+		callExpr += ";"
 	}
 	// Indent the call to match the original indentation.
 	callLine := indent + callExpr
@@ -163,36 +179,51 @@ func detectMinIndent(lines [][]byte) string {
 
 // buildExtractedFunction wraps the deindented lines in a function declaration
 // appropriate for the file's language.
-func buildExtractedFunction(ext, name string, body []string) string {
+func buildExtractedFunction(ext, name, params string, body []string) string {
 	joined := strings.Join(body, "\n")
 
 	switch ext {
 	case ".py", ".pyi":
-		// Python: def name():\n    body
-		return fmt.Sprintf("def %s():\n%s\n", name, joined)
+		// Python: def name(params):\n    body
+		return fmt.Sprintf("def %s(%s):\n%s\n", name, params, joined)
 
 	case ".rb":
-		// Ruby: def name\n  body\nend
+		// Ruby: def name(params)\n  body\nend
+		if params != "" {
+			return fmt.Sprintf("def %s(%s)\n%s\nend\n", name, params, joined)
+		}
 		return fmt.Sprintf("def %s\n%s\nend\n", name, joined)
 
 	case ".rs":
-		// Rust: fn name() {\n    body\n}
-		return fmt.Sprintf("fn %s() {\n%s\n}\n", name, joined)
+		// Rust: fn name(params) {\n    body\n}
+		return fmt.Sprintf("fn %s(%s) {\n%s\n}\n", name, params, joined)
 
 	case ".java", ".kt", ".kts", ".scala", ".sc":
-		// Java/Kotlin/Scala: void name() {\n    body\n}
-		return fmt.Sprintf("void %s() {\n%s\n}\n", name, joined)
+		// Java/Kotlin/Scala: void name(params) {\n    body\n}
+		return fmt.Sprintf("void %s(%s) {\n%s\n}\n", name, params, joined)
 
 	case ".js", ".jsx", ".ts", ".tsx", ".mts", ".cts":
-		// JavaScript/TypeScript: function name() {\n    body\n}
-		return fmt.Sprintf("function %s() {\n%s\n}\n", name, joined)
+		// JavaScript/TypeScript: function name(params) {\n    body\n}
+		return fmt.Sprintf("function %s(%s) {\n%s\n}\n", name, params, joined)
 
 	case ".c", ".h", ".cpp", ".cc", ".hpp", ".cxx", ".hxx", ".hh":
-		// C/C++: void name() {\n    body\n}
-		return fmt.Sprintf("void %s() {\n%s\n}\n", name, joined)
+		// C/C++: void name(params) {\n    body\n}
+		return fmt.Sprintf("void %s(%s) {\n%s\n}\n", name, params, joined)
 
 	default:
-		// Go and fallback: func name() {\n    body\n}
-		return fmt.Sprintf("func %s() {\n%s\n}\n", name, joined)
+		// Go and fallback: func name(params) {\n    body\n}
+		return fmt.Sprintf("func %s(%s) {\n%s\n}\n", name, params, joined)
 	}
+}
+
+// needsSemicolon returns true for languages where a bare function call needs a trailing semicolon.
+func needsSemicolon(ext string) bool {
+	switch ext {
+	case ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh",
+		".java", ".kt", ".kts", ".scala", ".sc",
+		".js", ".jsx", ".ts", ".tsx", ".mts", ".cts",
+		".rs", ".m", ".mm":
+		return true
+	}
+	return false
 }

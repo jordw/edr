@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -56,6 +57,13 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 	// Parse current params.
 	paramText := string(defBody[parenOpen+1 : parenClose])
 	params := splitParams(paramText)
+
+	// In C/C++, (void) means "no parameters" — strip the void placeholder
+	// so adding a real parameter doesn't produce (int flags, void).
+	ext := strings.ToLower(filepath.Ext(sym.File))
+	if isCFamily(ext) && len(params) == 1 && strings.TrimSpace(params[0]) == "void" {
+		params = nil
+	}
 
 	// Build the new parameter list.
 	var newParams []string
@@ -429,4 +437,13 @@ func deduplicateSpans(spans []sigSpan) []sigSpan {
 		out = append(out, s)
 	}
 	return out
+}
+
+// isCFamily returns true for C/C++/Objective-C file extensions where (void) means "no parameters".
+func isCFamily(ext string) bool {
+	switch ext {
+	case ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh", ".m", ".mm":
+		return true
+	}
+	return false
 }

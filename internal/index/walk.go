@@ -913,6 +913,7 @@ func repoMapLazy(ctx context.Context, db SymbolStore, root, edrDir string, cfg r
 	var dirSummary []DirSummaryEntry
 	if truncated && filesRendered*5 < totalFiles {
 		dirFiles := map[string]int{}
+		dirSyms := map[string]int{}
 		for _, rel := range relPaths {
 			if !Supported(filepath.Join(root, rel)) {
 				continue
@@ -923,8 +924,16 @@ func repoMapLazy(ctx context.Context, db SymbolStore, root, edrDir string, cfg r
 			}
 			dirFiles[dir]++
 		}
+		// Count symbols from files we actually rendered
+		for _, mf := range mapFiles {
+			dir := strings.SplitN(mf.File, string(filepath.Separator), 2)[0]
+			if !strings.Contains(mf.File, string(filepath.Separator)) {
+				dir = "."
+			}
+			dirSyms[dir] += len(mf.Symbols)
+		}
 		for dir, count := range dirFiles {
-			dirSummary = append(dirSummary, DirSummaryEntry{Dir: dir, Files: count})
+			dirSummary = append(dirSummary, DirSummaryEntry{Dir: dir, Files: count, Symbols: dirSyms[dir]})
 		}
 		sort.Slice(dirSummary, func(i, j int) bool {
 			return dirSummary[i].Files > dirSummary[j].Files
@@ -1098,15 +1107,17 @@ func repoMapFromSymbolIndex(root, edrDir string, cfg repoMapConfig, budgetChars 
 	var dirSummary []DirSummaryEntry
 	if truncated && filesRendered*5 < totalFiles {
 		dirFiles := map[string]int{}
+		dirSyms := map[string]int{}
 		for _, fs := range byFile {
 			dir := strings.SplitN(fs.rel, string(filepath.Separator), 2)[0]
 			if !strings.Contains(fs.rel, string(filepath.Separator)) {
 				dir = "."
 			}
 			dirFiles[dir]++
+			dirSyms[dir] += len(fs.syms)
 		}
 		for dir, count := range dirFiles {
-			dirSummary = append(dirSummary, DirSummaryEntry{Dir: dir, Files: count})
+			dirSummary = append(dirSummary, DirSummaryEntry{Dir: dir, Files: count, Symbols: dirSyms[dir]})
 		}
 		sort.Slice(dirSummary, func(i, j int) bool {
 			return dirSummary[i].Files > dirSummary[j].Files

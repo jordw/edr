@@ -123,6 +123,29 @@ func heuristicRank(candidates []index.SymbolInfo, query, root string) []rankedCa
 			}
 		}
 
+		// Function/method body boost: a multi-line definition is more useful
+		// than a 1-line forward declaration or extern prototype.
+		// Kept smaller than definition type boost to preserve struct > function ranking.
+		if s.Type == "function" || s.Type == "method" {
+			span := int(s.EndLine - s.StartLine)
+			if span >= 3 {
+				// Moderate boost: log2(49) ≈ 5.6 → bonus ≈ 11
+				score += int(2 * math.Log2(float64(span)))
+			}
+		}
+
+		// Penalty for vendor, test, and mock paths — these are rarely
+		// the canonical definition an agent is looking for.
+		// Use proportional penalty (halve) + fixed floor to handle both
+		// high-popularity and low-popularity peripheral symbols.
+		// Mock files get a stronger penalty since their popularity comes
+		// from test imports, not from being canonical definitions.
+		if peri := peripheralLevel(rel); peri == 2 {
+			score = score/3 - 15
+		} else if peri == 1 {
+			score = score/2 - 10
+		}
+
 		// Name match quality
 		if tier == tierExact && s.Name == query {
 			score += 3 // case-exact match
@@ -294,4 +317,43 @@ func isDefinitionType(t string) bool {
 		return true
 	}
 	return false
+}
+
+// peripheralLevel returns how peripheral a path is:
+//
+//	0 = normal (no penalty)
+//	1 = peripheral (vendor, test files, generated, examples)
+//	2 = highly peripheral (mock files, fake implementations)
+func peripheralLevel(rel string) int {
+	lower := strings.ToLower(rel)
+
+	// Level 2: mocks and fakes — these are stub implementations whose
+	// high popularity comes from test imports, not real usage.
+	if strings.Contains(lower, "/mocks/") || strings.Contains(lower, "/mock_") ||
+		strings.Contains(lower, "_mock.") || strings.Contains(lower, "mock.go") ||
+		strings.Contains(lower, "/fake_") || strings.Contains(lower, "fake.go") {
+		return 2
+	}
+
+	// Level 1: vendor, test files, generated code, examples
+	if strings.HasPrefix(lower, "vendor/") || strings.Contains(lower, "/vendor/") {
+		return 1
+	}
+	if strings.Contains(lower, "/testdata/") || strings.Contains(lower, "/testing/") {
+		return 1
+	}
+	if strings.HasSuffix(lower, "_test.go") || strings.HasSuffix(lower, "_test.ts") ||
+		strings.HasSuffix(lower, "_test.js") || strings.HasSuffix(lower, "_test.py") ||
+		strings.HasSuffix(lower, ".test.ts") || strings.HasSuffix(lower, ".test.js") ||
+		strings.HasSuffix(lower, ".spec.ts") || strings.HasSuffix(lower, ".spec.js") {
+		return 1
+	}
+	if strings.Contains(lower, "/generated/") || strings.Contains(lower, "/zz_generated") {
+		return 1
+	}
+	if strings.HasPrefix(lower, "examples/") || strings.HasPrefix(lower, "samples/") ||
+		strings.Contains(lower, "/examples/") || strings.Contains(lower, "/samples/") {
+		return 1
+	}
+	return 0
 }

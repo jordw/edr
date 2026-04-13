@@ -76,6 +76,10 @@ type RenameResult struct {
 	Diffs        []RenameDiff       `json:"diffs,omitempty"`
 	Warnings     []string           `json:"warnings,omitempty"`
 	Truncated    bool               `json:"truncated,omitempty"`
+	// OldContents holds pre-mutation file contents (relative path → content).
+	// Used by checkpoint logic to snapshot secondary files for undo.
+	// Excluded from JSON output.
+	OldContents  map[string][]byte  `json:"-"`
 }
 
 // RenameDiff holds a per-file unified diff for dry-run rename preview.

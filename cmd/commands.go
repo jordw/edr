@@ -56,6 +56,37 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	sess, saveSess := session.LoadSession(edrDir, db.Root())
 	defer saveSess()
 
+	injectSessionHash(sess, cmdName, args, flags)
+
+	// Auto-checkpoint before mutations so undo can restore
+	dryRun, _ := flags["dry_run"].(bool)
+	if !dryRun && sess != nil && cmdspec.ModifiesState(cmdName) {
+		dirtyFiles := sess.GetDirtyFiles()
+		if len(args) > 0 {
+			target := args[0]
+			if idx := strings.Index(target, ":"); idx > 0 {
+				target = target[:idx]
+			}
+			found := false
+			for _, f := range dirtyFiles {
+				if f == target {
+					found = true
+					break
+				}
+			}
+			if !found {
+				dirtyFiles = append(dirtyFiles, target)
+			}
+		}
+		label := cmdName
+		if len(args) > 0 {
+			label = cmdName + "_" + args[0]
+		}
+		if _, err := sess.CreateAutoCheckpoint(filepath.Join(edrDir, "sessions"), root, label, dirtyFiles); err != nil {
+			fmt.Fprintf(os.Stderr, "edr: checkpoint failed: %v\n", err)
+		}
+	}
+
 	env := output.NewEnvelope(cmdName)
 	opID := cmdName[:1] + "0"
 
@@ -65,6 +96,13 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 		env.ComputeOK()
 		output.PrintEnvelope(env)
 		return silentError{code: 1}
+	}
+
+	// Multi-file commands (rename) return OldContents so the checkpoint can
+	// be patched to include secondary files. Without this, undo cannot
+	// restore files it didn't know about at checkpoint-creation time.
+	if r, ok := result.(*output.RenameResult); ok && len(r.OldContents) > 0 && sess != nil {
+		patchCheckpointWithOldContents(edrDir, root, r.OldContents)
 	}
 
 	// Multi-result: expand into individual ops (e.g. multi-file read)
@@ -564,16 +602,13 @@ var undoCmd = &cobra.Command{
 			}
 		}
 		result["remaining"] = autoCount
-		// Remove files created after the checkpoint (they did not exist then)
-		var removed []string
-		for _, f := range notRemoved {
-			abs := filepath.Join(root, f)
-			if err := os.Remove(abs); err == nil {
-				removed = append(removed, f)
-			}
-		}
-		if len(removed) > 0 {
-			result["new_files_removed"] = removed
+		// Files modified after the checkpoint that weren't snapshotted.
+		// Do NOT delete them — they may be pre-existing files that a
+		// multi-file command (rename, changesig) modified. Only files
+		// with nil content in the checkpoint (truly new files) are
+		// deleted by RestoreCheckpoint itself.
+		if len(notRemoved) > 0 {
+			result["unrestored"] = notRemoved
 		}
 
 		env := output.NewEnvelope("undo")
@@ -888,6 +923,15 @@ func recordOp(sess *session.Session, cmdName string, args []string, flags map[st
 	action, kind := classifyOp(cmdName, flags, result, ok)
 	sess.RecordOp(cmdName, file, symbol, action, kind, ok)
 
+	// Multi-file commands (rename, changesig) modify files beyond the primary
+	// target. Record extra ops so GetDirtyFiles includes them in checkpoints.
+	if ok && (cmdName == "rename" || cmdName == "changesig") {
+		extraFiles := multiFileEdits(cmdName, result, file)
+		for _, f := range extraFiles {
+			sess.RecordOp(cmdName, f, "", action, kind, true)
+		}
+	}
+
 	if !ok {
 		return
 	}
@@ -920,7 +964,57 @@ func recordOp(sess *session.Session, cmdName string, args []string, flags map[st
 	}
 }
 
+// patchCheckpointWithOldContents adds pre-mutation file snapshots to the most
+// recent auto-checkpoint. This is needed for multi-file commands (rename,
+// changesig) where secondary files aren't known until after dispatch. Without
+// this patch, undo cannot restore secondary files because they weren't in the
+// original checkpoint.
+func patchCheckpointWithOldContents(edrDir, root string, oldContents map[string][]byte) {
+	sessDir := filepath.Join(edrDir, "sessions")
+	cpID := session.LatestAutoCheckpoint(sessDir)
+	if cpID == "" {
+		return
+	}
+	if err := session.PatchCheckpointFiles(sessDir, cpID, root, oldContents); err != nil {
+		fmt.Fprintf(os.Stderr, "edr: patch checkpoint: %v\n", err)
+	}
+}
+
 // extractFileSymbol parses file and optional symbol from command args.
+// multiFileEdits returns extra files modified by multi-file commands (rename, changesig)
+// that are not the primary target file. This ensures GetDirtyFiles tracks them for checkpoints.
+func multiFileEdits(cmdName string, result any, primaryFile string) []string {
+	switch cmdName {
+	case "rename":
+		if r, ok := result.(*output.RenameResult); ok {
+			var extra []string
+			for _, f := range r.FilesChanged {
+				if f != primaryFile {
+					extra = append(extra, f)
+				}
+			}
+			return extra
+		}
+	case "changesig":
+		if m, ok := result.(map[string]any); ok {
+			if diff, ok := m["diff"].(string); ok {
+				// Parse file names from unified diff headers (--- a/file)
+				var extra []string
+				for _, line := range strings.Split(diff, "\n") {
+					if strings.HasPrefix(line, "--- a/") {
+						f := line[6:]
+						if f != primaryFile {
+							extra = append(extra, f)
+						}
+					}
+				}
+				return extra
+			}
+		}
+	}
+	return nil
+}
+
 func extractFileSymbol(args []string) (file, symbol string) {
 	if len(args) == 0 {
 		return "", ""
