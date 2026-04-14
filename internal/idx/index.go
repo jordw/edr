@@ -1343,6 +1343,9 @@ func StatChanges(root, edrDir string) *Changes {
 
 	// Scan directories for new files. A directory with a changed mtime
 	// has had files created or deleted. We check every indexed directory.
+	// When we encounter a NEW subdirectory (not in indexedDirs), recurse
+	// into it to find files created in newly-made directory trees
+	// (e.g. edr edit --mkdir creating tools/testing/foo.c).
 	for dir, maxMtime := range indexedDirs {
 		info, err := os.Stat(filepath.Join(root, dir))
 		if err != nil {
@@ -1356,10 +1359,14 @@ func StatChanges(root, edrDir string) *Changes {
 			continue
 		}
 		for _, e := range entries {
+			rel := filepath.Join(dir, e.Name())
 			if e.IsDir() {
+				// Recurse into directories that aren't in our indexed set.
+				if _, known := indexedDirs[rel]; !known {
+					walkNewDir(root, rel, indexedSet, &c.New)
+				}
 				continue
 			}
-			rel := filepath.Join(dir, e.Name())
 			if _, indexed := indexedSet[rel]; !indexed {
 				c.New = append(c.New, rel)
 			}
@@ -1367,6 +1374,33 @@ func StatChanges(root, edrDir string) *Changes {
 	}
 
 	return c
+}
+
+// walkNewDir recursively walks a directory that wasn't in the index,
+// adding all non-indexed files to the new list. Skips ignored paths.
+func walkNewDir(root, dir string, indexed map[string]struct{}, out *[]string) {
+	entries, err := os.ReadDir(filepath.Join(root, dir))
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		// Skip hidden and common ignored directories.
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		rel := filepath.Join(dir, name)
+		if e.IsDir() {
+			if name == "node_modules" || name == "vendor" || name == "target" || name == "build" {
+				continue
+			}
+			walkNewDir(root, rel, indexed, out)
+			continue
+		}
+		if _, alreadyIndexed := indexed[rel]; !alreadyIndexed {
+			*out = append(*out, rel)
+		}
+	}
 }
 
 func isBinary(data []byte) bool {

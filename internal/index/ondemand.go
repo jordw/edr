@@ -666,6 +666,13 @@ func (o *OnDemand) filteredSymbolsFromIndex(namePattern, symbolType string) ([]S
 func (o *OnDemand) FindSemanticCallers(ctx context.Context, symbolName, symbolFile string) ([]SymbolInfo, error) {
 	all := o.parseAll(ctx)
 
+	// For C-family languages, the import graph is unreliable for tracking
+	// callers: callers include the header (e.g. <linux/sched.h>), not the
+	// .c definition file. Skip the import-reach gate and rely on textual
+	// containment instead. This catches cross-file calls that the import
+	// graph misses (e.g. sched_tick called from kernel/time/timer.c).
+	skipImportCheck := isCFamilyFile(symbolFile)
+
 	nameBytes := []byte(symbolName)
 	var callers []SymbolInfo
 	for _, cf := range all {
@@ -676,9 +683,15 @@ func (o *OnDemand) FindSemanticCallers(ctx context.Context, symbolName, symbolFi
 		if !bytes.Contains(cf.src, nameBytes) {
 			continue
 		}
-		// Check import visibility
+		// Check import visibility (skipped for C-family — see comment above).
 		sameFile := cf.symbols[0].File == symbolFile
-		if !sameFile && !importsReach(cf.imports, symbolFile, cf.symbols[0].File, o.root) {
+		if !sameFile && !skipImportCheck && !importsReach(cf.imports, symbolFile, cf.symbols[0].File, o.root) {
+			continue
+		}
+		// For C-family cross-file callers, also restrict to same language family
+		// to avoid false positives from unrelated languages (e.g. Python files
+		// mentioning a C function name).
+		if !sameFile && skipImportCheck && !isCFamilyFile(cf.symbols[0].File) {
 			continue
 		}
 		for _, s := range cf.symbols {
@@ -721,6 +734,16 @@ func (o *OnDemand) FindSemanticReferences(ctx context.Context, symbolName, symbo
 	// Same as FindSemanticCallers for on-demand — we find symbols whose body
 	// contains the name and whose file imports the target.
 	return o.FindSemanticCallers(ctx, symbolName, symbolFile)
+}
+
+// isCFamilyFile returns true for C/C++/Objective-C source files where the
+// header/source split makes the import graph unreliable for finding callers.
+func isCFamilyFile(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh", ".m", ".mm":
+		return true
+	}
+	return false
 }
 
 func (o *OnDemand) HasRefs(_ context.Context) bool {

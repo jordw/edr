@@ -154,7 +154,7 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 		// Deduplicate overlapping spans (e.g. a method and its containing class
 		// can both be returned as references).
 		spans = deduplicateSpans(spans)
-		newData := transformCallSites(data, spans, callRe, sym.Name, addParam != "", callarg, atIdx, removeIdx)
+		newData := transformCallSites(data, spans, callRe, sym.Name, addParam != "", callarg, addParam, atIdx, removeIdx)
 		if !bytes.Equal(data, newData) {
 			edits = append(edits, fileEdit{file: file, oldData: data, newData: newData})
 		}
@@ -165,7 +165,7 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 	if defSpans, ok := refFileSpans[sym.File]; ok {
 		sort.Slice(defSpans, func(i, j int) bool { return defSpans[i].start < defSpans[j].start })
 		defSpans = deduplicateSpans(defSpans)
-		transformed := transformCallSites(newDefData, defSpans, callRe, sym.Name, addParam != "", callarg, atIdx, removeIdx)
+		transformed := transformCallSites(newDefData, defSpans, callRe, sym.Name, addParam != "", callarg, addParam, atIdx, removeIdx)
 		if !bytes.Equal(newDefData, transformed) {
 			edits[0].newData = transformed
 		}
@@ -342,7 +342,7 @@ func splitParams(s string) []string {
 // and adds/removes the argument.
 type sigSpan struct{ start, end uint32 }
 
-func transformCallSites(data []byte, spans []sigSpan, callRe *regexp.Regexp, funcName string, isAdd bool, callarg string, atIdx, removeIdx int) []byte {
+func transformCallSites(data []byte, spans []sigSpan, callRe *regexp.Regexp, funcName string, isAdd bool, callarg, paramSpec string, atIdx, removeIdx int) []byte {
 	// Find all call site locations: positions of the '(' after funcName
 	type callSite struct {
 		openParen int // byte offset of '(' in data
@@ -385,14 +385,29 @@ func transformCallSites(data []byte, spans []sigSpan, callRe *regexp.Regexp, fun
 		argText := string(result[site.openParen+1 : closeParen])
 		args := splitParams(argText)
 
+		// Detect C declarations like `extern void foo(void);` — the "call site"
+		// is actually a forward declaration. Use paramSpec (e.g. "int flags")
+		// instead of callarg ("0") so the declaration mirrors the definition.
+		// We only catch the (void) case unambiguously; a generic `foo(x);` could
+		// be either a call or a declaration, so we leave those as call sites.
+		isVoidDecl := len(args) == 1 && strings.TrimSpace(args[0]) == "void"
+		if isVoidDecl {
+			args = nil
+		}
+
+		insertArg := callarg
+		if isVoidDecl && paramSpec != "" {
+			insertArg = paramSpec
+		}
+
 		var newArgs []string
 		if isAdd {
 			if atIdx < 0 || atIdx >= len(args) {
-				newArgs = append(args, callarg)
+				newArgs = append(args, insertArg)
 			} else {
 				newArgs = make([]string, 0, len(args)+1)
 				newArgs = append(newArgs, args[:atIdx]...)
-				newArgs = append(newArgs, callarg)
+				newArgs = append(newArgs, insertArg)
 				newArgs = append(newArgs, args[atIdx:]...)
 			}
 		} else {
