@@ -214,6 +214,30 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 	sort.Strings(matches)
 	// Deduplicate — changed-file rescan may overlap with trigram results.
 	matches = dedupStrings(matches)
+
+	// Auto-retry as regex when literal mode found nothing and pattern contains
+	// alternation. Catches the common case of users typing foo|bar expecting
+	// alternation. If the regex retry also finds nothing, we return the
+	// original 0-result response (no warning needed).
+	if len(matches) == 0 && !regexMode && containsAlternation(pattern) {
+		if _, err := regexp.Compile(pattern); err == nil {
+			retryFlags := make(map[string]any, len(flags)+1)
+			for k, v := range flags {
+				retryFlags[k] = v
+			}
+			retryFlags["regex"] = true
+			retryResult, _ := runFiles(nil, db, root, args, retryFlags)
+			if rm, ok := retryResult.(map[string]any); ok {
+				if n := anyInt(rm["n"]); n > 0 {
+					retryWarn := fmt.Sprintf("treating %q as regex (literal had 0 matches); use --regex to skip this fallback", pattern)
+					existing := toStringSlice(rm["warnings"])
+					rm["warnings"] = append([]string{retryWarn}, existing...)
+					return rm, nil
+				}
+			}
+		}
+	}
+
 	result := filesResult(pattern, matches, source, budget)
 	if len(warnings) > 0 {
 		result["warnings"] = warnings
@@ -222,6 +246,50 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 		result["root"] = output.Rel(root)
 	}
 	return result, nil
+}
+
+// containsAlternation returns true if the pattern has an unescaped | character.
+func containsAlternation(pattern string) bool {
+	for i := 0; i < len(pattern); i++ {
+		if pattern[i] == '\\' && i+1 < len(pattern) {
+			i++
+			continue
+		}
+		if pattern[i] == '|' {
+			return true
+		}
+	}
+	return false
+}
+
+// anyInt is defined in the output package; we need a local copy here.
+func anyInt(v any) int {
+	switch x := v.(type) {
+	case int:
+		return x
+	case int64:
+		return int(x)
+	case float64:
+		return int(x)
+	}
+	return 0
+}
+
+// toStringSlice converts an any-typed slice or string slice to []string.
+func toStringSlice(v any) []string {
+	switch x := v.(type) {
+	case []string:
+		return x
+	case []any:
+		out := make([]string, 0, len(x))
+		for _, s := range x {
+			if str, ok := s.(string); ok {
+				out = append(out, str)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // dedupStrings returns a sorted, deduplicated slice.
