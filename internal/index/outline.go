@@ -106,6 +106,14 @@ func collapseFile(src []byte, syms []SymbolInfo, depth int) string {
 		}
 	}
 
+	// Preserve signature and closing lines of nested symbols (e.g. methods
+	// inside a class). Without this, a container collapse swallows all nested
+	// symbol headers, reducing the skeleton to just the outer wrapper.
+	for _, sym := range syms {
+		delete(collapsed, int(sym.StartLine))
+		delete(collapsed, int(sym.EndLine))
+	}
+
 	// Track which collapses we've emitted "..." for
 	emitted := make(map[int]bool)
 	for i, line := range lines {
