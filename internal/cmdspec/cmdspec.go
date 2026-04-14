@@ -101,6 +101,7 @@ var orientFlags = []FlagSpec{
 var filesFlags = []FlagSpec{
 	{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens (default 2000)"},
 	{Name: "full", Type: FlagBool, Default: false, Desc: "Return full results (no default budget cap)"},
+	{Name: "regex", Type: FlagBool, Default: false, Desc: "Treat pattern as a regular expression (Go syntax)"},
 }
 
 var Registry = []*Spec{

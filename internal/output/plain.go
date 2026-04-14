@@ -856,6 +856,9 @@ func plainFiles(w *os.File, op Op) {
 	}
 	hTrunc(h, op)
 	hStr(h, "root", op, "root")
+	if warns := toStringSlice(op["warnings"]); len(warns) > 0 {
+		h["warnings"] = warns
+	}
 	writeHeader(w, h)
 	// Body: one file per line
 	if files := toStringSlice(op["files"]); len(files) > 0 {
