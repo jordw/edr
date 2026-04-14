@@ -2,6 +2,7 @@ package idx
 
 import (
 	"encoding/binary"
+	"math"
 	"os"
 	"path/filepath"
 )
@@ -45,6 +46,21 @@ func ComputePopularity(symbols []SymbolEntry, files []FileEntry, graph *ImportGr
 		} else {
 			indexToGraph[i] = -1
 		}
+	}
+
+	// Precompute per-graph-file caller weight: 1 + log2(1 + inboundCount).
+	// A caller file that is itself heavily imported counts more — one step
+	// of PageRank. A mock or test file (inbound = 0) contributes weight 1;
+	// a canonical package file with ~100 imports contributes ~7.7. This
+	// deranks mock-heavy defs (mocks are only referenced by tests, which
+	// are referenced by nothing) without a path-pattern rule.
+	callerWeights := make([]float64, len(graph.Files))
+	for i := range graph.Files {
+		inb := uint32(0)
+		if i < len(graph.InboundCount) {
+			inb = graph.InboundCount[i]
+		}
+		callerWeights[i] = 1.0 + math.Log2(1.0+float64(inb))
 	}
 
 	// Group symbols by name hash.
@@ -99,7 +115,8 @@ func ComputePopularity(symbols []SymbolEntry, files []FileEntry, graph *ImportGr
 			}
 		}
 
-		// For each definition, count callers in files that import this def's file.
+		// For each definition, sum caller-quality weights for callers whose
+		// file imports this def's file.
 		for _, d := range defs {
 			if int(d.fileID) >= len(files) {
 				continue
@@ -113,24 +130,24 @@ func ComputePopularity(symbols []SymbolEntry, files []FileEntry, graph *ImportGr
 				continue
 			}
 
-			count := 0
+			weighted := 0.0
 			if len(callerGraphFiles) < len(importers) {
 				for cf := range callerGraphFiles {
-					if importers[cf] {
-						count++
+					if importers[cf] && int(cf) < len(callerWeights) {
+						weighted += callerWeights[cf]
 					}
 				}
 			} else {
 				for imp := range importers {
-					if callerGraphFiles[imp] {
-						count++
+					if callerGraphFiles[imp] && int(imp) < len(callerWeights) {
+						weighted += callerWeights[imp]
 					}
 				}
 			}
-			if count > 65535 {
-				count = 65535
+			if weighted > 65535 {
+				weighted = 65535
 			}
-			scores[d.id] = uint16(count)
+			scores[d.id] = uint16(weighted)
 		}
 	}
 
