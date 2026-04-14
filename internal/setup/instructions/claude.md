@@ -63,13 +63,16 @@ edr extract file.go:Func --name NewFunc --lines 10-20 --call "NewFunc(x)"  # cus
 
 edr edit file.go:Func --move-after other.go:Target  # move to another file
 
-## Batch — combine operations in one call
+## Python — multi-op scripts
 
-Chain with `-f -o -s -e -w`. File carries forward. Edit includes read-back.
+For loops, filters, or 5+ chained ops. Session state shared via PID.
 
-edr --focus f.go:Func --edit --old "x" --new "y"
-edr --search "TODO"
-edr --focus f.go:Func --expand callers
+python3 <<EOF
+import sys; sys.path.insert(0, "$(edr python-path)")
+import edr
+for s in edr.orient("internal/", grep="^run", type="function"):
+    if not edr.files(s.name): print("unused:", s.name)
+EOF
 
 ## Other commands
 - `edr status` — root, index, undo, build state, warnings

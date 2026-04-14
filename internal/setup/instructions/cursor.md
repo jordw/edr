@@ -72,16 +72,16 @@ new code
 EOF
 )"`
 
-## Batch — combine operations in one call
+## Python — multi-op scripts
 
-Chain operations with `--focus`, `--orient`, `--search`, `--edit`, `--write`.
-File carries forward between operations. Short aliases: `-f -o -s -e -w`.
+For loops, filters, or 5+ chained ops. Session state shared via PID.
 
-edr --orient cmd/ --focus f.go --sig          # map dir + read sigs
-edr --focus f.go:Func --edit --old "x" --new "y"  # read + edit (includes read-back)
-edr --search "TODO"                              # text search
-edr --focus f.go:Func --expand callers        # symbol + callers
-edr --write new.go --content "pkg main" --mkdir  # create file
+python3 <<EOF
+import sys; sys.path.insert(0, "$(edr python-path)")
+import edr
+for s in edr.orient("internal/", grep="^run", type="function"):
+    if not edr.files(s.name): print("unused:", s.name)
+EOF
 
 ## Other commands
 - `edr status` — root, index, undo, build state, warnings
