@@ -88,10 +88,12 @@ func heuristicRank(candidates []index.SymbolInfo, query, root string) []rankedCa
 		}
 
 		var score int
+		span := int(s.EndLine - s.StartLine)
+		q := symbolQuality(s.Type, span)
 
 		if popScores != nil && s.IndexID > 0 && int(s.IndexID) < len(popScores) {
-			// --- Primary path: popularity score ---
-			score = int(popScores[s.IndexID])
+			// --- Primary path: popularity score, scaled by def quality ---
+			score = int(float64(popScores[s.IndexID]) * q)
 		} else {
 			// --- Fallback: log-scaled import count ---
 			inbound := 0
@@ -102,7 +104,7 @@ func heuristicRank(candidates []index.SymbolInfo, query, root string) []rankedCa
 				}
 			}
 			if inbound > 0 {
-				score = int(8 * math.Log2(1+float64(inbound)))
+				score = int(float64(8*math.Log2(1+float64(inbound))) * q)
 			}
 		}
 
@@ -110,7 +112,6 @@ func heuristicRank(candidates []index.SymbolInfo, query, root string) []rankedCa
 		// more likely to be THE definition than a 1-line variable declaration
 		// that the regex parser also tags as "struct". Scale by log of span.
 		if isDefinitionType(s.Type) {
-			span := int(s.EndLine - s.StartLine)
 			if span >= 3 {
 				// log2(827) ≈ 10 → bonus ≈ 50; log2(3) ≈ 1.6 → bonus ≈ 8
 				score += int(5 * math.Log2(float64(span)))
@@ -127,7 +128,6 @@ func heuristicRank(candidates []index.SymbolInfo, query, root string) []rankedCa
 		// than a 1-line forward declaration or extern prototype.
 		// Kept smaller than definition type boost to preserve struct > function ranking.
 		if s.Type == "function" || s.Type == "method" {
-			span := int(s.EndLine - s.StartLine)
 			if span >= 3 {
 				// Moderate boost: log2(49) ≈ 5.6 → bonus ≈ 11
 				score += int(2 * math.Log2(float64(span)))
@@ -309,6 +309,38 @@ func isHeaderFile(rel string) bool {
 		return true
 	}
 	return false
+}
+
+// symbolQuality returns a [0,1] confidence that the symbol is a real
+// definition rather than a parser artifact (comment fragment, forward
+// decl, name appearing inside another declaration). Pure function of
+// (type, span) so it can be tuned without reindexing. Applied as a
+// multiplier on popularity so a 1-line "struct" in a heavily-imported
+// header can't outscore the real multi-line def elsewhere.
+func symbolQuality(t string, span int) float64 {
+	switch t {
+	case "struct", "class", "interface", "enum", "impl":
+		// Real defs have field/member bodies. span=1 is almost always
+		// a regex false positive on a comment or forward decl.
+		q := float64(span-1) / 4.0
+		if q < 0 {
+			return 0
+		}
+		if q > 1 {
+			return 1
+		}
+		return q
+	case "function", "method":
+		// One-liners are legitimate (inline funcs, Go one-liners), but
+		// less likely to be the canonical definition than a body.
+		q := float64(span) / 3.0
+		if q > 1 {
+			return 1
+		}
+		return q
+	}
+	// typedef, const, var, type alias — one-liners are the norm.
+	return 1
 }
 
 func isDefinitionType(t string) bool {

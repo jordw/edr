@@ -389,23 +389,39 @@ func (p *cppParser) parseClassOrStruct(kind string) {
 			return
 		}
 	}
-	// Scan the preamble (base-class list, template args, attributes) up to { or ;.
-	// If we hit * or ( the "struct name" is actually a type in a variable/parameter
-	// declaration (e.g. "struct task_struct *fork_idle(...)"), not a definition.
+	// Scan the preamble up to { or ;.
+	// Legitimate chars here are: template args <...>, base-class marker ':',
+	// and the 'final' keyword (handled above). Anything else disqualifies:
+	//   * ( ) = [ , — pointer/array/func/init (e.g. "struct task_struct *p")
+	//   bare identifier — type is being used, not defined
+	//     (e.g. "struct rcu_head rcu_head;")
+	// Once we see ':', we're in the base-class list and must skip to {/;.
 	isDefinition := true
+	inBaseList := false
 	for !p.s.EOF() {
 		p.skipWSAndComments()
 		c := p.s.Peek()
 		if c == '{' || c == ';' {
 			break
 		}
-		if c == '*' || c == '(' || c == ')' || c == '=' {
-			isDefinition = false
-			break
-		}
-		if c == '<' {
-			p.s.SkipAngles()
-			continue
+		if !inBaseList {
+			if c == '*' || c == '(' || c == ')' || c == '=' || c == '[' || c == ',' {
+				isDefinition = false
+				break
+			}
+			if c == '<' {
+				p.s.SkipAngles()
+				continue
+			}
+			if c == ':' {
+				inBaseList = true
+				p.s.Pos++
+				continue
+			}
+			if lexkit.DefaultIdentStart[c] {
+				isDefinition = false
+				break
+			}
 		}
 		p.s.Pos++
 	}
