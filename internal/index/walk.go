@@ -1003,29 +1003,46 @@ func repoMapFromSymbolIndex(root, edrDir string, cfg repoMapConfig, budgetChars 
 			fileIDs = append(fileIDs, id)
 		}
 	}
-	sort.Slice(fileIDs, func(i, j int) bool {
-		ri := byFile[fileIDs[i]].rel
-		rj := byFile[fileIDs[j]].rel
-		ci := isCodeFile(ri)
-		cj := isCodeFile(rj)
-		if ci != cj { return ci }
-		ti := isTestOrBenchFile(ri)
-		tj := isTestOrBenchFile(rj)
-		if ti != tj { return !ti }
-		if importGraph != nil {
-			ii := importGraph.Inbound(ri)
-			ij := importGraph.Inbound(rj)
-			if ii != ij { return ii > ij }
+	// Precompute sort keys once per file. The previous sort.Slice closure
+	// invoked isCodeFile/isTestOrBenchFile/importGraph.Inbound on every
+	// comparison (O(N log N) calls), which dominated cost on large repos.
+	type sortKey struct {
+		id         uint32
+		isCode     bool
+		isTest     bool
+		inbound    int
+		numSyms    int
+		depth      int
+		rel        string
+	}
+	keys := make([]sortKey, len(fileIDs))
+	for i, id := range fileIDs {
+		rel := byFile[id].rel
+		k := sortKey{
+			id:      id,
+			isCode:  isCodeFile(rel),
+			isTest:  isTestOrBenchFile(rel),
+			numSyms: len(byFile[id].syms),
+			depth:   strings.Count(rel, string(filepath.Separator)),
+			rel:     rel,
 		}
-		// More symbols = more substantial file
-		si := len(byFile[fileIDs[i]].syms)
-		sj := len(byFile[fileIDs[j]].syms)
-		if si != sj { return si > sj }
-		di := strings.Count(ri, string(filepath.Separator))
-		dj := strings.Count(rj, string(filepath.Separator))
-		if di != dj { return di < dj }
-		return ri < rj
+		if importGraph != nil {
+			k.inbound = importGraph.Inbound(rel)
+		}
+		keys[i] = k
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := &keys[i], &keys[j]
+		if a.isCode != b.isCode { return a.isCode }
+		if a.isTest != b.isTest { return !a.isTest }
+		if a.inbound != b.inbound { return a.inbound > b.inbound }
+		if a.numSyms != b.numSyms { return a.numSyms > b.numSyms }
+		if a.depth != b.depth { return a.depth < b.depth }
+		return a.rel < b.rel
 	})
+	for i, k := range keys {
+		fileIDs[i] = k.id
+	}
 
 	totalFiles := len(fileIDs)
 	totalSymbols := len(allSyms)
