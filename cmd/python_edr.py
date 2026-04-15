@@ -36,6 +36,40 @@ class EdrError(Exception):
         self.stderr = stderr
 
 
+class AmbiguousError(EdrError):
+    """Raised when a bare-name focus() matches multiple symbols.
+
+    `candidates` is the ranked shortlist; pick one and call focus() with
+    `path:symbol` to disambiguate.
+    """
+
+    def __init__(self, name: str, candidates: "list[Symbol]"):
+        super().__init__(
+            f"{name!r} is ambiguous ({len(candidates)} candidates); "
+            f"use focus('path:symbol') to pick one",
+            code="ambiguous",
+        )
+        self.name = name
+        self.candidates = candidates
+
+
+_SHORTLIST_LINE = re.compile(r"^\s*\d+\.\s+([^:]+):(\d+)\s+(\S+)\s+(\S+)\s*$")
+
+
+class OrientResult(list):
+    """A list of Symbols with truncation metadata attached.
+
+    Behaves like ``list[Symbol]``, with extra attributes:
+      * ``total`` — total symbols matching (pre-budget)
+      * ``shown`` — symbols actually returned
+      * ``truncated`` — True when ``total > shown``
+    """
+
+    total: int = 0
+    shown: int = 0
+    truncated: bool = False
+
+
 @dataclass
 class Symbol:
     """A code symbol returned by focus/orient/callers."""
@@ -138,6 +172,21 @@ def _symbol_from_dict(d: dict, file_hint: str | None = None) -> Symbol:
     )
 
 
+def _parse_shortlist_body(body: str) -> list[Symbol]:
+    """Parse focus()'s ambiguous shortlist body.
+
+    Format: `  N. file:line  type name`
+    """
+    out: list[Symbol] = []
+    for line in body.split("\n"):
+        m = _SHORTLIST_LINE.match(line)
+        if not m:
+            continue
+        file, line_no, typ, name = m.groups()
+        out.append(Symbol(file=file, name=name, type=typ, start_line=int(line_no), end_line=int(line_no)))
+    return out
+
+
 def _parse_orient_body(body: str) -> list[Symbol]:
     """Parse orient's plain-text body lines into Symbols.
 
@@ -176,13 +225,22 @@ def focus(
     if expand:
         args += ["--expand", expand]
     result = _run(args, root=root)
+    # Ambiguous bare-name: header has method="heuristic_ranking" and no file.
+    if result.get("method") == "heuristic_ranking" and not result.get("file"):
+        candidates = _parse_shortlist_body(result.get("_body", ""))
+        raise AmbiguousError(result.get("query") or target, candidates)
     # focus result: {file, sym, lines:[s,e], hash} — sym may be missing for file-only reads.
     # Derive name from sym or from the target's :suffix.
     if "sym" not in result and ":" in target and not target.startswith("/"):
         _, _, name = target.partition(":")
         if name and not name[0].isdigit():
             result.setdefault("sym", name)
-    return _symbol_from_dict(result)
+    sym = _symbol_from_dict(result)
+    # When --sig was requested, the body *is* the signature; don't leave it in .content.
+    if sig and sym.content and not sym.signature:
+        sym.signature = sym.content.strip()
+        sym.content = None
+    return sym
 
 
 # ---------------------------------------------------------------- orient / map
@@ -211,7 +269,11 @@ def orient(
     result = _run(args, root=root)
     # orient emits structured symbols in the plain-text body; content in the
     # JSON header is stripped before output. Parse the body instead.
-    return _parse_orient_body(result.get("_body", ""))
+    out = OrientResult(_parse_orient_body(result.get("_body", "")))
+    out.total = int(result.get("symbols") or 0)
+    out.shown = int(result.get("shown_symbols") or len(out))
+    out.truncated = bool(result.get("trunc"))
+    return out
 
 
 # ---------------------------------------------------------------- edit
@@ -313,7 +375,7 @@ def changesig(
     return EditResult(
         file=result.get("file", target.split(":", 1)[0]),
         status=result.get("status", "unknown"),
-        diff=result.get("diff"),
+        diff=result.get("diff") or result.get("_body"),
         hash=result.get("hash"),
         message=result.get("message") or result.get("msg"),
     )
@@ -340,7 +402,7 @@ def extract(
     return EditResult(
         file=result.get("file", target.split(":", 1)[0]),
         status=result.get("status", "unknown"),
-        diff=result.get("diff"),
+        diff=result.get("diff") or result.get("_body"),
         hash=result.get("hash"),
         message=result.get("message"),
     )
@@ -377,13 +439,52 @@ def status(*, root: str | None = None) -> dict:
 # ---------------------------------------------------------------- callers
 
 
+_CALLER_LINE = re.compile(r"^(\S+)\s{2,}(.*)$")
+_CALLER_NAME = re.compile(r"\b(?:func|def|fn|function|method)\s+\(?[^)]*\)?\s*(\w+)|(\w+)\s*\(")
+
+
 def callers(symbol: Symbol, *, root: str | None = None) -> list[Symbol]:
-    """Find symbols that reference the given symbol. Uses the focus --expand callers path."""
+    """Find symbols that reference the given symbol. Uses the focus --expand callers path.
+
+    Returns a de-duplicated list of call-site Symbols. Each result has ``file``
+    and ``signature`` populated; ``name`` is extracted from the signature when
+    possible.
+    """
     target = f"{symbol.file}:{symbol.name}"
     args = ["focus", target, "--expand", "callers"]
     result = _run(args, root=root)
+
     out: list[Symbol] = []
+    seen: set[tuple[str, str]] = set()
+    # Preferred: structured callers in header (if the CLI ever emits them).
     for c in result.get("callers") or []:
         if isinstance(c, dict):
-            out.append(_symbol_from_dict(c))
+            sym = _symbol_from_dict(c)
+            key = (sym.file, sym.signature or sym.name)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(sym)
+    if out:
+        return out
+
+    # Fallback: parse plain body lines "<file>  <signature>".
+    body = result.get("_body", "")
+    for line in body.split("\n"):
+        line = line.rstrip()
+        if not line or line.startswith("---"):
+            continue
+        m = _CALLER_LINE.match(line)
+        if not m:
+            continue
+        file, sig = m.group(1), m.group(2).strip()
+        key = (file, sig)
+        if key in seen:
+            continue
+        seen.add(key)
+        name = ""
+        nm = _CALLER_NAME.search(sig)
+        if nm:
+            name = nm.group(1) or nm.group(2) or ""
+        out.append(Symbol(file=file, name=name, type="", start_line=0, end_line=0, signature=sig))
     return out
