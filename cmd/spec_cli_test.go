@@ -2661,7 +2661,7 @@ func TestSpec_RenameCrossFile(t *testing.T) {
 	})
 
 	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-		"rename", "lib.go:Compute", "--to", "Calculate")
+		"rename", "lib.go:Compute", "--to", "Calculate", "--cross-file")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2852,7 +2852,7 @@ func TestSpec_ChangeSigAddParam(t *testing.T) {
 	})
 
 	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-		"changesig", "lib.go:Process", "--add", "ctx context.Context", "--at", "0", "--callarg", "ctx")
+		"changesig", "lib.go:Process", "--add", "ctx context.Context", "--at", "0", "--callarg", "ctx", "--cross-file")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2884,7 +2884,7 @@ func TestSpec_ChangeSigAddParamEnd(t *testing.T) {
 	})
 
 	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-		"changesig", "lib.go:Process", "--add", "opts string", "--callarg", "\"\"")
+		"changesig", "lib.go:Process", "--add", "opts string", "--callarg", "\"\"", "--cross-file")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2911,7 +2911,7 @@ func TestSpec_ChangeSigRemoveParam(t *testing.T) {
 	})
 
 	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-		"changesig", "lib.go:Process", "--remove", "1")
+		"changesig", "lib.go:Process", "--remove", "1", "--cross-file")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -2974,7 +2974,7 @@ func TestSpec_ChangeSigCrossFile(t *testing.T) {
 	})
 
 	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-		"changesig", "lib.go:Compute", "--add", "scale float64", "--callarg", "1.0")
+		"changesig", "lib.go:Compute", "--add", "scale float64", "--callarg", "1.0", "--cross-file")
 	if exit != 0 {
 		t.Fatalf("exit %d", exit)
 	}
@@ -3072,7 +3072,7 @@ func TestSpec_ChangeSigAllLanguages(t *testing.T) {
 			})
 
 			result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-				"changesig", tc.symbol, "--add", tc.addParam, "--callarg", tc.callarg)
+				"changesig", tc.symbol, "--add", tc.addParam, "--callarg", tc.callarg, "--cross-file")
 			if exit != 0 {
 				t.Fatalf("exit %d", exit)
 			}

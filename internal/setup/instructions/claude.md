@@ -46,8 +46,9 @@ edr edit --where Symbol --old "x" --new "y"        # auto-resolve file
 
 ## Rename — `edr rename`
 
-edr rename file.go:OldName --to NewName            # rename across all references
+edr rename file.go:OldName --to NewName            # same-file rename (def + same-file callers)
 edr rename file.go:OldName --to NewName --dry-run  # preview without applying
+edr rename file.go:OldName --to NewName --cross-file # update callers across all files
 
 ## Change signature — `edr changesig`
 

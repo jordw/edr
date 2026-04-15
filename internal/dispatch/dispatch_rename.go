@@ -20,6 +20,8 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 		return nil, fmt.Errorf("rename: --to <new_name> is required")
 	}
 	dryRun := flagBool(flags, "dry_run", false)
+	crossFile := flagBool(flags, "cross_file", false)
+	force := flagBool(flags, "force", false)
 
 	// Resolve the symbol to rename.
 	sym, err := resolveSymbolArgs(ctx, db, root, args)
@@ -59,8 +61,14 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 		callRe = defRe
 	}
 
-	// Find all symbols that reference the target.
-	refs, err := db.FindSemanticReferences(ctx, oldName, sym.File)
+	// Find references. Default scope is same-file; --cross-file opts into
+	// repo-wide fan-out.
+	var refs []index.SymbolInfo
+	if crossFile {
+		refs, err = db.FindSemanticReferences(ctx, oldName, sym.File)
+	} else {
+		refs, err = db.FindSameFileCallers(ctx, oldName, sym.File)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("rename: finding references: %w", err)
 	}
@@ -170,6 +178,18 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 		}, nil
 	}
 
+	// Blast-radius gate: cross-file rename touching large swaths of the repo
+	// almost certainly indicates a common-name collision (e.g. renaming "init"
+	// matches thousands of unrelated identifiers). Refuse unless --force.
+	const (
+		crossFileFileCap = 50
+		crossFileEditCap = 200
+	)
+	if crossFile && !force && (len(edits) > crossFileFileCap || totalOccurrences > crossFileEditCap) {
+		return nil, fmt.Errorf("rename refused: --cross-file would edit %d files and %d occurrences (limits: %d files, %d occurrences). The name %q likely collides with unrelated identifiers. Re-run with --force to proceed, --dry-run to inspect, or narrow scope",
+			len(edits), totalOccurrences, crossFileFileCap, crossFileEditCap, oldName)
+	}
+
 	// Build result.
 	result := &output.RenameResult{
 		OldName:     oldName,
@@ -252,3 +272,4 @@ func expandToDocComment(file string, startByte uint32) uint32 {
 	}
 	return uint32(pos)
 }
+

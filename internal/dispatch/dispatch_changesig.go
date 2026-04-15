@@ -22,6 +22,8 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 	atIdx := flagInt(flags, "at", -1)
 	callarg := flagString(flags, "callarg", "")
 	dryRun := flagBool(flags, "dry_run", false)
+	crossFile := flagBool(flags, "cross_file", false)
+	force := flagBool(flags, "force", false)
 
 	if addParam == "" && removeIdx < 0 {
 		return nil, fmt.Errorf("changesig: --add or --remove is required")
@@ -109,7 +111,12 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 		return nil, fmt.Errorf("changesig: %w", err)
 	}
 
-	refs, err := db.FindSemanticReferences(ctx, sym.Name, sym.File)
+	var refs []index.SymbolInfo
+	if crossFile {
+		refs, err = db.FindSemanticReferences(ctx, sym.Name, sym.File)
+	} else {
+		refs, err = db.FindSameFileCallers(ctx, sym.Name, sym.File)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("changesig: finding references: %w", err)
 	}
@@ -173,6 +180,14 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 
 	// Sort edits by file for deterministic output.
 	sort.Slice(edits, func(i, j int) bool { return edits[i].file < edits[j].file })
+
+	// Blast-radius gate: cross-file changesig touching large swaths of the repo
+	// indicates a common-name collision. Refuse unless --force.
+	const crossFileFileCap = 50
+	if crossFile && !force && len(edits) > crossFileFileCap {
+		return nil, fmt.Errorf("changesig refused: --cross-file would edit %d files (limit: %d). The name %q likely collides with unrelated identifiers. Re-run with --force to proceed, or narrow scope",
+			len(edits), crossFileFileCap, sym.Name)
+	}
 
 	// Build diffs.
 	totalFiles := 0

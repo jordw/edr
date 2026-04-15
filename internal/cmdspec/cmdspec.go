@@ -158,6 +158,8 @@ var Registry = []*Spec{
 			{Name: "new_name", Alias: "to", Type: FlagString, Default: "", Desc: "New name for the symbol (required)"},
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
 			{Name: "verify", Type: FlagBool, Default: false, Desc: "Run build verification after rename"},
+			{Name: "cross_file", Type: FlagBool, Default: false, Desc: "Rename across all files, not just the defining file"},
+			{Name: "force", Type: FlagBool, Default: false, Desc: "With --cross-file, proceed even if the name is ambiguous (defined by multiple symbols)"},
 		},
 	},
 	{
@@ -183,6 +185,8 @@ var Registry = []*Spec{
 			{Name: "remove", Type: FlagInt, Default: -1, Desc: "Position of parameter to remove (0-indexed)"},
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
 			{Name: "verify", Type: FlagBool, Default: false, Desc: "Run build verification after change"},
+			{Name: "cross_file", Type: FlagBool, Default: false, Desc: "Update call sites across all files, not just the defining file"},
+			{Name: "force", Type: FlagBool, Default: false, Desc: "With --cross-file, proceed even if the name is ambiguous (defined by multiple symbols)"},
 		},
 	},
 	// --- Internal commands (dispatch-only, no CLI surface) ---
