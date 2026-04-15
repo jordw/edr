@@ -758,7 +758,27 @@ func extractSymIdents(data []byte, syms []SymbolEntry) [][]string {
 		if int(s.EndByte) > len(data) || s.StartByte >= s.EndByte {
 			continue
 		}
-		idents[i] = tokenizeIdents(data[s.StartByte:s.EndByte])
+		all := tokenizeIdents(data[s.StartByte:s.EndByte])
+		// A symbol isn't a caller of itself. The declaration line
+		// (e.g. "func Hello() string {") contains the symbol's own
+		// name, which would otherwise produce a spurious self-edge in
+		// the ref graph — hiding real callers when the fallback path
+		// gates on "ref graph returned zero callers". Filter is
+		// case-insensitive because NameHash is case-insensitive;
+		// literal text like "hello" in a string would otherwise hash
+		// to the same bucket as the symbol name "Hello".
+		if s.Name != "" && len(all) > 0 {
+			nameLower := strings.ToLower(s.Name)
+			n := 0
+			for _, id := range all {
+				if !strings.EqualFold(id, nameLower) {
+					all[n] = id
+					n++
+				}
+			}
+			all = all[:n]
+		}
+		idents[i] = all
 	}
 	return idents
 }
