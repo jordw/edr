@@ -383,7 +383,7 @@ edr <span class="flag">-e</span> f.go <span class="flag">--content</span> "..." 
 <!-- How it works -->
 <section>
   <h2>How it works</h2>
-  <p>edr uses pure-Go regex-based symbol extraction to give agents capabilities they don't have with raw file tools. No CGO dependency, single binary.</p>
+  <p>edr uses pure-Go, lexer-based symbol extraction to give agents capabilities they don't have with raw file tools. No CGO dependency, single binary.</p>
   <p><strong>Symbol-level reads and edits.</strong> Focus on one function instead of a 400-line file. Get a class API with <code>--signatures</code>. Scope edits to a symbol with <code>--in Symbol</code>. Use <code>--verify</code> for build feedback. The agent sees what it needs and makes better decisions.</p>
   <p><strong>Structural navigation.</strong> <code>orient</code> shows what's in a directory in terms of symbols and files. <code>focus SymbolName</code> resolves ambiguous names with ranked matching. Budget controls keep output sized for agent context windows.</p>
   <p><strong>Sessions.</strong> edr tracks what the agent has seen and returns only what changed. Repeated reads produce zero output.</p>
@@ -394,7 +394,7 @@ edr <span class="flag">-e</span> f.go <span class="flag">--content</span> "..." 
 <section>
   <h2>Limitations</h2>
   <ul style="list-style: none; padding: 0;">
-    <li style="margin-bottom: 0.75rem;"><strong>Regex-based, not LSP.</strong> Fast, no build step, works on broken code, zero config. Tradeoff: no type information, no AST. Symbol extraction uses regex patterns tuned per language.</li>
+    <li style="margin-bottom: 0.75rem;"><strong>Lexer-based, not LSP.</strong> Fast, no build step, works on broken code, zero config. Tradeoff: no type information, no full AST. Symbol extraction uses language-specific lexers.</li>
     <li style="margin-bottom: 0.75rem;"><strong>macOS and Linux only.</strong> Windows is not planned.</li>
     <li><strong>Optional index.</strong> Works without an index (files parsed on demand). <code>edr index</code> builds a trigram + symbol index for faster operations on large repos.</li>
   </ul>

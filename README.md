@@ -133,7 +133,7 @@ Without edr, agents grep to find code, read line ranges, guess what's relevant, 
 
 Under the hood:
 
-- **Symbol extraction** is pure-Go regex per language — no CGO, no build step, works on broken code.
+- **Symbol extraction** is pure-Go, lexer-based per language — no CGO, no build step, works on broken code.
 - **Sessions** track what the agent has already seen and return only what changed on re-reads.
 - **Indexing** is optional. `edr index` builds a trigram + symbol index; on the Linux kernel (93K files), indexed operations complete in 0.02–0.5s. Without an index, files are parsed on demand.
 - **Edits** use span-based transactions with a TOCTOU hash guard, optional build verification, and auto-checkpointed undo.
