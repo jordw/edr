@@ -477,11 +477,28 @@ func (p *cppParser) parseEnum() {
 func (p *cppParser) parseTypedef() {
 	startLine := p.s.Line
 	var lastName string
+	// Tracks an inner "struct/union/enum NAME" seen before the body so
+	// "typedef struct task_queue { ... } task_queue_t;" emits both the
+	// inner struct (task_queue) and the typedef alias (task_queue_t).
+	var innerName, innerKind string
+	var innerStart int
+	emitInner := func(endLine int) {
+		if innerName == "" {
+			return
+		}
+		p.result.Symbols = append(p.result.Symbols, CppSymbol{
+			Type: innerKind, Name: innerName, StartLine: innerStart, EndLine: endLine, Parent: p.stack.NearestSym(),
+		})
+		innerName = ""
+	}
 	for !p.s.EOF() {
 		p.skipWSAndComments()
 		c := p.s.Peek()
 		if c == ';' {
 			p.s.Pos++
+			// Forward decl: "typedef struct foo foo_t;" has no body, so
+			// emit the inner struct as a 1-line entry if it wasn't already.
+			emitInner(p.s.Line)
 			if lastName != "" {
 				p.result.Symbols = append(p.result.Symbols, CppSymbol{
 					Type: "type", Name: lastName, StartLine: startLine, EndLine: p.s.Line, Parent: p.stack.NearestSym(),
@@ -491,6 +508,7 @@ func (p *cppParser) parseTypedef() {
 		}
 		if c == '{' {
 			p.s.SkipBalanced('{', '}', cppStringScanner)
+			emitInner(p.s.Line)
 			continue
 		}
 		if c == '(' {
@@ -502,7 +520,20 @@ func (p *cppParser) parseTypedef() {
 			continue
 		}
 		if lexkit.DefaultIdentStart[c] {
-			lastName = string(p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont))
+			word := string(p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont))
+			if (word == "struct" || word == "class" || word == "union" || word == "enum") && innerName == "" {
+				p.skipWSAndComments()
+				if !p.s.EOF() && lexkit.DefaultIdentStart[p.s.Peek()] {
+					innerStart = p.s.Line
+					innerName = string(p.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont))
+					innerKind = word
+					if word == "union" {
+						innerKind = "struct"
+					}
+				}
+				continue
+			}
+			lastName = word
 			continue
 		}
 		p.s.Pos++
