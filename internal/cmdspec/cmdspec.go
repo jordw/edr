@@ -252,6 +252,12 @@ var Registry = []*Spec{
 		Flags:    []FlagSpec{},
 	},
 	{
+		Name: "txn", Desc: "Multi-op transactions with preview and atomic rollback.",
+		Category: CatGlobalMutate, MinArgs: 0, MaxArgs: 1,
+		Internal: true,
+		Flags:    []FlagSpec{},
+	},
+	{
 		Name: "setup", Desc: "Install edr into a project and inject agent instructions.",
 		Category: CatMeta, MinArgs: 0, MaxArgs: 1,
 		Flags: []FlagSpec{

@@ -18,6 +18,7 @@ Requires the `edr` binary on $PATH.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import shutil
@@ -28,12 +29,30 @@ _ORIENT_LINE = re.compile(r"^([^:]+):(\d+)-(\d+):\s+(\S+)\s+(\S+)(?:\s+\((\d+)\s
 
 
 class EdrError(Exception):
-    """Raised when an edr invocation returns a non-zero exit or an error code."""
+    """Raised when an edr invocation returns a non-zero exit or an error code.
 
-    def __init__(self, message: str, code: str | None = None, stderr: str = ""):
+    Attributes beyond ``message`` and ``code``:
+      operation  – the edr command that failed (e.g. "edit", "rename").
+      inputs     – the args/flags passed to that command.
+      suggestion – remediation hint from the CLI, if any.
+      stderr     – raw stderr from the subprocess.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        code: str | None = None,
+        stderr: str = "",
+        operation: str = "",
+        inputs: list[str] | None = None,
+        suggestion: str = "",
+    ):
         super().__init__(message)
         self.code = code
         self.stderr = stderr
+        self.operation = operation
+        self.inputs = inputs or []
+        self.suggestion = suggestion
 
 
 class AmbiguousError(EdrError):
@@ -145,7 +164,14 @@ def _run(args: list[str], *, root: str | None = None, stdin: str | None = None) 
         raise EdrError(f"failed to parse edr JSON: {e}\noutput: {out[:500]}") from e
 
     if isinstance(header, dict) and "error" in header:
-        raise EdrError(header["error"], code=header.get("ec"), stderr=proc.stderr)
+        raise EdrError(
+            header["error"],
+            code=header.get("ec"),
+            stderr=proc.stderr,
+            operation=header.get("type", args[0] if args else ""),
+            inputs=args,
+            suggestion=header.get("hint", ""),
+        )
 
     if proc.returncode != 0:
         raise EdrError(
@@ -436,28 +462,73 @@ def status(*, root: str | None = None) -> dict:
     return _run(["status"], root=root)
 
 
+@dataclass
+class VerifyResult:
+    """Structured build/test verification result."""
+
+    status: str  # "pass", "fail", "skipped"
+    command: str = ""
+    output: str = ""
+    errors: list[dict] = field(default_factory=list)
+    elapsed_ms: int = 0
+
+    @property
+    def ok(self) -> bool:
+        return self.status in ("pass", "passed")
+
+
+def verify(
+    *,
+    command: str | None = None,
+    test: bool = False,
+    timeout: int | None = None,
+    root: str | None = None,
+) -> VerifyResult:
+    """Run build or test verification and return structured results.
+
+    Auto-detects the project type (Go, Node, Rust, Make) unless ``command``
+    is provided.  Set ``test=True`` for test-level verification.
+    """
+    args = ["verify"]
+    if command:
+        args += ["--command", command]
+    if test:
+        args.append("--test")
+    if timeout is not None:
+        args += ["--timeout", str(timeout)]
+    result = _run(args, root=root)
+    return VerifyResult(
+        status=result.get("status", "fail"),
+        command=result.get("command", ""),
+        output=result.get("output", result.get("_body", "")),
+        errors=result.get("errors", []),
+        elapsed_ms=result.get("elapsed_ms", 0),
+    )
+
+
 # ---------------------------------------------------------------- callers
 
 
 _CALLER_LINE = re.compile(r"^(\S+)\s{2,}(.*)$")
-_CALLER_NAME = re.compile(r"\b(?:func|def|fn|function|method)\s+\(?[^)]*\)?\s*(\w+)|(\w+)\s*\(")
+# Match decl keyword + optional receiver parens, then the name.
+_CALLER_NAME = re.compile(
+    r"\b(?:func|def|fn|function|method)\s+"
+    r"(?:\([^)]*\)\s*)?"  # optional Go-style receiver
+    r"(\w+)"
+    r"|(\w+)\s*\("  # bare "name(" — trailing fallback
+)
 
 
-def callers(symbol: Symbol, *, root: str | None = None) -> list[Symbol]:
-    """Find symbols that reference the given symbol. Uses the focus --expand callers path.
+def _parse_ref_section(result: dict, header_key: str, section: str) -> list[Symbol]:
+    """Parse focus --expand output for callers/deps-style sections.
 
-    Returns a de-duplicated list of call-site Symbols. Each result has ``file``
-    and ``signature`` populated; ``name`` is extracted from the signature when
-    possible.
+    Tries the structured header field first (``header_key``); falls back to the
+    plain body section delimited by ``--- <section> ---`` with lines of the form
+    ``<file>  <signature>``.
     """
-    target = f"{symbol.file}:{symbol.name}"
-    args = ["focus", target, "--expand", "callers"]
-    result = _run(args, root=root)
-
     out: list[Symbol] = []
     seen: set[tuple[str, str]] = set()
-    # Preferred: structured callers in header (if the CLI ever emits them).
-    for c in result.get("callers") or []:
+    for c in result.get(header_key) or []:
         if isinstance(c, dict):
             sym = _symbol_from_dict(c)
             key = (sym.file, sym.signature or sym.name)
@@ -468,11 +539,15 @@ def callers(symbol: Symbol, *, root: str | None = None) -> list[Symbol]:
     if out:
         return out
 
-    # Fallback: parse plain body lines "<file>  <signature>".
     body = result.get("_body", "")
+    in_section = False
+    marker = f"--- {section}"
     for line in body.split("\n"):
         line = line.rstrip()
-        if not line or line.startswith("---"):
+        if line.startswith("--- "):
+            in_section = line.startswith(marker)
+            continue
+        if not in_section or not line:
             continue
         m = _CALLER_LINE.match(line)
         if not m:
@@ -488,3 +563,107 @@ def callers(symbol: Symbol, *, root: str | None = None) -> list[Symbol]:
             name = nm.group(1) or nm.group(2) or ""
         out.append(Symbol(file=file, name=name, type="", start_line=0, end_line=0, signature=sig))
     return out
+
+
+def callers(symbol: Symbol, *, root: str | None = None) -> list[Symbol]:
+    """Find symbols that reference the given symbol (who calls it).
+
+    Returns a de-duplicated list of call-site Symbols with ``file`` and
+    ``signature`` populated; ``name`` is extracted from the signature.
+    """
+    target = f"{symbol.file}:{symbol.name}"
+    result = _run(["focus", target, "--expand", "callers"], root=root)
+    return _parse_ref_section(result, "callers", "callers")
+
+
+def callees(symbol: Symbol, *, root: str | None = None) -> list[Symbol]:
+    """Find symbols that the given symbol references (what it calls).
+
+    Uses the ref-graph via ``focus --expand deps``. Returns a de-duplicated
+    list of callee Symbols with ``file`` and ``signature`` populated.
+    """
+    target = f"{symbol.file}:{symbol.name}"
+    result = _run(["focus", target, "--expand", "deps"], root=root)
+    return _parse_ref_section(result, "deps", "deps")
+
+
+def usages(symbol: Symbol, *, root: str | None = None) -> list[str]:
+    """Find files that mention the given symbol's name (non-call refs included).
+
+    File-granularity on purpose: uses the reliable fulltext index rather than
+    symbol-body matching, which trades precision (no line numbers) for recall
+    (catches struct literals, type references, and any other identifier use).
+    The symbol's own defining file is filtered out.
+    """
+    hits = files(symbol.name, root=root)
+    return [f for f in hits if f != symbol.file]
+
+
+# ---------------------------------------------------------------- transactions
+
+
+class Transaction:
+    """Handle for an open transaction. Use via ``edr.transaction()``.
+
+    Ops called while the transaction is open (edit, rename, changesig, etc.)
+    apply normally to disk, but their pre-mutation file content is staged into
+    a checkpoint. ``diff`` shows the consolidated change; ``commit()`` releases
+    the anchor; ``rollback()`` restores every touched file.
+
+    Unhandled exceptions inside the ``with`` block trigger auto-rollback.
+    Normal exit auto-commits unless ``.commit()`` or ``.rollback()`` was
+    already called.
+    """
+
+    def __init__(self, cp_id: str, root: str | None):
+        self.id = cp_id
+        self._root = root
+        self._settled = False
+
+    @property
+    def diff(self) -> str:
+        """Unified diff from begin to current disk state."""
+        if self._settled:
+            raise EdrError("transaction already settled", code="txn_settled")
+        result = _run(["txn", "diff"], root=self._root)
+        return result.get("diff", "") or result.get("_body", "")
+
+    def commit(self) -> None:
+        if self._settled:
+            return
+        _run(["txn", "commit"], root=self._root)
+        self._settled = True
+
+    def rollback(self) -> None:
+        if self._settled:
+            return
+        _run(["txn", "rollback"], root=self._root)
+        self._settled = True
+
+
+@contextlib.contextmanager
+def transaction(*, root: str | None = None):
+    """Open a transaction. Yields a :class:`Transaction`.
+
+    Example::
+
+        with edr.transaction() as tx:
+            edr.edit("a.go", old="X", new="Y")
+            edr.edit("b.go", old="X", new="Y")
+            print(tx.diff)       # consolidated preview
+            if not ok(tx.diff):
+                tx.rollback()    # restore both files
+            # else: auto-commit on normal exit
+    """
+    result = _run(["txn", "begin"], root=root)
+    cp_id = result.get("id", "")
+    if not cp_id:
+        raise EdrError("txn begin did not return an id", code="txn_begin_failed")
+    tx = Transaction(cp_id, root)
+    try:
+        yield tx
+    except BaseException:
+        tx.rollback()
+        raise
+    else:
+        tx.commit()

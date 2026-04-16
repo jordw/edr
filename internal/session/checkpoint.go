@@ -293,6 +293,63 @@ func LatestAutoCheckpoint(sessDir string) string {
 	return ""
 }
 
+// LoadCheckpoint exposes a checkpoint by ID for diff rendering.
+func LoadCheckpoint(sessDir, cpID string) (*Checkpoint, error) {
+	return loadCheckpoint(sessDir, cpID)
+}
+
+// AppendCurrentFiles snapshots the current on-disk content of the given files
+// into an existing checkpoint. Files already present in the checkpoint are
+// untouched, preserving the earliest-seen pre-mutation state. Missing files
+// are recorded with nil content (new-file markers).
+func AppendCurrentFiles(sessDir, cpID, repoRoot string, files []string) error {
+	if len(files) == 0 {
+		return nil
+	}
+	cp, err := loadCheckpoint(sessDir, cpID)
+	if err != nil {
+		return err
+	}
+	existing := make(map[string]bool, len(cp.Files))
+	for _, f := range cp.Files {
+		existing[f.Path] = true
+	}
+	changed := false
+	for _, rel := range files {
+		if existing[rel] {
+			continue
+		}
+		abs := filepath.Join(repoRoot, rel)
+		content, err := os.ReadFile(abs)
+		if err != nil {
+			cp.Files = append(cp.Files, FileSnapshot{Path: rel, Content: nil})
+		} else {
+			cp.Files = append(cp.Files, FileSnapshot{Path: rel, Content: content})
+		}
+		existing[rel] = true
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return saveCheckpoint(sessDir, cp)
+}
+
+// CheckpointForOp records pre-mutation state for a mutating op. If a
+// transaction is active (s.ActiveTxn is non-empty) it appends the target
+// files' current content to the transaction checkpoint. Otherwise it creates
+// a rolling auto-checkpoint.
+func (s *Session) CheckpointForOp(sessDir, repoRoot, label string, dirtyFiles []string) error {
+	s.mu.Lock()
+	active := s.ActiveTxn
+	s.mu.Unlock()
+	if active != "" {
+		return AppendCurrentFiles(sessDir, active, repoRoot, dirtyFiles)
+	}
+	_, err := s.CreateAutoCheckpoint(sessDir, repoRoot, label, dirtyFiles)
+	return err
+}
+
 // DropCheckpoint removes a checkpoint file.
 func DropCheckpoint(sessDir, cpID string) error {
 	path := filepath.Join(sessDir, cpID+".json")

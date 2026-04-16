@@ -740,7 +740,7 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 				}
 			}
 			sessDir := filepath.Join(db.EdrDir(), "sessions")
-			if _, err := sess.CreateAutoCheckpoint(sessDir, db.Root(), "batch", dirtyFiles); err != nil {
+			if err := sess.CheckpointForOp(sessDir, db.Root(), "batch", dirtyFiles); err != nil {
 				fmt.Fprintf(os.Stderr, "edr: checkpoint failed: %v\n", err)
 			}
 		}

@@ -97,6 +97,11 @@ type Session struct {
 	// external modification detection via the warnings package.
 	FileMtimes map[string]FileMtimeEntry `json:"file_mtimes,omitempty"`
 
+	// ActiveTxn, when non-empty, names a cp_txn_* checkpoint that is the
+	// rollback anchor for an open transaction. While set, pre-op checkpointing
+	// appends to this checkpoint instead of creating rolling auto-checkpoints.
+	ActiveTxn string `json:"active_txn,omitempty"`
+
 	// repoRoot is the absolute path to the repo root, set at load time.
 	// Used for stat fallback when mtime is not in the result map.
 	repoRoot string
@@ -504,7 +509,17 @@ func parentPID(pid int) int {
 func resolveByPPID() string {
 	root, err := findRepoRoot()
 	if err != nil {
-		return ""
+		// No .git — fall back to cwd. The rest of edr tolerates non-git dirs;
+		// session resolution should too, otherwise state silently vanishes
+		// between subprocess calls.
+		cwd, werr := os.Getwd()
+		if werr != nil {
+			return ""
+		}
+		if resolved, rerr := filepath.EvalSymlinks(cwd); rerr == nil {
+			cwd = resolved
+		}
+		root = cwd
 	}
 	edrDir := homeEdrDir(root)
 	sessDir := filepath.Join(edrDir, "sessions")

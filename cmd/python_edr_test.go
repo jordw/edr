@@ -172,6 +172,19 @@ check(len(cs) >= 1, f"callers() returned nothing: {cs}")
 check(all(c.file for c in cs), f"callers() missing files: {cs}")
 check(any(c.signature for c in cs), f"callers() missing signatures: {cs}")
 
+# --- callees() returns what main() calls ---
+m = edr.focus("main.go:main")
+cs = edr.callees(m)
+# main() calls Greet and Greet2; ref-graph may produce both or a superset.
+names = {c.name for c in cs if c.name}
+check("Greet" in names or "Greet2" in names, f"callees() missed Greet/Greet2: {names}")
+
+# --- usages() returns files referencing a symbol's name, excluding its own file ---
+g = edr.focus("main.go:Greet")
+us = edr.usages(g)
+check(isinstance(us, list), f"usages() should return list, got {type(us)}")
+check("main.go" not in us, f"usages() should exclude defining file: {us}")
+
 # --- changesig() dry-run carries diff ---
 res = edr.changesig("main.go:Greet", add="x int", at=1, callarg="0", dry_run=True)
 check(res.status == "dry_run", f"changesig status={res.status}")
@@ -185,6 +198,29 @@ check(res.diff, f"extract diff missing: {res!r}")
 # --- status() returns a dict ---
 st = edr.status()
 check(isinstance(st, dict), f"status={type(st)}")
+
+# --- transaction: rollback restores all files across multiple edits ---
+with open("main.go") as f: pre = f.read()
+try:
+    with edr.transaction() as tx:
+        edr.edit("main.go", old='"hi "', new='"X "')
+        edr.edit("main.go", old='"hello "', new='"Y "')
+        with open("main.go") as f:
+            mid = f.read()
+        check('"X "' in mid and '"Y "' in mid, "edits should apply inside txn")
+        d = tx.diff
+        check("--- a/main.go" in d and "+++ b/main.go" in d, f"txn diff missing: {d!r}")
+        raise RuntimeError("force rollback")
+except RuntimeError:
+    pass
+with open("main.go") as f: post = f.read()
+check(post == pre, f"rollback failed to restore file")
+
+# --- transaction: commit path persists ---
+with edr.transaction() as tx:
+    edr.edit("main.go", old='"hi "', new='"howdy "')
+with open("main.go") as f: after = f.read()
+check('"howdy "' in after, "commit should persist")
 
 print("ALL_OK")
 `

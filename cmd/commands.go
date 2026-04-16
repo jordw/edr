@@ -32,6 +32,7 @@ func init() {
 	rootCmd.AddCommand(setupCmd)
 	rootCmd.AddCommand(indexCmd)
 	rootCmd.AddCommand(filesCmd)
+	rootCmd.AddCommand(verifyCmd)
 }
 
 // dispatchCmd is the common pattern: open DB, dispatch, wrap in envelope, print.
@@ -82,7 +83,7 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 		if len(args) > 0 {
 			label = cmdName + "_" + args[0]
 		}
-		if _, err := sess.CreateAutoCheckpoint(filepath.Join(edrDir, "sessions"), root, label, dirtyFiles); err != nil {
+		if err := sess.CheckpointForOp(filepath.Join(edrDir, "sessions"), root, label, dirtyFiles); err != nil {
 			fmt.Fprintf(os.Stderr, "edr: checkpoint failed: %v\n", err)
 		}
 	}
@@ -236,7 +237,7 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 		if len(args) > 0 {
 			label = cmdName + "_" + args[0]
 		}
-		if _, err := sess.CreateAutoCheckpoint(filepath.Join(edrDir, "sessions"), root, label, dirtyFiles); err != nil {
+		if err := sess.CheckpointForOp(filepath.Join(edrDir, "sessions"), root, label, dirtyFiles); err != nil {
 			// Log checkpoint failure but don't block the edit
 			fmt.Fprintf(os.Stderr, "edr: checkpoint failed: %v\n", err)
 		}
@@ -513,6 +514,19 @@ var statusCmd = &cobra.Command{
 }
 
 func init() { cmdspec.RegisterFlags(statusCmd.Flags(), "status") }
+
+// verifyCmd runs standalone build/test verification.
+var verifyCmd = &cobra.Command{
+	Use:    "verify",
+	Short:  "Run build or test verification",
+	Hidden: true,
+	Args:   cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return dispatchCmd(cmd, "verify", args)
+	},
+}
+
+func init() { cmdspec.RegisterFlags(verifyCmd.Flags(), "verify") }
 
 // sessionCmd is a hidden backward-compatibility command.
 // "edr session new" is now "edr reset --session".
@@ -971,7 +985,13 @@ func recordOp(sess *session.Session, cmdName string, args []string, flags map[st
 // original checkpoint.
 func patchCheckpointWithOldContents(edrDir, root string, oldContents map[string][]byte) {
 	sessDir := filepath.Join(edrDir, "sessions")
-	cpID := session.LatestAutoCheckpoint(sessDir)
+	cpID := ""
+	if sess, _ := session.LoadSession(edrDir, root); sess != nil && sess.ActiveTxn != "" {
+		cpID = sess.ActiveTxn
+	}
+	if cpID == "" {
+		cpID = session.LatestAutoCheckpoint(sessDir)
+	}
 	if cpID == "" {
 		return
 	}
