@@ -67,6 +67,9 @@ func writeCounts(b *strings.Builder, l *Ledger) {
 	}
 	for _, t := range TierOrder {
 		n := l.Counts[t]
+		if n == 0 {
+			continue
+		}
 		pad := strings.Repeat(" ", widest-len(string(t))+1)
 		fmt.Fprintf(b, "%s%s%5d", t, pad, n)
 		if l.Render != nil && l.Render.Truncated[t] > 0 {
