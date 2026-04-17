@@ -96,6 +96,8 @@ func printPlain(e *Envelope) {
 			plainIndex(w, op)
 		case "files":
 			plainFiles(w, op)
+		case "refs-to":
+			plainRefsTo(w, op)
 		case "bench":
 			plainBench(w, op)
 		case "assert":
@@ -851,6 +853,52 @@ func plainUndo(w *os.File, op Op) {
 		fmt.Fprintln(w, "\nnew files removed:")
 		for _, f := range removed {
 			fmt.Fprintf(w, "  %s\n", f)
+		}
+	}
+}
+
+func plainRefsTo(w *os.File, op Op) {
+	h := map[string]any{}
+	hStr(h, "file", op, "file")
+	if v := anyInt(op["count"]); v >= 0 {
+		h["count"] = v
+	}
+	if decl, ok := op["decl"].(map[string]any); ok {
+		d := map[string]any{}
+		if s, ok := decl["name"].(string); ok {
+			d["name"] = s
+		}
+		if s, ok := decl["kind"].(string); ok {
+			d["kind"] = s
+		}
+		if n := anyInt(decl["line"]); n > 0 {
+			d["line"] = n
+		}
+		h["decl"] = d
+	}
+	hTrunc(h, op)
+	writeHeader(w, h)
+	// Body: one ref per line, in "line:col  (reason)" form.
+	// Result may be []map[string]any (fast path) or []any (JSON round-trip).
+	var refs []map[string]any
+	switch v := op["refs"].(type) {
+	case []map[string]any:
+		refs = v
+	case []any:
+		for _, r := range v {
+			if m, ok := r.(map[string]any); ok {
+				refs = append(refs, m)
+			}
+		}
+	}
+	for _, m := range refs {
+		line := anyInt(m["line"])
+		col := anyInt(m["col"])
+		reason, _ := m["reason"].(string)
+		if reason == "" || reason == "direct_scope" {
+			fmt.Fprintf(w, "%d:%d\n", line, col)
+		} else {
+			fmt.Fprintf(w, "%d:%d  (%s)\n", line, col, reason)
 		}
 	}
 }

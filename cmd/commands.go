@@ -639,6 +639,18 @@ var filesCmd = &cobra.Command{
 
 func init() { cmdspec.RegisterFlags(filesCmd.Flags(), "files") }
 
+var refsToCmd = &cobra.Command{
+	Use:   "refs-to <file:Symbol>",
+	Short: ToolDesc["refs-to"],
+	Args:  cobra.ExactArgs(1),
+	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "refs-to", args) },
+}
+
+func init() {
+	rootCmd.AddCommand(refsToCmd)
+	cmdspec.RegisterFlags(refsToCmd.Flags(), "refs-to")
+}
+
 var benchCmd = &cobra.Command{
 	Use:   "bench",
 	Short: ToolDesc["bench"],

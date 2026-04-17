@@ -282,6 +282,13 @@ var Registry = []*Spec{
 		Flags: filesFlags,
 	},
 	{
+		Name: "refs-to", Desc: "List references to a symbol (scope-aware, single-file for v1).",
+		Category: CatRead, MinArgs: 1, MaxArgs: 1, FileScoped: true,
+		Flags: []FlagSpec{
+			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max refs to return (0 = unlimited)"},
+		},
+	},
+	{
 		Name: "bench", Desc: "Benchmark common operations on the current repo.",
 		Category: CatMeta, MinArgs: 0, MaxArgs: 0,
 		Flags: []FlagSpec{},

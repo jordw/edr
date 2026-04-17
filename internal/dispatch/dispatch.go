@@ -124,6 +124,8 @@ func Dispatch(ctx context.Context, db index.SymbolStore, cmd string, args []stri
 		result, err = runIndex(ctx, db, root, args, flags)
 	case "files":
 		result, err = runFiles(ctx, db, root, args, flags)
+	case "refs-to":
+		result, err = runRefsTo(ctx, db, root, args, flags)
 	case "bench":
 		result, err = runBench(ctx, db, root, args, flags)
 	default:

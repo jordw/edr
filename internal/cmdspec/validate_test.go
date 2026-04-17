@@ -15,6 +15,7 @@ func TestPublicCommandSurface(t *testing.T) {
 		"status": true, "undo": true, "setup": true,
 		"index": true,
 		"files": true,
+		"refs-to": true,
 		"bench": true,
 	}
 

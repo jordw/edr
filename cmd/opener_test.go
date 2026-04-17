@@ -33,6 +33,7 @@ func TestOpenerAlignment(t *testing.T) {
 		{"changesigCmd", "changesig"},
 		{"indexCmd", "index"},
 		{"filesCmd", "files"},
+		{"refsToCmd", "refs-to"},
 	}
 
 	// Commands that must use dispatchCmdWithStdin (also calls openDBStrict internally)
