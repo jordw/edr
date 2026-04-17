@@ -29,6 +29,7 @@ package ts
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"strings"
 
 	"github.com/jordw/edr/internal/lexkit"
 	"github.com/jordw/edr/internal/scope"
@@ -43,6 +44,11 @@ func Parse(file string, src []byte) *scope.Result {
 		file: file,
 		res:  &scope.Result{File: file},
 		s:    lexkit.New(src),
+	}
+	// Enable JSX parsing for .jsx/.tsx. Plain .ts/.js never has JSX;
+	// in those, `<` means generic param or less-than, never element.
+	if strings.HasSuffix(file, ".tsx") || strings.HasSuffix(file, ".jsx") {
+		b.jsxEnabled = true
 	}
 	b.openScope(scope.ScopeFile, 0)
 	b.regexOK = true
@@ -90,6 +96,11 @@ type builder struct {
 	// prevByte tracks the last non-whitespace byte, used for property-
 	// access detection ('x.y' — y is a property, not a scope ref).
 	prevByte byte
+
+	// jsxEnabled is true for .tsx/.jsx files: '<' in expression position
+	// may start a JSX element. False for plain .ts/.js where '<' is
+	// always generic-param or less-than.
+	jsxEnabled bool
 
 	// paramListPending is set after a function-like keyword + name; the
 	// next '(' begins a param list whose identifiers are param decls.
@@ -227,6 +238,10 @@ func (b *builder) run() {
 			b.varDeclKind = ""
 			if b.paramListPending {
 				b.paramListPending = false
+				// Seeing '(' confirms we're in a param list, not a generic
+				// decl. The '<' for generics comes before '('; if we got
+				// here without it, there's no generic decl — clear the flag.
+				b.genericParamsExpected = false
 				b.inParamList = true
 				b.paramDepth = 1
 				b.paramSectionNeedsName = true
@@ -308,8 +323,7 @@ func (b *builder) run() {
 			b.prevByte = '.'
 		case c == '<':
 			// Generic type-parameter list after a function/class/interface/
-			// type/method decl name. Otherwise a less-than operator or a
-			// type-position angle bracket we don't decode here.
+			// type/method decl name.
 			if b.genericParamsExpected {
 				b.genericParamsExpected = false
 				b.inGenericParams = true
@@ -322,7 +336,20 @@ func (b *builder) run() {
 			}
 			if b.inGenericParams {
 				b.genericDepth++
+				b.s.Pos++
+				b.regexOK = true
+				b.prevByte = '<'
+				continue
 			}
+			// JSX element start: in .tsx/.jsx files, '<' in expression
+			// position followed by a letter, '/', or '>' starts a JSX
+			// element. Consume the whole element (with embedded {...}
+			// recursively parsed as JS expressions).
+			if b.jsxEnabled && looksLikeJSXStart(b) {
+				b.handleJSXElement()
+				continue
+			}
+			// Otherwise: less-than or type-position angle (we don't decode).
 			b.s.Pos++
 			b.regexOK = true
 			b.prevByte = '<'
@@ -724,6 +751,12 @@ func (b *builder) handleOpenBrace() {
 	if b.pendingScope != nil {
 		kind = *b.pendingScope
 		b.pendingScope = nil
+		// Opening a named body (function/class/interface/namespace) means
+		// we're past the decl-name-to-'<' window. Clear genericParamsExpected
+		// ONLY in that case — generic constraints like `<T extends { k }>`
+		// also contain '{' but those are type-position, and we haven't
+		// consumed the '<' yet; clearing there would break them.
+		b.genericParamsExpected = false
 	}
 	b.openScope(kind, uint32(b.s.Pos-1))
 	// Flush pending params into the newly-opened scope. Value params
@@ -1212,6 +1245,240 @@ func skipTemplateExpr(s *lexkit.Scanner) {
 		default:
 			s.Pos++
 		}
+	}
+}
+
+// looksLikeJSXStart reports whether the '<' we're currently sitting at
+// (not yet consumed) plausibly starts a JSX element, given:
+//   1. the character immediately after '<' is a letter, '/', or '>'
+//   2. the prevByte context is one where an expression is expected
+// Called only when jsxEnabled and NOT inGenericParams/expected.
+func looksLikeJSXStart(b *builder) bool {
+	next := b.s.PeekAt(1)
+	// Must be ident-start, '/', or '>' right after '<'.
+	if !(identStart[next] || next == '/' || next == '>') {
+		return false
+	}
+	// And the preceding context must be expression-position.
+	switch b.prevByte {
+	case '=', '(', '[', '{', ',', ';', ':', '?', '!', '|', '&',
+		'~', '+', '-', '*', '/', '^', '%', '>', 0:
+		return true
+	case 'k': // previous keyword (return, yield, throw, etc.)
+		return true
+	}
+	// Statement boundary with no prev byte counts too.
+	return b.stmtStart
+}
+
+// handleJSXElement consumes a full JSX element (or fragment) starting
+// at '<'. Emits component-name refs for capitalized tags. Recurses on
+// nested elements and calls back into the main token handling inside
+// '{...}' embedded expressions so scope resolution still applies there.
+func (b *builder) handleJSXElement() {
+	b.s.Pos++ // consume '<'
+	// Fragment: <> ... </>
+	if b.s.Peek() == '>' {
+		b.s.Pos++
+		b.scanJSXChildren()
+		b.prevByte = '>'
+		b.regexOK = false
+		return
+	}
+	// Closing tag: </Name> — not a start. Consume to matching '>'.
+	if b.s.Peek() == '/' {
+		for !b.s.EOF() && b.s.Peek() != '>' {
+			b.s.Pos++
+		}
+		if !b.s.EOF() {
+			b.s.Pos++
+		}
+		b.prevByte = '>'
+		b.regexOK = false
+		return
+	}
+	// Opening tag name (possibly dotted: <Foo.Bar>).
+	if identStart[b.s.Peek()] {
+		startByte := uint32(b.s.Pos)
+		word := b.s.ScanIdentTable(&identStart, &identCont)
+		endByte := uint32(b.s.Pos)
+		// Capitalized tag = component reference.
+		if len(word) > 0 {
+			c0 := word[0]
+			if c0 >= 'A' && c0 <= 'Z' {
+				b.emitRef(string(word), mkSpan(startByte, endByte))
+			}
+		}
+		// Skip dotted members (Foo.Bar.Baz) — these are property accesses.
+		for !b.s.EOF() && b.s.Peek() == '.' {
+			b.s.Pos++
+			b.s.ScanIdentTable(&identStart, &identCont)
+		}
+	}
+	// Attributes.
+	b.scanJSXAttributes()
+	// Self-close or open?
+	if b.s.Peek() == '/' && b.s.PeekAt(1) == '>' {
+		b.s.Advance(2)
+		b.prevByte = '>'
+		b.regexOK = false
+		return
+	}
+	if b.s.Peek() == '>' {
+		b.s.Pos++
+		b.scanJSXChildren()
+	}
+	b.prevByte = '>'
+	b.regexOK = false
+}
+
+// scanJSXAttributes consumes attributes up to '>' or '/>'.
+func (b *builder) scanJSXAttributes() {
+	for !b.s.EOF() {
+		b.skipJSXWS()
+		c := b.s.Peek()
+		if c == '>' || c == '/' || c == 0 {
+			return
+		}
+		// `{...spread}` attribute.
+		if c == '{' {
+			b.s.Pos++
+			b.scanJSXEmbedded()
+			continue
+		}
+		// Attribute name.
+		if identStart[c] {
+			b.s.ScanIdentTable(&identStart, &identCont)
+			// Skip namespaced (aria-label:foo, xlink:href) — colon or dash.
+			for !b.s.EOF() && (b.s.Peek() == ':' || b.s.Peek() == '-') {
+				b.s.Pos++
+				if identStart[b.s.Peek()] {
+					b.s.ScanIdentTable(&identStart, &identCont)
+				}
+			}
+			b.skipJSXWS()
+			if b.s.Peek() == '=' {
+				b.s.Pos++
+				b.skipJSXWS()
+				switch b.s.Peek() {
+				case '"':
+					b.s.ScanSimpleString('"')
+				case '\'':
+					b.s.ScanSimpleString('\'')
+				case '{':
+					b.s.Pos++
+					b.scanJSXEmbedded()
+				}
+			}
+			continue
+		}
+		b.s.Pos++ // unknown: advance one byte
+	}
+}
+
+// scanJSXChildren reads child content until the matching closing tag.
+func (b *builder) scanJSXChildren() {
+	for !b.s.EOF() {
+		c := b.s.Peek()
+		if c == '<' {
+			// </Name> closing tag or nested <Name>.
+			if b.s.PeekAt(1) == '/' {
+				// Consume through '>'.
+				for !b.s.EOF() && b.s.Peek() != '>' {
+					b.s.Pos++
+				}
+				if !b.s.EOF() {
+					b.s.Pos++
+				}
+				return
+			}
+			b.handleJSXElement()
+			continue
+		}
+		if c == '{' {
+			b.s.Pos++
+			b.scanJSXEmbedded()
+			continue
+		}
+		if c == '\n' {
+			b.s.Next()
+			continue
+		}
+		b.s.Pos++
+	}
+}
+
+// scanJSXEmbedded processes a '{...}' expression inside JSX. We've
+// already consumed the opening '{'. Idents inside get routed through
+// handleIdent so scope resolution still applies; nested JSX is also
+// handled (e.g. `{items.map(x => <Item key={x} />)}`).
+func (b *builder) scanJSXEmbedded() {
+	depth := 1
+	for !b.s.EOF() && depth > 0 {
+		c := b.s.Peek()
+		switch {
+		case c == '{':
+			depth++
+			b.s.Pos++
+		case c == '}':
+			depth--
+			b.s.Pos++
+			if depth == 0 {
+				return
+			}
+		case c == '<':
+			if b.jsxEnabled && looksLikeJSXStart(b) {
+				b.handleJSXElement()
+			} else {
+				b.s.Pos++
+				b.prevByte = '<'
+			}
+		case c == '"':
+			b.s.ScanSimpleString('"')
+			b.prevByte = '"'
+		case c == '\'':
+			b.s.ScanSimpleString('\'')
+			b.prevByte = '\''
+		case c == '`':
+			b.s.ScanInterpolatedString('`', "${", skipTemplateExpr)
+			b.prevByte = '`'
+		case c == '/' && b.s.PeekAt(1) == '/':
+			b.s.SkipLineComment()
+		case c == '/' && b.s.PeekAt(1) == '*':
+			b.s.Advance(2)
+			b.s.SkipBlockComment("*/")
+		case lexkit.IsDefaultIdentStart(c) || c == '$':
+			word := b.s.ScanIdentTable(&identStart, &identCont)
+			b.handleIdent(word)
+		case c == '\n':
+			b.s.Next()
+		case c == ' ' || c == '\t' || c == '\r':
+			b.s.Pos++
+		default:
+			b.s.Pos++
+			b.prevByte = c
+		}
+	}
+}
+
+// skipJSXWS skips whitespace and line/block comments inside JSX.
+func (b *builder) skipJSXWS() {
+	for !b.s.EOF() {
+		c := b.s.Peek()
+		if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+			b.s.Next()
+			continue
+		}
+		if c == '/' && b.s.PeekAt(1) == '/' {
+			b.s.SkipLineComment()
+			continue
+		}
+		if c == '/' && b.s.PeekAt(1) == '*' {
+			b.s.Advance(2)
+			b.s.SkipBlockComment("*/")
+			continue
+		}
+		return
 	}
 }
 

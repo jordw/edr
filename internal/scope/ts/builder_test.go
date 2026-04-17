@@ -698,6 +698,97 @@ func TestDogfood_InFileResolutionRate(t *testing.T) {
 	}
 }
 
+
+
+func TestParse_JSXBasicComponent(t *testing.T) {
+	src := []byte(`import { Button } from './btn'
+function App() {
+  return <Button label="hi" />
+}
+`)
+	r := Parse("a.tsx", src)
+	// Button should be an import decl + a ref from the JSX element.
+	if findDecl(r, "Button") == nil {
+		t.Fatalf("Button import decl missing; decls=%v", declNames(r))
+	}
+	refs := refsNamed(r, "Button")
+	if len(refs) == 0 {
+		t.Fatal("no refs to Button")
+	}
+	if refs[0].Binding.Kind != scope.BindResolved {
+		t.Errorf("Button ref did not resolve: %+v", refs[0].Binding)
+	}
+}
+
+func TestParse_JSXEmbeddedExpression(t *testing.T) {
+	src := []byte(`function App() {
+  const name = "hi"
+  return <Greeting text={name} count={42} />
+}
+`)
+	r := Parse("a.tsx", src)
+	// name should be a const decl; its ref inside {name} in JSX should resolve.
+	nameDecl := findDecl(r, "name")
+	if nameDecl == nil {
+		t.Fatal("const name missing")
+	}
+	nameRefs := refsNamed(r, "name")
+	if len(nameRefs) == 0 {
+		t.Fatal("no ref to name inside JSX embedded expression")
+	}
+	if nameRefs[0].Binding.Kind != scope.BindResolved || nameRefs[0].Binding.Decl != nameDecl.ID {
+		t.Errorf("name ref did not bind to const decl: %+v", nameRefs[0])
+	}
+}
+
+func TestParse_JSXDoesntBreakGenerics(t *testing.T) {
+	// In a .ts file (non-JSX), function<T>(x) must still work as generic.
+	src := []byte(`function id<T>(x: T): T { return x }`)
+	r := Parse("a.ts", src)
+	if findDecl(r, "T") == nil {
+		t.Fatal("generic T missing in .ts file (JSX should not be active)")
+	}
+}
+
+func TestParse_JSXNestedElements(t *testing.T) {
+	src := []byte(`function App() {
+  return (
+    <Container>
+      <Header title="hi" />
+      <Body>
+        {items.map((item) => <Item key={item.id} />)}
+      </Body>
+    </Container>
+  )
+}
+`)
+	r := Parse("a.tsx", src)
+	// Components should all be emitted as refs.
+	for _, name := range []string{"Container", "Header", "Body", "Item"} {
+		if len(refsNamed(r, name)) == 0 {
+			t.Errorf("no ref to component %q", name)
+		}
+	}
+	// Inside the embedded expression, items.map should work — items is a ref.
+	if len(refsNamed(r, "items")) == 0 {
+		t.Error("items inside JSX embedded expression missed")
+	}
+}
+
+func TestParse_JSXFragment(t *testing.T) {
+	src := []byte(`function App() {
+  return <>
+    <A />
+    <B />
+  </>
+}
+`)
+	r := Parse("a.tsx", src)
+	if len(refsNamed(r, "A")) == 0 || len(refsNamed(r, "B")) == 0 {
+		t.Error("fragment children not seen as component refs")
+	}
+}
+
 func declNames(r *scope.Result) []string {
 	out := make([]string, 0, len(r.Decls))
 	for _, d := range r.Decls {
