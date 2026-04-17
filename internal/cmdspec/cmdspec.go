@@ -160,6 +160,7 @@ var Registry = []*Spec{
 			{Name: "verify", Type: FlagBool, Default: false, Desc: "Run build verification after rename"},
 			{Name: "cross_file", Type: FlagBool, Default: false, Desc: "Rename across all files, not just the defining file"},
 			{Name: "force", Type: FlagBool, Default: false, Desc: "With --cross-file, proceed even if the name is ambiguous (defined by multiple symbols)"},
+			{Name: "comments", Type: FlagString, Default: "rewrite", Desc: "How to handle matches inside comments: 'rewrite' (default) or 'skip'"},
 		},
 	},
 	{

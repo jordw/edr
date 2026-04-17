@@ -140,6 +140,33 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 		refFileSpans[ref.File] = append(refFileSpans[ref.File], sigSpan{ref.StartByte, ref.EndByte})
 	}
 
+	// excludeOpens[file] is the set of byte offsets where a same-named
+	// definition's parameter list begins. These positions textually match
+	// `\bname\s*\(` and would otherwise be rewritten as if they were call
+	// sites — turning `createEditor(workingCopy: ...)` (a class method
+	// definition that shadows the target's name) into invalid syntax like
+	// `createEditor({}, workingCopy: ...)`. We scan the parsed symbols of
+	// each file (not just the refs returned by the caller search) because
+	// the same-named def may be a method inside a class — the class is the
+	// ref, and the method's name is shadowed within it.
+	//
+	// For the definition file, positions after the new parameter list are
+	// shifted by defDelta because transformCallSites runs on newDefData.
+	excludeOpens := computeExcludeOpens(ctx, db, sym, refFileSpans)
+	defDelta := len(newDefData) - len(defData)
+	if defDelta != 0 && excludeOpens[sym.File] != nil {
+		adjusted := map[int]bool{}
+		for pos := range excludeOpens[sym.File] {
+			if pos > absParenClose {
+				adjusted[pos+defDelta] = true
+			} else if pos < absParenOpen {
+				adjusted[pos] = true
+			}
+			// Positions inside the (replaced) param list no longer exist.
+		}
+		excludeOpens[sym.File] = adjusted
+	}
+
 	// Also transform call sites within the definition file itself
 	// (same-file callers aren't in refs but may exist).
 	// The definition file already has the new param list, so we need to
@@ -161,7 +188,7 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 		// Deduplicate overlapping spans (e.g. a method and its containing class
 		// can both be returned as references).
 		spans = deduplicateSpans(spans)
-		newData := transformCallSites(data, spans, callRe, sym.Name, addParam != "", callarg, addParam, atIdx, removeIdx)
+		newData := transformCallSites(data, spans, callRe, sym.Name, addParam != "", callarg, addParam, atIdx, removeIdx, excludeOpens[file])
 		if !bytes.Equal(data, newData) {
 			edits = append(edits, fileEdit{file: file, oldData: data, newData: newData})
 		}
@@ -172,7 +199,7 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 	if defSpans, ok := refFileSpans[sym.File]; ok {
 		sort.Slice(defSpans, func(i, j int) bool { return defSpans[i].start < defSpans[j].start })
 		defSpans = deduplicateSpans(defSpans)
-		transformed := transformCallSites(newDefData, defSpans, callRe, sym.Name, addParam != "", callarg, addParam, atIdx, removeIdx)
+		transformed := transformCallSites(newDefData, defSpans, callRe, sym.Name, addParam != "", callarg, addParam, atIdx, removeIdx, excludeOpens[sym.File])
 		if !bytes.Equal(newDefData, transformed) {
 			edits[0].newData = transformed
 		}
@@ -247,6 +274,67 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 		"hash":    newHash,
 		"message": msg,
 	}, nil
+}
+
+// computeExcludeOpens scans every file we're about to rewrite and records the
+// byte offset of the opening '(' for any symbol whose name shadows the target
+// but is structurally a *different* function — a different kind (method vs
+// top-level function) or a method on a different receiver. Excluding these
+// positions stops transformCallSites from injecting --callarg into the
+// shadowing definition's parameter list, e.g. turning a class method
+// `createEditor(workingCopy: ...)` into `createEditor({}, workingCopy: ...)`.
+//
+// Same-kind same-receiver same-named symbols (e.g. C forward declarations like
+// `extern void sched_tick(void);` matching `void sched_tick(void) { ... }`)
+// are NOT excluded — those are legitimately part of the same function and
+// must update in lockstep.
+func computeExcludeOpens(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo, refFileSpans map[string][]sigSpan) map[string]map[int]bool {
+	out := map[string]map[int]bool{}
+	for file := range refFileSpans {
+		syms, err := db.GetSymbolsByFile(ctx, file)
+		if err != nil {
+			continue
+		}
+		var data []byte
+		for i := range syms {
+			s := &syms[i]
+			if s.Name != sym.Name {
+				continue
+			}
+			if s.StartByte >= s.EndByte {
+				continue
+			}
+			// Skip the target definition itself.
+			if file == sym.File && s.StartByte == sym.StartByte {
+				continue
+			}
+			// Same kind AND same receiver → treat as an alias of the target
+			// (forward decl, prototype). Let the call-site transform update it.
+			if s.Type == sym.Type && s.Receiver == sym.Receiver {
+				continue
+			}
+			if data == nil {
+				data, err = os.ReadFile(file)
+				if err != nil {
+					break
+				}
+			}
+			if int(s.EndByte) > len(data) {
+				continue
+			}
+			body := data[s.StartByte:s.EndByte]
+			op := findParamListOpen(body, sym.Name)
+			if op < 0 {
+				continue
+			}
+			pos := int(s.StartByte) + op
+			if out[file] == nil {
+				out[file] = map[int]bool{}
+			}
+			out[file][pos] = true
+		}
+	}
+	return out
 }
 
 // findParamListOpen finds the opening paren of the function's parameter list
@@ -357,7 +445,7 @@ func splitParams(s string) []string {
 // and adds/removes the argument.
 type sigSpan struct{ start, end uint32 }
 
-func transformCallSites(data []byte, spans []sigSpan, callRe *regexp.Regexp, funcName string, isAdd bool, callarg, paramSpec string, atIdx, removeIdx int) []byte {
+func transformCallSites(data []byte, spans []sigSpan, callRe *regexp.Regexp, funcName string, isAdd bool, callarg, paramSpec string, atIdx, removeIdx int, excludeOpens map[int]bool) []byte {
 	// Find all call site locations: positions of the '(' after funcName
 	type callSite struct {
 		openParen int // byte offset of '(' in data
@@ -376,6 +464,11 @@ func transformCallSites(data []byte, spans []sigSpan, callRe *regexp.Regexp, fun
 			// m[1]-1 is the '(' position within the region
 			absPos := start + m[1] - 1
 			if absPos < len(data) && data[absPos] == '(' {
+				if excludeOpens[absPos] {
+					// This '(' is a same-named definition's parameter list,
+					// not a call site of the target function.
+					continue
+				}
 				sites = append(sites, callSite{openParen: absPos})
 			}
 		}

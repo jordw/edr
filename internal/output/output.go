@@ -68,6 +68,14 @@ type RenameResult struct {
 	NewName      string             `json:"new_name"`
 	FilesChanged []string           `json:"files_changed"`
 	Occurrences  int                `json:"occurrences"`
+	// CodeOccurrences and CommentOccurrences split Occurrences by where the
+	// match landed. A C rename of `sched_tick` typically produces a few code
+	// edits (decl, def, calls) plus a handful of comment mentions ("tick path:
+	// sched_tick -> ..."). Surfacing them separately lets the caller decide
+	// whether the comment edits are intended.
+	CodeOccurrences    int            `json:"code_occurrences,omitempty"`
+	CommentOccurrences int            `json:"comment_occurrences,omitempty"`
+	CommentMode        string         `json:"comment_mode,omitempty"` // "rewrite" (default) or "skip"
 	Status       string             `json:"status"` // "applied", "dry_run", "noop"
 	Noop         bool               `json:"noop,omitempty"` // deprecated: use Status
 	Hashes       map[string]string  `json:"hashes,omitempty"`

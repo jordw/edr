@@ -404,6 +404,15 @@ func plainRename(w *os.File, op Op) {
 	if v := anyInt(op["occurrences"]); v > 0 {
 		h["n"] = v
 	}
+	if v := anyInt(op["code_occurrences"]); v > 0 {
+		h["code"] = v
+	}
+	if v := anyInt(op["comment_occurrences"]); v > 0 {
+		h["in_comments"] = v
+		if mode, _ := op["comment_mode"].(string); mode == "skip" {
+			h["comments"] = "skipped"
+		}
+	}
 	if t, ok := op["truncated"].(bool); ok && t {
 		h["truncated"] = true
 		h["hint"] = "use --include to narrow scope, or --budget N for more"

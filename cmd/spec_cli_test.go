@@ -2700,6 +2700,69 @@ func TestSpec_RenameMissingTo(t *testing.T) {
 	}
 }
 
+// Comment classification: rename should report code vs comment matches
+// separately, and --comments=skip should leave comments untouched while still
+// counting them in the summary.
+func TestSpec_RenameCommentClassification(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		// foo.c has 1 def, 1 call, 1 comment mention.
+		"foo.c": `// Calls foo() from main.
+void foo(void) {
+}
+
+void main(void) {
+	foo();
+}
+`,
+	})
+
+	// Default: rewrite (current behavior). All 3 matches change.
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"rename", "foo.c:foo", "--to", "bar", "--dry-run")
+	if exit != 0 {
+		t.Fatalf("rewrite mode: exit %d", exit)
+	}
+	getN := func(h map[string]any, k string) float64 {
+		if v, ok := h[k].(float64); ok {
+			return v
+		}
+		return -1
+	}
+	h := result.Ops[0].Header
+	if getN(h, "n") != 3 {
+		t.Errorf("rewrite n = %v, want 3", h["n"])
+	}
+	if getN(h, "code") != 2 {
+		t.Errorf("rewrite code = %v, want 2", h["code"])
+	}
+	if getN(h, "in_comments") != 1 {
+		t.Errorf("rewrite in_comments = %v, want 1", h["in_comments"])
+	}
+
+	// --comments=skip: only the 2 code matches change; comment match is
+	// counted but left intact.
+	result, _, _, exit = specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"rename", "foo.c:foo", "--to", "bar", "--dry-run", "--comments", "skip")
+	if exit != 0 {
+		t.Fatalf("skip mode: exit %d", exit)
+	}
+	h = result.Ops[0].Header
+	if getN(h, "n") != 2 {
+		t.Errorf("skip n = %v, want 2", h["n"])
+	}
+	if h["comments"] != "skipped" {
+		t.Errorf("skip comments tag = %v, want skipped", h["comments"])
+	}
+	// The diff must NOT touch the comment.
+	body := result.Ops[0].Body
+	if strings.Contains(body, "Calls bar()") {
+		t.Errorf("skip mode should not rewrite the comment; got body:\n%s", body)
+	}
+	if !strings.Contains(body, "void bar(void)") {
+		t.Errorf("skip mode should still rewrite the def; got body:\n%s", body)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Extract
 // ---------------------------------------------------------------------------
@@ -2768,6 +2831,56 @@ func TestSpec_ExtractWithCall(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(dir, "main.go"))
 	if !strings.Contains(string(data), "c := compute(a, b)") {
 		t.Errorf("custom call expression not found in file")
+	}
+}
+
+// Regression: extracting a block that references a local declared in the
+// enclosing function would silently produce uncompileable code (the extracted
+// function would reference an undefined name). The check below should error
+// out and tell the user which locals they need to thread via --call.
+func TestSpec_ExtractDetectsExternalLocal(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.c": `void run(void) {
+	int cpu = 7;
+	if (cpu > 0)
+		printk("hi");
+}
+`,
+	})
+
+	// Lines 3-4 reference `cpu` which is declared on line 2.
+	_, _, stderr, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"extract", "main.c:run", "--name", "do_thing", "--lines", "3-4", "--dry-run")
+	if exit == 0 {
+		t.Fatalf("expected error but exit=0; stderr=%s", stderr)
+	}
+	// The error envelope is on stdout, not stderr — re-run capturing stdout.
+	stdout, _, _, _ := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"extract", "main.c:run", "--name", "do_thing", "--lines", "3-4", "--dry-run")
+	if len(stdout.Ops) == 0 {
+		t.Fatalf("no ops in result")
+	}
+	op := stdout.Ops[0]
+	errMsg := ""
+	if e, ok := op.Header["error"].(string); ok {
+		errMsg = e
+	}
+	if !strings.Contains(errMsg, "cpu") {
+		t.Errorf("error should mention `cpu`; got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "--call") {
+		t.Errorf("error should suggest --call; got: %s", errMsg)
+	}
+
+	// With --call threading cpu, extract should succeed.
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"extract", "main.c:run", "--name", "do_thing", "--lines", "3-4",
+		"--call", "do_thing(cpu)", "--dry-run")
+	if exit != 0 {
+		t.Fatalf("with --call cpu, expected success; exit=%d", exit)
+	}
+	if result.Ops[0].Header["status"] != "dry_run" {
+		t.Errorf("status = %v, want dry_run", result.Ops[0].Header["status"])
 	}
 }
 
@@ -2997,6 +3110,54 @@ func TestSpec_ChangeSigCrossFile(t *testing.T) {
 	utilData, _ := os.ReadFile(filepath.Join(dir, "util.go"))
 	if !strings.Contains(string(utilData), "Compute(3, 4, 1.0)") {
 		t.Errorf("util.go call site not updated:\n%s", string(utilData))
+	}
+}
+
+// Regression: changesig used to rewrite a same-named method definition's
+// parameter list as if it were a call site of the target top-level function,
+// producing invalid syntax like `createEditor({}, workingCopy: ...)`.
+// The shadowing method (different kind/receiver) must be left untouched while
+// genuine call sites inside its body are still rewritten.
+func TestSpec_ChangeSigSkipsShadowingMethod(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"lib.ts": `export function createEditor(resource: string, opts: number): number {
+	return resource.length + opts;
+}
+
+class Handler {
+	createEditor(workingCopy: string): number {
+		return createEditor(workingCopy, 0);
+	}
+}
+`,
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"changesig", "lib.ts:createEditor", "--add", "extra: any", "--at", "0", "--callarg", "{}", "--cross-file")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if result.Ops[0].Header["status"] != "applied" {
+		t.Fatalf("status = %v", result.Ops[0].Header["status"])
+	}
+
+	got, _ := os.ReadFile(filepath.Join(dir, "lib.ts"))
+	src := string(got)
+
+	// Top-level function must be updated.
+	if !strings.Contains(src, "function createEditor(extra: any, resource: string, opts: number)") {
+		t.Errorf("top-level def not updated:\n%s", src)
+	}
+	// Call inside the method must be updated.
+	if !strings.Contains(src, "return createEditor({}, workingCopy, 0)") {
+		t.Errorf("inner call not updated:\n%s", src)
+	}
+	// The shadowing method definition must be left ALONE.
+	if !strings.Contains(src, "createEditor(workingCopy: string): number {") {
+		t.Errorf("shadowing method definition was rewritten:\n%s", src)
+	}
+	if strings.Contains(src, "createEditor({}, workingCopy: string)") {
+		t.Errorf("shadowing method definition was incorrectly rewritten with --callarg:\n%s", src)
 	}
 }
 

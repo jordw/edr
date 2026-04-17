@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/jordw/edr/internal/edit"
@@ -61,6 +63,18 @@ func runExtract(ctx context.Context, db index.SymbolStore, root string, args []s
 	// lines is 0-indexed, startLine/endLine are 1-indexed.
 	extracted := lines[startLine-1 : endLine]
 
+	// Static check: do any identifiers in the extracted block refer to
+	// locals declared in the surrounding function but not threaded into the
+	// new function via --call? If so, the extracted function will not
+	// compile. Force the user to declare them explicitly.
+	ext := strings.ToLower(filepath.Ext(sym.File))
+	if missing := findExternalLocals(ext, lines, startLine, endLine, sym, data, flagString(flags, "call", "")); len(missing) > 0 {
+		return nil, fmt.Errorf("extract: extracted block references %d local(s) from %s not threaded through --call: %s. "+
+			"Re-run with --call %q to pass them as arguments",
+			len(missing), sym.Name, strings.Join(missing, ", "),
+			suggestedCall(flagString(flags, "name", ""), missing))
+	}
+
 	// Detect the indentation of the extracted block to de-indent for the new function.
 	indent := detectMinIndent(extracted)
 	var deindented []string
@@ -74,9 +88,6 @@ func runExtract(ctx context.Context, db index.SymbolStore, root string, args []s
 			deindented = append(deindented, "\t"+s)
 		}
 	}
-
-	// Build the new function body using language-appropriate syntax.
-	ext := strings.ToLower(filepath.Ext(sym.File))
 
 	// Parse parameters from the --call expression if provided.
 	// E.g. --call "helper(rq, flags)" => params = "rq, flags"
@@ -214,6 +225,149 @@ func buildExtractedFunction(ext, name, params string, body []string) string {
 		// Go and fallback: func name(params) {\n    body\n}
 		return fmt.Sprintf("func %s(%s) {\n%s\n}\n", name, params, joined)
 	}
+}
+
+// findExternalLocals returns the names of identifiers used in the extracted
+// block that are declared as locals in the surrounding function but not
+// passed via --call. Returning these as an error prevents the user from
+// silently producing an extracted function that references undefined symbols.
+//
+// The detection is heuristic and language-specific. For unsupported languages
+// it returns nil, accepting false negatives over false positives — the user
+// can still get a clean dry-run that they can read before applying.
+func findExternalLocals(ext string, fileLines [][]byte, startLine, endLine int, sym *index.SymbolInfo, fileData []byte, callExpr string) []string {
+	declRe := localDeclRegex(ext)
+	if declRe == nil {
+		return nil
+	}
+
+	// Build the surrounding function body excluding the extracted lines.
+	// We index fileLines (1-based startLine/endLine) and the symbol's own
+	// line range so we don't accidentally pick up declarations from
+	// unrelated functions in the same file.
+	symStart := int(sym.StartLine)
+	symEnd := int(sym.EndLine)
+	if symStart < 1 {
+		symStart = 1
+	}
+	if symEnd > len(fileLines) {
+		symEnd = len(fileLines)
+	}
+	var outside bytes.Buffer
+	for i := symStart - 1; i < symEnd; i++ {
+		ln := i + 1
+		if ln >= startLine && ln <= endLine {
+			continue
+		}
+		outside.Write(fileLines[i])
+		outside.WriteByte('\n')
+	}
+
+	// Locals declared in the surrounding body.
+	declared := map[string]bool{}
+	for _, m := range declRe.FindAllSubmatch(outside.Bytes(), -1) {
+		if len(m) >= 2 && len(m[1]) > 0 {
+			declared[string(m[1])] = true
+		}
+	}
+	// Add the function's own parameters — they're available in the parent
+	// scope but are not "locals to thread through" because they'd be passed
+	// by the caller of the extracted function the same way they're passed
+	// to the parent.
+	if pos := bytes.IndexByte(fileData[sym.StartByte:sym.EndByte], '('); pos >= 0 {
+		body := fileData[sym.StartByte:sym.EndByte]
+		close := findMatchingClose(body, pos)
+		if close > pos {
+			for _, p := range splitParams(string(body[pos+1 : close])) {
+				if name := lastIdentifier(p); name != "" {
+					declared[name] = true
+				}
+			}
+		}
+	}
+
+	// Identifiers used in the extracted block.
+	var extractedSrc bytes.Buffer
+	for i := startLine - 1; i < endLine; i++ {
+		extractedSrc.Write(fileLines[i])
+		extractedSrc.WriteByte('\n')
+	}
+	used := map[string]bool{}
+	for _, m := range identifierRe.FindAll(extractedSrc.Bytes(), -1) {
+		used[string(m)] = true
+	}
+
+	// Names already passed via --call.
+	threaded := map[string]bool{}
+	if callExpr != "" {
+		if lp := strings.Index(callExpr, "("); lp >= 0 {
+			if rp := strings.LastIndex(callExpr, ")"); rp > lp {
+				for _, arg := range splitParams(callExpr[lp+1 : rp]) {
+					threaded[strings.TrimSpace(arg)] = true
+				}
+			}
+		}
+	}
+
+	var missing []string
+	seen := map[string]bool{}
+	for name := range used {
+		if !declared[name] || threaded[name] || seen[name] {
+			continue
+		}
+		// Function parameters were added to `declared` above, so they're
+		// already filtered. We leave them in `declared` because the user
+		// needs to be reminded if a param is referenced — they must thread
+		// it. But the param name itself is in declared, not in
+		// "missing-from-threaded": if --call already mentions it, it's
+		// threaded. If not, it's missing. That matches the behavior we want.
+		seen[name] = true
+		missing = append(missing, name)
+	}
+	sort.Strings(missing)
+	return missing
+}
+
+// localDeclRegex returns a language-specific regex whose first capture group
+// is the identifier name of a local variable declaration. nil means we don't
+// have a checker for the language.
+func localDeclRegex(ext string) *regexp.Regexp {
+	switch ext {
+	case ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh", ".m", ".mm":
+		// C-family: match `<type> <name>` and `<type> *<name>` at start of
+		// a statement. Type may be a keyword, a `struct X`/`enum X`/`union
+		// X` form, or an identifier ending in `_t`.
+		return regexp.MustCompile(`(?m)^\s*(?:const\s+|static\s+|register\s+|volatile\s+|extern\s+|auto\s+)*(?:int|long|short|char|float|double|unsigned|signed|bool|void|struct\s+\w+|enum\s+\w+|union\s+\w+|u8|u16|u32|u64|s8|s16|s32|s64|size_t|ssize_t|loff_t|gfp_t|pid_t|uid_t|gid_t|atomic_t|atomic64_t|spinlock_t|\w+_t)\s+\**\s*(\w+)`)
+	case ".rs":
+		return regexp.MustCompile(`\blet\s+(?:mut\s+)?(\w+)`)
+	case ".go":
+		return regexp.MustCompile(`(?m)\b(\w+)\s*:=`)
+	case ".js", ".jsx", ".ts", ".tsx", ".mts", ".cts":
+		return regexp.MustCompile(`\b(?:const|let|var)\s+(\w+)`)
+	}
+	return nil
+}
+
+var identifierRe = regexp.MustCompile(`\b[A-Za-z_][A-Za-z_0-9]*\b`)
+
+// lastIdentifier returns the last identifier-looking token in s. Used to peel
+// the name off a parameter declaration like `int flags` → `flags` or
+// `struct rq *rq` → `rq`.
+func lastIdentifier(s string) string {
+	m := identifierRe.FindAllString(s, -1)
+	if len(m) == 0 {
+		return ""
+	}
+	return m[len(m)-1]
+}
+
+// suggestedCall produces a hint like `do_thing(cpu, rq)` that the user can
+// paste into --call to thread the missing locals.
+func suggestedCall(name string, missing []string) string {
+	if name == "" {
+		name = "newFn"
+	}
+	return fmt.Sprintf("%s(%s)", name, strings.Join(missing, ", "))
 }
 
 // needsSemicolon returns true for languages where a bare function call needs a trailing semicolon.

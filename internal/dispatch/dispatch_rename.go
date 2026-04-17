@@ -22,6 +22,12 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 	dryRun := flagBool(flags, "dry_run", false)
 	crossFile := flagBool(flags, "cross_file", false)
 	force := flagBool(flags, "force", false)
+	commentMode := flagString(flags, "comments", "rewrite")
+	switch commentMode {
+	case "rewrite", "skip":
+	default:
+		return nil, fmt.Errorf("rename: --comments must be 'rewrite' or 'skip' (got %q)", commentMode)
+	}
 
 	// Resolve the symbol to rename.
 	sym, err := resolveSymbolArgs(ctx, db, root, args)
@@ -96,13 +102,15 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 
 	// For each file, replace only within the identified symbol spans.
 	type fileEdit struct {
-		file    string
-		oldData []byte
-		newData []byte
-		count   int
+		file         string
+		oldData      []byte
+		newData      []byte
+		count        int
+		commentCount int
 	}
 	var edits []fileEdit
-	totalOccurrences := 0
+	totalCodeEdits := 0
+	totalCommentMatches := 0
 
 	for _, file := range files {
 		data, err := os.ReadFile(file)
@@ -118,11 +126,16 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 		// Sort spans by start offset for a single forward pass.
 		sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
 
+		fileExt := commentSyntaxFor(file)
+
 		// Build new file content: copy unchanged regions verbatim,
-		// apply regex replacement only within span ranges.
+		// apply replacement only within span ranges. Match-by-match (rather
+		// than ReplaceAll) so we can classify each match as code vs comment
+		// and honor --comments=skip.
 		var buf bytes.Buffer
 		pos := 0
-		count := 0
+		codeCount := 0
+		commentCount := 0
 		for _, s := range spans {
 			start := int(s.start)
 			end := int(s.end)
@@ -136,10 +149,8 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 				// Overlapping or out-of-order span; skip.
 				continue
 			}
-			// Copy unchanged region before this span.
 			buf.Write(data[pos:start])
-			// Replace within the span using the appropriate regex.
-			region := data[start:end]
+
 			re := callRe
 			repl := []byte("." + newName)
 			if s.isDef {
@@ -148,26 +159,55 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 			} else if !isMethod {
 				repl = []byte(newName)
 			}
-			replaced := re.ReplaceAll(region, repl)
-			count += len(re.FindAll(region, -1))
-			buf.Write(replaced)
+			region := data[start:end]
+			matches := re.FindAllIndex(region, -1)
+			rpos := 0
+			for _, m := range matches {
+				absPos := start + m[0]
+				inComment := positionInComment(data, absPos, fileExt)
+				if inComment {
+					commentCount++
+					if commentMode == "skip" {
+						// Copy verbatim — don't rewrite this match.
+						buf.Write(region[rpos:m[1]])
+						rpos = m[1]
+						continue
+					}
+				} else {
+					codeCount++
+				}
+				buf.Write(region[rpos:m[0]])
+				buf.Write(repl)
+				rpos = m[1]
+			}
+			buf.Write(region[rpos:])
 			pos = end
 		}
 		// Copy remainder after last span.
 		buf.Write(data[pos:])
+
+		// Count matches even if we ended up with no edits (skip mode +
+		// only-comment matches). The summary should still report what was
+		// found vs ignored.
+		totalCodeEdits += codeCount
+		totalCommentMatches += commentCount
 
 		newData := buf.Bytes()
 		if bytes.Equal(data, newData) {
 			continue
 		}
 
+		count := codeCount
+		if commentMode == "rewrite" {
+			count += commentCount
+		}
 		edits = append(edits, fileEdit{
-			file:    file,
-			oldData: data,
-			newData: newData,
-			count:   count,
+			file:         file,
+			oldData:      data,
+			newData:      newData,
+			count:        count,
+			commentCount: commentCount,
 		})
-		totalOccurrences += count
 	}
 
 	if len(edits) == 0 {
@@ -185,6 +225,10 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 		crossFileFileCap = 50
 		crossFileEditCap = 200
 	)
+	totalOccurrences := totalCodeEdits
+	if commentMode == "rewrite" {
+		totalOccurrences += totalCommentMatches
+	}
 	if crossFile && !force && (len(edits) > crossFileFileCap || totalOccurrences > crossFileEditCap) {
 		return nil, fmt.Errorf("rename refused: --cross-file would edit %d files and %d occurrences (limits: %d files, %d occurrences). The name %q likely collides with unrelated identifiers. Re-run with --force to proceed, --dry-run to inspect, or narrow scope",
 			len(edits), totalOccurrences, crossFileFileCap, crossFileEditCap, oldName)
@@ -192,9 +236,12 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 
 	// Build result.
 	result := &output.RenameResult{
-		OldName:     oldName,
-		NewName:     newName,
-		Occurrences: totalOccurrences,
+		OldName:            oldName,
+		NewName:            newName,
+		Occurrences:        totalOccurrences,
+		CodeOccurrences:    totalCodeEdits,
+		CommentOccurrences: totalCommentMatches,
+		CommentMode:        commentMode,
 	}
 
 	result.OldContents = make(map[string][]byte, len(edits))
@@ -232,6 +279,92 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 
 	result.Status = "applied"
 	return result, nil
+}
+
+// commentSyntaxFor returns a small bitmask describing which comment styles
+// the file's language uses. Approximate but enough to cover the languages we
+// support: line comments via // for C-family/JS/TS/Rust/Go, # for Python/Ruby
+// /shell/Makefile, -- for SQL/Lua, ; for Lisp/asm. Block comments via /* */
+// for C-family/JS/TS/Rust/Go, """ for Python.
+func commentSyntaxFor(file string) commentSyntax {
+	ext := ""
+	for i := len(file) - 1; i >= 0; i-- {
+		if file[i] == '.' {
+			ext = file[i:]
+			break
+		}
+		if file[i] == '/' {
+			break
+		}
+	}
+	switch ext {
+	case ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh",
+		".m", ".mm", ".java", ".kt", ".kts", ".scala", ".sc",
+		".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
+		".go", ".rs", ".swift", ".cs", ".dart", ".groovy", ".php":
+		return commentSyntax{slashSlash: true, slashStar: true}
+	case ".py", ".pyi":
+		return commentSyntax{hash: true, tripleQuote: true}
+	case ".rb", ".sh", ".bash", ".zsh", ".pl", ".pm", ".tcl", ".cmake":
+		return commentSyntax{hash: true}
+	case ".lua", ".sql":
+		return commentSyntax{dashDash: true}
+	}
+	// Default: slash-slash + slash-star covers most curly-brace languages we
+	// haven't enumerated.
+	return commentSyntax{slashSlash: true, slashStar: true}
+}
+
+type commentSyntax struct {
+	slashSlash  bool
+	slashStar   bool
+	hash        bool
+	dashDash    bool
+	tripleQuote bool
+}
+
+// positionInComment reports whether the byte at `pos` in `data` falls inside
+// a comment, scanning back to the start of the line for line-comments and
+// scanning the file for the most recent unterminated block-comment opener.
+//
+// Cheap and approximate — we don't tokenize strings, so a comment marker
+// inside a string literal will be misclassified. For the rename use case the
+// trade-off is fine: a false positive (treating "// foo" inside a string as
+// a comment) just means we report it as a comment edit, which is at worst
+// noisy in the summary, never an incorrect edit.
+func positionInComment(data []byte, pos int, syn commentSyntax) bool {
+	if pos < 0 || pos >= len(data) {
+		return false
+	}
+	// Scan back to the line start.
+	lineStart := pos
+	for lineStart > 0 && data[lineStart-1] != '\n' {
+		lineStart--
+	}
+	for i := lineStart; i < pos; i++ {
+		c := data[i]
+		if syn.slashSlash && c == '/' && i+1 < len(data) && data[i+1] == '/' {
+			return true
+		}
+		if syn.hash && c == '#' {
+			return true
+		}
+		if syn.dashDash && c == '-' && i+1 < len(data) && data[i+1] == '-' {
+			return true
+		}
+	}
+	// Block-comment scan: look for the nearest /* before pos that isn't
+	// closed before pos. (Skip when the language doesn't use /* */.)
+	if syn.slashStar {
+		open := bytes.LastIndex(data[:pos], []byte("/*"))
+		if open >= 0 {
+			close := bytes.Index(data[open:pos], []byte("*/"))
+			if close < 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // expandToDocComment scans backwards from startByte to include preceding

@@ -475,6 +475,22 @@ func smartEditSpan(ctx context.Context, db index.SymbolStore, file string, start
 	return smartEditByteRange(ctx, db, file, startByte, endByte, replacement, label, dryRun)
 }
 
+// validateMoveSpan returns an error if the symbol's byte range is unusable
+// for a move/extract (zero or inverted). Surfacing a clean error here keeps
+// downstream slicing from panicking with "slice bounds out of range" when an
+// upstream resolver picks an overload-only declaration that the parser
+// couldn't fully bracket.
+func validateMoveSpan(s *index.SymbolInfo, role string) error {
+	if s == nil {
+		return fmt.Errorf("%s symbol: nil", role)
+	}
+	if s.EndByte <= s.StartByte {
+		return fmt.Errorf("%s symbol %q in %s has no body span (likely an overload or forward declaration); pick the implementation",
+			role, s.Name, output.Rel(s.File))
+	}
+	return nil
+}
+
 // smartEditMoveAfter moves a source symbol after a target symbol within the same file.
 func smartEditMoveAfter(ctx context.Context, db index.SymbolStore, root string, args []string, targetName string, dryRun bool) (any, error) {
 	// Resolve source symbol
@@ -499,6 +515,13 @@ func smartEditMoveAfter(ctx context.Context, db index.SymbolStore, root string, 
 		if err != nil {
 			return nil, fmt.Errorf("target symbol: %w", err)
 		}
+	}
+
+	if err := validateMoveSpan(srcSym, "source"); err != nil {
+		return nil, err
+	}
+	if err := validateMoveSpan(tgtSym, "target"); err != nil {
+		return nil, err
 	}
 
 	if srcSym.File != tgtSym.File {

@@ -190,24 +190,47 @@ func (o *OnDemand) GetSymbol(ctx context.Context, file, name string) (*SymbolInf
 	// When multiple symbols share a name, prefer:
 	// 1. Definitions (struct/class/enum/type/interface) over impls/methods
 	// 2. Among same kind, the largest span (implementation over overload signature)
+	// Skip "malformed" symbols where the parser couldn't determine the end
+	// (EndLine == 0 or EndByte <= StartByte) — typical for TS/C overload-only
+	// declarations like `void foo(int);`. These can't be safely sliced or
+	// edited, and using uint32 subtraction on them underflows the span
+	// comparison and makes them always win the tiebreaker.
 	var best *SymbolInfo
 	for i := range cf.symbols {
-		if cf.symbols[i].Name == name {
-			s := &cf.symbols[i]
-			if best == nil {
-				best = s
-			} else if isDefinitionType(s.Type) && !isDefinitionType(best.Type) {
-				best = s
-			} else if isDefinitionType(s.Type) == isDefinitionType(best.Type) &&
-				(s.EndLine-s.StartLine) > (best.EndLine-best.StartLine) {
-				best = s
-			}
+		if cf.symbols[i].Name != name {
+			continue
+		}
+		s := &cf.symbols[i]
+		if !hasValidSpan(s) {
+			continue
+		}
+		if best == nil {
+			best = s
+		} else if isDefinitionType(s.Type) && !isDefinitionType(best.Type) {
+			best = s
+		} else if isDefinitionType(s.Type) == isDefinitionType(best.Type) &&
+			symSpan(s) > symSpan(best) {
+			best = s
 		}
 	}
 	if best != nil {
 		return best, nil
 	}
 	return nil, o.symbolNotFoundError(ctx, name, file)
+}
+
+// hasValidSpan reports whether a symbol has a parser-determined byte/line
+// range we can safely slice or edit. Overload-only declarations and other
+// decl-only symbols often have EndLine==0 / EndByte==0 from the parser.
+func hasValidSpan(s *SymbolInfo) bool {
+	return s.EndLine >= s.StartLine && s.EndByte > s.StartByte
+}
+
+// symSpan returns the line span as a signed int. Using signed math avoids
+// uint32 underflow when EndLine < StartLine (which hasValidSpan should
+// already exclude, but the helper keeps comparisons honest at call sites).
+func symSpan(s *SymbolInfo) int64 {
+	return int64(s.EndLine) - int64(s.StartLine)
 }
 
 
