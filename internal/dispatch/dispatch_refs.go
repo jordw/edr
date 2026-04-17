@@ -12,6 +12,7 @@ import (
 	"github.com/jordw/edr/internal/scope"
 	"github.com/jordw/edr/internal/scope/golang"
 	"github.com/jordw/edr/internal/scope/python"
+	scopestore "github.com/jordw/edr/internal/scope/store"
 	"github.com/jordw/edr/internal/scope/ts"
 )
 
@@ -41,17 +42,30 @@ func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []stri
 	}
 
 	ext := strings.ToLower(filepath.Ext(absFile))
+
+	// Prefer the persisted scope index when it's present and fresh.
+	// Falls through to on-demand parse on miss/stale.
 	var result *scope.Result
-	switch ext {
-	case ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts":
-		result = ts.Parse(relFile, src)
-	case ".go":
-		result = golang.Parse(relFile, src)
-	case ".py", ".pyi":
-		result = python.Parse(relFile, src)
-	default:
-		return nil, fmt.Errorf("refs-to: unsupported language %q (currently supports .ts/.tsx/.js/.jsx, .go, .py)", ext)
+	var persistedIndex *scopestore.Index
+	if idx, _ := scopestore.Load(db.EdrDir()); idx != nil {
+		persistedIndex = idx
+		if r := idx.ResultFor(root, relFile); r != nil {
+			result = r
+		}
 	}
+	if result == nil {
+		switch ext {
+		case ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts":
+			result = ts.Parse(relFile, src)
+		case ".go":
+			result = golang.Parse(relFile, src)
+		case ".py", ".pyi":
+			result = python.Parse(relFile, src)
+		default:
+			return nil, fmt.Errorf("refs-to: unsupported language %q (currently supports .ts/.tsx/.js/.jsx, .go, .py)", ext)
+		}
+	}
+	_ = persistedIndex // reserved for future cross-file resolution via DeclID
 
 	// Find the decl. Prefer file-scope match; fall back to any decl with the name.
 	decl := scope.FindDeclByName(result, symbolName)
@@ -119,17 +133,14 @@ func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []stri
 	if decl.Scope == 1 {
 		switch ext {
 		case ".go":
-			entries = append(entries, goCrossFileRefs(absFile, symbolName)...)
-			// Walk the whole repo for cross-package property_access refs
-			// ONLY for exported (capitalized) symbols — unexported refs
-			// are package-internal and already covered by the sibling walk.
+			entries = append(entries, goCrossFileRefs(absFile, symbolName, persistedIndex, root)...)
 			if len(symbolName) > 0 && symbolName[0] >= 'A' && symbolName[0] <= 'Z' {
-				entries = append(entries, goCrossPackagePropRefs(root, absFile, symbolName)...)
+				entries = append(entries, goCrossPackagePropRefs(root, absFile, symbolName, persistedIndex)...)
 			}
 		case ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts":
-			entries = append(entries, tsCrossFileRefs(root, absFile, symbolName)...)
+			entries = append(entries, tsCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
 		case ".py", ".pyi":
-			entries = append(entries, pyCrossFileRefs(root, absFile, symbolName)...)
+			entries = append(entries, pyCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
 		}
 	}
 
@@ -170,30 +181,22 @@ func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []stri
 	}, nil
 }
 
-// goCrossFileRefs walks sibling .go files in the same directory and
-// returns refs to `name` that look like cross-file references (ident
-// matches our symbol and is not locally bound). Skips test files.
-func goCrossFileRefs(originFile, name string) []refEntry {
+// goCrossFileRefs returns refs to `name` from sibling .go files in
+// the same package (same directory). Uses the persisted scope index
+// when available to skip re-parsing; falls back to filesystem walk.
+func goCrossFileRefs(originFile, name string, idx *scopestore.Index, root string) []refEntry {
 	dir := filepath.Dir(originFile)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
 	var out []refEntry
-	for _, e := range entries {
-		fn := e.Name()
-		if !strings.HasSuffix(fn, ".go") || strings.HasSuffix(fn, "_test.go") {
-			continue
-		}
-		sibPath := filepath.Join(dir, fn)
+	iter := func(sibPath string, r *scope.Result, sibSrc []byte) {
 		if sibPath == originFile {
-			continue
+			return
 		}
-		sibSrc, err := os.ReadFile(sibPath)
-		if err != nil {
-			continue
+		if filepath.Dir(sibPath) != dir {
+			return
 		}
-		r := golang.Parse(sibPath, sibSrc)
+		if !strings.HasSuffix(sibPath, ".go") || strings.HasSuffix(sibPath, "_test.go") {
+			return
+		}
 		sibLines := computeLineStarts(sibSrc)
 		for _, ref := range r.Refs {
 			if ref.Name != name {
@@ -223,6 +226,31 @@ func goCrossFileRefs(originFile, name string) []refEntry {
 			})
 		}
 	}
+	if idx != nil {
+		for rel, r := range idx.AllResults() {
+			abs := filepath.Join(root, rel)
+			src, err := os.ReadFile(abs)
+			if err != nil {
+				continue
+			}
+			iter(abs, r, src)
+		}
+		return out
+	}
+	// Fallback: filesystem walk of the origin's directory.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	for _, e := range entries {
+		sibPath := filepath.Join(dir, e.Name())
+		src, err := os.ReadFile(sibPath)
+		if err != nil {
+			continue
+		}
+		r := golang.Parse(sibPath, src)
+		iter(sibPath, r, src)
+	}
 	return out
 }
 
@@ -241,33 +269,16 @@ type refEntry struct {
 // exported cross-package Go symbols — imprecise (we don't verify the
 // package alias actually points at origin's package), but high-signal
 // in practice for capitalized names.
-func goCrossPackagePropRefs(root, originFile, name string) []refEntry {
+func goCrossPackagePropRefs(root, originFile, name string, idx *scopestore.Index) []refEntry {
 	originDir := filepath.Dir(originFile)
 	var out []refEntry
-	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if info.IsDir() {
-			n := info.Name()
-			if n == ".git" || n == ".edr" || n == "vendor" || n == "node_modules" || n == "testdata" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
+	collect := func(path string, r *scope.Result, src []byte) {
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
+			return
 		}
-		// Skip files in the origin's own directory (already covered by
-		// goCrossFileRefs).
 		if filepath.Dir(path) == originDir {
-			return nil
+			return // same package; covered by goCrossFileRefs
 		}
-		src, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		r := golang.Parse(path, src)
 		sibLines := computeLineStarts(src)
 		for _, ref := range r.Refs {
 			if ref.Name != name || ref.Binding.Reason != "property_access" {
@@ -283,6 +294,38 @@ func goCrossPackagePropRefs(root, originFile, name string) []refEntry {
 				kind:   scope.BindProbable,
 			})
 		}
+	}
+	if idx != nil {
+		for rel, r := range idx.AllResults() {
+			abs := filepath.Join(root, rel)
+			src, err := os.ReadFile(abs)
+			if err != nil {
+				continue
+			}
+			collect(abs, r, src)
+		}
+		return out
+	}
+	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			n := info.Name()
+			if n == ".git" || n == ".edr" || n == "vendor" || n == "node_modules" || n == "testdata" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		r := golang.Parse(path, src)
+		collect(path, r, src)
 		return nil
 	})
 	return out
@@ -293,8 +336,63 @@ func goCrossPackagePropRefs(root, originFile, name string) []refEntry {
 // or property-access probable (`pkg.name` call sites). Heuristic but
 // high-signal — Python import resolution (dotted paths, from..import,
 // relative imports) is deferred.
-func pyCrossFileRefs(root, originFile, name string) []refEntry {
+func pyCrossFileRefs(root, originFile, name string, idx *scopestore.Index) []refEntry {
 	var out []refEntry
+	collect := func(path string, r *scope.Result, src []byte) {
+		if path == originFile || !strings.HasSuffix(path, ".py") {
+			return
+		}
+		// Only scan files that mention the name at all.
+		seen := false
+		for _, ref := range r.Refs {
+			if ref.Name == name {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			return
+		}
+		sibLines := computeLineStarts(src)
+		for _, ref := range r.Refs {
+			if ref.Name != name {
+				continue
+			}
+			var reason string
+			switch {
+			case ref.Binding.Reason == "property_access":
+				reason = "property_access"
+			case ref.Binding.Kind == scope.BindResolved && ref.Binding.Reason == "builtin":
+				continue
+			case ref.Binding.Kind == scope.BindResolved:
+				reason = "cross_file_import"
+			case ref.Binding.Kind == scope.BindUnresolved:
+				reason = "cross_file_unresolved"
+			default:
+				continue
+			}
+			line, col := byteToLineCol(sibLines, ref.Span.StartByte)
+			out = append(out, refEntry{
+				file:   output.Rel(path),
+				line:   line,
+				col:    col,
+				span:   [2]uint32{ref.Span.StartByte, ref.Span.EndByte},
+				reason: reason,
+				kind:   scope.BindProbable,
+			})
+		}
+	}
+	if idx != nil {
+		for rel, r := range idx.AllResults() {
+			abs := filepath.Join(root, rel)
+			src, err := os.ReadFile(abs)
+			if err != nil {
+				continue
+			}
+			collect(abs, r, src)
+		}
+		return out
+	}
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
@@ -364,8 +462,83 @@ func pyCrossFileRefs(root, originFile, name string) []refEntry {
 // the absence of full import-path resolution; false positives are
 // possible when unrelated files happen to use the same identifier as
 // an imported name.
-func tsCrossFileRefs(root, originFile, name string) []refEntry {
+func tsCrossFileRefs(root, originFile, name string, idx *scopestore.Index) []refEntry {
 	var out []refEntry
+	collect := func(path string, r *scope.Result, src []byte) {
+		if path == originFile {
+			return
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		switch ext {
+		case ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts":
+		default:
+			return
+		}
+		if strings.HasSuffix(path, ".d.ts") {
+			return
+		}
+		hasImport := false
+		hasPropertyAccess := false
+		for _, d := range r.Decls {
+			if d.Name == name && d.Kind == scope.KindImport {
+				hasImport = true
+				break
+			}
+		}
+		if !hasImport {
+			for _, ref := range r.Refs {
+				if ref.Name == name && ref.Binding.Reason == "property_access" {
+					hasPropertyAccess = true
+					break
+				}
+			}
+		}
+		if !hasImport && !hasPropertyAccess {
+			return
+		}
+		sibLines := computeLineStarts(src)
+		for _, ref := range r.Refs {
+			if ref.Name != name {
+				continue
+			}
+			var reason string
+			switch {
+			case ref.Binding.Reason == "property_access":
+				reason = "property_access"
+			case ref.Binding.Kind == scope.BindResolved && ref.Binding.Reason == "builtin":
+				continue
+			case ref.Binding.Kind == scope.BindResolved:
+				reason = "cross_file_import"
+			case ref.Binding.Kind == scope.BindUnresolved:
+				if !hasPropertyAccess {
+					continue
+				}
+				reason = "cross_file_import"
+			default:
+				reason = "cross_file_import"
+			}
+			line, col := byteToLineCol(sibLines, ref.Span.StartByte)
+			out = append(out, refEntry{
+				file:   output.Rel(path),
+				line:   line,
+				col:    col,
+				span:   [2]uint32{ref.Span.StartByte, ref.Span.EndByte},
+				reason: reason,
+				kind:   scope.BindProbable,
+			})
+		}
+	}
+	if idx != nil {
+		for rel, r := range idx.AllResults() {
+			abs := filepath.Join(root, rel)
+			src, err := os.ReadFile(abs)
+			if err != nil {
+				continue
+			}
+			collect(abs, r, src)
+		}
+		return out
+	}
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil

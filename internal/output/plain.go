@@ -957,6 +957,12 @@ func plainIndex(w *os.File, op Op) {
 	if v, ok := op["stale"].(bool); ok && v {
 		h["stale"] = true
 	}
+	if v := anyInt(op["scope_files"]); v > 0 {
+		h["scope_files"] = v
+	}
+	if v, ok := op["scope_error"].(string); ok {
+		h["scope_error"] = v
+	}
 	writeHeader(w, h)
 }
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
+	scopestore "github.com/jordw/edr/internal/scope/store"
 )
 
 // runIndex handles "edr index" and "edr index --status".
@@ -137,12 +138,23 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 	}
 	idx.InvalidateSymbolCache()
 
+	// Scope index build: per-file scope.Result data for supported
+	// languages (Go, TS/JS/TSX/JSX, Python). Used by refs-to and future
+	// rename/changesig consumers. Separate from the trigram+symbol index
+	// so its format can evolve independently.
+	scopeFiles, scopeErr := scopestore.Build(root, edrDir, index.WalkRepoFiles)
+
 	s := idx.GetStatus(root, edrDir)
 	result := map[string]any{
 		"status":        "built",
 		"files_indexed": s.Files,
 		"trigrams":      s.Trigrams,
 		"size_bytes":    s.SizeBytes,
+	}
+	if scopeErr == nil {
+		result["scope_files"] = scopeFiles
+	} else {
+		result["scope_error"] = scopeErr.Error()
 	}
 	if h, err := idx.ReadHeader(edrDir); err == nil && h.NumSymbols > 0 {
 		result["symbols"] = int(h.NumSymbols)
