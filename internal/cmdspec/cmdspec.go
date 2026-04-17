@@ -102,6 +102,7 @@ var filesFlags = []FlagSpec{
 	{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max response tokens (default 2000)"},
 	{Name: "full", Type: FlagBool, Default: false, Desc: "Return full results (no default budget cap)"},
 	{Name: "regex", Type: FlagBool, Default: false, Desc: "Treat pattern as a regular expression (Go syntax)"},
+	{Name: "glob", Type: FlagString, Default: "", Desc: "Limit results to files matching this path glob (e.g. \"**/*.go\")"},
 }
 
 var Registry = []*Spec{
@@ -253,12 +254,6 @@ var Registry = []*Spec{
 		Flags:    []FlagSpec{},
 	},
 	{
-		Name: "txn", Desc: "Multi-op transactions with preview and atomic rollback.",
-		Category: CatGlobalMutate, MinArgs: 0, MaxArgs: 1,
-		Internal: true,
-		Flags:    []FlagSpec{},
-	},
-	{
 		Name: "setup", Desc: "Install edr into a project and inject agent instructions.",
 		Category: CatMeta, MinArgs: 0, MaxArgs: 1,
 		Flags: []FlagSpec{
@@ -278,6 +273,7 @@ var Registry = []*Spec{
 		Category: CatMeta, MinArgs: 0, MaxArgs: 0,
 		Flags: []FlagSpec{
 			{Name: "status", Type: FlagBool, Default: false, Desc: "Show index stats without building"},
+			{Name: "rebuild", Type: FlagBool, Default: false, Desc: "Explicit rebuild (default behavior; accepted for clarity)"},
 		},
 	},
 	{

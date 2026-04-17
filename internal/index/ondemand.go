@@ -533,14 +533,22 @@ func (o *OnDemand) FilteredSymbols(ctx context.Context, dir, symbolType, namePat
 		}
 	}
 
-	// Fast path: use symbol index when available
+	// Fast path: use symbol index when available.
+	// Trust the index only when (a) no explicit dirty marker from edr edits
+	// and (b) filesystem mtime/size for files in scope still matches the index.
+	// The second check catches files modified by other processes (editors,
+	// other agents, git operations) that do not touch edr's dirty file.
 	if idx.HasSymbolIndex(o.edrDir) {
-		if !idx.IsDirty(o.edrDir) {
+		explicitDirty := idx.DirtyFiles(o.edrDir)
+		_, files := idx.LoadAllSymbols(o.edrDir)
+		fsStale := detectFilesystemStale(o.root, files, absDir)
+		dirty := mergeDirtyPaths(explicitDirty, fsStale)
+
+		if len(dirty) == 0 {
 			results, err := o.filteredSymbolsFromIndex(namePattern, symbolType)
 			if err != nil {
 				return nil, err
 			}
-			// Apply dir filter on index results
 			if absDir != "" {
 				n := 0
 				for _, s := range results {
@@ -553,11 +561,7 @@ func (o *OnDemand) FilteredSymbols(ctx context.Context, dir, symbolType, namePat
 			}
 			return results, nil
 		}
-		// Dirty index: use index for clean files, re-parse only dirty ones.
-		dirtyFiles := idx.DirtyFiles(o.edrDir)
-		if len(dirtyFiles) > 0 {
-			return o.filteredSymbolsDirtyPatch(ctx, absDir, symbolType, namePattern, dirtyFiles)
-		}
+		return o.filteredSymbolsDirtyPatch(ctx, absDir, symbolType, namePattern, dirty)
 	}
 
 	var parsed map[string]*cachedFile
@@ -654,6 +658,54 @@ func (o *OnDemand) filteredSymbolsDirtyPatch(ctx context.Context, absDir, symbol
 	}
 
 	return results, nil
+}
+
+func detectFilesystemStale(root string, files []idx.FileEntry, absDir string) []string {
+	if len(files) == 0 {
+		return nil
+	}
+	var stale []string
+	for _, fe := range files {
+		abs := filepath.Join(root, fe.Path)
+		if absDir != "" && !strings.HasPrefix(abs, absDir) {
+			continue
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			// File is missing or unreadable — treat as stale so its
+			// index symbols are suppressed via the dirty-patch path.
+			stale = append(stale, fe.Path)
+			continue
+		}
+		if info.ModTime().UnixNano() != fe.Mtime || info.Size() != fe.Size {
+			stale = append(stale, fe.Path)
+		}
+	}
+	return stale
+}
+
+func mergeDirtyPaths(explicit, fsStale []string) []string {
+	if len(fsStale) == 0 {
+		return explicit
+	}
+	if len(explicit) == 0 {
+		return fsStale
+	}
+	seen := make(map[string]bool, len(explicit)+len(fsStale))
+	merged := make([]string, 0, len(explicit)+len(fsStale))
+	for _, f := range explicit {
+		if !seen[f] {
+			seen[f] = true
+			merged = append(merged, f)
+		}
+	}
+	for _, f := range fsStale {
+		if !seen[f] {
+			seen[f] = true
+			merged = append(merged, f)
+		}
+	}
+	return merged
 }
 
 func (o *OnDemand) filteredSymbolsFromIndex(namePattern, symbolType string) ([]SymbolInfo, error) {

@@ -203,7 +203,23 @@ func WithBudget(budget int) RepoMapOption {
 	return func(c *repoMapConfig) { c.budget = budget }
 }
 
-// matchDoublestarPath matches a relative path against a ** glob pattern.
+// MatchGlob applies a path glob against a relative path. Supports
+// doublestar (**), subdirectory patterns with /, and basename-only patterns.
+func MatchGlob(relPath, pattern string) bool {
+	if pattern == "" {
+		return true
+	}
+	if strings.Contains(pattern, "**") {
+		return matchDoublestarPath(relPath, pattern)
+	}
+	if strings.Contains(pattern, "/") {
+		ok, _ := filepath.Match(pattern, relPath)
+		return ok
+	}
+	ok, _ := filepath.Match(pattern, filepath.Base(relPath))
+	return ok
+}
+
 func matchDoublestarPath(path, pattern string) bool {
 	parts := strings.SplitN(pattern, "**", 2)
 	if len(parts) == 1 {

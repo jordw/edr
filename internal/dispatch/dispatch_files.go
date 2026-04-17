@@ -215,6 +215,18 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 	// Deduplicate — changed-file rescan may overlap with trigram results.
 	matches = dedupStrings(matches)
 
+	// Apply --glob path filter (e.g. "**/*.go", "cmd/*").
+	if glob := flagString(flags, "glob", ""); glob != "" {
+		n := 0
+		for _, rel := range matches {
+			if index.MatchGlob(rel, glob) {
+				matches[n] = rel
+				n++
+			}
+		}
+		matches = matches[:n]
+	}
+
 	// Auto-retry as regex when literal mode found nothing and pattern contains
 	// alternation. Catches the common case of users typing foo|bar expecting
 	// alternation. If the regex retry also finds nothing, we return the
