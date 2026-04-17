@@ -173,6 +173,31 @@ func (c *Counter) Inc() {
 	}
 }
 
+
+
+func TestParse_PropertyAccess(t *testing.T) {
+	src := []byte(`package p
+
+import "fmt"
+
+func F(x Y) {
+	fmt.Println(x.Name)
+	return x.Do()
+}
+`)
+	r := Parse("a.go", src)
+	for _, name := range []string{"Println", "Name", "Do"} {
+		refs := refsNamed(r, name)
+		if len(refs) == 0 {
+			t.Errorf("property-access %q missing", name)
+			continue
+		}
+		if refs[0].Binding.Kind != scope.BindProbable || refs[0].Binding.Reason != "property_access" {
+			t.Errorf("%q should be property_access probable, got %+v", name, refs[0].Binding)
+		}
+	}
+}
+
 func TestParse_Builtins(t *testing.T) {
 	src := []byte(`package foo
 

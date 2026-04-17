@@ -422,8 +422,12 @@ func (b *builder) handleIdent(word []byte) {
 		return
 	}
 
-	// Property access after `.` (x.y — skip y).
+	// Property access after `.` (x.y): emit y as a probable ref with
+	// Reason="property_access". Imprecise — we don't know the receiver
+	// type — but lets refs-to discover cross-package method/field
+	// references by name matching. Consumer filters by binding kind.
 	if b.prevByte == '.' {
+		b.emitPropertyRef(name, mkSpan(startByte, endByte))
 		b.prevByte = 'i'
 		return
 	}
@@ -688,6 +692,25 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 	})
 }
 
+// emitPropertyRef records a property-access ref (after `.`). Binding
+// is BindProbable, Reason="property_access"; consumers match by name.
+func (b *builder) emitPropertyRef(name string, span scope.Span) {
+	scopeID := b.currentScope()
+	locID := hashLoc(b.file, span, name)
+	b.res.Refs = append(b.res.Refs, scope.Ref{
+		LocID:     locID,
+		File:      b.file,
+		Span:      span,
+		Name:      name,
+		Namespace: scope.NSField,
+		Scope:     scopeID,
+		Binding: scope.RefBinding{
+			Kind:   scope.BindProbable,
+			Reason: "property_access",
+		},
+	})
+}
+
 func (b *builder) emitRef(name string, span scope.Span) {
 	scopeID := b.currentScope()
 	locID := hashLoc(b.file, span, name)
@@ -721,6 +744,9 @@ func (b *builder) resolveRefs() {
 	}
 	for i := range b.res.Refs {
 		r := &b.res.Refs[i]
+		if r.Binding.Reason == "property_access" {
+			continue
+		}
 		cur := r.Scope
 		resolved := false
 		for {

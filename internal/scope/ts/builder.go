@@ -518,6 +518,13 @@ func (b *builder) handleIdent(word []byte) {
 	}
 
 	if b.prevByte == '.' {
+		// Property access `x.Name`: we can't resolve Name via scope
+		// chain (we don't know the receiver type), but emit as a
+		// probable ref with Reason=property_access so refs-to queries
+		// on method/field decls can pick it up by name-matching across
+		// files. Imprecise — matches any same-named method on any
+		// object — but surfaces the references users actually want.
+		b.emitPropertyRef(name, mkSpan(startByte, endByte))
 		b.regexOK = false
 		b.prevByte = 'i'
 		return
@@ -1049,6 +1056,27 @@ func (b *builder) emitRef(name string, span scope.Span) {
 	})
 }
 
+// emitPropertyRef records a ref from a property-access position
+// (`x.Name` — we're at Name, following `.`). Binding is BindProbable
+// with Reason="property_access": name-only, no decl link. Consumers
+// (refs-to, rename) match these by name against field/method decls.
+func (b *builder) emitPropertyRef(name string, span scope.Span) {
+	scopeID := b.currentScope()
+	locID := hashLoc(b.file, span, name)
+	b.res.Refs = append(b.res.Refs, scope.Ref{
+		LocID:     locID,
+		File:      b.file,
+		Span:      span,
+		Name:      name,
+		Namespace: scope.NSField,
+		Scope:     scopeID,
+		Binding: scope.RefBinding{
+			Kind:   scope.BindProbable,
+			Reason: "property_access",
+		},
+	})
+}
+
 // resolveRefs walks each Ref's scope chain and binds it to the innermost
 // matching Decl, if any.
 func (b *builder) resolveRefs() {
@@ -1071,6 +1099,10 @@ func (b *builder) resolveRefs() {
 	}
 	for i := range b.res.Refs {
 		r := &b.res.Refs[i]
+		// Property-access refs are pre-bound (BindProbable, no scope walk).
+		if r.Binding.Reason == "property_access" {
+			continue
+		}
 		cur := r.Scope
 		resolved := false
 		for {

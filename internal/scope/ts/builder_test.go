@@ -201,15 +201,19 @@ util.run()
 	if len(refs) == 0 || refs[0].Binding.Kind != scope.BindResolved {
 		t.Errorf("Schema ref not resolved: %+v", refs)
 	}
-	// util.run — util resolves; run is a property access, should not be emitted as a ref.
+	// util.run — util resolves; run is a property-access ref (probable,
+	// name-only, no scope-chain resolution).
 	utilRefs := refsNamed(r, "util")
 	if len(utilRefs) == 0 || utilRefs[0].Binding.Kind != scope.BindResolved {
 		t.Errorf("util ref not resolved")
 	}
-	for _, ref := range r.Refs {
-		if ref.Name == "run" {
-			t.Errorf("property access 'run' should not be emitted as a ref")
-		}
+	runRefs := refsNamed(r, "run")
+	if len(runRefs) == 0 {
+		t.Errorf("property-access 'run' should be emitted as a probable ref")
+	} else if runRefs[0].Binding.Kind != scope.BindProbable ||
+		runRefs[0].Binding.Reason != "property_access" {
+		t.Errorf("run ref should be BindProbable/property_access, got %+v",
+			runRefs[0].Binding)
 	}
 }
 
@@ -786,6 +790,35 @@ func TestParse_JSXFragment(t *testing.T) {
 	r := Parse("a.tsx", src)
 	if len(refsNamed(r, "A")) == 0 || len(refsNamed(r, "B")) == 0 {
 		t.Error("fragment children not seen as component refs")
+	}
+}
+
+
+
+func TestParse_PropertyAccessEmitsProbableRef(t *testing.T) {
+	src := []byte(`const obj = { foo: 1 }
+const x = obj.foo
+const y = obj.bar.baz
+`)
+	r := Parse("a.ts", src)
+	// `foo`, `bar`, `baz` should all be probable property-access refs.
+	for _, name := range []string{"foo", "bar", "baz"} {
+		refs := refsNamed(r, name)
+		if len(refs) == 0 {
+			t.Errorf("property-access %q missing", name)
+			continue
+		}
+		// At least one ref should be a property_access probable.
+		found := false
+		for _, ref := range refs {
+			if ref.Binding.Kind == scope.BindProbable && ref.Binding.Reason == "property_access" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("no property_access probable ref for %q: %+v", name, refs)
+		}
 	}
 }
 
