@@ -496,11 +496,18 @@ func (b *builder) handleIdent(word []byte) {
 		return
 	}
 
-	// Destructuring: emit each ident at any depth as a decl in the
-	// current scope. Known v1 imprecision: `{a: b}` records both a and b
-	// (the key a should be skipped, only b is the local), but both
-	// resolve to the same scope — acceptable for rename/refs-to.
+	// Destructuring: emit idents as decls in the current scope, with
+	// one wrinkle: in `{ key: local }` renaming syntax, only `local` is
+	// the local binding. Detect via one-token lookahead: if this ident
+	// is followed by ':' at depth 1+, it's a key — skip and let the
+	// next ident emit instead.
 	if b.inDestructuring {
+		if b.peekNonWSByte() == ':' {
+			// Key in `{ key: local }`. Skip emission.
+			b.regexOK = false
+			b.prevByte = 'i'
+			return
+		}
 		b.emitDecl(name, b.destructureKind, mkSpan(startByte, endByte))
 		b.regexOK = false
 		b.prevByte = 'i'
@@ -863,22 +870,81 @@ func (b *builder) isArrowParamList() bool {
 	if parenDepth != 0 {
 		return false
 	}
-	// Skip whitespace/comments; check for '=>'.
-	for !b.s.EOF() {
-		c := b.s.Peek()
-		switch {
-		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
-			b.s.Next()
-		case c == '/' && b.s.PeekAt(1) == '/':
-			b.s.SkipLineComment()
-		case c == '/' && b.s.PeekAt(1) == '*':
-			b.s.Advance(2)
-			b.s.SkipBlockComment("*/")
-		default:
-			return b.s.Peek() == '=' && b.s.PeekAt(1) == '>'
+	// Skip whitespace/comments; check for '=>'. If we hit ':' instead,
+	// we're looking at a TS-typed arrow `(a): RetType => body` — scan
+	// through the return-type annotation (balanced across <>[](){}) and
+	// try again for '=>'.
+	skipWS := func() {
+		for !b.s.EOF() {
+			c := b.s.Peek()
+			if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+				b.s.Next()
+				continue
+			}
+			if c == '/' && b.s.PeekAt(1) == '/' {
+				b.s.SkipLineComment()
+				continue
+			}
+			if c == '/' && b.s.PeekAt(1) == '*' {
+				b.s.Advance(2)
+				b.s.SkipBlockComment("*/")
+				continue
+			}
+			return
 		}
 	}
-	return false
+	skipWS()
+	if b.s.EOF() {
+		return false
+	}
+	if b.s.Peek() == ':' {
+		// TS return-type annotation. Skip through the type expression
+		// until we hit '=>' at depth 0 (or a stop token that means
+		// this wasn't an arrow after all).
+		b.s.Pos++ // consume ':'
+		typeDepth := 0
+		for !b.s.EOF() {
+			c := b.s.Peek()
+			if typeDepth == 0 && c == '=' && b.s.PeekAt(1) == '>' {
+				return true
+			}
+			switch c {
+			case '<', '[', '(', '{':
+				typeDepth++
+				b.s.Pos++
+			case '>', ']', ')', '}':
+				if typeDepth == 0 {
+					return false
+				}
+				typeDepth--
+				b.s.Pos++
+			case ';', ',':
+				if typeDepth == 0 {
+					return false
+				}
+				b.s.Pos++
+			case '/':
+				if b.s.PeekAt(1) == '/' {
+					b.s.SkipLineComment()
+				} else if b.s.PeekAt(1) == '*' {
+					b.s.Advance(2)
+					b.s.SkipBlockComment("*/")
+				} else {
+					b.s.Pos++
+				}
+			case '\'':
+				b.s.ScanSimpleString('\'')
+			case '"':
+				b.s.ScanSimpleString('"')
+			case '`':
+				b.s.ScanInterpolatedString('`', "${", skipTemplateExpr)
+			default:
+				b.s.Next()
+			}
+		}
+		return false
+	}
+	return b.s.Peek() == '=' && b.s.PeekAt(1) == '>'
 }
 
 // peekNonWSByte returns the next non-whitespace, non-comment byte without
@@ -914,12 +980,22 @@ func (b *builder) peekNonWSByte() byte {
 func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 	scopeID := b.currentScope()
 	locID := hashLoc(b.file, span, name)
-	declID := hashDecl(b.file, name, scope.NSValue, scopeID)
+	ns := scope.NSValue
+	// Class/interface members (field, method) go in the field namespace so
+	// they do not shadow same-name top-level decls during scope resolution.
+	// Property-access refs (obj.x) are skipped at the tokenizer level, so
+	// field/method names never come up as bare refs.
+	if kind == scope.KindField || kind == scope.KindMethod {
+		if sk := b.currentScopeKind(); sk == scope.ScopeClass || sk == scope.ScopeInterface {
+			ns = scope.NSField
+		}
+	}
+	declID := hashDecl(b.file, name, ns, scopeID)
 	b.res.Decls = append(b.res.Decls, scope.Decl{
 		ID:        declID,
 		LocID:     locID,
 		Name:      name,
-		Namespace: scope.NSValue,
+		Namespace: ns,
 		Kind:      kind,
 		Scope:     scopeID,
 		File:      b.file,
@@ -950,11 +1026,12 @@ func (b *builder) resolveRefs() {
 	type key struct {
 		scope scope.ScopeID
 		name  string
+		ns    scope.Namespace
 	}
 	byKey := make(map[key]*scope.Decl, len(b.res.Decls))
 	for i := range b.res.Decls {
 		d := &b.res.Decls[i]
-		k := key{scope: d.Scope, name: d.Name}
+		k := key{scope: d.Scope, name: d.Name, ns: d.Namespace}
 		if _, ok := byKey[k]; !ok {
 			byKey[k] = d
 		}
@@ -964,7 +1041,7 @@ func (b *builder) resolveRefs() {
 		cur := r.Scope
 		resolved := false
 		for {
-			if d, ok := byKey[key{scope: cur, name: r.Name}]; ok {
+			if d, ok := byKey[key{scope: cur, name: r.Name, ns: r.Namespace}]; ok {
 				r.Binding = scope.RefBinding{
 					Kind:   scope.BindResolved,
 					Decl:   d.ID,
@@ -979,7 +1056,7 @@ func (b *builder) resolveRefs() {
 			}
 			if p == 0 && cur != 0 {
 				// Reached file scope; try one more lookup there.
-				if d, ok := byKey[key{scope: 0, name: r.Name}]; ok {
+				if d, ok := byKey[key{scope: 0, name: r.Name, ns: r.Namespace}]; ok {
 					r.Binding = scope.RefBinding{
 						Kind:   scope.BindResolved,
 						Decl:   d.ID,
@@ -995,9 +1072,39 @@ func (b *builder) resolveRefs() {
 			cur = p
 		}
 		if !resolved {
+			// Signature-position generics: `function foo<T>(x: T)` — the
+			// ref to T in the param list is emitted at file scope but the
+			// T decl lives in the function scope (opened later at '{').
+			// Pass 2: for an unresolved ref, look for a KindType decl
+			// whose source position precedes the ref AND whose enclosing
+			// scope's end-byte follows the ref. Bind with a distinct
+			// reason so consumers can tell it apart.
+			for j := range b.res.Decls {
+				d := &b.res.Decls[j]
+				if d.Kind != scope.KindType || d.Name != r.Name || d.Namespace != r.Namespace {
+					continue
+				}
+				if d.Span.EndByte >= r.Span.StartByte {
+					continue // decl not yet in source at ref position
+				}
+				if int(d.Scope) <= 0 || int(d.Scope) > len(b.res.Scopes) {
+					continue
+				}
+				sc := b.res.Scopes[int(d.Scope)-1]
+				if sc.Span.EndByte == 0 || r.Span.EndByte > sc.Span.EndByte {
+					continue // scope doesn't enclose ref (still open or past end)
+				}
+				r.Binding = scope.RefBinding{
+					Kind:   scope.BindResolved,
+					Decl:   d.ID,
+					Reason: "signature_scope",
+				}
+				resolved = true
+				break
+			}
+		}
+		if !resolved {
 			// Fall back to language builtins: Array, Promise, Error, etc.
-			// Bind with a deterministic synthetic DeclID so RefsTo queries
-			// group correctly; consumers filter by Reason == "builtin".
 			if builtins.TypeScript.Has(r.Name) {
 				r.Binding = scope.RefBinding{
 					Kind:   scope.BindResolved,

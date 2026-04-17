@@ -46,9 +46,11 @@ func Parse(file string, src []byte) *scope.Result {
 }
 
 type scopeEntry struct {
-	kind             scope.ScopeKind
-	id               scope.ScopeID
-	savedVarDeclKind scope.DeclKind
+	kind                  scope.ScopeKind
+	id                    scope.ScopeID
+	savedVarDeclKind      scope.DeclKind
+	savedStructNeedsName  bool
+	savedStructDepth      int
 }
 
 type builder struct {
@@ -102,6 +104,14 @@ type builder struct {
 
 	// parenVarStack: save/restore varDeclKind across () and [] pairs.
 	parenVarStack []scope.DeclKind
+
+	// structNeedsName: at the top depth of a struct/interface body, the
+	// first ident in each section (line or comma-separated) is a field or
+	// method name; subsequent idents on the same section are type refs.
+	// structDepth tracks nested {}/[]/() inside the struct body to avoid
+	// applying the rule inside nested types like `X []map[string]int`.
+	structNeedsName bool
+	structDepth     int
 
 	// shortVarCandidates: idents on the LHS of a possible `a, b := ...`.
 	// If we hit `:=`, they become decls. Else, they're refs.
@@ -163,6 +173,9 @@ func (b *builder) run() {
 			b.parenVarStack = append(b.parenVarStack, b.varDeclKind)
 			b.varDeclKind = ""
 			b.prevByte = '('
+			if sk := b.currentScopeKind(); sk == scope.ScopeClass || sk == scope.ScopeInterface {
+				b.structDepth++
+			}
 			if b.funcReceiverPending {
 				b.funcReceiverPending = false
 				b.inFuncReceiver = true
@@ -192,6 +205,9 @@ func (b *builder) run() {
 				b.parenVarStack = b.parenVarStack[:n-1]
 			}
 			b.prevByte = ')'
+			if sk := b.currentScopeKind(); (sk == scope.ScopeClass || sk == scope.ScopeInterface) && b.structDepth > 0 {
+				b.structDepth--
+			}
 			if b.inParamList {
 				b.paramDepth--
 				if b.paramDepth == 0 {
@@ -216,6 +232,9 @@ func (b *builder) run() {
 			b.parenVarStack = append(b.parenVarStack, b.varDeclKind)
 			b.varDeclKind = ""
 			b.prevByte = '['
+			if sk := b.currentScopeKind(); sk == scope.ScopeClass || sk == scope.ScopeInterface {
+				b.structDepth++
+			}
 			if b.typeParamsPending {
 				b.typeParamsPending = false
 				b.inTypeParams = true
@@ -231,6 +250,9 @@ func (b *builder) run() {
 				b.parenVarStack = b.parenVarStack[:n-1]
 			}
 			b.prevByte = ']'
+			if sk := b.currentScopeKind(); (sk == scope.ScopeClass || sk == scope.ScopeInterface) && b.structDepth > 0 {
+				b.structDepth--
+			}
 			if b.inTypeParams {
 				b.typeParamDepth--
 				if b.typeParamDepth == 0 {
@@ -249,6 +271,12 @@ func (b *builder) run() {
 			if !b.inShortVarLHS && b.varDeclKind != "" && !b.inParamList && !b.inTypeParams {
 				// multi-name var: `var a, b int`
 				b.declContext = b.varDeclKind
+			}
+			// Struct multi-name field: `X, Y int` — a comma at struct top
+			// depth re-enables needsName for the next name.
+			sk := b.currentScopeKind()
+			if (sk == scope.ScopeClass || sk == scope.ScopeInterface) && b.structDepth == 0 {
+				b.structNeedsName = true
 			}
 		case c == ':' && b.s.PeekAt(1) == '=':
 			// `:=` short variable declaration. Preceding ident(s) are decls.
@@ -302,7 +330,8 @@ func (b *builder) run() {
 // flushes pending short-var LHS as refs (if not followed by `:=`).
 // Inside a block decl (`var (... )`), each line is a fresh binder —
 // re-activate declContext from blockDeclKind so the next ident is
-// recognized as a decl.
+// recognized as a decl. In struct/interface bodies, a newline begins
+// a fresh field/method section — re-enable structNeedsName.
 func (b *builder) onStatementBoundary() {
 	b.stmtStart = true
 	if b.inBlockDecl && b.blockDeclDepth > 0 {
@@ -311,6 +340,11 @@ func (b *builder) onStatementBoundary() {
 	} else {
 		b.declContext = ""
 		b.varDeclKind = ""
+	}
+	// Re-enable field-name at top depth of a struct/interface scope.
+	sk := b.currentScopeKind()
+	if (sk == scope.ScopeClass || sk == scope.ScopeInterface) && b.structDepth == 0 {
+		b.structNeedsName = true
 	}
 	if b.inShortVarLHS {
 		for _, p := range b.shortVarCandidates {
@@ -439,9 +473,42 @@ func (b *builder) handleIdent(word []byte) {
 	}
 
 	// Struct/interface body: field or method declaration.
+	// First ident per section at top depth = field (or method, if followed
+	// by '(' in interface scope). Subsequent idents on the same line/section
+	// are type refs. `,` re-enables needsName for multi-name fields.
+	// Nested types (X []map[string]int) are handled by structDepth — idents
+	// inside nested brackets go through the normal ref path.
 	scopeK := b.currentScopeKind()
-	if scopeK == scope.ScopeClass || scopeK == scope.ScopeInterface {
-		b.emitDecl(name, scope.KindField, mkSpan(startByte, endByte))
+	if (scopeK == scope.ScopeClass || scopeK == scope.ScopeInterface) && b.structDepth == 0 {
+		if b.structNeedsName {
+			// Embedded type in interface: `io.Closer` — ident followed by
+			// `.` is a qualified reference, not a method. Emit as ref.
+			// Same in struct for embedded types, though struct embedding
+			// is less common in this codebase.
+			if b.peekNonWSByte() == '.' {
+				b.emitRef(name, mkSpan(startByte, endByte))
+				b.structNeedsName = false
+				b.prevByte = 'i'
+				return
+			}
+			// Method in interface: ident followed by `(` or `[` (generic).
+			kind := scope.KindField
+			if scopeK == scope.ScopeInterface {
+				next := b.peekNonWSByte()
+				if next == '(' || next == '[' {
+					kind = scope.KindMethod
+					// After a method decl, allow param list to open.
+					b.paramListPending = true
+					b.typeParamsPending = true
+				}
+			}
+			b.emitDecl(name, kind, mkSpan(startByte, endByte))
+			b.structNeedsName = false
+			b.prevByte = 'i'
+			return
+		}
+		// Subsequent ident on the same field/method line is a type ref.
+		b.emitRef(name, mkSpan(startByte, endByte))
 		b.prevByte = 'i'
 		return
 	}
@@ -508,14 +575,26 @@ func (b *builder) openScope(kind scope.ScopeKind, startByte uint32) {
 	})
 	b.stack.Push(lexkit.Scope[scopeEntry]{
 		Data: scopeEntry{
-			kind:             kind,
-			id:               id,
-			savedVarDeclKind: b.varDeclKind,
+			kind:                 kind,
+			id:                   id,
+			savedVarDeclKind:     b.varDeclKind,
+			savedStructNeedsName: b.structNeedsName,
+			savedStructDepth:     b.structDepth,
 		},
 		SymIdx:   -1,
 		OpenLine: b.s.Line,
 	})
 	b.varDeclKind = ""
+	// Entering a new scope: reset struct-body state. A fresh struct or
+	// interface scope starts with structNeedsName=true; any other scope
+	// ignores the flag.
+	if kind == scope.ScopeClass || kind == scope.ScopeInterface {
+		b.structNeedsName = true
+		b.structDepth = 0
+	} else {
+		b.structNeedsName = false
+		b.structDepth = 0
+	}
 }
 
 func (b *builder) closeTopScope(endByte uint32) {
@@ -528,6 +607,8 @@ func (b *builder) closeTopScope(endByte uint32) {
 		b.res.Scopes[idx].Span.EndByte = endByte
 	}
 	b.varDeclKind = e.Data.savedVarDeclKind
+	b.structNeedsName = e.Data.savedStructNeedsName
+	b.structDepth = e.Data.savedStructDepth
 }
 
 func (b *builder) closeScopesToDepth(depth int) {
@@ -544,6 +625,36 @@ func (b *builder) currentScope() scope.ScopeID {
 	return 0
 }
 
+// peekNonWSByte returns the next non-whitespace, non-comment byte
+// without advancing the scanner. Used for one-token lookahead (e.g.
+// "is this ident a method or a field?" in an interface body).
+func (b *builder) peekNonWSByte() byte {
+	save := b.s.Pos
+	saveLine := b.s.Line
+	for !b.s.EOF() {
+		c := b.s.Peek()
+		if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+			b.s.Next()
+			continue
+		}
+		if c == '/' && b.s.PeekAt(1) == '/' {
+			b.s.SkipLineComment()
+			continue
+		}
+		if c == '/' && b.s.PeekAt(1) == '*' {
+			b.s.Advance(2)
+			b.s.SkipBlockComment("*/")
+			continue
+		}
+		b.s.Pos = save
+		b.s.Line = saveLine
+		return c
+	}
+	b.s.Pos = save
+	b.s.Line = saveLine
+	return 0
+}
+
 func (b *builder) currentScopeKind() scope.ScopeKind {
 	if top := b.stack.Top(); top != nil {
 		return top.Data.kind
@@ -554,12 +665,22 @@ func (b *builder) currentScopeKind() scope.ScopeKind {
 func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 	scopeID := b.currentScope()
 	locID := hashLoc(b.file, span, name)
-	declID := hashDecl(b.file, name, scope.NSValue, scopeID)
+	ns := scope.NSValue
+	// Struct fields and interface methods live in the field namespace so
+	// they do not shadow same-name top-level types/values during scope-
+	// chain resolution. Refs to them via property access (obj.x) are
+	// skipped at the tokenizer level, so they never come up as bare refs.
+	if kind == scope.KindField || kind == scope.KindMethod {
+		if sk := b.currentScopeKind(); sk == scope.ScopeClass || sk == scope.ScopeInterface {
+			ns = scope.NSField
+		}
+	}
+	declID := hashDecl(b.file, name, ns, scopeID)
 	b.res.Decls = append(b.res.Decls, scope.Decl{
 		ID:        declID,
 		LocID:     locID,
 		Name:      name,
-		Namespace: scope.NSValue,
+		Namespace: ns,
 		Kind:      kind,
 		Scope:     scopeID,
 		File:      b.file,
@@ -588,11 +709,12 @@ func (b *builder) resolveRefs() {
 	type key struct {
 		scope scope.ScopeID
 		name  string
+		ns    scope.Namespace
 	}
 	byKey := make(map[key]*scope.Decl, len(b.res.Decls))
 	for i := range b.res.Decls {
 		d := &b.res.Decls[i]
-		k := key{scope: d.Scope, name: d.Name}
+		k := key{scope: d.Scope, name: d.Name, ns: d.Namespace}
 		if _, ok := byKey[k]; !ok {
 			byKey[k] = d
 		}
@@ -602,7 +724,7 @@ func (b *builder) resolveRefs() {
 		cur := r.Scope
 		resolved := false
 		for {
-			if d, ok := byKey[key{scope: cur, name: r.Name}]; ok {
+			if d, ok := byKey[key{scope: cur, name: r.Name, ns: r.Namespace}]; ok {
 				r.Binding = scope.RefBinding{
 					Kind:   scope.BindResolved,
 					Decl:   d.ID,
@@ -616,7 +738,7 @@ func (b *builder) resolveRefs() {
 				break
 			}
 			if p == 0 && cur != 0 {
-				if d, ok := byKey[key{scope: 0, name: r.Name}]; ok {
+				if d, ok := byKey[key{scope: 0, name: r.Name, ns: r.Namespace}]; ok {
 					r.Binding = scope.RefBinding{
 						Kind:   scope.BindResolved,
 						Decl:   d.ID,
@@ -630,6 +752,34 @@ func (b *builder) resolveRefs() {
 				break
 			}
 			cur = p
+		}
+		if !resolved {
+			// Signature-position generics: for an unresolved ref, find a
+			// KindType decl whose source position precedes the ref and
+			// whose enclosing scope encloses the ref's byte range.
+			for j := range b.res.Decls {
+				d := &b.res.Decls[j]
+				if d.Kind != scope.KindType || d.Name != r.Name || d.Namespace != r.Namespace {
+					continue
+				}
+				if d.Span.EndByte >= r.Span.StartByte {
+					continue
+				}
+				if int(d.Scope) <= 0 || int(d.Scope) > len(b.res.Scopes) {
+					continue
+				}
+				sc := b.res.Scopes[int(d.Scope)-1]
+				if sc.Span.EndByte == 0 || r.Span.EndByte > sc.Span.EndByte {
+					continue
+				}
+				r.Binding = scope.RefBinding{
+					Kind:   scope.BindResolved,
+					Decl:   d.ID,
+					Reason: "signature_scope",
+				}
+				resolved = true
+				break
+			}
 		}
 		if !resolved {
 			if builtins.Go.Has(r.Name) {

@@ -41,6 +41,12 @@ const (
 	NSNamespace Namespace = "namespace"
 	NSMacro     Namespace = "macro"
 	NSConstant  Namespace = "constant"
+	// NSField is for struct/interface members (fields and methods as
+	// declared within a type body). Field/method refs happen via
+	// property access (obj.x), which scope resolution does not walk.
+	// Putting them in their own namespace prevents shadowing of
+	// same-name top-level decls during scope-chain resolution.
+	NSField Namespace = "field"
 )
 
 // DeclKind classifies a declaration's syntactic role (for display and

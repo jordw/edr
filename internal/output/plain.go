@@ -891,14 +891,22 @@ func plainRefsTo(w *os.File, op Op) {
 			}
 		}
 	}
+	originFile, _ := op["file"].(string)
 	for _, m := range refs {
 		line := anyInt(m["line"])
 		col := anyInt(m["col"])
 		reason, _ := m["reason"].(string)
+		refFile, _ := m["file"].(string)
+		// Prefix with filename only when it differs from the decl file
+		// (cross-file refs). Keeps in-file output compact.
+		prefix := ""
+		if refFile != "" && refFile != originFile {
+			prefix = refFile + ":"
+		}
 		if reason == "" || reason == "direct_scope" {
-			fmt.Fprintf(w, "%d:%d\n", line, col)
+			fmt.Fprintf(w, "%s%d:%d\n", prefix, line, col)
 		} else {
-			fmt.Fprintf(w, "%d:%d  (%s)\n", line, col, reason)
+			fmt.Fprintf(w, "%s%d:%d  (%s)\n", prefix, line, col, reason)
 		}
 	}
 }
