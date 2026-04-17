@@ -11,6 +11,7 @@ import (
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/scope"
 	"github.com/jordw/edr/internal/scope/golang"
+	"github.com/jordw/edr/internal/scope/python"
 	"github.com/jordw/edr/internal/scope/ts"
 )
 
@@ -46,8 +47,10 @@ func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []stri
 		result = ts.Parse(relFile, src)
 	case ".go":
 		result = golang.Parse(relFile, src)
+	case ".py", ".pyi":
+		result = python.Parse(relFile, src)
 	default:
-		return nil, fmt.Errorf("refs-to: unsupported language %q (currently supports .ts/.tsx/.js/.jsx and .go)", ext)
+		return nil, fmt.Errorf("refs-to: unsupported language %q (currently supports .ts/.tsx/.js/.jsx, .go, .py)", ext)
 	}
 
 	// Find the decl. Prefer file-scope match; fall back to any decl with the name.
@@ -125,6 +128,8 @@ func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []stri
 			}
 		case ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts":
 			entries = append(entries, tsCrossFileRefs(root, absFile, symbolName)...)
+		case ".py", ".pyi":
+			entries = append(entries, pyCrossFileRefs(root, absFile, symbolName)...)
 		}
 	}
 
@@ -275,6 +280,76 @@ func goCrossPackagePropRefs(root, originFile, name string) []refEntry {
 				col:    col,
 				span:   [2]uint32{ref.Span.StartByte, ref.Span.EndByte},
 				reason: "cross_package_property",
+				kind:   scope.BindProbable,
+			})
+		}
+		return nil
+	})
+	return out
+}
+
+// pyCrossFileRefs walks .py files under root and collects refs to
+// `name` that are unresolved (likely cross-module imports not followed)
+// or property-access probable (`pkg.name` call sites). Heuristic but
+// high-signal — Python import resolution (dotted paths, from..import,
+// relative imports) is deferred.
+func pyCrossFileRefs(root, originFile, name string) []refEntry {
+	var out []refEntry
+	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			n := info.Name()
+			if n == ".git" || n == ".edr" || n == "__pycache__" || n == ".venv" || n == "node_modules" || n == "build" || n == "dist" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if path == originFile || !strings.HasSuffix(path, ".py") {
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		r := python.Parse(path, src)
+		// Only scan files that mention the name at all.
+		seen := false
+		for _, ref := range r.Refs {
+			if ref.Name == name {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			return nil
+		}
+		sibLines := computeLineStarts(src)
+		for _, ref := range r.Refs {
+			if ref.Name != name {
+				continue
+			}
+			var reason string
+			switch {
+			case ref.Binding.Reason == "property_access":
+				reason = "property_access"
+			case ref.Binding.Kind == scope.BindResolved && ref.Binding.Reason == "builtin":
+				continue
+			case ref.Binding.Kind == scope.BindResolved:
+				reason = "cross_file_import"
+			case ref.Binding.Kind == scope.BindUnresolved:
+				reason = "cross_file_unresolved"
+			default:
+				continue
+			}
+			line, col := byteToLineCol(sibLines, ref.Span.StartByte)
+			out = append(out, refEntry{
+				file:   output.Rel(path),
+				line:   line,
+				col:    col,
+				span:   [2]uint32{ref.Span.StartByte, ref.Span.EndByte},
+				reason: reason,
 				kind:   scope.BindProbable,
 			})
 		}
