@@ -33,9 +33,10 @@ import (
 // Parse extracts a scope.Result from a Go source buffer.
 func Parse(file string, src []byte) *scope.Result {
 	b := &builder{
-		file: file,
-		res:  &scope.Result{File: file},
-		s:    lexkit.New(src),
+		file:             file,
+		res:              &scope.Result{File: file},
+		s:                lexkit.New(src),
+		pendingOwnerDecl: -1,
 	}
 	b.openScope(scope.ScopeFile, 0)
 	b.stmtStart = true
@@ -51,6 +52,11 @@ type scopeEntry struct {
 	savedVarDeclKind      scope.DeclKind
 	savedStructNeedsName  bool
 	savedStructDepth      int
+	// ownerDeclIdx is the index in res.Decls of the decl that owns this
+	// scope (e.g., for a function scope, the func decl). -1 if none.
+	// On scope close, FullSpan.EndByte for that decl is patched to the
+	// closing brace position.
+	ownerDeclIdx int
 }
 
 type builder struct {
@@ -117,6 +123,17 @@ type builder struct {
 	// If we hit `:=`, they become decls. Else, they're refs.
 	shortVarCandidates []pendingParam
 	inShortVarLHS      bool
+
+	// pendingFullStart captures the byte position of the most recent
+	// declaration keyword (func, type, var, const, struct, interface).
+	// emitDecl uses it as FullSpan.StartByte so the full span covers
+	// keyword → closing brace for scope-owning decls.
+	pendingFullStart uint32
+
+	// pendingOwnerDecl is the index in res.Decls of the last emitted
+	// decl that owns an upcoming scope. Consumed by the next openScope
+	// call so closeTopScope can patch FullSpan.EndByte. -1 when none.
+	pendingOwnerDecl int
 
 	prevByte byte
 }
@@ -380,6 +397,7 @@ func (b *builder) handleIdent(word []byte) {
 		b.declContext = scope.KindFunction
 		k := scope.ScopeFunction
 		b.pendingScope = &k
+		b.pendingFullStart = startByte
 		b.funcReceiverPending = true // next `(` might be receiver
 		b.prevByte = 'k'
 		return
@@ -388,6 +406,7 @@ func (b *builder) handleIdent(word []byte) {
 			b.declContext = scope.KindType
 			b.blockDeclKind = scope.KindType
 			b.inBlockDecl = true
+			b.pendingFullStart = startByte
 		}
 		b.prevByte = 'k'
 		return
@@ -396,6 +415,7 @@ func (b *builder) handleIdent(word []byte) {
 		b.varDeclKind = scope.KindVar
 		b.blockDeclKind = scope.KindVar
 		b.inBlockDecl = true
+		b.pendingFullStart = startByte
 		b.prevByte = 'k'
 		return
 	case "const":
@@ -403,6 +423,7 @@ func (b *builder) handleIdent(word []byte) {
 		b.varDeclKind = scope.KindConst
 		b.blockDeclKind = scope.KindConst
 		b.inBlockDecl = true
+		b.pendingFullStart = startByte
 		b.prevByte = 'k'
 		return
 	case "struct":
@@ -577,6 +598,8 @@ func (b *builder) openScope(kind scope.ScopeKind, startByte uint32) {
 		Kind:   kind,
 		Span:   scope.Span{StartByte: startByte, EndByte: 0},
 	})
+	owner := b.pendingOwnerDecl
+	b.pendingOwnerDecl = -1
 	b.stack.Push(lexkit.Scope[scopeEntry]{
 		Data: scopeEntry{
 			kind:                 kind,
@@ -584,6 +607,7 @@ func (b *builder) openScope(kind scope.ScopeKind, startByte uint32) {
 			savedVarDeclKind:     b.varDeclKind,
 			savedStructNeedsName: b.structNeedsName,
 			savedStructDepth:     b.structDepth,
+			ownerDeclIdx:         owner,
 		},
 		SymIdx:   -1,
 		OpenLine: b.s.Line,
@@ -609,6 +633,15 @@ func (b *builder) closeTopScope(endByte uint32) {
 	idx := int(e.Data.id) - 1
 	if idx >= 0 && idx < len(b.res.Scopes) {
 		b.res.Scopes[idx].Span.EndByte = endByte
+	}
+	// If this scope was owned by a decl (function, class, interface,
+	// struct/type body), extend that decl's FullSpan to include the
+	// closing brace. endByte is the byte position one past the '}'
+	// (half-open range, matches Scope.Span convention).
+	if o := e.Data.ownerDeclIdx; o >= 0 && o < len(b.res.Decls) {
+		if b.res.Decls[o].FullSpan.EndByte < endByte {
+			b.res.Decls[o].FullSpan.EndByte = endByte
+		}
 	}
 	b.varDeclKind = e.Data.savedVarDeclKind
 	b.structNeedsName = e.Data.savedStructNeedsName
@@ -680,6 +713,19 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 		}
 	}
 	declID := hashDecl(b.file, name, ns, scopeID)
+
+	// FullSpan covers keyword → end of declaration. Scope-owning decls
+	// (function, method, type, interface class/struct bodies) get
+	// FullSpan.EndByte patched to the closing brace in closeTopScope.
+	// Leaf decls (var/const/param/field/import) keep FullSpan = Span
+	// since this pass does not track their statement end.
+	fullStart := b.pendingFullStart
+	if fullStart == 0 || fullStart > span.StartByte {
+		fullStart = span.StartByte
+	}
+	fullSpan := scope.Span{StartByte: fullStart, EndByte: span.EndByte}
+
+	idx := len(b.res.Decls)
 	b.res.Decls = append(b.res.Decls, scope.Decl{
 		ID:        declID,
 		LocID:     locID,
@@ -689,7 +735,21 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 		Scope:     scopeID,
 		File:      b.file,
 		Span:      span,
+		FullSpan:  fullSpan,
 	})
+
+	// Scope-owning decls: remember the decl index so the next openScope
+	// can attach it and closeTopScope can patch FullSpan.EndByte.
+	switch kind {
+	case scope.KindFunction, scope.KindMethod, scope.KindType,
+		scope.KindClass, scope.KindInterface:
+		b.pendingOwnerDecl = idx
+	}
+	// Always clear pendingFullStart after the first consumer so a
+	// later decl on a different statement does not pick up a stale
+	// keyword position. Multi-ident block decls (var (...)) re-set it
+	// at each line start via onStatementBoundary → blockDeclKind path.
+	b.pendingFullStart = 0
 }
 
 // emitPropertyRef records a property-access ref (after `.`). Binding

@@ -255,3 +255,88 @@ var (
 		}
 	}
 }
+
+// TestParse_FullSpan_ScopeOwningDecls asserts that function, type,
+// struct, and interface decls populate FullSpan covering from the
+// declaration keyword through the closing brace.
+func TestParse_FullSpan_ScopeOwningDecls(t *testing.T) {
+	src := []byte(`package p
+
+func Greet(name string) string {
+	return "hi " + name
+}
+
+type Point struct {
+	X int
+	Y int
+}
+
+type Stringer interface {
+	String() string
+}
+`)
+	r := Parse("a.go", src)
+
+	check := func(name, wantPrefix string) {
+		t.Helper()
+		d := findDecl(r, name)
+		if d == nil {
+			t.Fatalf("decl %q missing", name)
+		}
+		if d.FullSpan.StartByte >= d.Span.StartByte {
+			t.Errorf("%s: FullSpan.StartByte=%d should be < Span.StartByte=%d (must cover keyword)",
+				name, d.FullSpan.StartByte, d.Span.StartByte)
+		}
+		if d.FullSpan.EndByte <= d.Span.EndByte {
+			t.Errorf("%s: FullSpan.EndByte=%d should be > Span.EndByte=%d (must cover body)",
+				name, d.FullSpan.EndByte, d.Span.EndByte)
+		}
+		got := string(src[d.FullSpan.StartByte:min(int(d.FullSpan.EndByte), len(src))])
+		if len(got) < len(wantPrefix) || got[:len(wantPrefix)] != wantPrefix {
+			t.Errorf("%s: FullSpan content starts %q, want prefix %q", name, got, wantPrefix)
+		}
+		if got[len(got)-1] != '}' {
+			t.Errorf("%s: FullSpan content does not end at }: %q", name, got)
+		}
+	}
+	check("Greet", "func Greet")
+	check("Point", "type Point struct")
+	check("Stringer", "type Stringer interface")
+}
+
+// TestParse_FullSpan_LeafDecls asserts that non-scope-owning decls
+// (var, const, param, field) fall back to FullSpan == Span. The pass
+// does not track statement boundaries for leaf decls, so this is the
+// documented behavior.
+func TestParse_FullSpan_LeafDecls(t *testing.T) {
+	src := []byte(`package p
+
+var Pi = 3.14
+const MaxN = 10
+`)
+	r := Parse("a.go", src)
+	for _, name := range []string{"Pi", "MaxN"} {
+		d := findDecl(r, name)
+		if d == nil {
+			t.Fatalf("decl %q missing", name)
+		}
+		// FullSpan.StartByte covers the keyword (var/const), so it is
+		// less than Span.StartByte. FullSpan.EndByte matches Span.EndByte
+		// (leaf decls do not track statement end).
+		if d.FullSpan.StartByte >= d.Span.StartByte {
+			t.Errorf("%s: FullSpan.StartByte=%d should cover the keyword before Span.StartByte=%d",
+				name, d.FullSpan.StartByte, d.Span.StartByte)
+		}
+		if d.FullSpan.EndByte != d.Span.EndByte {
+			t.Errorf("%s: FullSpan.EndByte=%d should equal Span.EndByte=%d for leaf decl",
+				name, d.FullSpan.EndByte, d.Span.EndByte)
+		}
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
