@@ -822,6 +822,121 @@ const y = obj.bar.baz
 	}
 }
 
+// TestParse_ThisDotFieldResolves asserts that `this.X` inside a method
+// body binds to the enclosing class's field/method decl, not an
+// unresolved property_access ref. Also verifies:
+//   - `this.X.Y` only resolves the first segment (X); Y remains property_access.
+//   - `this` inside an arrow nested in a method still resolves to the class.
+//   - standalone (non-method) `this.X` falls through to property_access.
+func TestParse_ThisDotFieldResolves(t *testing.T) {
+	src := []byte(`class Counter {
+  value: number
+  step: number
+  increment() {
+    this.value = this.value + this.step
+    const bump = () => { this.value += 1 }
+    bump()
+    return this.value.toString()
+  }
+}
+function topLevel() {
+  return this.value
+}
+`)
+	r := Parse("a.ts", src)
+
+	// Find field decls.
+	var valueDecl, stepDecl *scope.Decl
+	for i := range r.Decls {
+		d := &r.Decls[i]
+		if d.Namespace != scope.NSField {
+			continue
+		}
+		switch d.Name {
+		case "value":
+			if d.Kind == scope.KindField {
+				valueDecl = d
+			}
+		case "step":
+			if d.Kind == scope.KindField {
+				stepDecl = d
+			}
+		}
+	}
+	if valueDecl == nil {
+		t.Fatalf("field decl `value` missing; decls=%v", declNames(r))
+	}
+	if stepDecl == nil {
+		t.Fatalf("field decl `step` missing; decls=%v", declNames(r))
+	}
+
+	// Count resolved `this.value` refs. The body has 4 occurrences of
+	// `this.value` inside the method:
+	//   1. `this.value = ...`       (direct method body)
+	//   2. `this.value + ...`       (direct method body)
+	//   3. `this.value += 1`        (inside arrow, lexical this)
+	//   4. `this.value.toString()`  (only `value` resolves; `toString` stays property_access)
+	// And 1 more in topLevel() that should fall back to property_access.
+	resolvedValue := 0
+	propAccessValue := 0
+	for _, ref := range r.Refs {
+		if ref.Name != "value" {
+			continue
+		}
+		switch {
+		case ref.Binding.Kind == scope.BindResolved &&
+			ref.Binding.Decl == valueDecl.ID &&
+			ref.Binding.Reason == "this_dot_field":
+			resolvedValue++
+		case ref.Binding.Kind == scope.BindProbable &&
+			ref.Binding.Reason == "property_access":
+			propAccessValue++
+		}
+	}
+	if resolvedValue != 4 {
+		t.Errorf("expected 4 resolved this.value refs, got %d; refs=%+v", resolvedValue, refsNamed(r, "value"))
+	}
+	// The standalone topLevel() function's `this.value` should fall
+	// through to property_access (no enclosing class on the scope stack).
+	if propAccessValue != 1 {
+		t.Errorf("expected 1 property_access `value` ref (from topLevel), got %d; refs=%+v", propAccessValue, refsNamed(r, "value"))
+	}
+
+	// `this.step` appears once and should resolve.
+	resolvedStep := 0
+	for _, ref := range r.Refs {
+		if ref.Name != "step" {
+			continue
+		}
+		if ref.Binding.Kind == scope.BindResolved &&
+			ref.Binding.Decl == stepDecl.ID &&
+			ref.Binding.Reason == "this_dot_field" {
+			resolvedStep++
+		}
+	}
+	if resolvedStep != 1 {
+		t.Errorf("expected 1 resolved this.step ref, got %d", resolvedStep)
+	}
+
+	// `this.value.toString()` — `toString` should still be property_access,
+	// not resolved against anything (no such field on the class).
+	toStringFound := false
+	for _, ref := range r.Refs {
+		if ref.Name != "toString" {
+			continue
+		}
+		if ref.Binding.Kind == scope.BindProbable && ref.Binding.Reason == "property_access" {
+			toStringFound = true
+		}
+		if ref.Binding.Kind == scope.BindResolved && ref.Binding.Reason == "this_dot_field" {
+			t.Errorf("toString should NOT be resolved as this_dot_field: %+v", ref)
+		}
+	}
+	if !toStringFound {
+		t.Errorf("expected property_access ref for toString")
+	}
+}
+
 func declNames(r *scope.Result) []string {
 	out := make([]string, 0, len(r.Decls))
 	for _, d := range r.Decls {

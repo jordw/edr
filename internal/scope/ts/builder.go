@@ -102,6 +102,12 @@ type builder struct {
 	// access detection ('x.y' — y is a property, not a scope ref).
 	prevByte byte
 
+	// prevIdentIsThis is true when the most recently scanned identifier
+	// was the keyword 'this'. Used in combination with prevByte == '.'
+	// to resolve 'this.X' property accesses against the enclosing class
+	// or interface's NSField decls. Cleared by any non-'this' ident.
+	prevIdentIsThis bool
+
 	// jsxEnabled is true for .tsx/.jsx files: '<' in expression position
 	// may start a JSX element. False for plain .ts/.js where '<' is
 	// always generic-param or less-than.
@@ -537,22 +543,40 @@ func (b *builder) handleIdent(word []byte) {
 			"implements", "as", "from":
 			b.regexOK = true
 		}
+		// Track 'this' so the next property access (this.X) can resolve
+		// against the enclosing class's field/method decls.
+		b.prevIdentIsThis = name == "this"
 		b.prevByte = 'k'
 		return
 	}
 
 	if b.prevByte == '.' {
-		// Property access `x.Name`: we can't resolve Name via scope
-		// chain (we don't know the receiver type), but emit as a
-		// probable ref with Reason=property_access so refs-to queries
-		// on method/field decls can pick it up by name-matching across
-		// files. Imprecise — matches any same-named method on any
-		// object — but surfaces the references users actually want.
+		// Property access `x.Name`: normally we can't resolve Name via
+		// scope chain (we don't know the receiver type), but if the
+		// receiver is `this` we can bind against the enclosing class's
+		// NSField decls directly.
+		if b.prevIdentIsThis {
+			b.prevIdentIsThis = false
+			if b.tryResolveThisField(name, mkSpan(startByte, endByte)) {
+				b.regexOK = false
+				b.prevByte = 'i'
+				return
+			}
+		}
+		// Otherwise: emit as a probable ref with Reason=property_access
+		// so refs-to queries on method/field decls can pick it up by
+		// name-matching across files. Imprecise — matches any same-named
+		// method on any object — but surfaces the references users
+		// actually want.
 		b.emitPropertyRef(name, mkSpan(startByte, endByte))
 		b.regexOK = false
 		b.prevByte = 'i'
 		return
 	}
+
+	// Any non-'this' identifier past this point clears the this marker
+	// so a later 'foo.bar' doesn't mis-resolve against enclosing fields.
+	b.prevIdentIsThis = false
 
 	// Destructuring: emit idents as decls in the current scope, with
 	// one wrinkle: in `{ key: local }` renaming syntax, only `local` is
@@ -1137,6 +1161,55 @@ func (b *builder) emitPropertyRef(name string, span scope.Span) {
 	})
 }
 
+// tryResolveThisField attempts to resolve `this.name` at `span` against
+// the nearest enclosing class or interface's NSField decls. Returns true
+// if it found a match and emitted a resolved ref; false otherwise, in
+// which case the caller should fall back to emitPropertyRef.
+//
+// The resolution is: walk the scope stack outward, find the nearest
+// ScopeClass or ScopeInterface, then scan res.Decls for a decl whose
+// Name matches, Namespace is NSField, and Scope equals that class's
+// scope ID. Works across arrow functions nested inside methods because
+// arrow `this` binds lexically to the enclosing method's receiver, and
+// the class scope is still on the stack.
+func (b *builder) tryResolveThisField(name string, span scope.Span) bool {
+	entries := b.stack.Entries()
+	var classScope scope.ScopeID
+	for i := len(entries) - 1; i >= 0; i-- {
+		k := entries[i].Data.kind
+		if k == scope.ScopeClass || k == scope.ScopeInterface {
+			classScope = entries[i].Data.id
+			break
+		}
+	}
+	if classScope == 0 {
+		return false
+	}
+	for i := range b.res.Decls {
+		d := &b.res.Decls[i]
+		if d.Scope != classScope || d.Namespace != scope.NSField || d.Name != name {
+			continue
+		}
+		scopeID := b.currentScope()
+		locID := hashLoc(b.file, span, name)
+		b.res.Refs = append(b.res.Refs, scope.Ref{
+			LocID:     locID,
+			File:      b.file,
+			Span:      span,
+			Name:      name,
+			Namespace: scope.NSField,
+			Scope:     scopeID,
+			Binding: scope.RefBinding{
+				Kind:   scope.BindResolved,
+				Decl:   d.ID,
+				Reason: "this_dot_field",
+			},
+		})
+		return true
+	}
+	return false
+}
+
 // resolveRefs walks each Ref's scope chain and binds it to the innermost
 // matching Decl, if any.
 func (b *builder) resolveRefs() {
@@ -1159,8 +1232,10 @@ func (b *builder) resolveRefs() {
 	}
 	for i := range b.res.Refs {
 		r := &b.res.Refs[i]
-		// Property-access refs are pre-bound (BindProbable, no scope walk).
-		if r.Binding.Reason == "property_access" {
+		// Pre-bound refs skip the scope walk:
+		//  - property_access: probable, name-only, intentionally unresolved.
+		//  - this_dot_field: resolved directly against the enclosing class.
+		if r.Binding.Reason == "property_access" || r.Binding.Reason == "this_dot_field" {
 			continue
 		}
 		cur := r.Scope
