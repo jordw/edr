@@ -169,6 +169,25 @@ type builder struct {
 	// decl. Consumed by the next openScope; closeTopScope patches
 	// FullSpan.EndByte. -1 when none.
 	pendingOwnerDecl int
+
+	// arrowExprStack tracks open expression-body arrow function scopes.
+	// Each entry records the parenVarStack depth at the moment the arrow
+	// opened, so we know which terminator (`,`, `;`, `)`, `]`, `}`, or
+	// a statement-start decl keyword) should close it. Block-body arrows
+	// `(x) => { ... }` use the regular '{' → '}' scope machinery and do
+	// NOT appear on this stack.
+	arrowExprStack []arrowExprEntry
+}
+
+// arrowExprEntry records the ambient state at the moment an expression-
+// body arrow function scope was pushed, so the close logic can match
+// the correct terminator.
+type arrowExprEntry struct {
+	// parenDepth is len(parenVarStack) at the time the arrow opened.
+	// The arrow's expression body closes when we see a terminator at
+	// this same paren/bracket depth (i.e., the ambient paren context
+	// the arrow was written inside).
+	parenDepth int
 }
 
 type pendingParam struct {
@@ -216,6 +235,9 @@ func (b *builder) run() {
 		case c == '}':
 			b.handleCloseBrace()
 		case c == ';':
+			// Close any expression-body arrow whose scope terminates at
+			// this statement boundary before processing the ';' itself.
+			b.closeArrowExprIfTerminating(uint32(b.s.Pos))
 			b.s.Pos++
 			b.stmtStart = true
 			b.regexOK = true
@@ -233,21 +255,39 @@ func (b *builder) run() {
 			b.inDestructuring = false
 			b.destructureDepth = 0
 		case c == '=' && b.s.PeekAt(1) == '>':
+			arrowStart := uint32(b.s.Pos)
 			b.s.Advance(2)
 			save := b.s.Pos
 			saveLine := b.s.Line
 			b.skipWS()
 			if !b.s.EOF() && b.s.Peek() == '{' {
+				// Block-body arrow `(x) => { ... }`: defer scope push to
+				// the '{' handler via pendingScope, which also flushes
+				// pendingParams into the new function scope.
 				k := scope.ScopeFunction
 				b.pendingScope = &k
 			} else {
 				b.s.Pos = save
 				b.s.Line = saveLine
-				// Expression-body arrow; no function scope will open.
-				// Drop any pending params to avoid leaking them into a
-				// later function. Refs in the expression body resolve to
-				// the enclosing scope, not the arrow's params (v1 gap).
-				b.pendingParams = nil
+				// Expression-body arrow `(x) => x + 1`: open a function
+				// scope now so params bind inside and body refs resolve
+				// through it. Closed on the next terminator (`,`, `;`,
+				// `)`, `]`, `}`, or a stmt-start decl keyword) at the
+				// matching paren/bracket depth.
+				b.openScope(scope.ScopeFunction, arrowStart)
+				b.arrowExprStack = append(b.arrowExprStack, arrowExprEntry{
+					parenDepth: len(b.parenVarStack),
+				})
+				if len(b.pendingParams) > 0 {
+					for _, p := range b.pendingParams {
+						pk := p.kind
+						if pk == "" {
+							pk = scope.KindParam
+						}
+						b.emitDecl(p.name, pk, p.span)
+					}
+					b.pendingParams = nil
+				}
 			}
 			b.regexOK = true
 			b.prevByte = '>'
@@ -278,6 +318,10 @@ func (b *builder) run() {
 				b.paramSectionNeedsName = true
 			}
 		case c == ')':
+			// Expression-body arrows opened inside the enclosing paren
+			// context end at this ')'. Close before popping parenVarStack
+			// so the arrow's entry depth still matches.
+			b.closeArrowExprIfTerminating(uint32(b.s.Pos))
 			b.s.Pos++
 			b.regexOK = false
 			b.prevByte = ')'
@@ -293,6 +337,9 @@ func (b *builder) run() {
 				}
 			}
 		case c == ',':
+			// Expression-body arrows separated from siblings by ','
+			// (e.g. `[x => x, y => y]`) end at this comma.
+			b.closeArrowExprIfTerminating(uint32(b.s.Pos))
 			b.s.Pos++
 			b.regexOK = true
 			b.prevByte = ','
@@ -408,6 +455,8 @@ func (b *builder) run() {
 				b.destructureKind = b.declContext
 			}
 		case c == ']':
+			// Expression-body arrows inside an array/bracket end at ']'.
+			b.closeArrowExprIfTerminating(uint32(b.s.Pos))
 			b.s.Pos++
 			b.regexOK = false
 			b.prevByte = ']'
@@ -447,6 +496,19 @@ func (b *builder) handleIdent(word []byte) {
 	name := string(word)
 	wasStmtStart := b.stmtStart
 	b.stmtStart = false
+
+	// Expression-body arrow without a trailing `;` terminates when a
+	// new statement-level decl keyword appears (ASI-style). Close here
+	// so the new decl lands in the enclosing scope, not in the arrow.
+	if wasStmtStart && len(b.arrowExprStack) > 0 {
+		switch name {
+		case "const", "let", "var", "function", "class", "interface",
+			"type", "enum", "namespace", "module", "import", "export",
+			"return", "if", "for", "while", "do", "switch", "throw",
+			"try", "break", "continue":
+			b.closeArrowExprIfTerminating(startByte)
+		}
+	}
 
 	// Keywords that change parser state.
 	switch name {
@@ -682,9 +744,57 @@ func (b *builder) handleIdent(word []byte) {
 		}
 	}
 
+	// Bare-ident arrow param: `x => body`. If the next non-ws/comment is
+	// '=>' and we're not in a context that would otherwise consume this
+	// ident (param list, destructuring, generics, declContext), stash it
+	// as a pending param instead of emitting a ref; the '=>' handler will
+	// open the arrow scope and flush it as a param decl.
+	if !b.inParamList && !b.inDestructuring && !b.inGenericParams &&
+		b.declContext == "" && b.prevByte != '.' && b.peekArrowAfterIdent() {
+		b.pendingParams = append(b.pendingParams, pendingParam{
+			name: name,
+			span: mkSpan(startByte, endByte),
+			kind: scope.KindParam,
+		})
+		b.regexOK = false
+		b.prevByte = 'i'
+		return
+	}
+
 	b.emitRef(name, mkSpan(startByte, endByte))
 	b.regexOK = false
 	b.prevByte = 'i'
+}
+
+// peekArrowAfterIdent reports whether the bytes following the current
+// scanner position (which has already consumed an identifier) are
+// whitespace/comments then '=>'. Used to detect bare-ident arrows like
+// `x => body`. Does not mutate scanner position.
+func (b *builder) peekArrowAfterIdent() bool {
+	save := b.s.Pos
+	saveLine := b.s.Line
+	defer func() {
+		b.s.Pos = save
+		b.s.Line = saveLine
+	}()
+	for !b.s.EOF() {
+		c := b.s.Peek()
+		if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+			b.s.Next()
+			continue
+		}
+		if c == '/' && b.s.PeekAt(1) == '/' {
+			b.s.SkipLineComment()
+			continue
+		}
+		if c == '/' && b.s.PeekAt(1) == '*' {
+			b.s.Advance(2)
+			b.s.SkipBlockComment("*/")
+			continue
+		}
+		return c == '=' && b.s.PeekAt(1) == '>'
+	}
+	return false
 }
 
 // handleImport parses import forms:
@@ -831,6 +941,10 @@ func (b *builder) handleOpenBrace() {
 }
 
 func (b *builder) handleCloseBrace() {
+	// Expression-body arrow whose body nests inside `{...}` ends at
+	// this '}'. Close before advancing so the scope ends before the
+	// brace that closes the enclosing block.
+	b.closeArrowExprIfTerminating(uint32(b.s.Pos))
 	b.s.Pos++
 	b.regexOK = false
 	b.prevByte = '}'
@@ -905,6 +1019,32 @@ func (b *builder) closeScopesToDepth(depth int) {
 	endByte := uint32(len(b.s.Src))
 	for b.stack.Depth() > depth {
 		b.closeTopScope(endByte)
+	}
+}
+
+// closeArrowExprIfTerminating closes any expression-body arrow function
+// scope(s) whose body is terminating at the current position. Called
+// before processing terminator tokens (`,`, `;`, `)`, `]`, `}`, and at
+// newline/stmt-start decl boundaries). An arrow expr scope terminates
+// when the current parenVarStack depth has returned to (or gone below)
+// its entry depth and it is on top of the scope stack. endByte is the
+// byte position to stamp as the scope's end.
+func (b *builder) closeArrowExprIfTerminating(endByte uint32) {
+	for len(b.arrowExprStack) > 0 {
+		top := b.arrowExprStack[len(b.arrowExprStack)-1]
+		if len(b.parenVarStack) > top.parenDepth {
+			// Inside a nested paren/bracket; not ready to close.
+			return
+		}
+		// Only close if the arrow scope is actually on top of the stack.
+		// If a block or other scope opened after the arrow (e.g. an
+		// object-literal `{}` inside the body), the caller (handleCloseBrace)
+		// will close those first.
+		if top2 := b.stack.Top(); top2 == nil || top2.Data.kind != scope.ScopeFunction {
+			return
+		}
+		b.closeTopScope(endByte)
+		b.arrowExprStack = b.arrowExprStack[:len(b.arrowExprStack)-1]
 	}
 }
 

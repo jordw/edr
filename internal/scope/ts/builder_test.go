@@ -400,6 +400,121 @@ function later(x) {
 	}
 }
 
+func TestParse_ExpressionBodyArrowScopesParams(t *testing.T) {
+	// Expression-body arrows must open their own function scope so
+	// params do not leak into the enclosing file scope and body refs
+	// bind to them.
+	src := []byte(`const add = (a, b) => a + b
+`)
+	r := Parse("a.ts", src)
+
+	// The arrow params a, b must be scoped to the arrow (not file scope).
+	fileScopeID := scope.ScopeID(1)
+	aDecl := findDecl(r, "a")
+	bDecl := findDecl(r, "b")
+	if aDecl == nil || aDecl.Kind != scope.KindParam {
+		t.Fatalf("arrow param a missing or wrong kind; decls=%v", declNames(r))
+	}
+	if bDecl == nil || bDecl.Kind != scope.KindParam {
+		t.Fatalf("arrow param b missing or wrong kind; decls=%v", declNames(r))
+	}
+	if aDecl.Scope == fileScopeID {
+		t.Errorf("arrow param a leaked into file scope (scope=%d)", aDecl.Scope)
+	}
+	if bDecl.Scope == fileScopeID {
+		t.Errorf("arrow param b leaked into file scope (scope=%d)", bDecl.Scope)
+	}
+	if aDecl.Scope != bDecl.Scope {
+		t.Errorf("a and b should share the arrow scope; got %d vs %d", aDecl.Scope, bDecl.Scope)
+	}
+
+	// Both refs in the body (`a + b`) must bind to the arrow params.
+	aRefs := refsNamed(r, "a")
+	bRefs := refsNamed(r, "b")
+	if len(aRefs) == 0 || aRefs[0].Binding.Kind != scope.BindResolved || aRefs[0].Binding.Decl != aDecl.ID {
+		t.Errorf("a ref did not resolve to arrow param: %+v", aRefs)
+	}
+	if len(bRefs) == 0 || bRefs[0].Binding.Kind != scope.BindResolved || bRefs[0].Binding.Decl != bDecl.ID {
+		t.Errorf("b ref did not resolve to arrow param: %+v", bRefs)
+	}
+}
+
+func TestParse_BareIdentArrowScopesParam(t *testing.T) {
+	// `x => x + 1` (no parens around the single param) must also open
+	// a function scope whose body sees x as a param, not a ref into the
+	// enclosing scope.
+	src := []byte(`const inc = x => x + 1
+`)
+	r := Parse("a.ts", src)
+
+	xDecl := findDecl(r, "x")
+	if xDecl == nil || xDecl.Kind != scope.KindParam {
+		t.Fatalf("bare-ident arrow param x missing or wrong kind; decls=%v", declNames(r))
+	}
+	fileScopeID := scope.ScopeID(1)
+	if xDecl.Scope == fileScopeID {
+		t.Errorf("bare-ident arrow param x leaked into file scope")
+	}
+	// The body `x + 1` should bind x to the param.
+	xRefs := refsNamed(r, "x")
+	if len(xRefs) == 0 {
+		t.Fatal("no x refs in body")
+	}
+	if xRefs[0].Binding.Kind != scope.BindResolved || xRefs[0].Binding.Decl != xDecl.ID {
+		t.Errorf("body x ref did not resolve to bare-ident arrow param: %+v", xRefs[0])
+	}
+}
+
+func TestParse_BlockBodyArrowShadowsOuter(t *testing.T) {
+	// Block-body arrow opens a function scope; `const outer` inside
+	// shadows the file-scope `const outer`. The inner `return outer`
+	// must bind to the inner decl, not the outer.
+	src := []byte(`const outer = 1
+const f = () => {
+  const outer = 2
+  return outer
+}
+`)
+	r := Parse("a.ts", src)
+
+	// There must be two `outer` decls: one at file scope, one inside f.
+	var outerDecls []scope.Decl
+	for _, d := range r.Decls {
+		if d.Name == "outer" {
+			outerDecls = append(outerDecls, d)
+		}
+	}
+	if len(outerDecls) != 2 {
+		t.Fatalf("expected 2 outer decls (outer shadow), got %d: %v", len(outerDecls), declNames(r))
+	}
+	// The inner `outer` must live in a non-file scope.
+	fileScopeID := scope.ScopeID(1)
+	var innerOuter *scope.Decl
+	for i := range outerDecls {
+		if outerDecls[i].Scope != fileScopeID {
+			innerOuter = &outerDecls[i]
+		}
+	}
+	if innerOuter == nil {
+		t.Fatal("inner outer decl is at file scope; arrow did not open a scope")
+	}
+
+	// The `return outer` ref must bind to the inner decl.
+	refs := refsNamed(r, "outer")
+	if len(refs) == 0 {
+		t.Fatal("no outer refs")
+	}
+	// The ref we care about is the last one (`return outer`).
+	last := refs[len(refs)-1]
+	if last.Binding.Kind != scope.BindResolved {
+		t.Fatalf("outer ref not resolved: %+v", last)
+	}
+	if last.Binding.Decl != innerOuter.ID {
+		t.Errorf("return outer bound to wrong decl: got %x, want inner %x",
+			last.Binding.Decl, innerOuter.ID)
+	}
+}
+
 func TestConsumerAPI_RefsToDecl(t *testing.T) {
 	// End-to-end: parse a file, look up a file-scope decl by name, fetch
 	// every ref binding to it. Shape of the Tier 1 "focus --refs-to" path.
