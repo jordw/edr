@@ -81,21 +81,28 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 	// Reference spans use callRe (matches .name for methods).
 	fileSpans := map[string][]span{}
 
-	// Scope-aware same-file path: for supported languages (Go, TS/JS/JSX,
-	// Python) we resolve rename targets via binding analysis. Shadowed
-	// locals with the same name in nested scopes are NOT renamed because
-	// their Binding.Decl points to the shadow, not the target. Falls back
-	// to the regex+symbol-index path on any failure.
+	// Scope-aware path: resolve rename targets via binding analysis so
+	// shadowed locals with the same name are NOT renamed. Same-file
+	// uses scopeAwareSameFileSpans; cross-file narrows candidates via
+	// the symbol index's import-graph-aware FindSemanticReferences
+	// and then scope-filters each file's refs (excluding refs that
+	// bind to a local same-name decl, i.e. shadows). Falls back to
+	// the regex+symbol-index path on any failure.
 	scopeDone := false
-	if !crossFile {
+	if crossFile {
+		if spans, ok := scopeAwareCrossFileSpans(ctx, db, sym); ok {
+			fileSpans = spans
+			scopeDone = true
+		}
+	} else {
 		if spans, ok := scopeAwareSameFileSpans(sym); ok {
 			fileSpans[sym.File] = spans
 			scopeDone = true
 		}
 	}
 
-	// Legacy regex+symbol-index path: cross-file renames, unsupported
-	// languages, or cases scope could not resolve.
+	// Legacy regex+symbol-index path: unsupported languages, or cases
+	// scope could not resolve.
 	if !scopeDone {
 		var refs []index.SymbolInfo
 		if crossFile {

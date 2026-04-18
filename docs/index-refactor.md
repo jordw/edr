@@ -1,50 +1,47 @@
 # Index subsystem refactor — agent briefing
 
-## Why this exists
+## What this is
 
-edr has three index stacks — `idx/` (trigram + symbol postings + import/ref graph), `scope/` (per-file results), `session/` (per-session state) — each re-implementing the same primitives: repo walk, staleness detection, atomic writes, dirty tracking, string interning, record storage. Stale-index bugs keep recurring (phantom symbols survived file deletion) because the logic is scattered. Scope v2 regressed on kubernetes — 981 MB gob shrank to 181 MB gzipped, but per-query latency rose because the whole blob decodes on every CLI invocation.
+edr has three index stacks — `idx/` (trigram + symbol postings + import/ref graph), `scope/` (per-file results), `session/` (per-session state) — that each re-implement overlapping primitives: repo walk, staleness detection, atomic writes, dirty tracking, status reporting. Stale-index bugs keep recurring (phantom symbols survived file deletion) because the logic is scattered. Separately, scope v2 persists as a 181 MB gzipped gob that decodes whole per CLI invocation — a net regression on kubernetes.
 
-The goal is one set of index primitives, split into two families:
+Two independent projects:
 
-- **Cross-cutting primitives** used by every index: `staleness/`, `walk/`, `status/`.
-- **Record-store primitives** used by indexes whose shape is keyed-per-file structured records: `blob/`, `builder/`. Scope uses these first; cross-file DeclID lands on them next (record shape sketched in §3 — validates the API before blob ships).
+1. **Shared primitives refactor.** Extract `staleness/`, `walk/`, `atomic/`, `status/` from the three stacks. Closes the phantom-symbols bug class and unifies diverging semantics.
+2. **Scope persistence rewrite.** Replace scopes whole-blob gob with a seekable record store. Built on top of the shared primitives.
 
-`idx/format.go`s trigram + symbol posting byte layout stays hand-written. Postings are varint bitmap-like structures tuned for AND/OR intersection; per-record gzip is the wrong shape. `idx/` migrates onto `staleness/`, `walk/`, `status/` — it does not migrate onto `blob/`. This is a deliberate split between posting-shaped and record-shaped storage, not a backlog deferral.
+Part 1 lands first. Part 2 depends on Part 1 but stands on its own scope-specific justification (181 MB → <200 MB, ~4 s → <50 ms cold query).
+
+`idx/format.go`s posting byte layout stays hand-written. Postings are varint bitmap-like structures tuned for AND/OR intersection and dont fit the per-record gzip shape scope needs. idx adopts the shared primitives without changing its storage.
 
 ## Current state
 
-### Index 1 — `internal/idx/`
+### `internal/idx/`
 
-Trigram + symbol postings + import graph + ref graph. Battle-tested byte-packed format. Hand-written Marshal/Unmarshal in `format.go`. **The byte layout does not change.**
+Trigram + symbol postings + import/ref graph. Battle-tested byte-packed format. Hand-written Marshal/Unmarshal in `format.go`. Own staleness (git-index mtime stamp + `StatChanges` walk), dirty tracking (`.edr/trigram.dirty`), atomic write (`atomicWrite`), walker (`WalkRepoFiles`), status rendering (inline in `dispatch_index.go`).
 
-- Staleness: git-index mtime stamp at `.edr/trigram.mtime` + `StatChanges` walk. Diverges from scope.
-- Dirty tracking: `MarkDirty`/`ClearDirty`/`IsDirty` via `.edr/trigram.dirty`.
-- Atomic write: unexported `atomicWrite`.
-- Builder: `BuildFullFromWalk` / `BuildFullFromWalkWithImports`.
+### `internal/scope/store/`
 
-Migrates to: `staleness.Check` (canonical per-file mtime+size; git-index mtime becomes an internal fast-path, not a separate source of truth), `staleness.Tracker` (dirty file), `walk.Walker`, `status.Reporter`.
+v2: gzipped gob of an interned index. Kubernetes: 181 MB disk, ~4 s cold query. In-progress v3 SSTable in `encode.go` — delete and redo as Part 2. Own staleness (per-file mtime inline in `ResultFor`), no dirty tracking, inline atomic write.
 
-### Index 2 — `internal/scope/store/`
+### `internal/session/`
 
-In flux. v2: gzipped gob of an interned index. Kubernetes: 181 MB disk, ~4 s cold query. In-progress v3 SSTable in `encode.go` — **delete it and redo on top of `blob/`.**
+Per-session metadata, checkpoint/restore, delta reads (hash-based), op log. Own atomic JSON write, own status rendering. Hash-based delta-reads dont fit `staleness/`; session only joins Part 1 for `atomic/` and `status/`.
 
-Migrates to: every primitive. Scope is the first full consumer of the new stack.
+### Stability issues the two projects close
 
-### Index 3 — `internal/session/`
+- **Phantom symbols** (index retains entries for deleted files). Addressed in Part 1 by `staleness.Check` returning `Deleted`; consumers prune.
+- **scope.bin size** on large repos. Addressed in Part 2 by per-record storage + interned string table.
+- **Diverging staleness semantics.** Addressed in Part 1 by making per-file mtime+size canonical. Git-index mtime survives as an internal fast-path inside `staleness/`, not a public API.
 
-Per-session metadata, checkpoint/restore, delta reads (hash-based), op log. Mutation-heavy small JSON. **Does not join `blob/`** — shape does not fit. Adopts `status.Reporter` only. Staleness is not a fit either — sessions delta-read is hash-based by design.
+---
 
-### Stability issues the refactor closes
+## Part 1 — Shared primitives refactor
 
-- **Phantom symbols** (index retains entries for deleted files). Fixed by `staleness.Check` returning `Deleted` and consumers pruning. Scope prunes on rebuild; idx prunes in-place on next mark-dirty cycle. No ad-hoc patches.
-- **scope.bin size** on large repos. Fixed by per-record storage + interned string table. Target: kubernetes scope < 200 MB.
-- **Diverging staleness semantics.** Fixed by making per-file mtime+size canonical. Git-index mtime survives as an internal fast-path inside `staleness/`, not a public API.
+Four packages. Each lands with every named consumer migrated before the next starts.
 
-## Components, in build order
+### 1.1 `internal/staleness/`
 
-Each component lands in its own PR with acceptance criteria met across **all named consumers** before the next starts. A primitive without a second consumer does not ship.
-
-### 1. `internal/staleness/` — freshness + dirty tracking
+Freshness + dirty tracking. Consumers: idx, scope.
 
 ```go
 type Entry struct {
@@ -70,31 +67,23 @@ func Check(root string, snap *Snapshot, walk WalkFn) *Diff
 
 type Tracker struct { ... } // file-backed at edrDir/<name>.dirty
 func OpenTracker(edrDir, name string) *Tracker
-func (t *Tracker) Mark(paths ...string) // O_APPEND write, no lock
+func (t *Tracker) Mark(paths ...string) // O_APPEND, no lock
 func (t *Tracker) Dirty() []string      // dedup on read
 func (t *Tracker) Clear()
 ```
 
-Concurrency: Tracker is append-only. `O_APPEND` writes are atomic for payloads under PIPE_BUF on local FS; paths are well under. Readers dedup. No lock. This matches the parallel-agent use case.
+Concurrency: Tracker is append-only. `O_APPEND` writes are atomic for payloads under PIPE_BUF on local FS; paths are well under. Matches the parallel-agent use case.
 
-Mandatory test cases (each represents a bug class):
+Test cases (each represents a bug class): mtime change → stale; size change with same mtime → stale (silent-replace); file deleted → `Diff.Deleted`; file created → `Diff.Added`; permission-only change → not stale; symlink target change → stale; rapid writes within same mtime tick → documented limitation; snapshot round-trip `Capture → save → load → Check` matches; 8-goroutine concurrent `Mark`, final `Dirty()` = union.
 
-- mtime change → stale
-- size change, same mtime → stale (silent-replace)
-- file deleted → `Diff.Deleted`
-- file created → `Diff.Added`
-- permission-only change, content identical → NOT stale
-- symlink target change → stale (follow symlinks)
-- rapid writes within same mtime tick → documented limitation
-- snapshot round-trip `Capture → save → load → Check` matches
-- 8 goroutines concurrent `Mark`, no lost writes, final `Dirty()` = union
-
-Acceptance:
+Landing criteria:
 - `scope/store.ResultFor` uses `staleness.IsFresh`.
 - `idx.Staleness` delegates to `staleness.Check`; git-index mtime shortcut moves into staleness internals.
-- Phantom-symbols regression test in `internal/idx/` that would fail without `Diff.Deleted`.
+- Phantom-symbols regression test in `internal/idx/` that fails without `Diff.Deleted`.
 
-### 2. `internal/walk/` — one repo walker
+### 1.2 `internal/walk/`
+
+One repo walker. Consumers: idx, scope.
 
 ```go
 type Walker struct { ... }
@@ -106,85 +95,31 @@ func (w *Walker) Walk(fn func(path string) error) error
 
 Inherits gitignore + binary filtering from existing `WalkRepoFiles`. Declarative config at call site.
 
-Acceptance:
+Landing criteria:
 - `scope.Build` uses `walk.Walker`.
 - `idx.BuildFullFromWalk` uses `walk.Walker`.
 - `dispatch_index.go:hasImportPatterns` uses `walk.Walker` with `.WithExts(...)`.
 - `internal/index.WalkRepoFiles` removed.
 
-### 3. `internal/blob/` — seekable record store
+### 1.3 `internal/atomic/`
 
-Storage primitive for record-shaped indexes. Scope migrates first; cross-file DeclID lands on blob without API change.
-
-**Second-consumer sketch (DeclID).** One record per declaration ID, body = `{file_idx u32, line u32, kind u8, name_idx u32, sig_bytes []byte}`. Keys are content-hashed DeclIDs (stable across incremental builds). Same Writer/Reader surface as scope — validates the keyed-lookup use case beyond a single consumer.
-
-On-disk layout:
-
-```
-[magic: 4B][version: uint32]
-[records: back-to-back; each = [uint32 size][gzip(body)]]
-[string table: [uint32 byteLen][gob-encoded []string]]
-[offset table: [uint32 count][count × (keyIdx u32, mtime i64, offset u64, size u32)]]
-[trailer: strings_off u64, index_off u64, magic 4B, version u32]
-```
+Temp+rename with optional hash-revalidate before rename (TOCTOU guard). Consumers: idx, scope, session.
 
 ```go
-type Writer struct { ... }
-func NewWriter(path string, magic []byte, version uint32) (*Writer, error)
-func (w *Writer) Intern(s string) uint32
-func (w *Writer) AppendRecord(key string, mtime int64, body []byte) error
-func (w *Writer) Finalize() error // writes tables, trailer, atomic rename
-
-type Reader struct { ... }
-func Open(path string, magic []byte, version uint32) (*Reader, error)
-func (r *Reader) String(idx uint32) string
-func (r *Reader) Record(key string) (body []byte, mtime int64, ok bool)
-func (r *Reader) Keys() []string
-func (r *Reader) ForEach(fn func(key string, body []byte, mtime int64) error) error
+func WriteFile(path string, body []byte) error
+func WriteFileVerify(path string, body []byte, expectedHash string) error
 ```
 
-Design decisions, locked:
+May stay a helper file under an existing package if a full package feels like overkill — decide at PR time. The point is one implementation, not one import path.
 
-- Trailer at EOF; records stream during write.
-- Per-record gzip so single-record reads decompress exactly one record.
-- String pool dedupes paths/names/kinds. Record bodies encode `u32` IDs, not raw strings — the 500 MB win on kubernetes depends on this, so scopes encoder calls `Intern()` and writes u32s into bodies.
-- Magic + version validated at BOTH header and trailer.
-- Open reads header + trailer + string table + offset table only; records fetched on demand via `ReadAt`.
-- Concurrent writers: temp file named `<path>.<pid>.tmp`; atomic rename last-writer-wins. Readers see a consistent blob (old or new) at any instant.
-- Deletion: blob is append-only. `builder/` triggers full rebuild when `len(Diff.Deleted) / len(records) > 0.1` or on explicit `edr index --rebuild`. Between rebuilds, callers stat-check file existence before returning a record.
+Landing criteria:
+- `idx.atomicWrite` replaced.
+- `scope/store.Index.save` inline rename replaced.
+- `session/` JSON write replaced.
 
-Acceptance:
-- Scope blob on kubernetes < 200 MB.
-- `ResultFor` cold query < 50 ms (single seek + single gzip).
-- `refs-to` cold query on a single-file target < 200 ms.
-- `AllResults()` audit: no hot path decompresses every record. If one exists, it uses `ForEach` (streaming).
-- DeclID record-shape sketch compiles against Writer/Reader before blob ships.
+### 1.4 `internal/status/`
 
-### 4. `internal/builder/` — walk + extract + write
-
-Composes 1 + 2 + 3. Replaces `idx.BuildFullFromWalk` and `scopestore.Build`s parallel implementations.
-
-```go
-type ExtractorFn func(path string, data []byte) ([]byte, error)
-
-type Spec struct {
-    Walker     *walk.Walker
-    Extractor  ExtractorFn
-    BlobWriter *blob.Writer
-    Tracker    *staleness.Tracker
-    Deletions  []string // from staleness.Check; triggers rebuild if threshold exceeded
-}
-
-func Run(spec Spec) (int, error) // may return ErrRebuildRequired
-```
-
-No hooks, no middlewares, no plugin interface. If a consumer needs something weird, it writes its own loop against the primitives.
-
-Acceptance:
-- `scope.Build` is `builder.Run` + an `ExtractorFn`.
-- `idx.BuildFullFromWalk` is NOT ported (posting-shaped, not record-shaped); uses `walk.Walker` + `staleness.Tracker` directly.
-
-### 5. `internal/status/` — unified status reporting
+Unified status reporting. Consumers: idx, scope, session.
 
 ```go
 type Report struct {
@@ -203,36 +138,120 @@ type Reporter interface {
 func Aggregate(reporters ...Reporter) []Report
 ```
 
-Acceptance:
+Landing criteria:
 - `idx/`, `scope/store/`, `session/` each implement `Reporter`.
 - `cmd/commands.go:buildNextResult` / `computeCurrentItems` / `computeFixItems` delegate to `status.Aggregate`.
 - `dispatch_index.go` ad-hoc status output removed.
 
+### Part 1 shipping
+
+Order: 1.1 → 1.2 → 1.3 → 1.4. Each PR stands alone — tests green, every named consumer migrated before the next starts. No bundled PRs.
+
+---
+
+## Part 2 — Scope persistence rewrite
+
+Replaces scopes gzipped-gob store with a seekable, keyed record store. Built on Part 1 primitives (`walk`, `staleness`, `atomic`, `status`).
+
+Targets:
+- Kubernetes scope blob < 200 MB (down from 181 MB gzipped gob; win comes from string-pool interning of Ref.File etc., which was 377 MB of redundant strings in v2 before compression).
+- `ResultFor` cold query < 50 ms (single seek + single gzip, vs ~4 s whole-blob decode).
+- `refs-to` cold query on a single-file target < 200 ms.
+
+### 2.1 `internal/blob/` — seekable record store
+
+Keyed record store. One keyspace per blob file, one record shape per blob. Scope is the consumer. Future record-shaped indexes (DeclID, call graph) can reuse the package later without API change, but are not part of this project.
+
+On-disk layout:
+
+```
+[magic: 4B][version: uint32]
+[records: back-to-back; each = [uint32 size][gzip(body)]]
+[string table: [uint32 byteLen][gob-encoded []string]]
+[offset table: [uint32 count][count × (keyIdx u32, mtime i64, offset u64, size u32)]]
+[trailer: strings_off u64, index_off u64, magic 4B, version u32]
+```
+
+```go
+type Writer struct { ... }
+func NewWriter(path string, magic []byte, version uint32) (*Writer, error)
+func (w *Writer) Intern(s string) uint32
+func (w *Writer) AppendRecord(key string, mtime int64, body []byte) error
+func (w *Writer) Finalize() error
+
+type Reader struct { ... }
+func Open(path string, magic []byte, version uint32) (*Reader, error)
+func (r *Reader) String(idx uint32) string
+func (r *Reader) Record(key string) (body []byte, mtime int64, ok bool)
+func (r *Reader) Keys() []string
+func (r *Reader) ForEach(fn func(key string, body []byte, mtime int64) error) error
+```
+
+Design decisions, locked:
+
+- Trailer at EOF; records stream during write.
+- Per-record gzip so single-record reads decompress exactly one record.
+- String pool dedupes paths/names/kinds. Record bodies encode `u32` IDs, not raw strings — the size target depends on this, so scopes encoder calls `Intern()` and writes u32s into bodies.
+- Magic + version validated at BOTH header and trailer.
+- Open reads header + trailer + string table + offset table only; records fetched on demand via `ReadAt`.
+- Concurrent writers: temp file `<path>.<pid>.tmp`, atomic rename via `atomic.WriteFile`. Last-writer-wins; readers see a consistent blob at any instant.
+- Deletion: blob is append-only. `builder/` triggers full rebuild when `len(Diff.Deleted) / len(records) > 0.1` or on explicit `edr index --rebuild`. Between rebuilds, callers stat-check file existence before returning a record.
+
+### 2.2 `internal/builder/` — walk + extract + write
+
+Composes `walk.Walker`, `staleness.Tracker`, `blob.Writer` into one orchestrator. Replaces `scopestore.Build`s inline loop. Scope is the consumer; idx keeps its own build path because its output is posting-shaped, not record-shaped.
+
+```go
+type ExtractorFn func(path string, data []byte) ([]byte, error)
+
+type Spec struct {
+    Walker     *walk.Walker
+    Extractor  ExtractorFn
+    BlobWriter *blob.Writer
+    Tracker    *staleness.Tracker
+    Deletions  []string // triggers rebuild if threshold exceeded
+}
+
+func Run(spec Spec) (int, error) // may return ErrRebuildRequired
+```
+
+No hooks, no middlewares, no plugin interface.
+
+### 2.3 Scope migration
+
+- Delete `internal/scope/store/encode.go` (in-flight SSTable attempt).
+- Replace `Index.save` / `Load` with `blob.Writer` / `blob.Reader`.
+- `ResultFor` becomes `Reader.Record` + record decode.
+- `AllResults` becomes `Reader.ForEach` (streaming). Audit callers during migration — no hot path should decompress every record.
+- `scope.Build` becomes `builder.Run` + the extractor function.
+
+### Part 2 shipping
+
+Order: 2.1 → 2.2 → 2.3. Lands after Part 1.1 and 1.2 are in.
+
+---
+
 ## Out of scope
 
 - Rewriting `idx/format.go` posting byte layout.
+- Cross-file DeclID resolution.
 - Daemonizing edr.
-- Implementing cross-file DeclID resolution (only its record shape is sketched — enough to validate blobs API).
 - Adding languages to the scope builder.
 
 ## Key files
 
 - `internal/idx/format.go` — reference binary format; do not modify.
-- `internal/idx/index.go` — existing build/query/staleness; migrates to new primitives.
-- `internal/scope/store/store.go` — v2; migrates first.
-- `internal/scope/store/encode.go` — v3 SSTable attempt. Delete.
+- `internal/idx/index.go` — adopts Part 1 primitives.
+- `internal/scope/store/store.go` — Part 2 target.
+- `internal/scope/store/encode.go` — delete.
 - `internal/dispatch/dispatch_index.go` — current build orchestration.
 - `internal/dispatch/dispatch_refs.go` — primary consumer of scope.
-- `internal/session/` — adopts `status.Reporter` only.
+- `internal/session/` — adopts `atomic` + `status`.
 
-## Pitfalls (non-negotiable)
+## Pitfalls
 
 - Inline strings in records cost 377 MB on kubernetes (Ref.File in v2s gob). Intern into the string pool, store `u32` IDs in bodies.
 - Whole-blob decode is incompatible with fresh-process CLI. Per-record lazy decode is the only way persistence helps.
-- mtime + size only; content hash is correct but too expensive. Document the 1-second mtime granularity as a known limitation.
+- mtime + size only; content hash is correct but too expensive. Document 1-second mtime granularity as a known limitation.
 - `staleness.Check` MUST produce `Deleted` and callers MUST prune. Phantom symbols came from skipping this.
-- Posting storage (trigram/symbol) and record storage (scope/DeclID) are different shapes. Do not merge their byte layouts.
-
-## Shipping
-
-1 → 2 → 3 → 4 → 5. Each PR stands alone: tests green, acceptance criteria met across every named consumer. Scope, idx, and session migrate as the primitives they need land — no opportunistic deferral, no bundled PRs.
+- Posting storage (trigram/symbol) and record storage (scope) are different shapes. Do not merge their byte layouts.

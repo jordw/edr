@@ -2700,6 +2700,44 @@ func TestSpec_RenameMissingTo(t *testing.T) {
 	}
 }
 
+// Scope-aware rename: a local var in OTHER files with the same name
+// must not be rewritten by --cross-file. The shadow ref binds to its
+// local decl, so the scope path excludes it; the legacy regex path
+// would rewrite every \bCompute\b in other.go.
+func TestSpec_RenameCrossFileRespectsShadowing(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"go.mod": "module example.com/t\n\ngo 1.21\n",
+		"lib.go": "package main\n\nfunc Compute(x int) int {\n\treturn x * 2\n}\n",
+		// other.go uses the target AND has a local var named Compute
+		// in a different function. The local ref must not be renamed.
+		"other.go": "package main\n\nfunc Caller() int {\n\treturn Compute(5)\n}\n\n" +
+			"func Shadowy() int {\n\tCompute := 42\n\treturn Compute\n}\n",
+	})
+
+	_, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"rename", "lib.go:Compute", "--to", "Calculate", "--cross-file")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+
+	libData, _ := os.ReadFile(filepath.Join(dir, "lib.go"))
+	if !strings.Contains(string(libData), "func Calculate(x int)") {
+		t.Errorf("lib.go decl not renamed: %s", libData)
+	}
+
+	otherData, _ := os.ReadFile(filepath.Join(dir, "other.go"))
+	other := string(otherData)
+	if !strings.Contains(other, "return Calculate(5)") {
+		t.Errorf("other.go: cross-file call site not renamed: %s", other)
+	}
+	if !strings.Contains(other, "Compute := 42") {
+		t.Errorf("other.go: shadowing local was renamed (should stay Compute := 42): %s", other)
+	}
+	if !strings.Contains(other, "return Compute\n") {
+		t.Errorf("other.go: ref to shadowing local was renamed (should stay return Compute): %s", other)
+	}
+}
+
 // Scope-aware rename: a local variable that shadows the target name in
 // another function must NOT be renamed. The legacy regex path would
 // rewrite every \bFoo\b inside the same file; the scope path binds each
