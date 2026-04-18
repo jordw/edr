@@ -340,3 +340,54 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// TestParse_CompositeLiteralKey asserts that struct-composite-literal
+// field keys (`T{field: value}`) do NOT bind to same-named outer decls.
+// Otherwise renaming a type `span` rewrites every struct field named
+// span on unrelated types (caught while dogfooding edr on itself).
+func TestParse_CompositeLiteralKey(t *testing.T) {
+	src := []byte(`package p
+
+type span struct {
+	lo, hi int
+}
+
+type entry struct {
+	file string
+	span [2]int
+}
+
+func make() entry {
+	return entry{
+		file: "x",
+		span: [2]int{1, 2},
+	}
+}
+`)
+	r := Parse("a.go", src)
+
+	// Two decls named "span": one top-level type, one field on entry.
+	// Field span lives in NSField with scope = entry's class scope.
+	var spanType *scope.Decl
+	for i := range r.Decls {
+		d := &r.Decls[i]
+		if d.Name == "span" && d.Kind == scope.KindType {
+			spanType = d
+			break
+		}
+	}
+	if spanType == nil {
+		t.Fatalf("top-level `span` type decl missing; decls=%v", declNames(r))
+	}
+
+	// The `span:` key inside `entry{span: ...}` must NOT emit a ref bound
+	// to the top-level span type.
+	for _, ref := range r.Refs {
+		if ref.Name != "span" {
+			continue
+		}
+		if ref.Binding.Kind == scope.BindResolved && ref.Binding.Decl == spanType.ID {
+			t.Errorf("composite-literal key `span:` wrongly bound to span type; ref at byte %d", ref.Span.StartByte)
+		}
+	}
+}

@@ -135,6 +135,18 @@ type builder struct {
 	// call so closeTopScope can patch FullSpan.EndByte. -1 when none.
 	pendingOwnerDecl int
 
+	// controlBlockExpected is true after seeing if/for/switch/select/else;
+	// tells handleOpenBrace that the upcoming `{` is a block (control-flow
+	// body), not a composite literal. Cleared when `{` consumes it.
+	controlBlockExpected bool
+
+	// compositeLitDepth counts nested composite-literal `{}` — `T{...}`,
+	// `[]T{...}`, `map[K]V{...}`. A composite literal does NOT introduce
+	// a scope; incrementing the depth lets handleIdent skip ident-key
+	// emission (the `field` in `T{field: value}`) so those idents do not
+	// bind to same-named top-level decls.
+	compositeLitDepth int
+
 	prevByte byte
 }
 
@@ -436,8 +448,15 @@ func (b *builder) handleIdent(word []byte) {
 		b.pendingScope = &k
 		b.prevByte = 'k'
 		return
-	case "return", "if", "else", "for", "switch", "case", "break", "continue",
-		"go", "defer", "select", "goto", "range", "chan", "map",
+	case "if", "for", "switch", "select", "else":
+		// The `{` that follows this keyword is a block body, not a
+		// composite literal — flag it so handleOpenBrace skips the
+		// ident-preceded-composite-lit heuristic.
+		b.controlBlockExpected = true
+		b.prevByte = 'k'
+		return
+	case "return", "case", "break", "continue",
+		"go", "defer", "goto", "range", "chan", "map",
 		"true", "false", "nil", "iota":
 		b.prevByte = 'k'
 		return
@@ -449,6 +468,18 @@ func (b *builder) handleIdent(word []byte) {
 	// references by name matching. Consumer filters by binding kind.
 	if b.prevByte == '.' {
 		b.emitPropertyRef(name, mkSpan(startByte, endByte))
+		b.prevByte = 'i'
+		return
+	}
+
+	// Composite-literal field key: inside `T{field: value}` (or a map
+	// literal `{key: value}`), an ident followed by `:` names a struct
+	// field on T — NOT a reference to an outer-scope decl. Without type
+	// info we cannot tell struct-literal from map-literal, so we skip
+	// ident emission for both conservatively: struct keys must not bind
+	// to same-name types; map keys-as-idents lose their ref (usually
+	// keys are string literals anyway, so this is low cost).
+	if b.compositeLitDepth > 0 && b.peekNonWSByte() == ':' {
 		b.prevByte = 'i'
 		return
 	}
@@ -557,32 +588,59 @@ func (b *builder) handleIdent(word []byte) {
 
 func (b *builder) handleOpenBrace() {
 	b.s.Pos++
+	prev := b.prevByte
 	b.stmtStart = true
 	b.prevByte = '{'
-	kind := scope.ScopeBlock
+
+	// Explicit scope push (function/struct/interface body).
 	if b.pendingScope != nil {
-		kind = *b.pendingScope
+		kind := *b.pendingScope
 		b.pendingScope = nil
-	}
-	b.openScope(kind, uint32(b.s.Pos-1))
-	if kind == scope.ScopeFunction || kind == scope.ScopeClass || kind == scope.ScopeInterface {
-		if len(b.pendingParams) > 0 {
-			for _, p := range b.pendingParams {
-				pk := p.kind
-				if pk == "" {
-					pk = scope.KindParam
+		b.openScope(kind, uint32(b.s.Pos-1))
+		if kind == scope.ScopeFunction || kind == scope.ScopeClass || kind == scope.ScopeInterface {
+			if len(b.pendingParams) > 0 {
+				for _, p := range b.pendingParams {
+					pk := p.kind
+					if pk == "" {
+						pk = scope.KindParam
+					}
+					b.emitDecl(p.name, pk, p.span)
 				}
-				b.emitDecl(p.name, pk, p.span)
+				b.pendingParams = nil
 			}
-			b.pendingParams = nil
 		}
+		return
 	}
+
+	// Control-flow block (`if cond {`, `for {`, `switch {`, etc.).
+	if b.controlBlockExpected {
+		b.controlBlockExpected = false
+		b.openScope(scope.ScopeBlock, uint32(b.s.Pos-1))
+		return
+	}
+
+	// Composite literal: `{` preceded by an ident (`T{...}`), a closing
+	// bracket (`[]T{...}`, `map[K]V{...}`, `[N]T{...}`), or the close of
+	// a struct/interface type decl (`struct{}{...}` — rare). Composite
+	// literals do NOT introduce a scope; we track depth so handleIdent
+	// can skip ident-key emission inside them.
+	if prev == 'i' || prev == ']' || prev == '}' {
+		b.compositeLitDepth++
+		return
+	}
+
+	// Default: bare block at statement position.
+	b.openScope(scope.ScopeBlock, uint32(b.s.Pos-1))
 }
 
 func (b *builder) handleCloseBrace() {
 	b.s.Pos++
 	b.prevByte = '}'
-	b.closeTopScope(uint32(b.s.Pos))
+	if b.compositeLitDepth > 0 {
+		b.compositeLitDepth--
+	} else {
+		b.closeTopScope(uint32(b.s.Pos))
+	}
 	b.stmtStart = true
 }
 
