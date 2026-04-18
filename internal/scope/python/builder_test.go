@@ -265,6 +265,127 @@ func TestParse_NestedDef(t *testing.T) {
 	}
 }
 
+// TestParse_Comprehension_ShadowsOuter verifies that a list comprehension
+// introduces its own scope: the loop variable `x` inside the comprehension
+// should bind to the comprehension-local decl, NOT to a same-named file-
+// scope var.
+func TestParse_Comprehension_ShadowsOuter(t *testing.T) {
+	src := []byte(`x = 42
+result = [x*2 for x in range(10)]
+print(x)
+`)
+	r := Parse("a.py", src)
+
+	// There should be two decls named "x": the file-scope assignment and
+	// the comprehension-local for-var.
+	var fileX, compX *scope.Decl
+	for i := range r.Decls {
+		d := &r.Decls[i]
+		if d.Name != "x" {
+			continue
+		}
+		if fileX == nil {
+			fileX = d
+		} else {
+			compX = d
+		}
+	}
+	if fileX == nil || compX == nil {
+		t.Fatalf("expected two x decls (file + comprehension); decls=%v", declNames(r))
+	}
+	if fileX.Scope == compX.Scope {
+		t.Fatalf("comprehension x should live in its own scope, got same scope %d for both", fileX.Scope)
+	}
+
+	// The x ref inside the comprehension's expression (the first `x` in
+	// `x*2`) should resolve to the comprehension-local decl.
+	// The x ref in `print(x)` should resolve to the file-scope decl.
+	xRefs := refsNamed(r, "x")
+	if len(xRefs) < 2 {
+		t.Fatalf("expected at least 2 refs to x, got %d", len(xRefs))
+	}
+	// Find the ref inside the comprehension (between '[' and ']').
+	openBr := -1
+	closeBr := -1
+	for i, b := range src {
+		if b == '[' {
+			openBr = i
+		}
+		if b == ']' {
+			closeBr = i
+			break
+		}
+	}
+	if openBr < 0 || closeBr < 0 {
+		t.Fatal("brackets missing from src")
+	}
+	var innerResolvedTo scope.DeclID
+	var outerResolvedTo scope.DeclID
+	for _, ref := range xRefs {
+		if ref.Binding.Kind != scope.BindResolved {
+			t.Errorf("x ref at %d unresolved: %+v", ref.Span.StartByte, ref.Binding)
+			continue
+		}
+		if int(ref.Span.StartByte) > openBr && int(ref.Span.StartByte) < closeBr {
+			innerResolvedTo = ref.Binding.Decl
+		} else if int(ref.Span.StartByte) > closeBr {
+			outerResolvedTo = ref.Binding.Decl
+		}
+	}
+	if innerResolvedTo == 0 {
+		t.Fatal("no inner-comprehension x ref found or resolved")
+	}
+	if outerResolvedTo == 0 {
+		t.Fatal("no outer x ref (print(x)) found or resolved")
+	}
+	if innerResolvedTo != compX.ID {
+		t.Errorf("inner x resolved to %d, want comprehension-local %d", innerResolvedTo, compX.ID)
+	}
+	if outerResolvedTo != fileX.ID {
+		t.Errorf("outer x resolved to %d, want file-scope %d", outerResolvedTo, fileX.ID)
+	}
+}
+
+// TestParse_Comprehension_Filter verifies that `if` filter clauses inside
+// comprehensions see the comprehension-local for-var.
+func TestParse_Comprehension_Filter(t *testing.T) {
+	src := []byte(`xs = [1, 2, 3]
+result = [x for x in xs if x > 0]
+`)
+	r := Parse("a.py", src)
+
+	// Find the comprehension's for-var decl.
+	var compX *scope.Decl
+	for i := range r.Decls {
+		d := &r.Decls[i]
+		if d.Name == "x" {
+			compX = d
+			break
+		}
+	}
+	if compX == nil {
+		t.Fatalf("comprehension x decl missing; decls=%v", declNames(r))
+	}
+
+	// All three x refs (expression, for-var position is a decl not a ref,
+	// and filter) should resolve to compX. Actually the for-var `x` is a
+	// decl, so we have two refs: the expression `x` and the filter `x`.
+	refs := refsNamed(r, "x")
+	if len(refs) < 2 {
+		t.Fatalf("expected at least 2 refs to x, got %d", len(refs))
+	}
+	for _, ref := range refs {
+		if ref.Binding.Kind != scope.BindResolved {
+			t.Errorf("x ref at %d unresolved: %+v", ref.Span.StartByte, ref.Binding)
+			continue
+		}
+		if ref.Binding.Decl != compX.ID {
+			t.Errorf("x ref at %d resolved to %d, want comprehension-local %d",
+				ref.Span.StartByte, ref.Binding.Decl, compX.ID)
+		}
+	}
+}
+
 // TestParse_FullSpan_ScopeOwningDecls asserts that def and class decls
 // populate FullSpan from the keyword through the end of the suite.
 func TestParse_FullSpan_ScopeOwningDecls(t *testing.T) {

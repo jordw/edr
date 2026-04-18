@@ -13,9 +13,9 @@
 //
 // v1 limitations:
 //   - global/nonlocal statements are skipped (don't affect resolution).
-//   - Comprehensions don't introduce their own scope (loop var leaks
-//     into enclosing function — reasonable approximation in v1).
-//   - Walrus operator `(x := v)` doesn't emit x as a decl.
+//   - Walrus operator `(x := v)` doesn't emit x as a decl; per PEP 572
+//     walrus in a comprehension leaks to the enclosing scope, so leaving
+//     the current behavior actually matches Python semantics.
 //   - Decorators are refs to the decorator name, but no deeper analysis.
 //   - Multi-target assignment `a = b = 1` records only the first target.
 //   - Destructuring tuple assignment records the first target only.
@@ -59,6 +59,10 @@ type scopeEntry struct {
 	// scope (def/class). closeTopScope patches FullSpan.EndByte. -1 when
 	// the scope has no owning decl (file scope).
 	ownerDeclIdx int
+	// bracket is true for scopes opened by a comprehension bracket; those
+	// scopes ignore indent-based closing (they close on the matching
+	// bracket instead).
+	bracket bool
 }
 
 type builder struct {
@@ -124,7 +128,24 @@ type builder struct {
 	// patches FullSpan.EndByte. -1 when none.
 	pendingOwnerDecl int
 
+	// bracketStack tracks open '[', '{', '(' that are not part of a def
+	// signature param list. Each entry records whether the bracket opens
+	// a comprehension scope and, if so, the scope-stack depth to pop to
+	// on the matching close.
+	bracketStack []bracketFrame
+
 	prevByte byte
+}
+
+// bracketFrame records a single unclosed bracket. comprehension is true
+// when the look-ahead at open time detected a top-level `for` keyword
+// inside the brackets; scopeDepthAtOpen is the b.stack.Depth() before
+// the comprehension scope was pushed, so the matching close can restore
+// it exactly.
+type bracketFrame struct {
+	open             byte
+	comprehension    bool
+	scopeDepthAtOpen int
 }
 
 type pendingParam struct {
@@ -155,6 +176,7 @@ func (b *builder) run() {
 			b.scanPyString()
 			b.prevByte = c
 		case c == '(':
+			openPos := b.s.Pos
 			b.s.Pos++
 			b.prevByte = '('
 			if b.paramListPending {
@@ -164,6 +186,8 @@ func (b *builder) run() {
 				b.paramSectionNeedsName = true
 			} else if b.inParamList {
 				b.paramDepth++
+			} else {
+				b.pushBracket('(', openPos)
 			}
 		case c == ')':
 			b.s.Pos++
@@ -174,6 +198,8 @@ func (b *builder) run() {
 					b.inParamList = false
 					b.paramSectionNeedsName = false
 				}
+			} else {
+				b.popBracket('(', uint32(b.s.Pos))
 			}
 		case c == ':':
 			// Could be: def body start, dict key separator, slice,
@@ -221,17 +247,23 @@ func (b *builder) run() {
 			}
 			b.decoratorLine = true
 		case c == '[':
+			openPos := b.s.Pos
 			b.s.Pos++
 			b.prevByte = '['
+			b.pushBracket('[', openPos)
 		case c == ']':
 			b.s.Pos++
 			b.prevByte = ']'
+			b.popBracket('[', uint32(b.s.Pos))
 		case c == '{':
+			openPos := b.s.Pos
 			b.s.Pos++
 			b.prevByte = '{'
+			b.pushBracket('{', openPos)
 		case c == '}':
 			b.s.Pos++
 			b.prevByte = '}'
+			b.popBracket('{', uint32(b.s.Pos))
 		case c == ';':
 			b.s.Pos++
 			b.endStatement()
@@ -547,6 +579,10 @@ func getBodyIndent(stack *lexkit.ScopeStack[scopeEntry]) int {
 }
 
 func (b *builder) openScope(kind scope.ScopeKind, startByte uint32, startIndent int) {
+	b.openScopeBracket(kind, startByte, startIndent, false)
+}
+
+func (b *builder) openScopeBracket(kind scope.ScopeKind, startByte uint32, startIndent int, bracket bool) {
 	id := scope.ScopeID(len(b.res.Scopes) + 1)
 	var parent scope.ScopeID
 	if top := b.stack.Top(); top != nil {
@@ -561,7 +597,7 @@ func (b *builder) openScope(kind scope.ScopeKind, startByte uint32, startIndent 
 	owner := b.pendingOwnerDecl
 	b.pendingOwnerDecl = -1
 	b.stack.Push(lexkit.Scope[scopeEntry]{
-		Data:     scopeEntry{kind: kind, id: id, startIndent: startIndent, ownerDeclIdx: owner},
+		Data:     scopeEntry{kind: kind, id: id, startIndent: startIndent, ownerDeclIdx: owner, bracket: bracket},
 		SymIdx:   -1,
 		OpenLine: b.s.Line,
 	})
@@ -588,6 +624,179 @@ func (b *builder) closeScopesToDepth(depth int) {
 	for b.stack.Depth() > depth {
 		b.closeTopScope(endByte)
 	}
+}
+
+// pushBracket handles '[', '{', '(' (when not a def-signature param list).
+// If the brackets enclose a comprehension, a ScopeFunction is opened at
+// the opening bracket; popBracket closes it on the matching close.
+func (b *builder) pushBracket(open byte, openPos int) {
+	frame := bracketFrame{
+		open:             open,
+		scopeDepthAtOpen: b.stack.Depth(),
+	}
+	if b.looksLikeComprehension(open, openPos) {
+		frame.comprehension = true
+		b.openScopeBracket(scope.ScopeFunction, uint32(openPos), -1, true)
+	}
+	b.bracketStack = append(b.bracketStack, frame)
+}
+
+// popBracket matches close to the top of bracketStack. If the open frame
+// was a comprehension, any scopes pushed since (including the one opened
+// at `[` / `{` / `(`) are closed.
+func (b *builder) popBracket(open byte, endByte uint32) {
+	n := len(b.bracketStack)
+	if n == 0 {
+		return
+	}
+	// Mismatched brackets (e.g., source with syntax error): unwind any
+	// trailing frames that wouldn't match, then pop the match.
+	for n > 0 {
+		top := b.bracketStack[n-1]
+		if top.open == open {
+			if top.comprehension {
+				// Close everything back down to the depth before we pushed
+				// the comprehension scope.
+				for b.stack.Depth() > top.scopeDepthAtOpen {
+					b.closeTopScope(endByte)
+				}
+			}
+			b.bracketStack = b.bracketStack[:n-1]
+			return
+		}
+		// Drop the mismatched frame (best-effort on malformed input).
+		if top.comprehension {
+			for b.stack.Depth() > top.scopeDepthAtOpen {
+				b.closeTopScope(endByte)
+			}
+		}
+		b.bracketStack = b.bracketStack[:n-1]
+		n--
+	}
+}
+
+// looksLikeComprehension scans forward from openPos (which points at the
+// opening bracket) and returns true if a top-level `for` keyword appears
+// before the matching close bracket. It honors bracket nesting, string
+// literals, and comments. The scan does not mutate the main scanner.
+func (b *builder) looksLikeComprehension(open byte, openPos int) bool {
+	close := matchingClose(open)
+	src := b.s.Src
+	i := openPos + 1
+	depth := 1
+	n := len(src)
+	for i < n {
+		c := src[i]
+		switch {
+		case c == '#':
+			// Skip to newline.
+			for i < n && src[i] != '\n' {
+				i++
+			}
+		case c == '"' || c == '\'':
+			i = skipPyStringAt(src, i)
+		case c == '[' || c == '(' || c == '{':
+			depth++
+			i++
+		case c == ']' || c == ')' || c == '}':
+			depth--
+			i++
+			if depth == 0 {
+				if c == close {
+					return false
+				}
+				// Mismatched close; give up.
+				return false
+			}
+		case isPyIdentStart(c):
+			// Collect the identifier.
+			start := i
+			for i < n && isPyIdentCont(src[i]) {
+				i++
+			}
+			word := src[start:i]
+			// Only the outermost bracket depth decides comprehension-ness.
+			if depth == 1 && len(word) == 3 && word[0] == 'f' && word[1] == 'o' && word[2] == 'r' {
+				// Must not be touching a larger identifier (e.g. "fore").
+				// isPyIdentCont stopped because next byte isn't ident-cont,
+				// so this is a real keyword boundary.
+				// Also must not be preceded by an ident-cont byte (e.g.
+				// "xfor"). Check via start > openPos+1 and prev byte.
+				if start == openPos+1 || !isPyIdentCont(src[start-1]) {
+					return true
+				}
+			}
+		default:
+			i++
+		}
+	}
+	return false
+}
+
+func matchingClose(open byte) byte {
+	switch open {
+	case '[':
+		return ']'
+	case '(':
+		return ')'
+	case '{':
+		return '}'
+	}
+	return 0
+}
+
+// skipPyStringAt advances past a Python string literal (possibly
+// triple-quoted) starting at position i (which points at the opening
+// quote). Handles backslash escapes. Returns the position just past the
+// closing quote, or len(src) if unterminated.
+func skipPyStringAt(src []byte, i int) int {
+	n := len(src)
+	if i >= n {
+		return n
+	}
+	q := src[i]
+	// Triple-quoted?
+	if i+2 < n && src[i+1] == q && src[i+2] == q {
+		i += 3
+		for i+2 < n {
+			if src[i] == '\\' {
+				i += 2
+				continue
+			}
+			if src[i] == q && src[i+1] == q && src[i+2] == q {
+				return i + 3
+			}
+			i++
+		}
+		return n
+	}
+	// Single-quoted.
+	i++
+	for i < n {
+		c := src[i]
+		if c == '\\' && i+1 < n {
+			i += 2
+			continue
+		}
+		if c == q {
+			return i + 1
+		}
+		if c == '\n' {
+			// Unterminated single-line string; stop here to avoid scanning
+			// past the end of its statement.
+			return i
+		}
+		i++
+	}
+	return n
+}
+
+func isPyIdentStart(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c >= 0x80
+}
+
+func isPyIdentCont(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c >= 0x80
 }
 
 func (b *builder) currentScope() scope.ScopeID {
