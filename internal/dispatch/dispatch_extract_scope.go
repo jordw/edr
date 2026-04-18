@@ -97,6 +97,12 @@ func findExternalLocalsScope(sym *index.SymbolInfo, fileData []byte, startLine, 
 		if threaded[local.Name] || seen[local.Name] {
 			continue
 		}
+		// Go's blank identifier `_` is always in scope and never needs
+		// threading. Filter it here rather than fix the scope builder,
+		// which intentionally emits `_` decls for short-var-decls.
+		if local.Name == "_" {
+			continue
+		}
 		seen[local.Name] = true
 		missing = append(missing, local.Name)
 	}
