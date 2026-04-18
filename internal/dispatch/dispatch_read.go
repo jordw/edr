@@ -977,12 +977,23 @@ func attachExpand(ctx context.Context, db index.SymbolStore, sym *index.SymbolIn
 
 	if showCallers {
 		callers := findCallersWithFallback(ctx, db, sym)
+		// Scope-aware filter: drop callers whose body has no
+		// binding-correct reference to the target (shadow-only matches,
+		// string/comment false positives). No-op for languages without
+		// a scope builder.
+		method := "heuristic"
+		if filtered := filterCallersByScope(callers, sym); len(filtered) != len(callers) {
+			callers = filtered
+			method = "scope_filtered"
+		} else {
+			callers = filtered
+		}
 		if len(callers) > 10 {
 			callers = callers[:10]
 		}
 		if items := symbolsToSignatures(ctx, callers); len(items) > 0 {
 			result["callers"] = items
-			result["callers_method"] = "heuristic"
+			result["callers_method"] = method
 		}
 	}
 }

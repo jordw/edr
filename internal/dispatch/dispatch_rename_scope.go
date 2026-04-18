@@ -170,17 +170,80 @@ func widenToCallParen(src []byte, end uint32) uint32 {
 	return end
 }
 
+// filterCallersByScope drops SymbolInfo entries whose file/range
+// does not actually contain a binding-correct reference to sym. It
+// catches false positives returned by the caller search: a function
+// whose body mentions the target's name only via a shadowed local
+// variable, or inside a string/comment the symbol index misread.
+// Returns callers unchanged if the language has no scope builder or
+// parsing fails for every candidate.
+func filterCallersByScope(callers []index.SymbolInfo, sym *index.SymbolInfo) []index.SymbolInfo {
+	if !scopeSupported(sym.File) {
+		return callers
+	}
+	parsed := make(map[string]*scope.Result)
+	filtered := make([]index.SymbolInfo, 0, len(callers))
+	for _, c := range callers {
+		if !scopeSupported(c.File) {
+			filtered = append(filtered, c)
+			continue
+		}
+		result, ok := parsed[c.File]
+		if !ok {
+			src, err := os.ReadFile(c.File)
+			if err == nil {
+				result = scopestore.Parse(c.File, src)
+			}
+			parsed[c.File] = result
+		}
+		if result == nil {
+			filtered = append(filtered, c)
+			continue
+		}
+		declByID := make(map[scope.DeclID]*scope.Decl, len(result.Decls))
+		for i := range result.Decls {
+			declByID[result.Decls[i].ID] = &result.Decls[i]
+		}
+		keep := false
+		for _, ref := range result.Refs {
+			if ref.Name != sym.Name {
+				continue
+			}
+			if ref.Span.StartByte < c.StartByte || ref.Span.EndByte > c.EndByte {
+				continue
+			}
+			if ref.Binding.Kind == scope.BindResolved && ref.Binding.Decl != 0 {
+				if local, ok := declByID[ref.Binding.Decl]; ok && local.Name == sym.Name {
+					var localScopeKind scope.ScopeKind
+					if sid := int(local.Scope) - 1; sid >= 0 && sid < len(result.Scopes) {
+						localScopeKind = result.Scopes[sid].Kind
+					}
+					if local.Kind != scope.KindImport && localScopeKind != scope.ScopeFile {
+						continue
+					}
+				}
+			}
+			keep = true
+			break
+		}
+		if keep {
+			filtered = append(filtered, c)
+		}
+	}
+	return filtered
+}
+
 // scopeAwareCrossFileSpans computes rename spans across the repo by
 // narrowing candidate files via the symbol index and filtering each
 // file's refs by scope binding. Cross-file DeclID matching is not
 // possible (DeclID is file-local), so the filter instead EXCLUDES refs
-// that bind to a local decl of the same name — those are shadows, not
-// references to the target.
+// that bind to a local decl of the same name (nested-scope shadows).
+// File-scope same-name decls and import decls pass through as they are
+// typically the cross-file bindings we want to rewrite.
 //
-// Returns a map keyed by absolute file path; sym.File carries both the
-// decl span and same-file refs from scopeAwareSameFileSpans. Returns
-// (nil, false) on unsupported language, parse failure, or missing
-// symbol-index narrowing data — the caller falls back to regex.
+// Returns a map keyed by absolute file path. On unsupported language
+// or parse failure, returns (nil, false) so the caller can fall back
+// to regex.
 func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo) (map[string][]span, bool) {
 	if !scopeSupported(sym.File) {
 		return nil, false
