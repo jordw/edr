@@ -41,9 +41,10 @@ import (
 // pass the same path the caller will use when querying.
 func Parse(file string, src []byte) *scope.Result {
 	b := &builder{
-		file: file,
-		res:  &scope.Result{File: file},
-		s:    lexkit.New(src),
+		file:             file,
+		res:              &scope.Result{File: file},
+		s:                lexkit.New(src),
+		pendingOwnerDecl: -1,
 	}
 	// Enable JSX parsing for .jsx/.tsx. Plain .ts/.js never has JSX;
 	// in those, `<` means generic param or less-than, never element.
@@ -67,6 +68,10 @@ type scopeEntry struct {
 	kind             scope.ScopeKind
 	id               scope.ScopeID
 	savedVarDeclKind scope.DeclKind
+	// ownerDeclIdx is the index in res.Decls of the decl that owns this
+	// scope. closeTopScope patches FullSpan.EndByte on that decl. -1 if
+	// the scope was not introduced by a decl (block scope, etc.).
+	ownerDeclIdx int
 }
 
 type builder struct {
@@ -148,6 +153,16 @@ type builder struct {
 	inDestructuring   bool
 	destructureDepth  int
 	destructureKind   scope.DeclKind
+
+	// pendingFullStart captures the byte position of the most recent
+	// declaration keyword (function, class, interface, type, enum,
+	// namespace, const, let, var). emitDecl uses it as FullSpan.StartByte.
+	pendingFullStart uint32
+
+	// pendingOwnerDecl is the index in res.Decls of the last scope-owning
+	// decl. Consumed by the next openScope; closeTopScope patches
+	// FullSpan.EndByte. -1 when none.
+	pendingOwnerDecl int
 }
 
 type pendingParam struct {
@@ -433,6 +448,7 @@ func (b *builder) handleIdent(word []byte) {
 		b.declContext = scope.KindFunction
 		k := scope.ScopeFunction
 		b.pendingScope = &k
+		b.pendingFullStart = startByte + 1
 		b.regexOK = false
 		b.prevByte = 'd'
 		return
@@ -440,6 +456,7 @@ func (b *builder) handleIdent(word []byte) {
 		b.declContext = scope.KindClass
 		k := scope.ScopeClass
 		b.pendingScope = &k
+		b.pendingFullStart = startByte + 1
 		b.regexOK = false
 		b.prevByte = 'd'
 		return
@@ -447,12 +464,14 @@ func (b *builder) handleIdent(word []byte) {
 		b.declContext = scope.KindInterface
 		k := scope.ScopeInterface
 		b.pendingScope = &k
+		b.pendingFullStart = startByte + 1
 		b.regexOK = false
 		b.prevByte = 'd'
 		return
 	case "type":
 		if wasStmtStart || b.prevByte == ';' || b.prevByte == '{' || b.prevByte == '}' {
 			b.declContext = scope.KindType
+			b.pendingFullStart = startByte + 1
 		}
 		b.regexOK = false
 		b.prevByte = 'd'
@@ -461,6 +480,7 @@ func (b *builder) handleIdent(word []byte) {
 		b.declContext = scope.KindEnum
 		k := scope.ScopeBlock
 		b.pendingScope = &k
+		b.pendingFullStart = startByte + 1
 		b.regexOK = false
 		b.prevByte = 'd'
 		return
@@ -468,24 +488,28 @@ func (b *builder) handleIdent(word []byte) {
 		b.declContext = scope.KindNamespace
 		k := scope.ScopeNamespace
 		b.pendingScope = &k
+		b.pendingFullStart = startByte + 1
 		b.regexOK = false
 		b.prevByte = 'd'
 		return
 	case "const":
 		b.declContext = scope.KindConst
 		b.varDeclKind = scope.KindConst
+		b.pendingFullStart = startByte + 1
 		b.regexOK = false
 		b.prevByte = 'd'
 		return
 	case "let":
 		b.declContext = scope.KindLet
 		b.varDeclKind = scope.KindLet
+		b.pendingFullStart = startByte + 1
 		b.regexOK = false
 		b.prevByte = 'd'
 		return
 	case "var":
 		b.declContext = scope.KindVar
 		b.varDeclKind = scope.KindVar
+		b.pendingFullStart = startByte + 1
 		b.regexOK = false
 		b.prevByte = 'd'
 		return
@@ -819,11 +843,14 @@ func (b *builder) openScope(kind scope.ScopeKind, startByte uint32) {
 		Kind:   kind,
 		Span:   scope.Span{StartByte: startByte, EndByte: 0},
 	})
+	owner := b.pendingOwnerDecl
+	b.pendingOwnerDecl = -1
 	b.stack.Push(lexkit.Scope[scopeEntry]{
 		Data: scopeEntry{
 			kind:             kind,
 			id:               id,
 			savedVarDeclKind: b.varDeclKind,
+			ownerDeclIdx:     owner,
 		},
 		SymIdx:   -1,
 		OpenLine: b.s.Line,
@@ -841,6 +868,11 @@ func (b *builder) closeTopScope(endByte uint32) {
 	idx := int(e.Data.id) - 1
 	if idx >= 0 && idx < len(b.res.Scopes) {
 		b.res.Scopes[idx].Span.EndByte = endByte
+	}
+	if o := e.Data.ownerDeclIdx; o >= 0 && o < len(b.res.Decls) {
+		if b.res.Decls[o].FullSpan.EndByte < endByte {
+			b.res.Decls[o].FullSpan.EndByte = endByte
+		}
 	}
 	b.varDeclKind = e.Data.savedVarDeclKind
 }
@@ -1031,6 +1063,25 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 		}
 	}
 	declID := hashDecl(b.file, name, ns, scopeID)
+
+	// FullSpan covers [decl keyword → end of body]. Scope-owning decls
+	// get FullSpan.EndByte patched when the body's closing brace closes
+	// the scope. Class methods do not have their own preceding keyword
+	// but DO own a scope; we use the identifier position as FullSpan.Start
+	// for those, and the closing brace patches the End.
+	//
+	// pendingFullStart uses a +1 offset to reserve 0 as "unset" (byte 0
+	// is a valid declaration-keyword position when a file begins with
+	// e.g. `function x() {}`).
+	var fullStart uint32
+	if b.pendingFullStart > 0 && b.pendingFullStart-1 <= span.StartByte {
+		fullStart = b.pendingFullStart - 1
+	} else {
+		fullStart = span.StartByte
+	}
+	fullSpan := scope.Span{StartByte: fullStart, EndByte: span.EndByte}
+
+	idx := len(b.res.Decls)
 	b.res.Decls = append(b.res.Decls, scope.Decl{
 		ID:        declID,
 		LocID:     locID,
@@ -1040,7 +1091,16 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 		Scope:     scopeID,
 		File:      b.file,
 		Span:      span,
+		FullSpan:  fullSpan,
 	})
+
+	switch kind {
+	case scope.KindFunction, scope.KindMethod, scope.KindClass,
+		scope.KindInterface, scope.KindEnum, scope.KindNamespace,
+		scope.KindType:
+		b.pendingOwnerDecl = idx
+	}
+	b.pendingFullStart = 0
 }
 
 func (b *builder) emitRef(name string, span scope.Span) {

@@ -829,3 +829,64 @@ func declNames(r *scope.Result) []string {
 	}
 	return out
 }
+
+// TestParse_FullSpan_ScopeOwningDecls asserts that function, class,
+// interface, and type decls populate FullSpan covering from the
+// declaration keyword through the closing brace.
+func TestParse_FullSpan_ScopeOwningDecls(t *testing.T) {
+	src := []byte(`function greet(name: string): string {
+  return "hi " + name
+}
+
+class Box<T> {
+  value: T
+  unwrap(): T { return this.value }
+}
+
+interface Shape {
+  area(): number
+}
+`)
+	r := Parse("a.ts", src)
+	cases := []struct {
+		name       string
+		wantPrefix string
+	}{
+		{"greet", "function greet"},
+		{"Box", "class Box"},
+		{"Shape", "interface Shape"},
+	}
+	for _, c := range cases {
+		d := findDecl(r, c.name)
+		if d == nil {
+			t.Errorf("%s: decl missing", c.name)
+			continue
+		}
+		if d.FullSpan.StartByte >= d.Span.StartByte {
+			t.Errorf("%s: FullSpan.StartByte=%d should be < Span.StartByte=%d",
+				c.name, d.FullSpan.StartByte, d.Span.StartByte)
+		}
+		if d.FullSpan.EndByte <= d.Span.EndByte {
+			t.Errorf("%s: FullSpan.EndByte=%d should be > Span.EndByte=%d",
+				c.name, d.FullSpan.EndByte, d.Span.EndByte)
+		}
+		got := string(src[d.FullSpan.StartByte:d.FullSpan.EndByte])
+		if !strings.HasPrefix(got, c.wantPrefix) {
+			t.Errorf("%s: FullSpan starts %q, want prefix %q", c.name, got, c.wantPrefix)
+		}
+		if got[len(got)-1] != '}' {
+			t.Errorf("%s: FullSpan does not end at }: %q", c.name, got)
+		}
+	}
+	// Class method: owns a function scope but has no preceding decl
+	// keyword. FullSpan still patched via scope close. Start is the
+	// identifier; end is the closing brace.
+	d := findDecl(r, "unwrap")
+	if d == nil {
+		t.Fatal("unwrap method decl missing")
+	}
+	if d.FullSpan.EndByte <= d.Span.EndByte {
+		t.Errorf("unwrap: FullSpan.EndByte=%d should cover body past Span.EndByte=%d",
+			d.FullSpan.EndByte, d.Span.EndByte)
+	}
+}

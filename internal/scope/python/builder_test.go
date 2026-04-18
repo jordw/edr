@@ -264,3 +264,51 @@ func TestParse_NestedDef(t *testing.T) {
 		t.Errorf("x in inner should resolve via enclosing scope")
 	}
 }
+
+// TestParse_FullSpan_ScopeOwningDecls asserts that def and class decls
+// populate FullSpan from the keyword through the end of the suite.
+func TestParse_FullSpan_ScopeOwningDecls(t *testing.T) {
+	src := []byte(`def greet(name):
+    return "hi " + name
+
+class Box:
+    def __init__(self, value):
+        self.value = value
+
+    def unwrap(self):
+        return self.value
+`)
+	r := Parse("a.py", src)
+
+	greet := findDecl(r, "greet")
+	if greet == nil {
+		t.Fatal("greet missing")
+	}
+	if greet.FullSpan.StartByte >= greet.Span.StartByte {
+		t.Errorf("greet: FullSpan.StartByte=%d should cover def keyword before Span.StartByte=%d",
+			greet.FullSpan.StartByte, greet.Span.StartByte)
+	}
+	if greet.FullSpan.EndByte <= greet.Span.EndByte {
+		t.Errorf("greet: FullSpan.EndByte=%d should cover body past Span.EndByte=%d",
+			greet.FullSpan.EndByte, greet.Span.EndByte)
+	}
+	if got := string(src[greet.FullSpan.StartByte:greet.FullSpan.StartByte+3]); got != "def" {
+		t.Errorf("greet: FullSpan starts with %q, want %q", got, "def")
+	}
+
+	box := findDecl(r, "Box")
+	if box == nil {
+		t.Fatal("Box missing")
+	}
+	if box.FullSpan.StartByte >= box.Span.StartByte {
+		t.Errorf("Box: FullSpan.StartByte=%d should cover class keyword before Span.StartByte=%d",
+			box.FullSpan.StartByte, box.Span.StartByte)
+	}
+	if box.FullSpan.EndByte <= box.Span.EndByte {
+		t.Errorf("Box: FullSpan.EndByte=%d should cover body past Span.EndByte=%d",
+			box.FullSpan.EndByte, box.Span.EndByte)
+	}
+	if got := string(src[box.FullSpan.StartByte:box.FullSpan.StartByte+5]); got != "class" {
+		t.Errorf("Box: FullSpan starts with %q, want %q", got, "class")
+	}
+}

@@ -397,7 +397,7 @@ func (b *builder) handleIdent(word []byte) {
 		b.declContext = scope.KindFunction
 		k := scope.ScopeFunction
 		b.pendingScope = &k
-		b.pendingFullStart = startByte
+		b.pendingFullStart = startByte + 1
 		b.funcReceiverPending = true // next `(` might be receiver
 		b.prevByte = 'k'
 		return
@@ -406,7 +406,7 @@ func (b *builder) handleIdent(word []byte) {
 			b.declContext = scope.KindType
 			b.blockDeclKind = scope.KindType
 			b.inBlockDecl = true
-			b.pendingFullStart = startByte
+			b.pendingFullStart = startByte + 1
 		}
 		b.prevByte = 'k'
 		return
@@ -415,7 +415,7 @@ func (b *builder) handleIdent(word []byte) {
 		b.varDeclKind = scope.KindVar
 		b.blockDeclKind = scope.KindVar
 		b.inBlockDecl = true
-		b.pendingFullStart = startByte
+		b.pendingFullStart = startByte + 1
 		b.prevByte = 'k'
 		return
 	case "const":
@@ -423,7 +423,7 @@ func (b *builder) handleIdent(word []byte) {
 		b.varDeclKind = scope.KindConst
 		b.blockDeclKind = scope.KindConst
 		b.inBlockDecl = true
-		b.pendingFullStart = startByte
+		b.pendingFullStart = startByte + 1
 		b.prevByte = 'k'
 		return
 	case "struct":
@@ -719,8 +719,15 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 	// FullSpan.EndByte patched to the closing brace in closeTopScope.
 	// Leaf decls (var/const/param/field/import) keep FullSpan = Span
 	// since this pass does not track their statement end.
-	fullStart := b.pendingFullStart
-	if fullStart == 0 || fullStart > span.StartByte {
+	//
+	// pendingFullStart uses a +1 offset so 0 is unambiguously "unset"
+	// (byte 0 is not actually reachable for Go decls — `package` comes
+	// first — but keeping the convention uniform avoids surprise if
+	// callers pipe in non-canonical fragments).
+	var fullStart uint32
+	if b.pendingFullStart > 0 && b.pendingFullStart-1 <= span.StartByte {
+		fullStart = b.pendingFullStart - 1
+	} else {
 		fullStart = span.StartByte
 	}
 	fullSpan := scope.Span{StartByte: fullStart, EndByte: span.EndByte}

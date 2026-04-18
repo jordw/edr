@@ -35,10 +35,11 @@ import (
 // Parse extracts a scope.Result from a Python source buffer.
 func Parse(file string, src []byte) *scope.Result {
 	b := &builder{
-		file:        file,
-		res:         &scope.Result{File: file},
-		s:           lexkit.New(src),
-		atLineStart: true,
+		file:             file,
+		res:              &scope.Result{File: file},
+		s:                lexkit.New(src),
+		atLineStart:      true,
+		pendingOwnerDecl: -1,
 	}
 	b.openScope(scope.ScopeFile, 0, -1)
 	b.run()
@@ -54,6 +55,10 @@ type scopeEntry struct {
 	// When a non-blank line at indent <= startIndent appears, this scope
 	// pops. File scope has startIndent = -1 so it never pops on indent.
 	startIndent int
+	// ownerDeclIdx is the index in res.Decls of the decl that owns this
+	// scope (def/class). closeTopScope patches FullSpan.EndByte. -1 when
+	// the scope has no owning decl (file scope).
+	ownerDeclIdx int
 }
 
 type builder struct {
@@ -108,6 +113,16 @@ type builder struct {
 	// forVarExpected: after `for` keyword at statement start, the next
 	// idents (before `in`) are loop variables (decls in enclosing scope).
 	forVarExpected bool
+
+	// pendingFullStart (+1 offset; 0 means unset) captures the byte
+	// position of the most recent def/class keyword for emitDecl to use
+	// as FullSpan.StartByte.
+	pendingFullStart uint32
+
+	// pendingOwnerDecl is the index in res.Decls of the last scope-
+	// owning decl (def/class). Consumed by openScope; closeTopScope
+	// patches FullSpan.EndByte. -1 when none.
+	pendingOwnerDecl int
 
 	prevByte byte
 }
@@ -347,6 +362,7 @@ func (b *builder) handleIdent(word []byte) {
 		k := scope.ScopeFunction
 		b.pendingScope = &k
 		b.pendingScopeAt = b.currentIndent
+		b.pendingFullStart = startByte + 1
 		b.prevByte = 'k'
 		return
 	case "class":
@@ -354,6 +370,7 @@ func (b *builder) handleIdent(word []byte) {
 		k := scope.ScopeClass
 		b.pendingScope = &k
 		b.pendingScopeAt = b.currentIndent
+		b.pendingFullStart = startByte + 1
 		b.prevByte = 'k'
 		return
 	case "lambda":
@@ -541,8 +558,10 @@ func (b *builder) openScope(kind scope.ScopeKind, startByte uint32, startIndent 
 		Kind:   kind,
 		Span:   scope.Span{StartByte: startByte, EndByte: 0},
 	})
+	owner := b.pendingOwnerDecl
+	b.pendingOwnerDecl = -1
 	b.stack.Push(lexkit.Scope[scopeEntry]{
-		Data:     scopeEntry{kind: kind, id: id, startIndent: startIndent},
+		Data:     scopeEntry{kind: kind, id: id, startIndent: startIndent, ownerDeclIdx: owner},
 		SymIdx:   -1,
 		OpenLine: b.s.Line,
 	})
@@ -556,6 +575,11 @@ func (b *builder) closeTopScope(endByte uint32) {
 	idx := int(e.Data.id) - 1
 	if idx >= 0 && idx < len(b.res.Scopes) {
 		b.res.Scopes[idx].Span.EndByte = endByte
+	}
+	if o := e.Data.ownerDeclIdx; o >= 0 && o < len(b.res.Decls) {
+		if b.res.Decls[o].FullSpan.EndByte < endByte {
+			b.res.Decls[o].FullSpan.EndByte = endByte
+		}
 	}
 }
 
@@ -577,6 +601,21 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 	scopeID := b.currentScope()
 	locID := hashLoc(b.file, span, name)
 	declID := hashDecl(b.file, name, scope.NSValue, scopeID)
+
+	// FullSpan covers [def/class keyword → end of suite]. Scope-owning
+	// decls get FullSpan.EndByte patched when the indent-based scope
+	// closes. Leaf decls (var, param, import) keep FullSpan = Span.
+	//
+	// pendingFullStart uses a +1 offset so 0 is unambiguously unset.
+	var fullStart uint32
+	if b.pendingFullStart > 0 && b.pendingFullStart-1 <= span.StartByte {
+		fullStart = b.pendingFullStart - 1
+	} else {
+		fullStart = span.StartByte
+	}
+	fullSpan := scope.Span{StartByte: fullStart, EndByte: span.EndByte}
+
+	idx := len(b.res.Decls)
 	b.res.Decls = append(b.res.Decls, scope.Decl{
 		ID:        declID,
 		LocID:     locID,
@@ -586,7 +625,14 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 		Scope:     scopeID,
 		File:      b.file,
 		Span:      span,
+		FullSpan:  fullSpan,
 	})
+
+	switch kind {
+	case scope.KindFunction, scope.KindClass:
+		b.pendingOwnerDecl = idx
+	}
+	b.pendingFullStart = 0
 }
 
 func (b *builder) emitRef(name string, span scope.Span) {
