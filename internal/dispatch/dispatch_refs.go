@@ -247,17 +247,24 @@ func goCrossFileRefs(originFile, name string, idx *scopestore.Index, root string
 			if ref.Name != name {
 				continue
 			}
-			// Accept: (a) unresolved (likely cross-package-scope candidate),
-			// (b) property_access probable (pkg.Name call sites — the
-			// canonical Go cross-package access pattern).
+			// Classify each ref:
+			//   - unresolved bare ident in a same-package file → this
+			//     IS the cross-file binding to our target. Mark as
+			//     BindResolved (target name is visible across all files
+			//     in the package; Go forbids duplicate top-level names
+			//     within a package, so the match is unambiguous).
+			//   - property_access `x.name` → cross-package access via a
+			//     package-qualified call. Keep as probable.
+			//   - otherwise (locally resolved shadow, builtin, etc.) →
+			//     skip.
 			reason := ""
 			kind := scope.BindProbable
 			if ref.Binding.Kind == scope.BindUnresolved {
 				reason = "cross_file_same_package"
+				kind = scope.BindResolved
 			} else if ref.Binding.Reason == "property_access" {
 				reason = "property_access"
 			} else {
-				// Locally bound to something else, or a builtin — skip.
 				continue
 			}
 			line, col := byteToLineCol(sibLines, ref.Span.StartByte)
