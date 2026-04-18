@@ -192,7 +192,10 @@ check(res.diff and "---" in res.diff and "+++" in res.diff, f"changesig diff mis
 check("x int" in res.diff, f"changesig diff lacks new param: {res.diff!r}")
 
 # --- extract() dry-run carries diff ---
-res = edr.extract("main.go:Greet", name="GreetInner", lines="4-4", dry_run=True)
+# Threads "name" through --call because the extracted line references
+# the Greet parameter; scope-aware extract correctly refuses to pull
+# out code that uses an outer local without explicit threading.
+res = edr.extract("main.go:Greet", name="GreetInner", lines="4-4", call="GreetInner(name)", dry_run=True)
 check(res.diff, f"extract diff missing: {res!r}")
 
 # --- status() returns a dict ---

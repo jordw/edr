@@ -66,9 +66,17 @@ func runExtract(ctx context.Context, db index.SymbolStore, root string, args []s
 	// Static check: do any identifiers in the extracted block refer to
 	// locals declared in the surrounding function but not threaded into the
 	// new function via --call? If so, the extracted function will not
-	// compile. Force the user to declare them explicitly.
+	// compile. Force the user to declare them explicitly. Scope-aware
+	// path for languages with a scope builder (Go, TS/JS/JSX, Python);
+	// regex fallback otherwise.
 	ext := strings.ToLower(filepath.Ext(sym.File))
-	if missing := findExternalLocals(ext, lines, startLine, endLine, sym, data, flagString(flags, "call", "")); len(missing) > 0 {
+	var missing []string
+	if scopeMissing, ok := findExternalLocalsScope(sym, data, startLine, endLine, flagString(flags, "call", "")); ok {
+		missing = scopeMissing
+	} else {
+		missing = findExternalLocals(ext, lines, startLine, endLine, sym, data, flagString(flags, "call", ""))
+	}
+	if len(missing) > 0 {
 		return nil, fmt.Errorf("extract: extracted block references %d local(s) from %s not threaded through --call: %s. "+
 			"Re-run with --call %q to pass them as arguments",
 			len(missing), sym.Name, strings.Join(missing, ", "),
