@@ -1,0 +1,1519 @@
+// Package php is the PHP scope + binding extractor.
+//
+// Produces a scope.Result for a single PHP source buffer. PHP code lives
+// inside <?php ... ?> tags; everything outside the tags is treated as
+// literal HTML/text and skipped. <?= is the short-echo open tag and is
+// also treated as a switch into PHP mode.
+//
+// Handles file / function / block / class / interface / trait / enum /
+// namespace scopes; emits KindFunction / KindMethod / KindClass /
+// KindInterface / KindType (for traits) / KindEnum / KindVar / KindConst /
+// KindField / KindParam / KindImport / KindNamespace decls. $-prefixed
+// locals/params/properties carry their leading $ in the decl name
+// (PHP's own view of the identifier). Bare identifiers (functions,
+// classes, constants) don't.
+//
+// v1 limitations:
+//   - No type-vs-value namespace split; class/interface/trait/enum all
+//     go into NSValue at file scope.
+//   - Top-level constants declared via define('X', ...) extract the first
+//     string-literal argument as the const name.
+//   - Short closure `fn($x) => ...` auto-captures everything in the
+//     enclosing scope (no `use (...)` needed); we treat it like a normal
+//     arrow — refs to outer vars fall through the scope chain, which
+//     works for lexical capture.
+//   - `global $x` declarations are treated as refs, not scope binders.
+//   - Trait composition (`use TraitA { foo as bar; }` inside a class) is
+//     not modelled; the trait names emit as refs.
+//   - PHP 8 attributes `#[Attr(...)]` are skipped.
+//   - Match expressions (`match($x) { ... }`) are treated as a block.
+//   - String interpolation `"$name"` doesn't emit a ref for the var name.
+//   - Readonly properties and enum backing types are only minimally handled.
+package php
+
+import (
+	"crypto/sha256"
+	"encoding/binary"
+
+	"github.com/jordw/edr/internal/lexkit"
+	"github.com/jordw/edr/internal/scope"
+)
+
+// Parse extracts a scope.Result from a PHP source buffer. file is the
+// canonical file path used to stamp Decl.File and Ref.File.
+func Parse(file string, src []byte) *scope.Result {
+	b := &builder{
+		file:             file,
+		res:              &scope.Result{File: file},
+		s:                lexkit.New(src),
+		pendingOwnerDecl: -1,
+		stmtStart:        true,
+	}
+	b.openScope(scope.ScopeFile, 0)
+	b.run()
+	b.closeScopesToDepth(0)
+	b.resolveRefs()
+	return b.res
+}
+
+// scopeEntry is our per-stack-frame data. ownerDeclIdx is the index in
+// res.Decls of the decl that owns this scope (class / function / etc.);
+// closeTopScope patches that decl's FullSpan.EndByte on close. -1 if
+// the scope was not introduced by a decl.
+type scopeEntry struct {
+	kind         scope.ScopeKind
+	id           scope.ScopeID
+	ownerDeclIdx int
+	// closeAtParenZero, when non-zero, marks this scope to close as soon
+	// as the ambient paren depth returns to zero (for `fn(x) => expr`
+	// arrow-function scopes). The stored value is parenDepth+1 at the
+	// moment the arrow opened (so 0 stays "inactive").
+	closeAtParenZero int
+}
+
+type builder struct {
+	file string
+	res  *scope.Result
+	s    lexkit.Scanner
+
+	// inPHP is true while we're inside <?php ... ?> tags. HTML outside
+	// the tags is silently skipped.
+	inPHP bool
+
+	stack lexkit.ScopeStack[scopeEntry]
+
+	stmtStart bool
+	prevByte  byte
+
+	// pendingScope, if non-nil, is consumed by the next '{' as the scope
+	// kind to push. Set by keywords like "function", "class", "interface".
+	pendingScope *scope.ScopeKind
+
+	// declContext, when non-empty, classifies the next identifier as a
+	// declaration of this kind rather than a reference.
+	declContext scope.DeclKind
+
+	// classBodyConst is true when the next const-declared ident should
+	// be emitted as a class constant (NSField, KindConst) rather than a
+	// top-level const (NSValue, KindConst).
+	classBodyConst bool
+
+	// paramListPending is set after a function-like keyword. The next
+	// '(' starts a parameter list.
+	paramListPending bool
+	// inParamList + paramDepth track being inside a function's (...) param
+	// list. paramDepth tracks '(' balance so nested parens (type hints,
+	// default values) don't confuse section boundaries.
+	inParamList bool
+	paramDepth  int
+	// paramSectionNeedsName: true at the start of each comma-separated
+	// param section; we're still looking for the param name (a $-ident).
+	paramSectionNeedsName bool
+
+	// inUseClause is true inside a closure's `use (...)` capture list.
+	// $-idents inside become refs bound to the enclosing scope, but we
+	// also need to suppress local-decl logic while scanning.
+	inUseClause bool
+	useDepth    int
+
+	// parenDepth counts open '(' at the top of the parser (outside
+	// param/use clauses). Used to decide when a `fn(...) => expr` arrow
+	// scope should close (when we return to the parenDepth it had at
+	// open time).
+	parenDepth int
+
+	// pendingFullStart captures the byte position of the most recent
+	// declaration keyword (function, class, interface, trait, enum,
+	// namespace, const). emitDecl uses it as FullSpan.StartByte. Stored
+	// as offset+1 so 0 means "unset".
+	pendingFullStart uint32
+
+	// pendingOwnerDecl is the index in res.Decls of the last scope-owning
+	// decl. Consumed by the next openScope; closeTopScope patches the
+	// decl's FullSpan.EndByte. -1 when none.
+	pendingOwnerDecl int
+
+	// pendingMethodOwnerDecl mirrors pendingOwnerDecl but for methods:
+	// when we emit a method name, we want the FUNCTION scope (opened on
+	// '{') to patch FullSpan.EndByte on the method decl, not the
+	// enclosing class scope.
+	pendingMethodOwnerDecl int
+
+	// Namespace statement handling: `namespace Foo\Bar;` opens a
+	// namespace scope for everything that follows (until another
+	// namespace statement or EOF). `namespace Foo { ... }` (block form)
+	// opens a scope that closes on '}'.
+	// namespaceIsBlock is true when the *next* '{' should be consumed
+	// as a namespace body. Set after `namespace Name` when the following
+	// non-ws byte is '{' (peek).
+	namespaceIsBlock bool
+
+	// prevIdentIsThis is true when the most recently scanned token was
+	// the identifier `$this`. Used with prevByte == '>' (from `->`) to
+	// resolve `$this->x` against the enclosing class's NSField decls.
+	prevIdentIsThis bool
+
+	// prevWasArrow is true just after we scan `->`. The next identifier
+	// is a property access (instance). Cleared after it's consumed.
+	prevWasArrow bool
+	// prevWasDoubleColon is true just after we scan `::`. The next
+	// identifier is a property access (static). Cleared after consumed.
+	prevWasDoubleColon bool
+}
+
+func (b *builder) run() {
+	for !b.s.EOF() {
+		if !b.inPHP {
+			b.skipToPHPOpen()
+			if b.s.EOF() {
+				return
+			}
+			continue
+		}
+		c := b.s.Peek()
+		// Check for closing ?>
+		if c == '?' && b.s.PeekAt(1) == '>' {
+			b.s.Advance(2)
+			b.inPHP = false
+			// `?>` acts like a statement terminator.
+			b.endStatement()
+			continue
+		}
+		switch {
+		case c == ' ' || c == '\t' || c == '\r':
+			b.s.Pos++
+		case c == '\n':
+			b.s.Next()
+		case c == '/' && b.s.PeekAt(1) == '/':
+			b.s.SkipLineComment()
+		case c == '/' && b.s.PeekAt(1) == '*':
+			b.s.Advance(2)
+			b.s.SkipBlockComment("*/")
+		case c == '#':
+			// Comment form `# ...` — unless it starts `#[` (attribute).
+			if b.s.PeekAt(1) == '[' {
+				b.s.Advance(2)
+				b.skipAttributeBody()
+				b.prevByte = ']'
+				continue
+			}
+			b.s.SkipLineComment()
+		case c == '\'':
+			b.s.ScanSimpleString('\'')
+			b.prevByte = '\''
+			b.stmtStart = false
+		case c == '"':
+			b.scanDoubleString()
+			b.prevByte = '"'
+			b.stmtStart = false
+		case c == '`':
+			// Backtick: shell-exec operator. Skip like a string.
+			b.s.ScanSimpleString('`')
+			b.prevByte = '`'
+			b.stmtStart = false
+		case c == '<' && b.s.PeekAt(1) == '<' && b.s.PeekAt(2) == '<':
+			// Heredoc or nowdoc.
+			b.scanHeredoc()
+			b.prevByte = '"'
+			b.stmtStart = false
+		case c == '{':
+			b.handleOpenBrace()
+		case c == '}':
+			b.handleCloseBrace()
+		case c == '(':
+			b.s.Pos++
+			b.prevByte = '('
+			if b.paramListPending {
+				b.paramListPending = false
+				b.inParamList = true
+				b.paramDepth = 1
+				b.paramSectionNeedsName = true
+			} else if b.inParamList {
+				b.paramDepth++
+			} else if b.inUseClause {
+				b.useDepth++
+			} else {
+				b.parenDepth++
+			}
+		case c == ')':
+			b.s.Pos++
+			b.prevByte = ')'
+			if b.inParamList {
+				b.paramDepth--
+				if b.paramDepth == 0 {
+					b.inParamList = false
+					b.paramSectionNeedsName = false
+				}
+			} else if b.inUseClause {
+				b.useDepth--
+				if b.useDepth == 0 {
+					b.inUseClause = false
+				}
+			} else if b.parenDepth > 0 {
+				b.parenDepth--
+				// Check for closing any fn()=>expr arrow scope whose
+				// closeAtParenZero was set at this level.
+				b.closeArrowIfTerminating()
+			}
+		case c == ',':
+			b.s.Pos++
+			b.prevByte = ','
+			// In a param list at top depth, a comma starts the next section.
+			if b.inParamList && b.paramDepth == 1 {
+				b.paramSectionNeedsName = true
+			}
+			b.closeArrowIfTerminating()
+		case c == ';':
+			b.s.Pos++
+			b.prevByte = ';'
+			b.endStatement()
+		case c == '[':
+			b.s.Pos++
+			b.prevByte = '['
+		case c == ']':
+			b.s.Pos++
+			b.prevByte = ']'
+		case c == '-' && b.s.PeekAt(1) == '>':
+			// Instance access. Next ident is property access.
+			b.s.Advance(2)
+			b.prevByte = '>'
+			b.prevWasArrow = true
+		case c == ':' && b.s.PeekAt(1) == ':':
+			// Static/scope access. Next ident is property access.
+			b.s.Advance(2)
+			b.prevByte = ':'
+			b.prevWasDoubleColon = true
+		case c == '=' && b.s.PeekAt(1) == '>':
+			// Arrow-function body or array element `=>`.
+			// If we're at the top of a `fn(params)` arrow (pendingScope
+			// set to ScopeFunction), open the arrow scope now.
+			if b.pendingScope != nil && *b.pendingScope == scope.ScopeFunction {
+				// Arrow fn: open a function scope here. The body is an
+				// expression; it closes at the next terminator at the
+				// ambient paren depth.
+				arrowStart := uint32(b.s.Pos)
+				b.s.Advance(2)
+				b.pendingScope = nil
+				b.openScopeArrow(scope.ScopeFunction, arrowStart, b.parenDepth+1)
+				b.prevByte = '>'
+				continue
+			}
+			b.s.Advance(2)
+			b.prevByte = '>'
+		case c == '$':
+			b.handleDollarIdent()
+		case c == '\\':
+			// Namespace separator, only meaningful inside qualified names.
+			b.s.Pos++
+			b.prevByte = '\\'
+		case lexkit.IsDefaultIdentStart(c):
+			word := b.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
+			b.handleIdent(word)
+		case lexkit.IsASCIIDigit(c):
+			for !b.s.EOF() {
+				cc := b.s.Peek()
+				if !lexkit.IsASCIIDigit(cc) && cc != '.' && cc != '_' && cc != 'x' && cc != 'X' && cc != 'e' && cc != 'E' && cc != 'b' && cc != 'B' {
+					break
+				}
+				b.s.Pos++
+			}
+			b.prevByte = '0'
+			b.stmtStart = false
+		default:
+			b.s.Pos++
+			b.prevByte = c
+		}
+	}
+}
+
+// skipToPHPOpen advances the scanner to just past the next <?php or <?=
+// open tag. If no open tag is found, advances to EOF.
+func (b *builder) skipToPHPOpen() {
+	for !b.s.EOF() {
+		c := b.s.Peek()
+		if c == '<' && b.s.PeekAt(1) == '?' {
+			// <?php (case-insensitive) or <?=
+			if b.s.PeekAt(2) == '=' {
+				b.s.Advance(3)
+				b.inPHP = true
+				b.stmtStart = true
+				return
+			}
+			// Match `<?php` literally, and as a fallback plain `<?`.
+			if (b.s.PeekAt(2) == 'p' || b.s.PeekAt(2) == 'P') &&
+				(b.s.PeekAt(3) == 'h' || b.s.PeekAt(3) == 'H') &&
+				(b.s.PeekAt(4) == 'p' || b.s.PeekAt(4) == 'P') {
+				b.s.Advance(5)
+				b.inPHP = true
+				b.stmtStart = true
+				return
+			}
+			// Short open tag `<?` — also accept.
+			b.s.Advance(2)
+			b.inPHP = true
+			b.stmtStart = true
+			return
+		}
+		b.s.Next()
+	}
+}
+
+// endStatement fires at ';', '?>', and close-brace for statement-like
+// contexts. Clears per-statement flags.
+func (b *builder) endStatement() {
+	b.stmtStart = true
+	b.declContext = ""
+	b.paramListPending = false
+	b.prevIdentIsThis = false
+	b.prevWasDoubleColon = false
+	b.classBodyConst = false
+	b.closeArrowIfTerminating()
+}
+
+func (b *builder) handleDollarIdent() {
+	// `$...`: could be a local / param / property / global-variable access.
+	// Treat `$ident` as a single identifier including the `$`.
+	start := b.s.Pos
+	b.s.Pos++ // consume $
+	if b.s.Peek() == '$' {
+		// Variable-variable `$$x`: emit nothing (not in v1). Advance
+		// through the inner $-ident so we don't loop.
+		b.s.Pos++
+		if lexkit.IsDefaultIdentStart(b.s.Peek()) {
+			_ = b.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
+		}
+		b.prevByte = 'i'
+		b.stmtStart = false
+		return
+	}
+	if !lexkit.IsDefaultIdentStart(b.s.Peek()) {
+		// Stray `$` — treat as data.
+		b.prevByte = '$'
+		return
+	}
+	_ = b.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
+	name := string(b.s.Src[start:b.s.Pos])
+	span := mkSpan(uint32(start), uint32(b.s.Pos))
+
+	wasStmtStart := b.stmtStart
+	b.stmtStart = false
+
+	// Property access: `->$var` is a dynamic property access; we don't
+	// treat as a decl. Same for `::$var`.
+	if b.prevWasArrow || b.prevWasDoubleColon {
+		b.emitPropertyRef(name, span)
+		b.prevWasArrow = false
+		b.prevWasDoubleColon = false
+		b.prevByte = 'i'
+		b.prevIdentIsThis = false
+		return
+	}
+
+	// Inside a param list, the first ident of each section is a param name.
+	if b.inParamList && b.paramDepth == 1 && b.paramSectionNeedsName {
+		b.emitDecl(name, scope.KindParam, span, scope.NSValue)
+		b.paramSectionNeedsName = false
+		b.prevByte = 'i'
+		b.prevIdentIsThis = false
+		return
+	}
+
+	// Inside a closure `use (...)` capture list: emit as a ref (binding
+	// in enclosing scope handled by the scope chain; we're at file/fn
+	// scope here, the closure scope hasn't pushed yet).
+	if b.inUseClause {
+		b.emitRef(name, span)
+		b.prevByte = 'i'
+		b.prevIdentIsThis = false
+		return
+	}
+
+	// Class property declaration: `public int $x;`, `private $y = 0;`,
+	// `static $z;`, or bare `var $w;`. Triggered by declContext =
+	// KindField set by visibility / var / static / readonly modifiers.
+	if b.declContext == scope.KindField {
+		b.emitDecl(name, scope.KindField, span, scope.NSField)
+		b.declContext = ""
+		b.prevByte = 'i'
+		b.prevIdentIsThis = false
+		return
+	}
+
+	// `$this` identifier — emit as a ref (resolves to file-scope nothing
+	// but the following `->X` will route through tryResolveThisField).
+	if name == "$this" {
+		b.emitRef(name, span)
+		b.prevByte = 'i'
+		b.prevIdentIsThis = true
+		return
+	}
+
+	// Statement-start `$var = ...` at function or block scope: emit as
+	// a var decl in the current scope. We recognise by peeking past ws
+	// for `=` (but not `==`, `=>`).
+	if wasStmtStart && b.isAssignTarget() {
+		b.emitDecl(name, scope.KindVar, span, scope.NSValue)
+		b.prevByte = 'i'
+		b.prevIdentIsThis = false
+		return
+	}
+
+	// Otherwise treat as a ref. Scope-chain resolution binds it to a
+	// local if one has been seen; else unresolved.
+	b.emitRef(name, span)
+	b.prevByte = 'i'
+	b.prevIdentIsThis = false
+}
+
+// isAssignTarget peeks past whitespace/comments for `=` followed by
+// something other than `=`, `>`, `=`. Used to detect `$x = 1` vs `$x ==
+// 1` / `$x => val`. Does not mutate scanner position.
+func (b *builder) isAssignTarget() bool {
+	save := b.s.Pos
+	saveLine := b.s.Line
+	defer func() {
+		b.s.Pos = save
+		b.s.Line = saveLine
+	}()
+	for !b.s.EOF() {
+		c := b.s.Peek()
+		if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+			b.s.Next()
+			continue
+		}
+		if c == '/' && b.s.PeekAt(1) == '/' {
+			b.s.SkipLineComment()
+			continue
+		}
+		if c == '/' && b.s.PeekAt(1) == '*' {
+			b.s.Advance(2)
+			b.s.SkipBlockComment("*/")
+			continue
+		}
+		if c != '=' {
+			return false
+		}
+		next := b.s.PeekAt(1)
+		return next != '=' && next != '>'
+	}
+	return false
+}
+
+func (b *builder) handleIdent(word []byte) {
+	if len(word) == 0 {
+		return
+	}
+	startByte := uint32(b.s.Pos - len(word))
+	endByte := uint32(b.s.Pos)
+	name := string(word)
+	wasStmtStart := b.stmtStart
+	b.stmtStart = false
+
+	// Property access: `->name` or `::name`. Resolve `$this->name`
+	// against the enclosing class if possible.
+	if b.prevWasArrow || b.prevWasDoubleColon {
+		wasArrow := b.prevWasArrow
+		b.prevWasArrow = false
+		b.prevWasDoubleColon = false
+		if wasArrow && b.prevIdentIsThis {
+			b.prevIdentIsThis = false
+			if b.tryResolveThisField(name, mkSpan(startByte, endByte)) {
+				b.prevByte = 'i'
+				return
+			}
+		}
+		b.prevIdentIsThis = false
+		b.emitPropertyRef(name, mkSpan(startByte, endByte))
+		b.prevByte = 'i'
+		return
+	}
+	b.prevIdentIsThis = false
+
+	// Keywords that change parser state.
+	switch phpLower(name) {
+	case "function":
+		// Could be a named function, a method (inside class body), an
+		// anonymous closure, or a method signature. Emit decl on the
+		// next ident if there is one, else open an anonymous function
+		// scope on the next '{'.
+		b.declContext = scope.KindFunction
+		k := scope.ScopeFunction
+		b.pendingScope = &k
+		b.pendingFullStart = startByte + 1
+		b.paramListPending = true
+		// A following `(` at top-of-statement without a name means
+		// anonymous closure: the `(` handler will start param collection
+		// anyway; the `{` will open the function scope even though no
+		// decl was emitted.
+		b.prevByte = 'k'
+		return
+	case "fn":
+		// Short closure: `fn($x) => expr`.
+		k := scope.ScopeFunction
+		b.pendingScope = &k
+		b.pendingFullStart = startByte + 1
+		b.paramListPending = true
+		b.prevByte = 'k'
+		return
+	case "class":
+		b.declContext = scope.KindClass
+		k := scope.ScopeClass
+		b.pendingScope = &k
+		b.pendingFullStart = startByte + 1
+		b.prevByte = 'k'
+		return
+	case "interface":
+		b.declContext = scope.KindInterface
+		k := scope.ScopeInterface
+		b.pendingScope = &k
+		b.pendingFullStart = startByte + 1
+		b.prevByte = 'k'
+		return
+	case "trait":
+		b.declContext = scope.KindType
+		k := scope.ScopeClass
+		b.pendingScope = &k
+		b.pendingFullStart = startByte + 1
+		b.prevByte = 'k'
+		return
+	case "enum":
+		b.declContext = scope.KindEnum
+		k := scope.ScopeClass
+		b.pendingScope = &k
+		b.pendingFullStart = startByte + 1
+		b.prevByte = 'k'
+		return
+	case "namespace":
+		b.handleNamespaceKeyword(startByte)
+		return
+	case "use":
+		// Two forms:
+		//   at stmt-start at file scope: `use Foo\Bar;` import
+		//   following `)` of a closure param list: `function() use ($x)`
+		if wasStmtStart && b.currentScopeKind() != scope.ScopeClass {
+			b.handleUseImport()
+			return
+		}
+		// Closure capture-list form.
+		b.inUseClause = true
+		// The ( that follows will bump useDepth.
+		b.prevByte = 'k'
+		return
+	case "const":
+		// Inside a class: NSField class constant. Otherwise top-level const.
+		if b.currentScopeKind() == scope.ScopeClass {
+			b.classBodyConst = true
+		}
+		b.declContext = scope.KindConst
+		b.pendingFullStart = startByte + 1
+		b.prevByte = 'k'
+		return
+	case "public", "private", "protected", "var":
+		// Property-visibility modifier. In a class body, the next token
+		// decides: if it's `function`, the normal function handling takes
+		// over (method); if it's `const`, the const path; else the next
+		// $-ident is a property.
+		if b.currentScopeKind() == scope.ScopeClass {
+			b.declContext = scope.KindField
+		}
+		b.prevByte = 'k'
+		return
+	case "static":
+		// Modifier for both methods and properties, or a scope token.
+		// If we're in a class body, hold a potential field context; it'll
+		// be cleared if `function` follows.
+		if b.currentScopeKind() == scope.ScopeClass {
+			if b.declContext == "" {
+				b.declContext = scope.KindField
+			}
+		}
+		b.prevByte = 'k'
+		return
+	case "abstract", "final", "readonly":
+		// Modifier; keep declContext intact.
+		b.prevByte = 'k'
+		return
+	case "extends", "implements":
+		// Type-position ident(s) follow. Treat as plain refs via normal
+		// fallthrough (do nothing special here).
+		b.prevByte = 'k'
+		return
+	case "new":
+		b.prevByte = 'k'
+		return
+	case "self", "parent":
+		// These act as receivers for `::` access; emit as refs.
+		b.emitRef(name, mkSpan(startByte, endByte))
+		b.prevByte = 'i'
+		return
+	case "true", "false", "null":
+		b.prevByte = 'k'
+		return
+	case "return", "throw", "if", "else", "elseif", "while", "for",
+		"foreach", "do", "switch", "case", "default", "break",
+		"continue", "try", "catch", "finally", "echo", "print",
+		"and", "or", "xor", "as", "instanceof", "yield", "match",
+		"global", "goto", "require", "require_once", "include",
+		"include_once", "declare", "endif", "endwhile", "endforeach",
+		"endfor", "endswitch", "list", "array", "isset", "unset",
+		"empty":
+		b.prevByte = 'k'
+		return
+	}
+
+	// After `function` keyword, the next ident is the function/method name.
+	if b.declContext == scope.KindFunction {
+		scopeK := b.currentScopeKind()
+		kind := scope.KindFunction
+		ns := scope.NSValue
+		if scopeK == scope.ScopeClass {
+			kind = scope.KindMethod
+			ns = scope.NSField
+		}
+		b.emitDecl(name, kind, mkSpan(startByte, endByte), ns)
+		b.declContext = ""
+		// paramListPending was set by "function"; we keep it.
+		b.prevByte = 'i'
+		return
+	}
+
+	// After `class`, `interface`, `trait`, `enum`: ident is the decl name.
+	if b.declContext == scope.KindClass {
+		b.emitDecl(name, scope.KindClass, mkSpan(startByte, endByte), scope.NSValue)
+		b.declContext = ""
+		b.prevByte = 'i'
+		return
+	}
+	if b.declContext == scope.KindInterface {
+		b.emitDecl(name, scope.KindInterface, mkSpan(startByte, endByte), scope.NSValue)
+		b.declContext = ""
+		b.prevByte = 'i'
+		return
+	}
+	if b.declContext == scope.KindType {
+		b.emitDecl(name, scope.KindType, mkSpan(startByte, endByte), scope.NSValue)
+		b.declContext = ""
+		b.prevByte = 'i'
+		return
+	}
+	if b.declContext == scope.KindEnum {
+		b.emitDecl(name, scope.KindEnum, mkSpan(startByte, endByte), scope.NSValue)
+		b.declContext = ""
+		b.prevByte = 'i'
+		return
+	}
+
+	// After `const`: first ident is the const name.
+	if b.declContext == scope.KindConst {
+		ns := scope.NSValue
+		if b.classBodyConst {
+			ns = scope.NSField
+		}
+		b.emitDecl(name, scope.KindConst, mkSpan(startByte, endByte), ns)
+		b.declContext = ""
+		b.classBodyConst = false
+		b.prevByte = 'i'
+		return
+	}
+
+	// If we're still in a class body with declContext=KindField but the
+	// ident isn't $-prefixed, this is a type hint for the upcoming $prop.
+	// Emit as a ref (the type name), leave declContext for the next $ident.
+	if b.declContext == scope.KindField {
+		b.emitRef(name, mkSpan(startByte, endByte))
+		b.prevByte = 'i'
+		return
+	}
+
+	// In a param list, type-hint ident before the $param.
+	if b.inParamList && b.paramDepth == 1 && b.paramSectionNeedsName {
+		// It's a type — emit as a ref unless it's a primitive.
+		if !isPHPTypeKeyword(name) {
+			b.emitRef(name, mkSpan(startByte, endByte))
+		}
+		b.prevByte = 'i'
+		return
+	}
+
+	// Otherwise: emit as a ref.
+	b.emitRef(name, mkSpan(startByte, endByte))
+	b.prevByte = 'i'
+}
+
+// handleNamespaceKeyword handles `namespace Name;` and `namespace Name { ... }`.
+func (b *builder) handleNamespaceKeyword(kwStart uint32) {
+	b.pendingFullStart = kwStart + 1
+	b.skipWS()
+	// Optional qualified name.
+	var nameStart, nameEnd uint32
+	var fullName string
+	if lexkit.IsDefaultIdentStart(b.s.Peek()) {
+		nameStart = uint32(b.s.Pos)
+		// Scan qualified Name\Sub\Sub.
+		for !b.s.EOF() {
+			if !lexkit.IsDefaultIdentStart(b.s.Peek()) {
+				break
+			}
+			for !b.s.EOF() && lexkit.DefaultIdentCont[b.s.Peek()] {
+				b.s.Pos++
+			}
+			if b.s.Peek() == '\\' {
+				b.s.Pos++
+				continue
+			}
+			break
+		}
+		nameEnd = uint32(b.s.Pos)
+		fullName = string(b.s.Src[nameStart:nameEnd])
+	}
+	b.skipWS()
+	next := byte(0)
+	if !b.s.EOF() {
+		next = b.s.Peek()
+	}
+	if fullName != "" {
+		// Emit the leaf component as the namespace decl name (similar
+		// to Ruby modules).
+		leaf := fullName
+		leafStart := nameStart
+		for i := len(fullName) - 1; i >= 0; i-- {
+			if fullName[i] == '\\' {
+				leaf = fullName[i+1:]
+				leafStart = nameStart + uint32(i+1)
+				break
+			}
+		}
+		b.emitDecl(leaf, scope.KindNamespace, mkSpan(leafStart, leafStart+uint32(len(leaf))), scope.NSNamespace)
+	}
+	if next == '{' {
+		// Block form: the next '{' opens the namespace scope.
+		k := scope.ScopeNamespace
+		b.pendingScope = &k
+	} else {
+		// Statement form: push a namespace scope that stays open until
+		// the next `namespace` statement or EOF. We model this by
+		// opening a ScopeNamespace right here; it'll close at EOF.
+		// If a previous statement-form namespace scope is already open,
+		// close it first so they don't nest incorrectly.
+		b.closeStatementNamespaceIfOpen()
+		b.openScope(scope.ScopeNamespace, kwStart)
+	}
+	b.prevByte = 'k'
+}
+
+// closeStatementNamespaceIfOpen closes the top-of-stack scope if and only
+// if it is a ScopeNamespace that was opened by a statement-form namespace
+// declaration (i.e., not enclosing a `{ ... }` block). Heuristic: pop the
+// top ScopeNamespace if it is not the file scope and has no ownerDeclIdx
+// mismatch (we can't easily tell block form from statement form at pop
+// time, so we conservatively only pop if it is the top).
+func (b *builder) closeStatementNamespaceIfOpen() {
+	top := b.stack.Top()
+	if top == nil {
+		return
+	}
+	if top.Data.kind != scope.ScopeNamespace {
+		return
+	}
+	b.closeTopScope(uint32(b.s.Pos))
+}
+
+// handleUseImport parses `use Foo\Bar;`, `use Foo\Bar as Baz;`, and
+// `use Foo\{A, B as C};`. Consumes up through the terminating `;`.
+func (b *builder) handleUseImport() {
+	// Optional `function` or `const` prefix (PHP allows `use function
+	// strlen;` etc.) — skip it for decl-kind purposes.
+	b.skipWS()
+	save := b.s.Pos
+	if lexkit.IsDefaultIdentStart(b.s.Peek()) {
+		word := b.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
+		wl := phpLower(string(word))
+		if wl != "function" && wl != "const" {
+			b.s.Pos = save
+		}
+	}
+	b.skipWS()
+	// Scan qualified name.
+	pathStart := b.s.Pos
+	path := b.scanQualifiedName()
+	b.skipWS()
+	// Grouped form: `use Foo\{...}`. scanQualifiedName stops before the
+	// trailing `\` when followed by a non-ident; advance past it here
+	// so we recognise the `{`.
+	if b.s.Peek() == '\\' && b.s.PeekAt(1) == '{' {
+		b.s.Pos++
+	}
+	if b.s.Peek() == '{' {
+		// Grouped: `use Foo\{A, B as C};`. Path is the prefix (with
+		// trailing `\` dropped).
+		b.s.Pos++ // consume '{'
+		for !b.s.EOF() {
+			b.skipWS()
+			if b.s.Peek() == '}' {
+				b.s.Pos++
+				break
+			}
+			// Optional prefix keyword.
+			svp := b.s.Pos
+			if lexkit.IsDefaultIdentStart(b.s.Peek()) {
+				w := b.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
+				wl := phpLower(string(w))
+				if wl != "function" && wl != "const" {
+					b.s.Pos = svp
+				}
+			}
+			b.skipWS()
+			subStart := b.s.Pos
+			sub := b.scanQualifiedName()
+			subEnd := b.s.Pos
+			if sub == "" {
+				b.s.Pos++
+				continue
+			}
+			b.skipWS()
+			leaf, leafOff := leafOfQualified(sub)
+			emitName := leaf
+			emitStart := uint32(subStart + leafOff)
+			emitEnd := uint32(subEnd)
+			if b.peekIdentWordCI("as") {
+				b.s.Advance(2)
+				b.skipWS()
+				if lexkit.IsDefaultIdentStart(b.s.Peek()) {
+					ast := b.s.Pos
+					_ = b.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
+					aen := b.s.Pos
+					emitName = string(b.s.Src[ast:aen])
+					emitStart = uint32(ast)
+					emitEnd = uint32(aen)
+				}
+			}
+			b.emitDecl(emitName, scope.KindImport, mkSpan(emitStart, emitEnd), scope.NSValue)
+			b.skipWS()
+			if b.s.Peek() == ',' {
+				b.s.Pos++
+			}
+		}
+	} else {
+		// Simple or aliased: `use Foo\Bar;` or `use Foo\Bar as Baz;`.
+		if path == "" {
+			return
+		}
+		leaf, leafOff := leafOfQualified(path)
+		emitName := leaf
+		emitStart := uint32(pathStart + leafOff)
+		emitEnd := uint32(pathStart + len(path))
+		if b.peekIdentWordCI("as") {
+			b.s.Advance(2)
+			b.skipWS()
+			if lexkit.IsDefaultIdentStart(b.s.Peek()) {
+				ast := b.s.Pos
+				_ = b.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
+				aen := b.s.Pos
+				emitName = string(b.s.Src[ast:aen])
+				emitStart = uint32(ast)
+				emitEnd = uint32(aen)
+			}
+		}
+		b.emitDecl(emitName, scope.KindImport, mkSpan(emitStart, emitEnd), scope.NSValue)
+	}
+	// Consume through ';'.
+	for !b.s.EOF() && b.s.Peek() != ';' && b.s.Peek() != '\n' {
+		b.s.Pos++
+	}
+	b.prevByte = 'k'
+}
+
+// scanQualifiedName reads a possibly-qualified PHP name like Foo\Bar\Baz.
+// Returns the full string. An empty return means there was no name.
+func (b *builder) scanQualifiedName() string {
+	start := b.s.Pos
+	// Optional leading backslash (absolute name).
+	if b.s.Peek() == '\\' {
+		b.s.Pos++
+	}
+	for !b.s.EOF() {
+		if !lexkit.IsDefaultIdentStart(b.s.Peek()) {
+			break
+		}
+		for !b.s.EOF() && lexkit.DefaultIdentCont[b.s.Peek()] {
+			b.s.Pos++
+		}
+		if b.s.Peek() == '\\' {
+			// Peek past: if no ident follows, stop (could be `use Foo\{...}`).
+			if !lexkit.IsDefaultIdentStart(b.s.PeekAt(1)) {
+				break
+			}
+			b.s.Pos++
+			continue
+		}
+		break
+	}
+	return string(b.s.Src[start:b.s.Pos])
+}
+
+// leafOfQualified returns (leaf, offset). Offset is where the leaf starts
+// within the qualified path.
+func leafOfQualified(path string) (string, int) {
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '\\' {
+			return path[i+1:], i + 1
+		}
+	}
+	return path, 0
+}
+
+// handleOpenBrace opens a scope. Uses pendingScope if set; else ScopeBlock.
+// For class/function/interface scopes, flushes the owner decl's FullSpan.
+func (b *builder) handleOpenBrace() {
+	startByte := uint32(b.s.Pos)
+	b.s.Pos++
+	b.prevByte = '{'
+	kind := scope.ScopeBlock
+	if b.pendingScope != nil {
+		kind = *b.pendingScope
+		b.pendingScope = nil
+	}
+	b.openScope(kind, startByte)
+	b.stmtStart = true
+}
+
+func (b *builder) handleCloseBrace() {
+	b.s.Pos++
+	b.prevByte = '}'
+	b.closeTopScope(uint32(b.s.Pos))
+	b.stmtStart = true
+	b.declContext = ""
+}
+
+// closeArrowIfTerminating closes any open `fn()=>expr` arrow-function
+// scope whose closeAtParenZero trigger has fired (ambient parenDepth is
+// now strictly less than the stored level).
+func (b *builder) closeArrowIfTerminating() {
+	for {
+		top := b.stack.Top()
+		if top == nil {
+			return
+		}
+		caz := top.Data.closeAtParenZero
+		if caz == 0 {
+			return
+		}
+		// The arrow closes when parenDepth < caz-1. Since `fn(x) => expr`
+		// is typically at parenDepth 0, caz is 1 and we close when depth
+		// returns to 0 after a terminator. Use <=; when we're at ',', ';',
+		// or `)` we're wrapping up.
+		if b.parenDepth >= caz {
+			return
+		}
+		b.closeTopScope(uint32(b.s.Pos))
+	}
+}
+
+// openScopeArrow opens a function scope for an expression-body arrow
+// (`fn(params) => expr`) and records the paren-depth level at which it
+// should close.
+func (b *builder) openScopeArrow(kind scope.ScopeKind, startByte uint32, closeAtDepth int) {
+	b.openScope(kind, startByte)
+	// Mark the scope entry.
+	top := b.stack.Top()
+	if top != nil {
+		top.Data.closeAtParenZero = closeAtDepth
+	}
+}
+
+func (b *builder) openScope(kind scope.ScopeKind, startByte uint32) {
+	id := scope.ScopeID(len(b.res.Scopes) + 1)
+	var parent scope.ScopeID
+	if top := b.stack.Top(); top != nil {
+		parent = top.Data.id
+	}
+	b.res.Scopes = append(b.res.Scopes, scope.Scope{
+		ID:     id,
+		Parent: parent,
+		Kind:   kind,
+		Span:   scope.Span{StartByte: startByte, EndByte: 0},
+	})
+	owner := b.pendingOwnerDecl
+	b.pendingOwnerDecl = -1
+	b.stack.Push(lexkit.Scope[scopeEntry]{
+		Data: scopeEntry{
+			kind:         kind,
+			id:           id,
+			ownerDeclIdx: owner,
+		},
+		SymIdx:   -1,
+		OpenLine: b.s.Line,
+	})
+}
+
+func (b *builder) closeTopScope(endByte uint32) {
+	e, ok := b.stack.Pop()
+	if !ok {
+		return
+	}
+	idx := int(e.Data.id) - 1
+	if idx >= 0 && idx < len(b.res.Scopes) {
+		b.res.Scopes[idx].Span.EndByte = endByte
+	}
+	if o := e.Data.ownerDeclIdx; o >= 0 && o < len(b.res.Decls) {
+		if b.res.Decls[o].FullSpan.EndByte < endByte {
+			b.res.Decls[o].FullSpan.EndByte = endByte
+		}
+	}
+}
+
+func (b *builder) closeScopesToDepth(depth int) {
+	endByte := uint32(len(b.s.Src))
+	for b.stack.Depth() > depth {
+		b.closeTopScope(endByte)
+	}
+}
+
+func (b *builder) currentScope() scope.ScopeID {
+	if top := b.stack.Top(); top != nil {
+		return top.Data.id
+	}
+	return 0
+}
+
+func (b *builder) currentScopeKind() scope.ScopeKind {
+	if top := b.stack.Top(); top != nil {
+		return top.Data.kind
+	}
+	return ""
+}
+
+func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span, ns scope.Namespace) {
+	scopeID := b.currentScope()
+	locID := hashLoc(b.file, span, name)
+	declID := hashDecl(b.file, name, ns, scopeID)
+
+	var fullStart uint32
+	if b.pendingFullStart > 0 && b.pendingFullStart-1 <= span.StartByte {
+		fullStart = b.pendingFullStart - 1
+	} else {
+		fullStart = span.StartByte
+	}
+	fullSpan := scope.Span{StartByte: fullStart, EndByte: span.EndByte}
+
+	idx := len(b.res.Decls)
+	b.res.Decls = append(b.res.Decls, scope.Decl{
+		ID:        declID,
+		LocID:     locID,
+		Name:      name,
+		Namespace: ns,
+		Kind:      kind,
+		Scope:     scopeID,
+		File:      b.file,
+		Span:      span,
+		FullSpan:  fullSpan,
+	})
+	switch kind {
+	case scope.KindFunction, scope.KindMethod, scope.KindClass,
+		scope.KindInterface, scope.KindEnum, scope.KindType,
+		scope.KindNamespace:
+		b.pendingOwnerDecl = idx
+	}
+	b.pendingFullStart = 0
+}
+
+func (b *builder) emitRef(name string, span scope.Span) {
+	scopeID := b.currentScope()
+	locID := hashLoc(b.file, span, name)
+	b.res.Refs = append(b.res.Refs, scope.Ref{
+		LocID:     locID,
+		File:      b.file,
+		Span:      span,
+		Name:      name,
+		Namespace: scope.NSValue,
+		Scope:     scopeID,
+	})
+}
+
+func (b *builder) emitPropertyRef(name string, span scope.Span) {
+	scopeID := b.currentScope()
+	locID := hashLoc(b.file, span, name)
+	b.res.Refs = append(b.res.Refs, scope.Ref{
+		LocID:     locID,
+		File:      b.file,
+		Span:      span,
+		Name:      name,
+		Namespace: scope.NSField,
+		Scope:     scopeID,
+		Binding: scope.RefBinding{
+			Kind:   scope.BindProbable,
+			Reason: "property_access",
+		},
+	})
+}
+
+// tryResolveThisField attempts to resolve `$this->name` at `span` against
+// the nearest enclosing class scope's NSField decls. Returns true if a
+// match was found (and a resolved ref was emitted); false otherwise.
+func (b *builder) tryResolveThisField(name string, span scope.Span) bool {
+	entries := b.stack.Entries()
+	var classScope scope.ScopeID
+	for i := len(entries) - 1; i >= 0; i-- {
+		k := entries[i].Data.kind
+		if k == scope.ScopeClass || k == scope.ScopeInterface {
+			classScope = entries[i].Data.id
+			break
+		}
+	}
+	if classScope == 0 {
+		return false
+	}
+	// PHP properties are declared as `$foo` (name includes `$`), but
+	// accessed as `$this->foo` (name without `$`). Methods have no `$`.
+	// Try both: bare name (methods) and `$`-prefixed (properties).
+	altName := "$" + name
+	for i := range b.res.Decls {
+		d := &b.res.Decls[i]
+		if d.Scope != classScope || d.Namespace != scope.NSField {
+			continue
+		}
+		if d.Name != name && d.Name != altName {
+			continue
+		}
+		scopeID := b.currentScope()
+		locID := hashLoc(b.file, span, name)
+		b.res.Refs = append(b.res.Refs, scope.Ref{
+			LocID:     locID,
+			File:      b.file,
+			Span:      span,
+			Name:      name,
+			Namespace: scope.NSField,
+			Scope:     scopeID,
+			Binding: scope.RefBinding{
+				Kind:   scope.BindResolved,
+				Decl:   d.ID,
+				Reason: "this_dot_field",
+			},
+		})
+		return true
+	}
+	return false
+}
+
+// resolveRefs walks each Ref's scope chain and binds it to the innermost
+// matching Decl, if any. Pre-bound refs (property_access, this_dot_field)
+// are left alone.
+func (b *builder) resolveRefs() {
+	parent := make(map[scope.ScopeID]scope.ScopeID, len(b.res.Scopes))
+	for _, s := range b.res.Scopes {
+		parent[s.ID] = s.Parent
+	}
+	type key struct {
+		scope scope.ScopeID
+		name  string
+		ns    scope.Namespace
+	}
+	byKey := make(map[key]*scope.Decl, len(b.res.Decls))
+	for i := range b.res.Decls {
+		d := &b.res.Decls[i]
+		k := key{scope: d.Scope, name: d.Name, ns: d.Namespace}
+		if _, ok := byKey[k]; !ok {
+			byKey[k] = d
+		}
+	}
+	for i := range b.res.Refs {
+		r := &b.res.Refs[i]
+		if r.Binding.Reason == "property_access" || r.Binding.Reason == "this_dot_field" {
+			continue
+		}
+		cur := r.Scope
+		resolved := false
+		for {
+			if d, ok := byKey[key{scope: cur, name: r.Name, ns: r.Namespace}]; ok {
+				r.Binding = scope.RefBinding{
+					Kind:   scope.BindResolved,
+					Decl:   d.ID,
+					Reason: "direct_scope",
+				}
+				resolved = true
+				break
+			}
+			p, ok := parent[cur]
+			if !ok {
+				break
+			}
+			if p == 0 && cur != 0 {
+				if d, ok := byKey[key{scope: 0, name: r.Name, ns: r.Namespace}]; ok {
+					r.Binding = scope.RefBinding{
+						Kind:   scope.BindResolved,
+						Decl:   d.ID,
+						Reason: "direct_scope",
+					}
+					resolved = true
+				}
+				break
+			}
+			if cur == 0 {
+				break
+			}
+			cur = p
+		}
+		if !resolved {
+			r.Binding = scope.RefBinding{
+				Kind:   scope.BindUnresolved,
+				Reason: "missing_import",
+			}
+		}
+	}
+}
+
+// scanDoubleString scans a double-quoted string body. For v1 we treat
+// interpolation boundaries as literal — we do NOT emit refs for `$var`
+// inside the string, we just scan through. This matches the "optional"
+// note in the task description.
+func (b *builder) scanDoubleString() {
+	if b.s.Peek() != '"' {
+		return
+	}
+	b.s.Pos++ // opening "
+	for !b.s.EOF() {
+		c := b.s.Peek()
+		if c == '\\' && b.s.PeekAt(1) != 0 {
+			b.s.Advance(2)
+			continue
+		}
+		if c == '"' {
+			b.s.Pos++
+			return
+		}
+		if c == '{' && b.s.PeekAt(1) == '$' {
+			// `{$var}` interpolation — skip through matching '}'.
+			b.s.Advance(2)
+			depth := 1
+			for !b.s.EOF() && depth > 0 {
+				cc := b.s.Peek()
+				switch cc {
+				case '{':
+					depth++
+					b.s.Pos++
+				case '}':
+					depth--
+					b.s.Pos++
+				case '\\':
+					b.s.Advance(2)
+				case '"':
+					// Nested string inside interp.
+					b.s.ScanSimpleString('"')
+				case '\'':
+					b.s.ScanSimpleString('\'')
+				default:
+					b.s.Pos++
+				}
+			}
+			continue
+		}
+		b.s.Pos++
+	}
+}
+
+// scanHeredoc scans a heredoc `<<<TAG ... TAG;` or nowdoc `<<<'TAG' ... TAG;`.
+// Body is treated as string data. Tag match is by line: a line whose
+// trimmed content equals the tag ends the heredoc.
+func (b *builder) scanHeredoc() {
+	// We're at `<<<`.
+	b.s.Advance(3)
+	// Optional whitespace/tabs.
+	for !b.s.EOF() {
+		c := b.s.Peek()
+		if c == ' ' || c == '\t' {
+			b.s.Pos++
+			continue
+		}
+		break
+	}
+	// Optional quote (nowdoc = single-quote).
+	quote := byte(0)
+	if b.s.Peek() == '\'' || b.s.Peek() == '"' {
+		quote = b.s.Peek()
+		b.s.Pos++
+	}
+	// Tag.
+	tagStart := b.s.Pos
+	for !b.s.EOF() && lexkit.DefaultIdentCont[b.s.Peek()] {
+		b.s.Pos++
+	}
+	tag := string(b.s.Src[tagStart:b.s.Pos])
+	if quote != 0 && b.s.Peek() == quote {
+		b.s.Pos++
+	}
+	if tag == "" {
+		return
+	}
+	// Skip to newline.
+	for !b.s.EOF() && b.s.Peek() != '\n' {
+		b.s.Pos++
+	}
+	if !b.s.EOF() {
+		b.s.Next()
+	}
+	// Scan lines until one whose trimmed content begins with the tag.
+	for !b.s.EOF() {
+		lineStart := b.s.Pos
+		for !b.s.EOF() && b.s.Peek() != '\n' {
+			b.s.Pos++
+		}
+		lineEnd := b.s.Pos
+		// Trim leading spaces/tabs.
+		t := lineStart
+		for t < lineEnd && (b.s.Src[t] == ' ' || b.s.Src[t] == '\t') {
+			t++
+		}
+		// Check tag prefix with non-ident-cont boundary.
+		if t+len(tag) <= lineEnd &&
+			string(b.s.Src[t:t+len(tag)]) == tag &&
+			(t+len(tag) == lineEnd || !lexkit.DefaultIdentCont[b.s.Src[t+len(tag)]]) {
+			// Found end. Advance past the terminator.
+			b.s.Pos = t + len(tag)
+			return
+		}
+		if !b.s.EOF() {
+			b.s.Next()
+		}
+	}
+}
+
+// skipAttributeBody skips through a PHP 8 attribute `#[Attr(...)]`. We've
+// already consumed `#[`. Scans balanced `]` bracket, handling strings.
+func (b *builder) skipAttributeBody() {
+	depth := 1
+	for !b.s.EOF() && depth > 0 {
+		c := b.s.Peek()
+		switch c {
+		case '[':
+			depth++
+			b.s.Pos++
+		case ']':
+			depth--
+			b.s.Pos++
+		case '"':
+			b.scanDoubleString()
+		case '\'':
+			b.s.ScanSimpleString('\'')
+		case '\n':
+			b.s.Next()
+		default:
+			b.s.Pos++
+		}
+	}
+}
+
+func (b *builder) skipWS() {
+	for !b.s.EOF() {
+		c := b.s.Peek()
+		if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+			b.s.Next()
+			continue
+		}
+		if c == '/' && b.s.PeekAt(1) == '/' {
+			b.s.SkipLineComment()
+			continue
+		}
+		if c == '/' && b.s.PeekAt(1) == '*' {
+			b.s.Advance(2)
+			b.s.SkipBlockComment("*/")
+			continue
+		}
+		if c == '#' && b.s.PeekAt(1) != '[' {
+			b.s.SkipLineComment()
+			continue
+		}
+		break
+	}
+}
+
+// peekIdentWordCI reports whether the scanner is at a case-insensitive
+// whole-word match for kw. Does not advance. kw must be lowercase ASCII.
+func (b *builder) peekIdentWordCI(kw string) bool {
+	if b.s.Pos+len(kw) > len(b.s.Src) {
+		return false
+	}
+	for i := 0; i < len(kw); i++ {
+		c := b.s.Src[b.s.Pos+i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != kw[i] {
+			return false
+		}
+	}
+	next := b.s.PeekAt(len(kw))
+	if next == 0 {
+		return true
+	}
+	return !lexkit.DefaultIdentCont[next]
+}
+
+// phpLower returns s lowercased ASCII. PHP keywords are case-insensitive.
+func phpLower(s string) string {
+	needs := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			needs = true
+			break
+		}
+	}
+	if !needs {
+		return s
+	}
+	buf := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		buf[i] = c
+	}
+	return string(buf)
+}
+
+// isPHPTypeKeyword reports whether name is a primitive PHP type keyword
+// that shouldn't be emitted as a ref (and thus not resolved/renamed).
+func isPHPTypeKeyword(name string) bool {
+	switch phpLower(name) {
+	case "int", "integer", "float", "double", "string", "bool",
+		"boolean", "array", "object", "mixed", "void", "iterable",
+		"callable", "self", "static", "parent", "never", "false",
+		"true", "null", "resource":
+		return true
+	}
+	return false
+}
+
+func mkSpan(start, end uint32) scope.Span {
+	return scope.Span{StartByte: start, EndByte: end}
+}
+
+func hashLoc(file string, span scope.Span, name string) scope.LocID {
+	h := sha256.New()
+	h.Write([]byte(file))
+	h.Write([]byte{0})
+	h.Write([]byte(name))
+	h.Write([]byte{0})
+	var buf [8]byte
+	binary.LittleEndian.PutUint32(buf[0:4], span.StartByte)
+	binary.LittleEndian.PutUint32(buf[4:8], span.EndByte)
+	h.Write(buf[:])
+	sum := h.Sum(nil)
+	return scope.LocID(binary.LittleEndian.Uint64(sum[:8]))
+}
+
+func hashDecl(canonicalPath, name string, ns scope.Namespace, scopeID scope.ScopeID) scope.DeclID {
+	h := sha256.New()
+	h.Write([]byte(canonicalPath))
+	h.Write([]byte{0})
+	h.Write([]byte(name))
+	h.Write([]byte{0})
+	h.Write([]byte(ns))
+	h.Write([]byte{0})
+	var buf [4]byte
+	binary.LittleEndian.PutUint32(buf[:], uint32(scopeID))
+	h.Write(buf[:])
+	sum := h.Sum(nil)
+	return scope.DeclID(binary.LittleEndian.Uint64(sum[:8]))
+}
