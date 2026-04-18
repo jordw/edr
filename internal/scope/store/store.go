@@ -18,11 +18,15 @@ import (
 	"github.com/jordw/edr/internal/scope"
 	"github.com/jordw/edr/internal/scope/c"
 	"github.com/jordw/edr/internal/scope/cpp"
+	"github.com/jordw/edr/internal/scope/csharp"
 	"github.com/jordw/edr/internal/scope/golang"
 	"github.com/jordw/edr/internal/scope/java"
+	"github.com/jordw/edr/internal/scope/kotlin"
+	"github.com/jordw/edr/internal/scope/php"
+	"github.com/jordw/edr/internal/scope/python"
 	"github.com/jordw/edr/internal/scope/ruby"
 	"github.com/jordw/edr/internal/scope/rust"
-	"github.com/jordw/edr/internal/scope/python"
+	"github.com/jordw/edr/internal/scope/swift"
 	"github.com/jordw/edr/internal/scope/ts"
 )
 
@@ -64,6 +68,14 @@ func Parse(relPath string, src []byte) *scope.Result {
 		return c.Parse(relPath, src)
 	case ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh":
 		return cpp.Parse(relPath, src)
+	case ".cs":
+		return csharp.Parse(relPath, src)
+	case ".swift":
+		return swift.Parse(relPath, src)
+	case ".kt", ".kts":
+		return kotlin.Parse(relPath, src)
+	case ".php":
+		return php.Parse(relPath, src)
 	}
 	return nil
 }
@@ -87,7 +99,8 @@ func Build(root, edrDir string, walkFn func(string, func(string) error) error) (
 			".go", ".py", ".pyi",
 			".java", ".rs", ".rb",
 			".c", ".h",
-			".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh":
+			".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh",
+			".cs", ".swift", ".kt", ".kts", ".php":
 		default:
 			return nil
 		}
