@@ -876,6 +876,11 @@ func plainRefsTo(w *os.File, op Op) {
 		}
 		h["decl"] = d
 	}
+	// Binding quality summary: pass through resolved/probable/unresolved/
+	// ambiguous counts so readers see scope precision at a glance.
+	if b, ok := op["binding"].(map[string]any); ok && len(b) > 0 {
+		h["binding"] = b
+	}
 	hTrunc(h, op)
 	writeHeader(w, h)
 	// Body: one ref per line, in "line:col  (reason)" form.

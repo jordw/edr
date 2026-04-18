@@ -166,8 +166,39 @@ func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []stri
 		out = append(out, m)
 	}
 
+	// Binding quality: count entries by BindingKind so consumers can see
+	// at a glance how many refs scope could pin down vs leave probable or
+	// unresolved. Surfaces the moat (extractive scope precision) without
+	// the user needing to scan per-ref reasons.
+	var nResolved, nProbable, nAmbiguous, nUnresolved int
+	for _, e := range entries {
+		switch e.kind {
+		case scope.BindResolved:
+			nResolved++
+		case scope.BindProbable:
+			nProbable++
+		case scope.BindAmbiguous:
+			nAmbiguous++
+		case scope.BindUnresolved:
+			nUnresolved++
+		}
+	}
+	binding := map[string]any{}
+	if nResolved > 0 {
+		binding["resolved"] = nResolved
+	}
+	if nProbable > 0 {
+		binding["probable"] = nProbable
+	}
+	if nAmbiguous > 0 {
+		binding["ambiguous"] = nAmbiguous
+	}
+	if nUnresolved > 0 {
+		binding["unresolved"] = nUnresolved
+	}
+
 	declLine, declCol := byteToLineCol(lines, decl.Span.StartByte)
-	return map[string]any{
+	payload := map[string]any{
 		"file": output.Rel(absFile),
 		"decl": map[string]any{
 			"name": decl.Name,
@@ -178,7 +209,11 @@ func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []stri
 		"count":     len(entries),
 		"refs":      out,
 		"truncated": truncated,
-	}, nil
+	}
+	if len(binding) > 0 {
+		payload["binding"] = binding
+	}
+	return payload, nil
 }
 
 // goCrossFileRefs returns refs to `name` from sibling .go files in
