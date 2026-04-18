@@ -221,6 +221,7 @@ func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []stri
 // when available to skip re-parsing; falls back to filesystem walk.
 func goCrossFileRefs(originFile, name string, idx *scopestore.Index, root string) []refEntry {
 	dir := filepath.Dir(originFile)
+	originPkg := goPackageOfFile(originFile)
 	var out []refEntry
 	iter := func(sibPath string, r *scope.Result, sibSrc []byte) {
 		if sibPath == originFile {
@@ -229,7 +230,16 @@ func goCrossFileRefs(originFile, name string, idx *scopestore.Index, root string
 		if filepath.Dir(sibPath) != dir {
 			return
 		}
-		if !strings.HasSuffix(sibPath, ".go") || strings.HasSuffix(sibPath, "_test.go") {
+		if !strings.HasSuffix(sibPath, ".go") {
+			return
+		}
+		// Verify the sibling actually shares the origin's `package X`
+		// clause. Files with a different clause (e.g. `package bar`
+		// next to `package foo`, or `package foo_test` vs `package foo`)
+		// are NOT same-package. Internal test files (`_test.go` with
+		// matching clause) are included — their refs-to call sites
+		// should be found.
+		if originPkg != "" && goReadPackageClause(sibSrc) != originPkg {
 			return
 		}
 		sibLines := computeLineStarts(sibSrc)

@@ -314,5 +314,22 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 			})
 		}
 	}
+
+	// Go same-package supplement: FindSemanticReferences uses the import
+	// graph to narrow candidates, and same-package files do not import
+	// each other — so refs to the target from sibling files in the same
+	// directory are MISSED. Walk the origin's package explicitly and add
+	// every BindUnresolved ref whose name matches; refs that resolve to a
+	// local decl are BindResolved and implicitly skipped (shadow guard).
+	if strings.EqualFold(filepath.Ext(sym.File), ".go") {
+		for _, idRef := range goSamePackageRefs(sym.File, goPackageOfFile(sym.File), sym.Name) {
+			out[idRef.file] = append(out[idRef.file], span{
+				start: idRef.startByte,
+				end:   idRef.endByte,
+				isDef: false,
+			})
+		}
+	}
+
 	return out, true
 }
