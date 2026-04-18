@@ -285,8 +285,18 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 			declByID[result.Decls[i].ID] = &result.Decls[i]
 		}
 
+		// Property-access refs from the wrong target class are a common
+		// false-positive source when renaming. Gate them: only include
+		// `x.Name` hits when the target is actually a field/method
+		// (something expected to be dotted into). For types, functions,
+		// vars, etc., property access to a same-named member on an
+		// unrelated object is NOT a rename target.
+		propOK := sym.Type == "method" || sym.Type == "field"
 		for _, ref := range result.Refs {
 			if ref.Name != sym.Name {
+				continue
+			}
+			if ref.Binding.Reason == "property_access" && !propOK {
 				continue
 			}
 			// Shadow guard: skip refs bound to a local same-name decl,
