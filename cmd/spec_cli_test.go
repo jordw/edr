@@ -2700,6 +2700,41 @@ func TestSpec_RenameMissingTo(t *testing.T) {
 	}
 }
 
+// Scope-aware rename: a local variable that shadows the target name in
+// another function must NOT be renamed. The legacy regex path would
+// rewrite every \bFoo\b inside the same file; the scope path binds each
+// occurrence to its declaring decl and only rewrites ones that point at
+// the target.
+func TestSpec_RenameRespectsShadowing(t *testing.T) {
+	src := "package main\n\n" +
+		"func Foo() int {\n\treturn 1\n}\n\n" +
+		"func Bar() int {\n\tFoo := 42\n\treturn Foo\n}\n\n" +
+		"func Use() int {\n\treturn Foo()\n}\n"
+	binary, dir := specRepo(t, map[string]string{"main.go": src})
+
+	_, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"rename", "main.go:Foo", "--to", "Renamed")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, "main.go"))
+	got := string(data)
+
+	if !strings.Contains(got, "func Renamed() int") {
+		t.Errorf("function decl not renamed: %s", got)
+	}
+	if !strings.Contains(got, "return Renamed()") {
+		t.Errorf("call site not renamed: %s", got)
+	}
+	if !strings.Contains(got, "Foo := 42") {
+		t.Errorf("shadowing local was rewritten (should stay as Foo := 42): %s", got)
+	}
+	if !strings.Contains(got, "return Foo\n") {
+		t.Errorf("reference to shadowing local was rewritten (should stay as return Foo): %s", got)
+	}
+}
+
 // Comment classification: rename should report code vs comment matches
 // separately, and --comments=skip should leave comments untouched while still
 // counting them in the summary.

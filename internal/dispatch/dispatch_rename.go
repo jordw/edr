@@ -14,6 +14,15 @@ import (
 	"github.com/jordw/edr/internal/output"
 )
 
+// span identifies a byte range in a file that rename should rewrite.
+// isDef distinguishes the declaration site (regex = bare name, rewrite
+// without dot prefix) from a call site (for methods, regex requires
+// a dot prefix).
+type span struct {
+	start, end uint32
+	isDef      bool
+}
+
 func runRename(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	newName := flagString(flags, "new_name", "")
 	if newName == "" {
@@ -67,30 +76,42 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 		callRe = defRe
 	}
 
-	// Find references. Default scope is same-file; --cross-file opts into
-	// repo-wide fan-out.
-	var refs []index.SymbolInfo
-	if crossFile {
-		refs, err = db.FindSemanticReferences(ctx, oldName, sym.File)
-	} else {
-		refs, err = db.FindSameFileCallers(ctx, oldName, sym.File)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("rename: finding references: %w", err)
-	}
-
 	// Build a map of file → symbol byte ranges to replace within.
 	// Definition span uses defRe (matches bare name in declaration).
 	// Reference spans use callRe (matches .name for methods).
-	type span struct {
-		start, end uint32
-		isDef      bool
-	}
 	fileSpans := map[string][]span{}
-	defStart := expandToDocComment(sym.File, sym.StartByte)
-	fileSpans[sym.File] = append(fileSpans[sym.File], span{defStart, sym.EndByte, true})
-	for _, ref := range refs {
-		fileSpans[ref.File] = append(fileSpans[ref.File], span{ref.StartByte, ref.EndByte, false})
+
+	// Scope-aware same-file path: for supported languages (Go, TS/JS/JSX,
+	// Python) we resolve rename targets via binding analysis. Shadowed
+	// locals with the same name in nested scopes are NOT renamed because
+	// their Binding.Decl points to the shadow, not the target. Falls back
+	// to the regex+symbol-index path on any failure.
+	scopeDone := false
+	if !crossFile {
+		if spans, ok := scopeAwareSameFileSpans(sym); ok {
+			fileSpans[sym.File] = spans
+			scopeDone = true
+		}
+	}
+
+	// Legacy regex+symbol-index path: cross-file renames, unsupported
+	// languages, or cases scope could not resolve.
+	if !scopeDone {
+		var refs []index.SymbolInfo
+		if crossFile {
+			refs, err = db.FindSemanticReferences(ctx, oldName, sym.File)
+		} else {
+			refs, err = db.FindSameFileCallers(ctx, oldName, sym.File)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("rename: finding references: %w", err)
+		}
+
+		defStart := expandToDocComment(sym.File, sym.StartByte)
+		fileSpans[sym.File] = append(fileSpans[sym.File], span{defStart, sym.EndByte, true})
+		for _, ref := range refs {
+			fileSpans[ref.File] = append(fileSpans[ref.File], span{ref.StartByte, ref.EndByte, false})
+		}
 	}
 
 	// Sort files for deterministic output.
