@@ -54,15 +54,12 @@ func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []stri
 		}
 	}
 	if result == nil {
-		switch ext {
-		case ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts":
-			result = ts.Parse(relFile, src)
-		case ".go":
-			result = golang.Parse(relFile, src)
-		case ".py", ".pyi":
-			result = python.Parse(relFile, src)
-		default:
-			return nil, fmt.Errorf("refs-to: unsupported language %q (currently supports .ts/.tsx/.js/.jsx, .go, .py)", ext)
+		// Delegate to the shared scope.Parse dispatcher so any language
+		// registered there (ts/js/jsx, go, python, java, rust, ruby, c,
+		// c++) is handled.
+		result = scopestore.Parse(relFile, src)
+		if result == nil {
+			return nil, fmt.Errorf("refs-to: unsupported language %q", ext)
 		}
 	}
 	_ = persistedIndex // reserved for future cross-file resolution via DeclID

@@ -11,8 +11,15 @@ import (
 	scopestore "github.com/jordw/edr/internal/scope/store"
 )
 
-// scopeSupported reports whether the scope builders can parse path's
-// language. The four query/mutation helpers share this gate.
+// scopeSupported gates which languages use the scope-aware helpers
+// for MUTATING commands (rename, changesig, extract). refs-to and the
+// scope index itself handle more languages via scopestore.Parse, but
+// mutations need the scope builder's binding resolution to be robust
+// enough to not miss cross-file refs. Today that is only the mature
+// three; the newer Java/Rust/Ruby/C/C++ builders serve refs-to well
+// but leave enough false negatives that mutations should continue to
+// use the regex + symbol-index fallback. Widen this gate per-language
+// as each builder matures.
 func scopeSupported(path string) bool {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".go", ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".py", ".pyi":

@@ -16,7 +16,12 @@ import (
 	"strings"
 
 	"github.com/jordw/edr/internal/scope"
+	"github.com/jordw/edr/internal/scope/c"
+	"github.com/jordw/edr/internal/scope/cpp"
 	"github.com/jordw/edr/internal/scope/golang"
+	"github.com/jordw/edr/internal/scope/java"
+	"github.com/jordw/edr/internal/scope/ruby"
+	"github.com/jordw/edr/internal/scope/rust"
 	"github.com/jordw/edr/internal/scope/python"
 	"github.com/jordw/edr/internal/scope/ts"
 )
@@ -49,6 +54,16 @@ func Parse(relPath string, src []byte) *scope.Result {
 		return golang.Parse(relPath, src)
 	case ".py", ".pyi":
 		return python.Parse(relPath, src)
+	case ".java":
+		return java.Parse(relPath, src)
+	case ".rs":
+		return rust.Parse(relPath, src)
+	case ".rb":
+		return ruby.Parse(relPath, src)
+	case ".c", ".h":
+		return c.Parse(relPath, src)
+	case ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh":
+		return cpp.Parse(relPath, src)
 	}
 	return nil
 }
@@ -69,7 +84,10 @@ func Build(root, edrDir string, walkFn func(string, func(string) error) error) (
 		ext := strings.ToLower(filepath.Ext(absPath))
 		switch ext {
 		case ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts",
-			".go", ".py", ".pyi":
+			".go", ".py", ".pyi",
+			".java", ".rs", ".rb",
+			".c", ".h",
+			".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh":
 		default:
 			return nil
 		}
