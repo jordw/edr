@@ -95,6 +95,81 @@ func scopeAwareSameFileSpans(sym *index.SymbolInfo) ([]span, bool) {
 	return out, true
 }
 
+// scopeAwareRefSpansByFile returns binding-correct reference byte
+// ranges grouped by file, excluding the target's declaration. It is
+// the changesig-flavored counterpart of scopeAwareCrossFileSpans —
+// changesig handles the definition edit separately, so it only needs
+// refs. When crossFile is false, returns same-file refs only.
+func scopeAwareRefSpansByFile(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo, crossFile bool) (map[string][]sigSpan, bool) {
+	var raw map[string][]span
+	if crossFile {
+		m, ok := scopeAwareCrossFileSpans(ctx, db, sym)
+		if !ok {
+			return nil, false
+		}
+		raw = m
+	} else {
+		spans, ok := scopeAwareSameFileSpans(sym)
+		if !ok {
+			return nil, false
+		}
+		raw = map[string][]span{sym.File: spans}
+	}
+	out := make(map[string][]sigSpan, len(raw))
+	for file, spans := range raw {
+		src, err := os.ReadFile(file)
+		for _, s := range spans {
+			if s.isDef {
+				continue // changesig handles the def edit itself
+			}
+			end := s.end
+			if err == nil {
+				end = widenToCallParen(src, s.end)
+			}
+			out[file] = append(out[file], sigSpan{start: s.start, end: end})
+		}
+	}
+	return out, true
+}
+
+// widenToCallParen extends an identifier-span end to include the `(`
+// that follows (allowing for whitespace and TS-style `<T>` generic
+// params). Needed because changesig's regex `\bname\s*\(` must find
+// the opening paren inside the span to identify a call site. Returns
+// end unchanged if no call follows within a reasonable window.
+func widenToCallParen(src []byte, end uint32) uint32 {
+	const maxLookahead = 200
+	limit := int(end) + maxLookahead
+	if limit > len(src) {
+		limit = len(src)
+	}
+	i := int(end)
+	for i < limit && (src[i] == ' ' || src[i] == '\t' || src[i] == '\n' || src[i] == '\r') {
+		i++
+	}
+	// Optional TS generic type arguments: skip balanced <...>.
+	if i < limit && src[i] == '<' {
+		depth := 1
+		i++
+		for i < limit && depth > 0 {
+			switch src[i] {
+			case '<':
+				depth++
+			case '>':
+				depth--
+			}
+			i++
+		}
+		for i < limit && (src[i] == ' ' || src[i] == '\t') {
+			i++
+		}
+	}
+	if i < limit && src[i] == '(' {
+		return uint32(i + 1)
+	}
+	return end
+}
+
 // scopeAwareCrossFileSpans computes rename spans across the repo by
 // narrowing candidate files via the symbol index and filtering each
 // file's refs by scope binding. Cross-file DeclID matching is not
@@ -123,7 +198,6 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 	if err != nil {
 		return out, true // origin still useful; cross-file narrowing failed
 	}
-
 	seen := map[string]bool{sym.File: true}
 	for _, r := range refs {
 		if seen[r.File] {
@@ -152,14 +226,22 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 			if ref.Name != sym.Name {
 				continue
 			}
-			// Shadow guard: skip refs bound to a local same-name decl.
-			// DeclID is file-local, so it cannot equal our target's
-			// ID — but if it points to a same-name local, that local is
-			// shadowing the target in this file and we must not rewrite
-			// it.
+			// Shadow guard: skip refs bound to a local same-name decl,
+			// but only when that decl is in a NESTED scope. File-scope
+			// decls with the same name are typically cross-file bindings
+			// — `import { X } from ...` (KindImport) for TS, or CJS
+			// `const { X } = require(...)` (KindConst at file scope) for
+			// JS. Those are the bindings we want to rewrite, not skip.
+			// A same-name decl inside a function/block is a real shadow.
 			if ref.Binding.Kind == scope.BindResolved && ref.Binding.Decl != 0 {
 				if local, ok := declByID[ref.Binding.Decl]; ok && local.Name == sym.Name {
-					continue
+					var localScopeKind scope.ScopeKind
+					if sid := int(local.Scope) - 1; sid >= 0 && sid < len(result.Scopes) {
+						localScopeKind = result.Scopes[sid].Kind
+					}
+					if local.Kind != scope.KindImport && localScopeKind != scope.ScopeFile {
+						continue
+					}
 				}
 			}
 			out[r.File] = append(out[r.File], span{

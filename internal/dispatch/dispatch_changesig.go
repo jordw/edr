@@ -111,16 +111,6 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 		return nil, fmt.Errorf("changesig: %w", err)
 	}
 
-	var refs []index.SymbolInfo
-	if crossFile {
-		refs, err = db.FindSemanticReferences(ctx, sym.Name, sym.File)
-	} else {
-		refs, err = db.FindSameFileCallers(ctx, sym.Name, sym.File)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("changesig: finding references: %w", err)
-	}
-
 	// Collect file edits. Start with the definition file.
 	type fileEdit struct {
 		file    string
@@ -134,10 +124,27 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 		newData: newDefData,
 	}}
 
-	// Group references by file, then transform call sites in each.
-	refFileSpans := map[string][]sigSpan{}
-	for _, ref := range refs {
-		refFileSpans[ref.File] = append(refFileSpans[ref.File], sigSpan{ref.StartByte, ref.EndByte})
+	// Call sites: prefer the scope-aware helper so shadowed locals and
+	// same-name-but-different-decl refs are excluded. Falls back to the
+	// symbol-index path for languages without a scope builder or when
+	// the target decl cannot be resolved.
+	var refFileSpans map[string][]sigSpan
+	if spans, ok := scopeAwareRefSpansByFile(ctx, db, sym, crossFile); ok {
+		refFileSpans = spans
+	} else {
+		var refs []index.SymbolInfo
+		if crossFile {
+			refs, err = db.FindSemanticReferences(ctx, sym.Name, sym.File)
+		} else {
+			refs, err = db.FindSameFileCallers(ctx, sym.Name, sym.File)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("changesig: finding references: %w", err)
+		}
+		refFileSpans = map[string][]sigSpan{}
+		for _, ref := range refs {
+			refFileSpans[ref.File] = append(refFileSpans[ref.File], sigSpan{ref.StartByte, ref.EndByte})
+		}
 	}
 
 	// excludeOpens[file] is the set of byte offsets where a same-named
@@ -165,6 +172,31 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 			// Positions inside the (replaced) param list no longer exist.
 		}
 		excludeOpens[sym.File] = adjusted
+	}
+
+	// Ref spans in sym.File are in ORIGINAL byte coordinates. The
+	// definition file we transform is newDefData, which has a shifted
+	// layout from the param-list rewrite. Adjust: spans past the
+	// original param-list close get defDelta added; spans inside the
+	// replaced param list no longer exist and are dropped.
+	if defDelta != 0 {
+		if spans, ok := refFileSpans[sym.File]; ok {
+			adjusted := spans[:0]
+			for _, s := range spans {
+				if int(s.start) >= absParenOpen && int(s.end) <= absParenClose+1 {
+					continue // inside the replaced param list; coordinates are gone
+				}
+				if int(s.start) > absParenClose {
+					adjusted = append(adjusted, sigSpan{
+						start: s.start + uint32(defDelta),
+						end:   s.end + uint32(defDelta),
+					})
+				} else {
+					adjusted = append(adjusted, s)
+				}
+			}
+			refFileSpans[sym.File] = adjusted
+		}
 	}
 
 	// Also transform call sites within the definition file itself
