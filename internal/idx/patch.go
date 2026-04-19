@@ -8,6 +8,15 @@ import (
 	"github.com/jordw/edr/internal/staleness"
 )
 
+// patchEntry holds a single file's re-extracted data in the middle of
+// a PatchDirtyFiles run. FileIDs are not assigned yet — rebuildFileTable
+// resolves paths to IDs once the file table has settled.
+type patchEntry struct {
+	entry FileEntry
+	tris  []Trigram
+	syms  []SymbolEntry // nil when PatchDirtyFiles was called with a nil extractor
+}
+
 // PatchDirtyFiles re-indexes only the files in the dirty list, then patches
 // them into the existing index. Avoids walking or re-parsing the whole repo.
 //
@@ -32,31 +41,47 @@ func PatchDirtyFiles(root, edrDir string, dirty []string, extractSymbols SymbolE
 	if old == nil {
 		return
 	}
-
-	// Build lookup for old file entries by path.
-	oldByPath := make(map[string]int, len(old.Files))
-	for i, f := range old.Files {
-		oldByPath[f.Path] = i
-	}
-
-	// dirtySet has every path the caller asked about — regardless of
-	// whether it was modified or deleted on disk.
 	dirtySet := make(map[string]bool, len(dirty))
 	for _, d := range dirty {
 		dirtySet[d] = true
 	}
-
-	// Re-extract trigrams for dirty files that still exist. Files that
-	// are gone from disk are recorded as deletions and get pruned from
-	// the file table and symbol table below.
-	type patchEntry struct {
-		fileID int
-		entry  FileEntry
-		tris   []Trigram
-		syms   []SymbolEntry // FileID set later once the new table is built
+	patches, deletedSet := collectPatches(root, dirty, extractSymbols)
+	files, oldIDToNewID, newByPath := rebuildFileTable(old.Files, deletedSet, patches)
+	triMap := rebuildTrigramMap(old, dirtySet, oldIDToNewID, patches, newByPath)
+	postings, entries := BuildPostings(triMap)
+	d := &IndexData{
+		Header: Header{
+			NumFiles:    uint32(len(files)),
+			NumTrigrams: uint32(len(entries)),
+			GitMtime:    gitIndexMtime(root),
+		},
+		Files:    files,
+		Trigrams: entries,
+		Postings: postings,
 	}
-	var patches []patchEntry
-	deletedSet := make(map[string]bool, len(dirty))
+	if syms, namePosts, namePostings := rebuildSymbolTable(edrDir, old, files, dirtySet, patches, newByPath); syms != nil {
+		d.Symbols = syms
+		d.NamePosts = namePosts
+		d.NamePostings = namePostings
+		d.Header.NumSymbols = uint32(len(syms))
+		d.Header.NumNameKeys = uint32(len(namePosts))
+	}
+	atomicio.WriteFile(filepath.Join(edrDir, MainFile), d.Marshal())
+	InvalidateSymbolCache()
+	// Popularity scores are stale after patching — remove so they get
+	// recomputed on the next full index build.
+	os.Remove(filepath.Join(edrDir, PopularityFile))
+	staleness.OpenTracker(edrDir, DirtyTrackerName).Clear()
+}
+
+// collectPatches stats+reads each dirty file and re-extracts trigrams
+// (and, when extract is non-nil, symbols). Files that couldn't be
+// stat'd land in deletedSet — they're pruned from the index. Files
+// that exist but are unreadable/binary are silently skipped, leaving
+// the old entry in place on the theory that a transient IO error
+// shouldn't evict a known-good record.
+func collectPatches(root string, dirty []string, extract SymbolExtractFn) (patches []patchEntry, deletedSet map[string]bool) {
+	deletedSet = make(map[string]bool, len(dirty))
 	for _, rel := range dirty {
 		absPath := filepath.Join(root, rel)
 		info, err := os.Stat(absPath)
@@ -70,56 +95,59 @@ func PatchDirtyFiles(root, edrDir string, dirty []string, extractSymbols SymbolE
 			// old entry — the user can always force a full rebuild.
 			continue
 		}
-		entry := FileEntry{
-			Path:  rel,
-			Mtime: info.ModTime().UnixNano(),
-			Size:  info.Size(),
+		pe := patchEntry{
+			entry: FileEntry{
+				Path:  rel,
+				Mtime: info.ModTime().UnixNano(),
+				Size:  info.Size(),
+			},
+			tris: ExtractTrigrams(data),
 		}
-		tris := ExtractTrigrams(data)
-		id := -1
-		if existing, ok := oldByPath[rel]; ok {
-			id = existing
-		}
-		pe := patchEntry{fileID: id, entry: entry, tris: tris}
-		if extractSymbols != nil {
-			pe.syms = extractSymbols(absPath, data)
+		if extract != nil {
+			pe.syms = extract(absPath, data)
 		}
 		patches = append(patches, pe)
 	}
+	return patches, deletedSet
+}
 
-	// Build the new file table. Start by dropping deleted entries —
-	// they're not in `patches` (we couldn't stat them) and leaving
-	// them in `files` is exactly the phantom bug. This re-numbers
-	// file IDs; we remap everything below.
-	var files []FileEntry
-	oldIDToNewID := make(map[uint32]uint32, len(old.Files))
-	for i, f := range old.Files {
+// rebuildFileTable produces the new file table. It drops entries in
+// deletedSet (closing the phantom bug), then either replaces or
+// appends each patch by path — replace when the path already existed
+// in the surviving table, append for brand-new files. IDs get
+// renumbered; the returned oldIDToNewID and newByPath maps let
+// rebuildTrigramMap and rebuildSymbolTable translate references.
+func rebuildFileTable(oldFiles []FileEntry, deletedSet map[string]bool, patches []patchEntry) (files []FileEntry, oldIDToNewID map[uint32]uint32, newByPath map[string]uint32) {
+	oldIDToNewID = make(map[uint32]uint32, len(oldFiles))
+	for i, f := range oldFiles {
 		if deletedSet[f.Path] {
 			continue
 		}
 		oldIDToNewID[uint32(i)] = uint32(len(files))
 		files = append(files, f)
 	}
-
-	// Apply patch entries to the rewritten file table. Appends for
-	// brand-new files; overwrites in place when the path already
-	// existed. The trigram merge below resolves IDs by path, so we
-	// don't need to track them on patchEntry here.
+	// newByPath lets us do replace-by-path in O(1). It's rebuilt once
+	// more at the end so appended entries are visible to callers.
+	byPath := make(map[string]uint32, len(files))
+	for i, f := range files {
+		byPath[f.Path] = uint32(i)
+	}
 	for _, p := range patches {
-		if newID, ok := oldIDToNewID[uint32(p.fileID)]; ok && p.fileID >= 0 {
-			files[newID] = p.entry
+		if existing, ok := byPath[p.entry.Path]; ok {
+			files[existing] = p.entry
 		} else {
+			byPath[p.entry.Path] = uint32(len(files))
 			files = append(files, p.entry)
 		}
 	}
-	newByPath := make(map[string]uint32, len(files))
-	for i, f := range files {
-		newByPath[f.Path] = uint32(i)
-	}
+	return files, oldIDToNewID, byPath
+}
 
-	// Rebuild trigram map: keep old postings for unchanged files
-	// (remapped to new IDs), drop entries for deleted + modified
-	// files, then add fresh trigrams for the re-indexed ones.
+// rebuildTrigramMap walks the old trigram postings, keeping IDs that
+// refer to unchanged surviving files (remapped to new IDs) and
+// dropping IDs for deleted or modified files. Fresh trigrams from
+// patches are appended with their new file IDs.
+func rebuildTrigramMap(old *IndexData, dirtySet map[string]bool, oldIDToNewID map[uint32]uint32, patches []patchEntry, newByPath map[string]uint32) map[Trigram][]uint32 {
 	triMap := make(map[Trigram][]uint32)
 	for _, te := range old.Trigrams {
 		ids := DecodePosting(old.Postings, te.Offset, te.Count)
@@ -149,62 +177,44 @@ func PatchDirtyFiles(root, edrDir string, dirty []string, extractSymbols SymbolE
 			triMap[t] = append(triMap[t], newID)
 		}
 	}
+	return triMap
+}
 
-	postings, entries := BuildPostings(triMap)
-	d := &IndexData{
-		Header: Header{
-			NumFiles:    uint32(len(files)),
-			NumTrigrams: uint32(len(entries)),
-			GitMtime:    gitIndexMtime(root),
-		},
-		Files:    files,
-		Trigrams: entries,
-		Postings: postings,
+// rebuildSymbolTable preserves symbols from the old index, remapping
+// FileIDs to the new file table. Symbols from dirty files are dropped
+// (they're stale); if an extractor ran during collectPatches, the
+// fresh symbols are merged back in with their new FileIDs.
+//
+// Returns (nil, nil, nil) when the old index had no symbols — ticks
+// are coverage-preserving, never coverage-initiating. Starting a
+// symbol table from a patch is the full-index path's job.
+func rebuildSymbolTable(edrDir string, old *IndexData, files []FileEntry, dirtySet map[string]bool, patches []patchEntry, newByPath map[string]uint32) ([]SymbolEntry, []NamePostEntry, []byte) {
+	if old.Header.NumSymbols == 0 {
+		return nil, nil, nil
 	}
-
-	// Preserve symbols from old index, remapping FileIDs to the new file table.
-	// Symbols from dirty files are dropped (they're stale); if an extractor
-	// was supplied, re-extracted symbols for modified/added files are merged
-	// back in with their new FileIDs.
-	//
-	// If the old index had no symbols we don't start building one here —
-	// that's the full-index path's job. Ticks stay coverage-preserving
-	// rather than coverage-initiating.
-	if old.Header.NumSymbols > 0 {
-		if full := loadIndex(edrDir); full != nil && len(full.Symbols) > 0 {
-			remapped := remapSymbols(full.Symbols, full.Files, files, dirtySet)
-			if extractSymbols != nil {
-				for _, p := range patches {
-					if len(p.syms) == 0 {
-						continue
-					}
-					newID, ok := newByPath[p.entry.Path]
-					if !ok {
-						continue
-					}
-					for _, s := range p.syms {
-						s.FileID = newID
-						remapped = append(remapped, s)
-					}
-				}
-			}
-			if len(remapped) > 0 {
-				namePostData, namePosts := BuildNamePostings(remapped)
-				d.Symbols = remapped
-				d.NamePosts = namePosts
-				d.NamePostings = namePostData
-				d.Header.NumSymbols = uint32(len(remapped))
-				d.Header.NumNameKeys = uint32(len(namePosts))
-			}
+	full := loadIndex(edrDir)
+	if full == nil || len(full.Symbols) == 0 {
+		return nil, nil, nil
+	}
+	remapped := remapSymbols(full.Symbols, full.Files, files, dirtySet)
+	for _, p := range patches {
+		if len(p.syms) == 0 {
+			continue
+		}
+		newID, ok := newByPath[p.entry.Path]
+		if !ok {
+			continue
+		}
+		for _, s := range p.syms {
+			s.FileID = newID
+			remapped = append(remapped, s)
 		}
 	}
-
-	atomicio.WriteFile(filepath.Join(edrDir, MainFile), d.Marshal())
-	InvalidateSymbolCache()
-	// Popularity scores are stale after patching — remove so they get
-	// recomputed on the next full index build.
-	os.Remove(filepath.Join(edrDir, PopularityFile))
-	staleness.OpenTracker(edrDir, DirtyTrackerName).Clear()
+	if len(remapped) == 0 {
+		return nil, nil, nil
+	}
+	namePostings, namePosts := BuildNamePostings(remapped)
+	return remapped, namePosts, namePostings
 }
 
 // remapSymbols translates symbol FileIDs from oldFiles to newFiles.
