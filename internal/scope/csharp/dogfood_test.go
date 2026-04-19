@@ -56,6 +56,7 @@ func TestDogfood_RealCSharpFiles(t *testing.T) {
 	}
 	var stats []fileStats
 	reasonCounts := map[string]int{}
+	unresolvedNames := map[string]int{}
 
 	for _, f := range files {
 		src, err := os.ReadFile(f)
@@ -86,6 +87,7 @@ func TestDogfood_RealCSharpFiles(t *testing.T) {
 							f, ref.Name, ref.Span.StartByte, ref.Span.EndByte)
 					}
 					reasonCounts[ref.Binding.Reason]++
+					unresolvedNames[ref.Name]++
 				}
 			}
 			for _, ref := range r.Refs {
@@ -131,6 +133,23 @@ func TestDogfood_RealCSharpFiles(t *testing.T) {
 	sort.Slice(rcs, func(i, j int) bool { return rcs[i].count > rcs[j].count })
 	for _, x := range rcs {
 		t.Logf("  %-25s %d", x.reason, x.count)
+	}
+
+	type nc struct {
+		name  string
+		count int
+	}
+	var ncs []nc
+	for n, c := range unresolvedNames {
+		ncs = append(ncs, nc{n, c})
+	}
+	sort.Slice(ncs, func(i, j int) bool { return ncs[i].count > ncs[j].count })
+	t.Logf("top 30 unresolved names:")
+	for i, x := range ncs {
+		if i >= 30 {
+			break
+		}
+		t.Logf("  %6d  %s", x.count, x.name)
 	}
 
 	sort.Slice(stats, func(i, j int) bool { return stats[i].decls > stats[j].decls })

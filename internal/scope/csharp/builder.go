@@ -213,6 +213,13 @@ type pendingParam struct {
 }
 
 func (b *builder) run() {
+	// Skip a UTF-8 byte-order mark at the start of the file. C# source is
+	// commonly saved with a BOM (Roslyn itself emits ~14K files with it);
+	// without this skip, the BOM's three bytes (0xEF 0xBB 0xBF) leak into
+	// the first token as an invisible "ident" that resolves to nothing.
+	if len(b.s.Src) >= 3 && b.s.Src[0] == 0xEF && b.s.Src[1] == 0xBB && b.s.Src[2] == 0xBF {
+		b.s.Pos = 3
+	}
 	for !b.s.EOF() {
 		c := b.s.Peek()
 		switch {
@@ -481,6 +488,16 @@ func (b *builder) run() {
 			}
 			b.stmtStart = false
 			b.prevByte = '0'
+		case c == '#':
+			// Preprocessor directive: `#nullable`, `#pragma`, `#if`, `#region`,
+			// `#define`, etc. C# directives are line-based (no continuation
+			// except inside a comment); consume to end-of-line. Without this,
+			// directive body idents (e.g. `nullable disable`, `warning CS0618`)
+			// leak as unresolved refs.
+			for !b.s.EOF() && b.s.Peek() != '\n' {
+				b.s.Pos++
+			}
+			b.prevByte = '#'
 		case c == '@':
 			// `@ident` is a C# verbatim identifier (e.g. `@class`).
 			// Skip the '@' and let the following ident scan normally.
