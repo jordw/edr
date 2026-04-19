@@ -21,24 +21,53 @@ func Staleness(repoRoot, edrDir string) bool {
 // IncrementalTick reconciles the index against the filesystem.
 //
 //  1. If .git/index hasn't moved, the fast path returns immediately.
-//  2. Otherwise run staleness.Check (via StatChanges) to find new,
-//     modified, and deleted files. If the union is non-empty, call
-//     PatchDirtyFiles — it rebuilds only the affected records.
-//     Deleted files are pruned (closes the phantom-symbols bug).
-//     Modified and added files are re-extracted (closes the sparse-
-//     symbols bug class) when extractSymbols is non-nil.
-//  3. When extractSymbols is nil, PatchDirtyFiles falls back to the
+//  2. Otherwise acquire a non-blocking advisory lock on
+//     edrDir/.tick.lock. If another edr process is already patching
+//     the same edrDir, the lock try fails and this tick skips — the
+//     holder will stamp the new git mtime on its way out, and this
+//     process's next tick will trip the fast path. This is the
+//     parallel-agent safety net: two ticks on the same edrDir used
+//     to both rewrite trigram.idx and silently drop each other's
+//     symbol extractions via atomic.WriteFile's last-writer-wins.
+//  3. With the lock held, run staleness.Check (via StatChanges) to
+//     find new, modified, and deleted files. If the union is non-
+//     empty, call PatchDirtyFiles — it rebuilds only the affected
+//     records. Deleted files are pruned (closes the phantom-symbols
+//     bug). Modified and added files are re-extracted (closes the
+//     sparse-symbols bug class) when extractSymbols is non-nil.
+//  4. When extractSymbols is nil, PatchDirtyFiles falls back to the
 //     legacy behavior of dropping symbols for dirty files without
 //     replacement. Bench code and other non-dispatch callers go
 //     through this path.
-//  4. Finally stamp the new git mtime so the next tick's fast path
+//  5. Finally stamp the new git mtime so the next tick's fast path
 //     trips and we don't re-walk on every command.
 //
 // Time budget: this is called on the hot path (every command), but
 // the stat walk is parallel and bounded (~60–70 ms on 93k files).
 // PatchDirtyFiles is cheap when the dirty set is small. When a large
 // rewrite hits, the caller should prefer `edr index` for a full rebuild.
+//
+// The Staleness fast path intentionally runs before the lock acquire:
+// it's a single .git/index stat and one index-header read, both
+// read-only, so there's nothing to serialize. Locking the fast path
+// would turn every command into a rendezvous point.
 func IncrementalTick(root, edrDir string, walkFn func(root string, fn func(path string) error) error, extractSymbols SymbolExtractFn) {
+	if !Staleness(root, edrDir) {
+		return
+	}
+	unlock, ok := acquireTickLock(edrDir)
+	if !ok {
+		// Another edr process is patching the same edrDir. Skip this
+		// tick — the holder will stamp the mtime and our next call
+		// will hit the fast path above.
+		return
+	}
+	defer unlock()
+	// Re-check staleness under the lock: if the holder finished while
+	// we were blocked on the open, its mtime stamp has already caught
+	// us up and there's nothing to do. Without this, two ticks racing
+	// for the lock both end up doing the full StatChanges walk back-
+	// to-back — correct but wasteful.
 	if !Staleness(root, edrDir) {
 		return
 	}
