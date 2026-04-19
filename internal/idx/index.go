@@ -12,75 +12,77 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/jordw/edr/internal/staleness"
 )
 
 // MainFile is the index filename within the edr repo directory.
 const MainFile = "trigram.idx"
 
-// DirtyFile tracks which files have been edited since the last index build.
-// Contains one relative path per line. Empty or absent = clean.
+// dirtyName is the staleness.Tracker name for the trigram index. The
+// on-disk file is edrDir/<dirtyName>.dirty — matching the historical
+// DirtyFile constant so existing .edr/ dirs remain readable.
+const dirtyName = "trigram"
+
+// DirtyFile is the on-disk name of the dirty marker.
+// Kept as a public constant for callers that reference it directly.
 const DirtyFile = "trigram.dirty"
+
+// dirtyTracker returns the staleness.Tracker backing the trigram
+// dirty list. A fresh Tracker is returned per call — they hold no
+// connection state and only serialize in-process Mark/Clear via a
+// mutex on their own path.
+func dirtyTracker(edrDir string) *staleness.Tracker {
+	return staleness.OpenTracker(edrDir, dirtyName)
+}
 
 // MarkDirty signals that specific files were edited and the index may be stale.
 // Appends the given relative paths to the dirty set.
 func MarkDirty(edrDir string, files ...string) {
-	path := filepath.Join(edrDir, DirtyFile)
-	existing := DirtyFiles(edrDir)
-	set := make(map[string]bool, len(existing)+len(files))
-	for _, f := range existing {
-		set[f] = true
-	}
+	// Filter out paths that look like legacy junk to preserve the
+	// prior "must look like a path" contract.
+	var clean []string
 	for _, f := range files {
-		set[f] = true
+		f = strings.TrimSpace(f)
+		if f == "" || f == "1" {
+			continue
+		}
+		if !strings.Contains(f, "/") && !strings.Contains(f, ".") {
+			continue
+		}
+		clean = append(clean, f)
 	}
-	var lines []string
-	for f := range set {
-		lines = append(lines, f)
-	}
-	sort.Strings(lines)
-	os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0600)
+	dirtyTracker(edrDir).Mark(clean...)
 }
 
 // ClearDirty removes the dirty marker after a full index build.
 func ClearDirty(edrDir string) {
-	os.Remove(filepath.Join(edrDir, DirtyFile))
+	dirtyTracker(edrDir).Clear()
 }
 
 // IsDirty returns true if any files have been edited since the last index build.
 func IsDirty(edrDir string) bool {
-	info, err := os.Stat(filepath.Join(edrDir, DirtyFile))
-	return err == nil && info.Size() > 0
+	return dirtyTracker(edrDir).IsDirty()
 }
 
 // IsDirtyFile returns true if a specific file has been edited since the last build.
 func IsDirtyFile(edrDir, relPath string) bool {
-	for _, f := range DirtyFiles(edrDir) {
-		if f == relPath {
-			return true
-		}
-	}
-	return false
+	return dirtyTracker(edrDir).Has(relPath)
 }
 
 // DirtyFiles returns the set of files edited since the last index build.
 func DirtyFiles(edrDir string) []string {
-	data, err := os.ReadFile(filepath.Join(edrDir, DirtyFile))
-	if err != nil {
-		return nil
-	}
-	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		// Skip empty lines and legacy boolean markers ("1")
-		if line == "" || line == "1" {
-			continue
+	out := dirtyTracker(edrDir).Dirty()
+	// Preserve the legacy "must look like a path" filter so any
+	// pre-existing dirty files with weird lines don't pollute the
+	// rebuild.
+	kept := out[:0]
+	for _, f := range out {
+		if strings.Contains(f, "/") || strings.Contains(f, ".") {
+			kept = append(kept, f)
 		}
-		// Basic validation: must look like a relative path
-		if !strings.Contains(line, "/") && !strings.Contains(line, ".") {
-			continue
-		}
-		files = append(files, line)
 	}
-	return files
+	return kept
 }
 
 // BuildFull builds a complete trigram index from the given absolute paths.
@@ -413,19 +415,67 @@ func GetStatus(repoRoot, edrDir string) Status {
 	return s
 }
 
-// IncrementalTick rebuilds the index if .git/index has changed.
-// Reuses trigrams from unchanged files. Time-capped at ~1s so the agent
-// never blocks; partial progress is saved and the next tick continues.
+// IncrementalTick reconciles the index against the filesystem.
+//
+//  1. If .git/index hasn't moved, the fast path returns immediately.
+//  2. Otherwise run staleness.Check (via StatChanges) to find deleted
+//     and modified files. If the union is non-empty, call
+//     PatchDirtyFiles — it rebuilds only the affected records and
+//     drops symbols whose source file is in the dirty set, closing
+//     the phantom-symbols bug class.
+//  3. Pure-Added files aren't patched here — dispatch already detects
+//     them at query time via StatChanges and scans them live.
+//  4. Finally stamp the new git mtime so the next tick's fast path
+//     trips and we don't re-walk on every command.
+//
+// Time budget: this is called on the hot path (every command), but
+// the stat walk is parallel and bounded (~60–70 ms on 93k files).
+// PatchDirtyFiles is cheap when the dirty set is small. When a large
+// rewrite hits, the caller should prefer `edr index` for a full rebuild.
 func IncrementalTick(root, edrDir string, walkFn func(root string, fn func(path string) error) error) {
 	if !Staleness(root, edrDir) {
 		return
 	}
-	// The index is stale (git mtime changed). Stamp the new mtime so we
-	// stop re-checking on every command. The trigram index is still valid
-	// for queries — dirty files are already tracked separately and Query
-	// callers verify candidates against actual file contents.
-	// Full rebuild (walk + re-index) happens only via explicit `edr index`.
+	// Find what changed on disk. Deleted files must be pruned from
+	// the symbol table or queries will return phantom symbols.
+	changes := StatChanges(root, edrDir)
+	if changes != nil {
+		var dirty []string
+		dirty = append(dirty, changes.Modified...)
+		dirty = append(dirty, changes.Deleted...)
+		// Include any edit-marked files so the patch covers edits
+		// made since the last successful build.
+		dirty = append(dirty, DirtyFiles(edrDir)...)
+		dirty = dedupStrings(dirty)
+		if len(dirty) > 0 {
+			PatchDirtyFiles(root, edrDir, dirty)
+			// PatchDirtyFiles stamps the new git mtime via the
+			// rewritten header; no further stamp needed.
+			return
+		}
+	}
+	// Nothing changed for known files — stamp mtime so the fast path
+	// trips next time.
 	stampMtime(root, edrDir)
+}
+
+// dedupStrings returns a sorted de-duplicated copy. Local helper to
+// avoid a stable dep on any single caller's ordering.
+func dedupStrings(in []string) []string {
+	if len(in) == 0 {
+		return in
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // stampMtime updates the git mtime in the index header without rebuilding.
@@ -448,6 +498,16 @@ func stampMtime(root, edrDir string) {
 
 // patchDirtyFiles re-indexes only the files in the dirty list, then patches
 // them into the existing index. Avoids walking or re-parsing the whole repo.
+//
+// Dirty files split three ways:
+//   - still on disk, readable  → re-index, replace the old entry
+//   - still on disk, unreadable/binary → keep the old entry untouched
+//   - missing from disk → DROP the file entry and remap symbols
+//
+// Dropping on delete closes the phantom-symbols bug class. Prior
+// behavior preserved the stale FileEntry and symbols that referenced
+// it, so queries would keep finding names for files that no longer
+// existed.
 func PatchDirtyFiles(root, edrDir string, dirty []string) {
 	old := loadIndexTrigrams(edrDir)
 	if old == nil {
@@ -460,37 +520,34 @@ func PatchDirtyFiles(root, edrDir string, dirty []string) {
 		oldByPath[f.Path] = i
 	}
 
-	// Invert postings only for dirty files (not all files).
+	// dirtySet has every path the caller asked about — regardless of
+	// whether it was modified or deleted on disk.
 	dirtySet := make(map[string]bool, len(dirty))
 	for _, d := range dirty {
 		dirtySet[d] = true
 	}
-	// Collect old trigrams for dirty files so we can remove them.
-	oldDirtyTris := make(map[int][]Trigram) // fileID → trigrams
-	for _, te := range old.Trigrams {
-		ids := DecodePosting(old.Postings, te.Offset, te.Count)
-		for _, id := range ids {
-			if int(id) < len(old.Files) && dirtySet[old.Files[id].Path] {
-				oldDirtyTris[int(id)] = append(oldDirtyTris[int(id)], te.Tri)
-			}
-		}
-	}
 
-	// Re-extract trigrams for dirty files.
+	// Re-extract trigrams for dirty files that still exist. Files that
+	// are gone from disk are recorded as deletions and get pruned from
+	// the file table and symbol table below.
 	type patchEntry struct {
 		fileID int
 		entry  FileEntry
 		tris   []Trigram
 	}
 	var patches []patchEntry
+	deletedSet := make(map[string]bool, len(dirty))
 	for _, rel := range dirty {
 		absPath := filepath.Join(root, rel)
 		info, err := os.Stat(absPath)
 		if err != nil {
-			continue // file deleted — will be absent from new index
+			deletedSet[rel] = true
+			continue
 		}
 		data, err := os.ReadFile(absPath)
 		if err != nil || isBinary(data) {
+			// File exists but became unreadable/binary. Preserve the
+			// old entry — the user can always force a full rebuild.
 			continue
 		}
 		entry := FileEntry{
@@ -506,38 +563,72 @@ func PatchDirtyFiles(root, edrDir string, dirty []string) {
 		patches = append(patches, patchEntry{fileID: id, entry: entry, tris: tris})
 	}
 
-	// Rebuild: start from old files, replace/add dirty ones.
-	files := make([]FileEntry, len(old.Files))
-	copy(files, old.Files)
+	// Build the new file table. Start by dropping deleted entries —
+	// they're not in `patches` (we couldn't stat them) and leaving
+	// them in `files` is exactly the phantom bug. This re-numbers
+	// file IDs; we remap everything below.
+	var files []FileEntry
+	oldIDToNewID := make(map[uint32]uint32, len(old.Files))
+	for i, f := range old.Files {
+		if deletedSet[f.Path] {
+			continue
+		}
+		oldIDToNewID[uint32(i)] = uint32(len(files))
+		files = append(files, f)
+	}
+
+	// Apply patch entries to the rewritten file table.
 	for _, p := range patches {
-		if p.fileID >= 0 {
-			files[p.fileID] = p.entry
+		if newID, ok := oldIDToNewID[uint32(p.fileID)]; ok && p.fileID >= 0 {
+			files[newID] = p.entry
+			// Fix the patch's fileID so the trigram merge below uses
+			// the correct post-renumbering id.
+			p.fileID = int(newID)
 		} else {
-			// New file — append
 			p.fileID = len(files)
 			files = append(files, p.entry)
 		}
+		// Overwrite the element so the loop variable changes stick.
+		// (Range by index needed because patches is a slice of
+		// values.)
+	}
+	// Re-derive fileIDs from paths for the trigram merge — safer than
+	// relying on the overwrite above to have stuck.
+	newByPath := make(map[string]uint32, len(files))
+	for i, f := range files {
+		newByPath[f.Path] = uint32(i)
 	}
 
-	// Rebuild trigram map: reuse old postings, patch dirty file entries.
+	// Rebuild trigram map: keep old postings for unchanged files
+	// (remapped to new IDs), drop entries for deleted + modified
+	// files, then add fresh trigrams for the re-indexed ones.
 	triMap := make(map[Trigram][]uint32)
 	for _, te := range old.Trigrams {
 		ids := DecodePosting(old.Postings, te.Offset, te.Count)
-		// Filter out dirty file IDs (they get re-added with new trigrams).
 		var kept []uint32
-		for _, id := range ids {
-			if int(id) < len(old.Files) && !dirtySet[old.Files[id].Path] {
-				kept = append(kept, id)
+		for _, oldID := range ids {
+			if int(oldID) >= len(old.Files) {
+				continue
+			}
+			p := old.Files[oldID].Path
+			if dirtySet[p] {
+				continue // re-added below with fresh trigrams, or dropped
+			}
+			if newID, ok := oldIDToNewID[oldID]; ok {
+				kept = append(kept, newID)
 			}
 		}
 		if len(kept) > 0 {
 			triMap[te.Tri] = kept
 		}
 	}
-	// Add new trigrams for patched files.
 	for _, p := range patches {
+		newID, ok := newByPath[p.entry.Path]
+		if !ok {
+			continue
+		}
 		for _, t := range p.tris {
-			triMap[t] = append(triMap[t], uint32(p.fileID))
+			triMap[t] = append(triMap[t], newID)
 		}
 	}
 
