@@ -14,6 +14,7 @@ import (
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
+	"github.com/jordw/edr/internal/walk"
 )
 
 const defaultFilesBudget = 2000
@@ -192,7 +193,7 @@ func runFiles(_ context.Context, db index.SymbolStore, root string, args []strin
 		source = "regex_scan"
 	} else if !hasIndex {
 		// No index at all — must walk.
-		index.WalkRepoFiles(root, func(path string) error {
+		walk.RepoFiles(root, func(path string) error {
 			rel, _ := filepath.Rel(root, path)
 			if rel == "" {
 				rel = path

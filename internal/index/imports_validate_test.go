@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jordw/edr/internal/walk"
 )
 
 // TestImportGraphAccuracy validates import edges against actual source code.
@@ -19,7 +21,7 @@ func TestImportGraphAccuracy(t *testing.T) {
 
 	// Collect all files
 	var allFiles []string
-	WalkRepoFiles(root, func(path string) error {
+	walk.RepoFiles(root, func(path string) error {
 		rel, _ := filepath.Rel(root, path)
 		allFiles = append(allFiles, rel)
 		return nil
@@ -109,7 +111,7 @@ func TestImportGraphKnownEdges(t *testing.T) {
 	}
 
 	var allFiles []string
-	WalkRepoFiles(root, func(path string) error {
+	walk.RepoFiles(root, func(path string) error {
 		rel, _ := filepath.Rel(root, path)
 		allFiles = append(allFiles, rel)
 		return nil
@@ -156,7 +158,7 @@ func TestImportCountsCorrelateWithImportance(t *testing.T) {
 	}
 
 	var allFiles []string
-	WalkRepoFiles(root, func(path string) error {
+	walk.RepoFiles(root, func(path string) error {
 		rel, _ := filepath.Rel(root, path)
 		allFiles = append(allFiles, rel)
 		return nil

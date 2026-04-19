@@ -70,8 +70,8 @@ func (d *Diff) Empty() bool {
 }
 
 // WalkFn is the repo-walker shape shared with idx and scope. Every
-// caller in edr passes index.WalkRepoFiles; the package-level type
-// exists so staleness itself doesn't import the walker implementation.
+// caller in edr passes walk.RepoFiles; the package-level type exists
+// so staleness itself doesn't import the walker implementation.
 // The walker emits absolute paths.
 type WalkFn func(root string, fn func(path string) error) error
 

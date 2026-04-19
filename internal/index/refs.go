@@ -13,12 +13,13 @@ import (
 	"unicode"
 
 	"github.com/jordw/edr/internal/idx"
+	"github.com/jordw/edr/internal/walk"
 )
 
 // findReferencesTextBased scans all repo files for whole-word matches of symbolName.
 func findReferencesTextBased(ctx context.Context, db SymbolStore, symbolName string) ([]SymbolInfo, error) {
 	var files []string
-	WalkRepoFiles(db.Root(), func(path string) error {
+	walk.RepoFiles(db.Root(), func(path string) error {
 		files = append(files, path)
 		return nil
 	})

@@ -324,7 +324,7 @@ type parsedFile struct {
 // Build walks the repo, parses every supported source file, and writes
 // the result to edrDir/scope.bin atomically. Returns the number of
 // records written. walkFn is the same shape used elsewhere in edr —
-// pass index.WalkRepoFiles for the standard gitignore-aware walk.
+// pass walk.RepoFiles for the standard gitignore-aware walk.
 func Build(root, edrDir string, walkFn func(string, func(string) error) error) (int, error) {
 	if err := os.MkdirAll(edrDir, 0o755); err != nil {
 		return 0, fmt.Errorf("scope store: mkdir %s: %w", edrDir, err)

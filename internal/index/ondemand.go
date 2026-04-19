@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/jordw/edr/internal/idx"
+	"github.com/jordw/edr/internal/walk"
 )
 
 // OnDemand implements SymbolStore by parsing files with tree-sitter on demand.
@@ -326,7 +327,7 @@ func (o *OnDemand) parseAll(ctx context.Context) map[string]*cachedFile {
 		}()
 	}
 
-	WalkRepoFiles(o.root, func(path string) error {
+	walk.RepoFiles(o.root, func(path string) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -372,7 +373,7 @@ func (o *OnDemand) parseDir(ctx context.Context, dir string) map[string]*cachedF
 		}()
 	}
 
-	WalkDirFiles(o.root, absDir, func(path string) error {
+	walk.DirFiles(o.root, absDir, func(path string) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -841,7 +842,7 @@ func (o *OnDemand) Stats(ctx context.Context) (files int, symbols int, err error
 	}
 
 	var fileCount int
-	WalkRepoFiles(o.root, func(path string) error {
+	walk.RepoFiles(o.root, func(path string) error {
 		if Supported(path) {
 			fileCount++
 		}
@@ -1004,7 +1005,7 @@ func (o *OnDemand) parseCandidateFiles(ctx context.Context, text string) map[str
 // Stops walking as soon as the threshold is exceeded, avoiding a full walk.
 func (o *OnDemand) FileCountExceeds(n int) bool {
 	count := 0
-	WalkRepoFiles(o.root, func(path string) error {
+	walk.RepoFiles(o.root, func(path string) error {
 		if Supported(path) {
 			count++
 			if count > n {

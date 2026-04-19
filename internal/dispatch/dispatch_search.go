@@ -13,6 +13,7 @@ import (
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
+	"github.com/jordw/edr/internal/walk"
 )
 
 const defaultSearchBudget = 2000
@@ -328,7 +329,7 @@ func runTextSearch(ctx context.Context, db index.SymbolStore, root, pattern stri
 		}
 	} else if !hasIndex {
 		// No index at all — must walk.
-		index.WalkRepoFiles(root, func(path string) error {
+		walk.RepoFiles(root, func(path string) error {
 			if atLimit() {
 				return filepath.SkipAll
 			}

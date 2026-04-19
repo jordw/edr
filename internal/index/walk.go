@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -17,100 +16,6 @@ import (
 	"strings"
 	"sync"
 )
-
-// alwaysIgnore contains directories that are always skipped regardless of .gitignore.
-var alwaysIgnore = []string{
-	".git", ".claude",
-}
-
-// DefaultIgnore is the fallback ignore list used when no .gitignore exists.
-var DefaultIgnore = []string{
-	".git", ".claude", "node_modules", "vendor", "__pycache__",
-	".venv", "venv", "target", "build", "dist", ".next",
-	".idea", ".vscode", "bin", "obj",
-}
-
-// WalkDirFiles walks a subdirectory of root, respecting .gitignore from root.
-func WalkDirFiles(root, dir string, fn func(path string) error) error {
-	gitignore := LoadGitIgnore(root)
-	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			if shouldIgnoreDir(d.Name(), path, root, gitignore) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if gitignore != nil {
-			rel, _ := filepath.Rel(root, path)
-			if gitignore.IsIgnored(rel, false) {
-				return nil
-			}
-		}
-		info, err := d.Info()
-		if err != nil || info.Size() > 1<<20 {
-			return nil
-		}
-		return fn(path)
-	})
-}
-
-func WalkRepoFiles(root string, fn func(path string) error) error {
-	gitignore := LoadGitIgnore(root)
-	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			if shouldIgnoreDir(d.Name(), path, root, gitignore) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if gitignore != nil {
-			rel, _ := filepath.Rel(root, path)
-			if gitignore.IsIgnored(rel, false) {
-				return nil
-			}
-		}
-		info, err := d.Info()
-		if err != nil || info.Size() > 1<<20 {
-			return nil
-		}
-		return fn(path)
-	})
-}
-
-// shouldIgnoreDir returns true if a directory should be skipped.
-// Uses .gitignore when available, falls back to DefaultIgnore.
-func shouldIgnoreDir(name, path, root string, gitignore *GitIgnoreMatcher) bool {
-	// Always skip .git and .claude
-	for _, ign := range alwaysIgnore {
-		if name == ign {
-			return true
-		}
-	}
-	// Skip git submodules (they have a .git file, not a directory)
-	if info, err := os.Stat(filepath.Join(path, ".git")); err == nil && !info.IsDir() {
-		return true
-	}
-	if gitignore != nil {
-		rel, _ := filepath.Rel(root, path)
-		if rel != "." && gitignore.IsIgnored(rel, true) {
-			return true
-		}
-	} else {
-		// No .gitignore — use hardcoded fallback
-		for _, ign := range DefaultIgnore {
-			if name == ign {
-				return true
-			}
-		}
-	}
-	return false
-}
 
 func fileHash(data []byte) string {
 	h := sha256.Sum256(data)

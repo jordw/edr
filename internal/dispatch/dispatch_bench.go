@@ -10,6 +10,7 @@ import (
 
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
+	"github.com/jordw/edr/internal/walk"
 )
 
 func runBench(ctx context.Context, db index.SymbolStore, root string, _ []string, _ map[string]any) (any, error) {
@@ -124,7 +125,7 @@ func discoverBenchTargets(ctx context.Context, db index.SymbolStore, root string
 	var candidates []fileInfo
 	dirSeen := map[string]bool{}
 
-	index.WalkRepoFiles(root, func(path string) error {
+	walk.RepoFiles(root, func(path string) error {
 		if !index.Supported(path) {
 			return nil
 		}

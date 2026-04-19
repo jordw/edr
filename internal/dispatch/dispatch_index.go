@@ -13,6 +13,7 @@ import (
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	scopestore "github.com/jordw/edr/internal/scope/store"
+	"github.com/jordw/edr/internal/walk"
 )
 
 // runIndex handles "edr index" and "edr index --status".
@@ -26,7 +27,7 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 		total := rep.Files
 		if !rep.Exists || rep.Stale {
 			total = 0
-			index.WalkRepoFiles(root, func(_ string) error {
+			walk.RepoFiles(root, func(_ string) error {
 				total++
 				return nil
 			})
@@ -120,7 +121,7 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 		return edges
 	}
 
-	err := idx.BuildFullFromWalkWithImports(root, edrDir, index.WalkRepoFiles, nil, symbolExtractor, importExtractor, importResolver)
+	err := idx.BuildFullFromWalkWithImports(root, edrDir, walk.RepoFiles, nil, symbolExtractor, importExtractor, importResolver)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +131,7 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 	// languages (Go, TS/JS/TSX/JSX, Python). Used by refs-to and future
 	// rename/changesig consumers. Separate from the trigram+symbol index
 	// so its format can evolve independently.
-	scopeFiles, scopeErr := scopestore.Build(root, edrDir, index.WalkRepoFiles)
+	scopeFiles, scopeErr := scopestore.Build(root, edrDir, walk.RepoFiles)
 
 	rep := idx.NewReporter(root, edrDir).Status()
 	result := map[string]any{
@@ -272,7 +273,7 @@ func extractImportsForFile(data []byte, ext string) []index.ImportEntry {
 func extractAllImports(root string) ([][2]string, []string) {
 	// Collect all file paths
 	var allFiles []string
-	index.WalkRepoFiles(root, func(path string) error {
+	walk.RepoFiles(root, func(path string) error {
 		rel, err := filepath.Rel(root, path)
 		if err == nil {
 			allFiles = append(allFiles, rel)
