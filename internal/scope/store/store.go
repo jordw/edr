@@ -2,7 +2,7 @@
 // in the .edr directory and serves point queries without materializing
 // the whole index.
 //
-// File layout (v5):
+// File layout (v6):
 //
 //	[u32 LE: header length in bytes]
 //	[gob-encoded Header struct]   ← includes Records map AND string Pool
@@ -23,6 +23,12 @@
 //
 // Wire stripping continues from v3: Decl/Ref still don't carry File on
 // the wire — re-filled from parent wireResult.File on decode.
+//
+// v6 adds RecordMeta.Size. Prior versions mtime-only-checked the file
+// in ResultFor; if the filesystem returned the same mtime after a
+// silent-replace (same-second rewrite, explicit touch, snapshot
+// restore) the store happily served stale scope data. The staleness
+// package now enforces mtime+size, but requires the Size at rest.
 //
 // Old versions are not read; Load returns an error and callers fall
 // back to "no index" until the next rebuild.
@@ -53,10 +59,14 @@ import (
 	"github.com/jordw/edr/internal/scope/rust"
 	"github.com/jordw/edr/internal/scope/swift"
 	"github.com/jordw/edr/internal/scope/ts"
+	"github.com/jordw/edr/internal/staleness"
 )
 
 const (
-	currentVersion uint32 = 5
+	// v6: RecordMeta gained Size. A pre-v6 scope.bin is rejected by
+	// Load, which callers treat as "no index" and trigger a rebuild
+	// on the next `edr index`.
+	currentVersion uint32 = 6
 	storeFileName         = "scope.bin"
 )
 
@@ -245,6 +255,7 @@ type RecordMeta struct {
 	Offset uint64
 	Length uint32
 	Mtime  int64
+	Size   int64 // source file size at index time; paired with Mtime by staleness.IsFresh
 }
 
 // Index is a handle to a loaded scope index. It holds the parsed header
@@ -317,6 +328,7 @@ func Build(root, edrDir string, walkFn func(string, func(string) error) error) (
 		rel   string
 		body  []byte
 		mtime int64
+		size  int64
 	}
 	var records []encodedRecord
 
@@ -363,6 +375,7 @@ func Build(root, edrDir string, walkFn func(string, func(string) error) error) (
 			rel:   rel,
 			body:  compressed,
 			mtime: info.ModTime().UnixNano(),
+			size:  info.Size(),
 		})
 		return nil
 	})
@@ -380,6 +393,7 @@ func Build(root, edrDir string, walkFn func(string, func(string) error) error) (
 			Offset: 0,
 			Length: uint32(len(r.body)),
 			Mtime:  r.mtime,
+			Size:   r.size,
 		}
 	}
 	headerBytes, err := encodeHeader(header)
@@ -529,15 +543,15 @@ func (idx *Index) ResultFor(root, relPath string) *scope.Result {
 	if !ok {
 		return nil
 	}
-	abs := relPath
-	if !filepath.IsAbs(abs) {
-		abs = filepath.Join(root, relPath)
-	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		return nil
-	}
-	if info.ModTime().UnixNano() != meta.Mtime {
+	// mtime+size check — silent-replace (same mtime, different
+	// content) must count as stale. Prior versions checked only
+	// mtime and happily served stale data through same-second
+	// rewrites, explicit touch, or snapshot restore.
+	if !staleness.IsFresh(root, staleness.Entry{
+		Path:  relPath,
+		Mtime: meta.Mtime,
+		Size:  meta.Size,
+	}) {
 		return nil
 	}
 	if idx.cached != nil {

@@ -142,6 +142,44 @@ func TestStaleness(t *testing.T) {
 	}
 }
 
+// TestStaleness_SizeChangeWithSameMtime is the regression for the
+// silent-replace bug. Before RecordMeta.Size, ResultFor only
+// compared mtime — a same-second rewrite (or restoring a file from
+// backup with its original mtime) would return stale scope data.
+func TestStaleness_SizeChangeWithSameMtime(t *testing.T) {
+	root, edrDir := setupRepo(t, map[string]string{
+		"a.go": "package a\n\nfunc Foo() {}\n",
+	})
+	if _, err := Build(root, edrDir, walkDir(t)); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	idx, err := Load(edrDir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer idx.Close()
+
+	p := filepath.Join(root, "a.go")
+	origInfo, err := os.Stat(p)
+	if err != nil {
+		t.Fatalf("stat a.go: %v", err)
+	}
+	origMtime := origInfo.ModTime()
+
+	// Rewrite with a bigger body, then force the mtime back to what
+	// the index has. Size differs; mtime matches.
+	if err := os.WriteFile(p, []byte("package a\n\nfunc Foo() { println(\"hello\") }\n"), 0o644); err != nil {
+		t.Fatalf("rewrite a.go: %v", err)
+	}
+	if err := os.Chtimes(p, origMtime, origMtime); err != nil {
+		t.Fatalf("chtimes a.go: %v", err)
+	}
+
+	if r := idx.ResultFor(root, "a.go"); r != nil {
+		t.Errorf("ResultFor a.go after same-mtime rewrite = non-nil; want nil (size changed)")
+	}
+}
+
 func TestLoadMissing(t *testing.T) {
 	edrDir := t.TempDir()
 	idx, err := Load(edrDir)
