@@ -464,3 +464,117 @@ end
 		}
 	}
 }
+
+// TestParse_Builtins: Kernel methods called as bare idents resolve as
+// builtins, not as BindUnresolved method_call. Core classes referenced
+// by name do the same.
+func TestParse_Builtins(t *testing.T) {
+	src := []byte(`def greet(name)
+  puts "hello #{name}"
+  raise ArgumentError if name.nil?
+end
+`)
+	r := Parse("a.rb", src)
+	for _, name := range []string{"puts", "ArgumentError"} {
+		refs := refsNamed(r, name)
+		if len(refs) == 0 {
+			t.Errorf("no ref to builtin %q; refs=%+v", name, r.Refs)
+			continue
+		}
+		if refs[0].Binding.Kind != scope.BindResolved {
+			t.Errorf("%q not resolved: %+v", name, refs[0].Binding)
+			continue
+		}
+		if refs[0].Binding.Reason != "builtin" {
+			t.Errorf("%q reason = %q, want \"builtin\"", name, refs[0].Binding.Reason)
+		}
+	}
+}
+
+// TestParse_ClassReopeningMerging: Ruby permits reopening a class in
+// the same file; both `class Foo` blocks should share a DeclID.
+func TestParse_ClassReopeningMerging(t *testing.T) {
+	src := []byte(`class Foo
+  def a; end
+end
+
+class Foo
+  def b; end
+end
+`)
+	r := Parse("a.rb", src)
+	var foos []*scope.Decl
+	for i := range r.Decls {
+		if r.Decls[i].Name == "Foo" && r.Decls[i].Kind == scope.KindClass {
+			foos = append(foos, &r.Decls[i])
+		}
+	}
+	if len(foos) < 2 {
+		t.Fatalf("expected >=2 Foo class decls; got %d; decls=%v", len(foos), declNames(r))
+	}
+	if foos[0].ID != foos[1].ID {
+		t.Errorf("reopened class Foo has distinct IDs %d vs %d (should merge)",
+			foos[0].ID, foos[1].ID)
+	}
+}
+
+// TestParse_AliasBareword checks that 'alias new_name old_name' emits
+// new_name as a method decl in the enclosing class scope.
+func TestParse_AliasBareword(t *testing.T) {
+	src := []byte("class Foo\n  def original_name; end\n  alias new_name original_name\nend\n")
+	r := Parse("a.rb", src)
+	d := findDeclOfKind(r, "new_name", scope.KindMethod)
+	if d == nil {
+		t.Fatalf("alias new_name missing as method decl; decls=%v", declNames(r))
+	}
+	if d.Namespace != scope.NSField {
+		t.Errorf("new_name namespace = %v, want %v", d.Namespace, scope.NSField)
+	}
+	// old_name should still be present (def) and a ref to original_name
+	// should exist.
+	if findDeclOfKind(r, "original_name", scope.KindMethod) == nil {
+		t.Fatalf("original_name method missing")
+	}
+	if len(refsNamed(r, "original_name")) == 0 {
+		t.Errorf("expected a ref to original_name from alias; refs=%+v", r.Refs)
+	}
+}
+
+// TestParse_AliasMethodSymbols checks 'alias_method :new_name, :old_name'.
+func TestParse_AliasMethodSymbols(t *testing.T) {
+	src := []byte("class Foo\n  def original_name; end\n  alias_method :another_name, :original_name\nend\n")
+	r := Parse("a.rb", src)
+	d := findDeclOfKind(r, "another_name", scope.KindMethod)
+	if d == nil {
+		t.Fatalf("alias_method another_name missing as method decl; decls=%v", declNames(r))
+	}
+	if d.Namespace != scope.NSField {
+		t.Errorf("another_name namespace = %v, want %v", d.Namespace, scope.NSField)
+	}
+	if len(refsNamed(r, "original_name")) == 0 {
+		t.Errorf("expected a ref to original_name from alias_method; refs=%+v", r.Refs)
+	}
+}
+
+// TestParse_AliasMethodString covers the string-literal form
+// 'alias_method :new_name, "old_name"'.
+func TestParse_AliasMethodString(t *testing.T) {
+	src := []byte("class Foo\n  def original_name; end\n  alias_method :sn, \"original_name\"\nend\n")
+	r := Parse("a.rb", src)
+	if findDeclOfKind(r, "sn", scope.KindMethod) == nil {
+		t.Fatalf("alias_method sn missing as method decl; decls=%v", declNames(r))
+	}
+}
+
+// TestParse_AliasNotBreaksDownstream makes sure aliasing doesn't prevent
+// later 'def's in the same class from being picked up.
+func TestParse_AliasNotBreaksDownstream(t *testing.T) {
+	src := []byte("class Foo\n  def a; end\n  alias b a\n  def c; end\nend\n")
+	r := Parse("a.rb", src)
+	for _, n := range []string{"a", "b", "c"} {
+		if findDeclOfKind(r, n, scope.KindMethod) == nil {
+			t.Errorf("method %q missing; decls=%v", n, declNames(r))
+		}
+	}
+}
+

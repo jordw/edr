@@ -309,6 +309,15 @@ func Exists(edrDir string) bool {
 	return err == nil
 }
 
+// parsedFile holds a parsed Result in memory during Build's first
+// pass so reconcileResults can rewrite DeclIDs before encoding.
+type parsedFile struct {
+	rel    string
+	result *scope.Result
+	mtime  int64
+	size   int64
+}
+
 // Build walks the repo, parses every supported source file, and writes
 // the result to edrDir/scope.bin atomically. Returns the number of
 // records written. walkFn is the same shape used elsewhere in edr —
@@ -318,19 +327,10 @@ func Build(root, edrDir string, walkFn func(string, func(string) error) error) (
 		return 0, fmt.Errorf("scope store: mkdir %s: %w", edrDir, err)
 	}
 
-	// Single pool shared across all records — that's the whole point.
-	pool := newPoolBuilder()
-
-	// First pass: parse every supported file, intern its strings into the
-	// pool while building wireResult, gob-encode the wireResult into a
-	// per-record buffer. Pool is finalized when the walk completes.
-	type encodedRecord struct {
-		rel   string
-		body  []byte
-		mtime int64
-		size  int64
-	}
-	var records []encodedRecord
+	// First pass: parse every supported file and hold Results in memory
+	// so cross-file reconciliation (partial classes, Ruby reopens, TS
+	// merging across modules) can rewrite DeclIDs before encoding.
+	var parsed []parsedFile
 
 	walkErr := walkFn(root, func(absPath string) error {
 		rel, err := filepath.Rel(root, absPath)
@@ -363,24 +363,48 @@ func Build(root, edrDir string, walkFn func(string, func(string) error) error) (
 		if result == nil {
 			return nil
 		}
-		var buf bytes.Buffer
-		if err := gob.NewEncoder(&buf).Encode(toWire(result, pool)); err != nil {
-			return fmt.Errorf("scope store: encode %s: %w", rel, err)
-		}
-		compressed, err := compressBody(buf.Bytes())
-		if err != nil {
-			return fmt.Errorf("scope store: compress %s: %w", rel, err)
-		}
-		records = append(records, encodedRecord{
-			rel:   rel,
-			body:  compressed,
-			mtime: info.ModTime().UnixNano(),
-			size:  info.Size(),
+		parsed = append(parsed, parsedFile{
+			rel:    rel,
+			result: result,
+			mtime:  info.ModTime().UnixNano(),
+			size:   info.Size(),
 		})
 		return nil
 	})
 	if walkErr != nil {
 		return 0, walkErr
+	}
+
+	// Cross-file declaration merging (C# partial classes, Ruby open-
+	// class reopening, TS declaration merging). Mutates parsed in place.
+	reconcileResults(parsed)
+
+	// Second pass: encode each reconciled Result. The string pool is
+	// built here so that interning reflects the final (post-merge)
+	// identifier names, with one pool shared across all records.
+	pool := newPoolBuilder()
+	type encodedRecord struct {
+		rel   string
+		body  []byte
+		mtime int64
+		size  int64
+	}
+	records := make([]encodedRecord, 0, len(parsed))
+	for _, p := range parsed {
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(toWire(p.result, pool)); err != nil {
+			return 0, fmt.Errorf("scope store: encode %s: %w", p.rel, err)
+		}
+		compressed, err := compressBody(buf.Bytes())
+		if err != nil {
+			return 0, fmt.Errorf("scope store: compress %s: %w", p.rel, err)
+		}
+		records = append(records, encodedRecord{
+			rel:   p.rel,
+			body:  compressed,
+			mtime: p.mtime,
+			size:  p.size,
+		})
 	}
 
 	header := &Header{

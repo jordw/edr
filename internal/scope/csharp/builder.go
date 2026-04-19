@@ -34,6 +34,7 @@ import (
 
 	"github.com/jordw/edr/internal/lexkit"
 	"github.com/jordw/edr/internal/scope"
+	"github.com/jordw/edr/internal/scope/builtins"
 )
 
 // Parse extracts a scope.Result from a C# source buffer.
@@ -53,6 +54,7 @@ func Parse(file string, src []byte) *scope.Result {
 	b.run()
 	b.closeScopesToDepth(0)
 	b.resolveRefs()
+	scope.MergeDuplicateDecls(b.res)
 	return b.res
 }
 
@@ -1375,9 +1377,17 @@ func (b *builder) resolveRefs() {
 			}
 		}
 		if !resolved {
-			r.Binding = scope.RefBinding{
-				Kind:   scope.BindUnresolved,
-				Reason: "missing_import",
+			if builtins.CSharp.Has(r.Name) {
+				r.Binding = scope.RefBinding{
+					Kind:   scope.BindResolved,
+					Decl:   hashBuiltinDecl(r.Name),
+					Reason: "builtin",
+				}
+			} else {
+				r.Binding = scope.RefBinding{
+					Kind:   scope.BindUnresolved,
+					Reason: "missing_import",
+				}
 			}
 		}
 	}
@@ -1399,6 +1409,15 @@ func hashLoc(file string, span scope.Span, name string) scope.LocID {
 	h.Write(buf[:])
 	sum := h.Sum(nil)
 	return scope.LocID(binary.LittleEndian.Uint64(sum[:8]))
+}
+
+func hashBuiltinDecl(name string) scope.DeclID {
+	h := sha256.New()
+	h.Write([]byte("<builtin:csharp>"))
+	h.Write([]byte{0})
+	h.Write([]byte(name))
+	sum := h.Sum(nil)
+	return scope.DeclID(binary.LittleEndian.Uint64(sum[:8]))
 }
 
 func hashDecl(canonicalPath, name string, ns scope.Namespace, scopeID scope.ScopeID) scope.DeclID {

@@ -497,3 +497,57 @@ func TestParse_ParseDoesNotPanicOnEmptyInput(t *testing.T) {
 	_ = Parse("empty.cs", []byte{})
 	_ = Parse("empty.cs", []byte("   \n\n  "))
 }
+
+// TestParse_Builtins: System.* types and primitive aliases bind as
+// builtins, not as BindUnresolved missing_import.
+func TestParse_Builtins(t *testing.T) {
+	src := []byte(`public class Greeter {
+    public string Greet(string name) {
+        Console.WriteLine(name);
+        throw new ArgumentNullException(name);
+    }
+}
+`)
+	r := Parse("a.cs", src)
+	for _, name := range []string{"Console", "ArgumentNullException"} {
+		refs := refsNamed(r, name)
+		if len(refs) == 0 {
+			t.Errorf("no ref to builtin %q; refs=%+v", name, r.Refs)
+			continue
+		}
+		if refs[0].Binding.Kind != scope.BindResolved {
+			t.Errorf("%q not resolved: %+v", name, refs[0].Binding)
+			continue
+		}
+		if refs[0].Binding.Reason != "builtin" {
+			t.Errorf("%q reason = %q, want \"builtin\"", name, refs[0].Binding.Reason)
+		}
+	}
+}
+
+// TestParse_PartialClassSameFileMerging: two `partial class Foo` blocks
+// in a single file should share a DeclID after within-file merging.
+// Cross-file partials are handled by the store-level reconciliation.
+func TestParse_PartialClassSameFileMerging(t *testing.T) {
+	src := []byte(`partial class Foo {
+    public int a;
+}
+partial class Foo {
+    public int b;
+}
+`)
+	r := Parse("a.cs", src)
+	var foos []*scope.Decl
+	for i := range r.Decls {
+		if r.Decls[i].Name == "Foo" && r.Decls[i].Kind == scope.KindClass {
+			foos = append(foos, &r.Decls[i])
+		}
+	}
+	if len(foos) < 2 {
+		t.Fatalf("expected >=2 Foo class decls; got %d", len(foos))
+	}
+	if foos[0].ID != foos[1].ID {
+		t.Errorf("partial class Foo has distinct IDs %d vs %d (should merge)",
+			foos[0].ID, foos[1].ID)
+	}
+}

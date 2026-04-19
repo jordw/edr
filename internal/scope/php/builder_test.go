@@ -539,3 +539,244 @@ class Foo {
 		t.Errorf("bar FullSpan was never patched; got %+v", bar.FullSpan)
 	}
 }
+
+// TestParse_Builtins: core PHP functions + exception classes bind as
+// builtins rather than BindUnresolved missing_import.
+func TestParse_Builtins(t *testing.T) {
+	src := []byte(`<?php
+function greet($name) {
+    if (empty($name)) {
+        throw new InvalidArgumentException("blank");
+    }
+    return strlen($name);
+}
+`)
+	r := Parse("a.php", src)
+	for _, name := range []string{"strlen", "InvalidArgumentException"} {
+		refs := refsNamed(r, name)
+		if len(refs) == 0 {
+			t.Errorf("no ref to builtin %q; refs=%+v", name, r.Refs)
+			continue
+		}
+		if refs[0].Binding.Kind != scope.BindResolved {
+			t.Errorf("%q not resolved: %+v", name, refs[0].Binding)
+			continue
+		}
+		if refs[0].Binding.Reason != "builtin" {
+			t.Errorf("%q reason = %q, want \"builtin\"", name, refs[0].Binding.Reason)
+		}
+	}
+}
+
+// TestParse_InterfaceNSType: `interface Foo` emits a KindInterface decl
+// in NSType only (no NSValue row) — interfaces are pure type names in
+// PHP.
+func TestParse_InterfaceNSType(t *testing.T) {
+	src := []byte(`<?php
+interface Foo {
+    public function hello(): string;
+}
+?>`)
+	r := Parse("a.php", src)
+	var seen []scope.Namespace
+	for i := range r.Decls {
+		if r.Decls[i].Name == "Foo" && r.Decls[i].Kind == scope.KindInterface {
+			seen = append(seen, r.Decls[i].Namespace)
+		}
+	}
+	if len(seen) == 0 {
+		t.Fatalf("no interface Foo decl found; decls=%v", declNames(r))
+	}
+	for _, ns := range seen {
+		if ns != scope.NSType {
+			t.Errorf("interface Foo namespace = %q, want NSType", ns)
+		}
+	}
+	// There must not be an NSValue decl for interface Foo.
+	for i := range r.Decls {
+		d := &r.Decls[i]
+		if d.Name == "Foo" && d.Kind == scope.KindInterface && d.Namespace == scope.NSValue {
+			t.Errorf("unexpected NSValue decl for interface Foo: %+v", d)
+		}
+	}
+}
+
+// TestParse_TraitNSType: `trait X` emits into NSType only. PHP's builder
+// uses KindType for traits.
+func TestParse_TraitNSType(t *testing.T) {
+	src := []byte(`<?php trait HasName { public string $name; } ?>`)
+	r := Parse("a.php", src)
+	var trait *scope.Decl
+	for i := range r.Decls {
+		if r.Decls[i].Name == "HasName" && r.Decls[i].Kind == scope.KindType {
+			trait = &r.Decls[i]
+			break
+		}
+	}
+	if trait == nil {
+		t.Fatalf("trait HasName missing; decls=%v", declNames(r))
+	}
+	if trait.Namespace != scope.NSType {
+		t.Errorf("trait HasName namespace = %q, want NSType", trait.Namespace)
+	}
+}
+
+// TestParse_ClassDualResident: `class Foo` emits TWO decls (NSValue +
+// NSType) that share a DeclID after within-file merge.
+func TestParse_ClassDualResident(t *testing.T) {
+	src := []byte(`<?php class Foo {} ?>`)
+	r := Parse("a.php", src)
+
+	var nsValueDecl, nsTypeDecl *scope.Decl
+	for i := range r.Decls {
+		d := &r.Decls[i]
+		if d.Name != "Foo" || d.Kind != scope.KindClass {
+			continue
+		}
+		switch d.Namespace {
+		case scope.NSValue:
+			nsValueDecl = d
+		case scope.NSType:
+			nsTypeDecl = d
+		}
+	}
+	if nsValueDecl == nil {
+		t.Fatalf("no NSValue decl for class Foo; decls=%+v", r.Decls)
+	}
+	if nsTypeDecl == nil {
+		t.Fatalf("no NSType decl for class Foo; decls=%+v", r.Decls)
+	}
+	if nsValueDecl.ID != nsTypeDecl.ID {
+		t.Errorf("class Foo NSValue.ID=%d NSType.ID=%d; want equal after merge",
+			nsValueDecl.ID, nsTypeDecl.ID)
+	}
+}
+
+// TestParse_EnumDualResident: `enum Color` emits TWO decls (NSValue +
+// NSType) that share a DeclID after within-file merge.
+func TestParse_EnumDualResident(t *testing.T) {
+	src := []byte(`<?php
+enum Color {
+    case Red;
+    case Green;
+}
+?>`)
+	r := Parse("a.php", src)
+
+	var nsValueDecl, nsTypeDecl *scope.Decl
+	for i := range r.Decls {
+		d := &r.Decls[i]
+		if d.Name != "Color" || d.Kind != scope.KindEnum {
+			continue
+		}
+		switch d.Namespace {
+		case scope.NSValue:
+			nsValueDecl = d
+		case scope.NSType:
+			nsTypeDecl = d
+		}
+	}
+	if nsValueDecl == nil {
+		t.Fatalf("no NSValue decl for enum Color; decls=%+v", r.Decls)
+	}
+	if nsTypeDecl == nil {
+		t.Fatalf("no NSType decl for enum Color; decls=%+v", r.Decls)
+	}
+	if nsValueDecl.ID != nsTypeDecl.ID {
+		t.Errorf("enum Color NSValue.ID=%d NSType.ID=%d; want equal after merge",
+			nsValueDecl.ID, nsTypeDecl.ID)
+	}
+}
+
+// TestParse_NameCollisionFunctionAndInterface: `function X()` (NSValue)
+// and `interface X` (NSType) collide by name but live in different
+// namespaces — each must be represented as its own decl row with the
+// correct namespace tag. (Contrast: a function and a class with the
+// same name both occupy NSValue and, given PHP's decl-ID scheme
+// (path+name+ns+scope), end up sharing an ID — that's a pre-existing
+// limitation, not something the type-split changes. An interface is
+// the interesting case because it lives ONLY in NSType.)
+func TestParse_NameCollisionFunctionAndInterface(t *testing.T) {
+	src := []byte(`<?php
+function X() { return 1; }
+interface X {}
+?>`)
+	r := Parse("a.php", src)
+
+	var fn, iface *scope.Decl
+	for i := range r.Decls {
+		d := &r.Decls[i]
+		if d.Name != "X" {
+			continue
+		}
+		switch d.Kind {
+		case scope.KindFunction:
+			if fn == nil {
+				fn = d
+			}
+		case scope.KindInterface:
+			if iface == nil {
+				iface = d
+			}
+		}
+	}
+	if fn == nil {
+		t.Fatalf("function X missing; decls=%+v", r.Decls)
+	}
+	if iface == nil {
+		t.Fatalf("interface X missing; decls=%+v", r.Decls)
+	}
+	if fn.Namespace != scope.NSValue {
+		t.Errorf("function X namespace = %q, want NSValue", fn.Namespace)
+	}
+	if iface.Namespace != scope.NSType {
+		t.Errorf("interface X namespace = %q, want NSType", iface.Namespace)
+	}
+	// Namespaces differ → hashDecl produces different DeclIDs → the
+	// two symbols are cleanly distinguishable.
+	if fn.ID == iface.ID {
+		t.Errorf("function X and interface X share DeclID %d; want distinct",
+			fn.ID)
+	}
+}
+
+// TestParse_InterfaceRefResolvesViaTypeNamespace: a parameter type hint
+// referencing an interface (which lives in NSType only) must still
+// resolve — either via direct NSType lookup or via the NSValue→NSType
+// fallback in resolveRefs.
+func TestParse_InterfaceRefResolvesViaTypeNamespace(t *testing.T) {
+	src := []byte(`<?php
+interface Foo {
+    public function hello(): string;
+}
+function useIt(Foo $x) { return $x; }
+?>`)
+	r := Parse("a.php", src)
+
+	var ifaceID scope.DeclID
+	for i := range r.Decls {
+		d := &r.Decls[i]
+		if d.Name == "Foo" && d.Kind == scope.KindInterface {
+			ifaceID = d.ID
+			break
+		}
+	}
+	if ifaceID == 0 {
+		t.Fatalf("no interface Foo decl found; decls=%v", declNames(r))
+	}
+
+	fooRefs := refsNamed(r, "Foo")
+	if len(fooRefs) == 0 {
+		t.Fatalf("no ref to Foo found; refs=%+v", r.Refs)
+	}
+	resolved := false
+	for _, ref := range fooRefs {
+		if ref.Binding.Kind == scope.BindResolved && ref.Binding.Decl == ifaceID {
+			resolved = true
+			break
+		}
+	}
+	if !resolved {
+		t.Errorf("Foo type-hint ref didn't resolve to interface Foo; refs=%+v", fooRefs)
+	}
+}

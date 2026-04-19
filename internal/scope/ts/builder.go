@@ -7,9 +7,15 @@
 // resolved via scope-chain walk to the innermost matching Decl.
 //
 // v1 limitations (to be relaxed):
-//   - All decls are in NSValue; type-vs-value namespace split is TODO.
-//     Generic type params are emitted as KindType decls but still in
-//     NSValue — they bind correctly by name, just not namespace-checked.
+//   - Type-vs-value namespace split (v2): interfaces and type aliases
+//     emit into NSType only; classes and enums dual-emit (NSValue +
+//     NSType) so `new Foo()` and `let f: Foo` resolve to the same ID
+//     via within-file merge. Refs are tagged NSType when the builder
+//     detects a type annotation (`:` in param/var/return position) or
+//     a generic `<...>` list. Ref tagging is heuristic — keyword-
+//     triggered contexts (`extends`, `as`, `satisfies`, `keyof`) are
+//     NOT yet tracked, so refs in those positions stay NSValue and
+//     rely on resolveRefs' NSValue→NSType fallback to find types.
 //   - Destructuring declarations extract the first name only.
 //   - No declaration merging (class+interface+namespace with same name
 //     produces three separate Decls; merging is a later reconciliation pass).
@@ -57,6 +63,7 @@ func Parse(file string, src []byte) *scope.Result {
 	b.run()
 	b.closeScopesToDepth(0)
 	b.resolveRefs()
+	scope.MergeDuplicateDecls(b.res)
 	return b.res
 }
 
@@ -160,6 +167,14 @@ type builder struct {
 	destructureDepth  int
 	destructureKind   scope.DeclKind
 
+	// typePosition is true when the next ident refers to a type. Entered
+	// on `:` in param/var/return annotations and while inside a generic
+	// `<...>` list. Cleared on `=`, `;`, `{` (value body), `=>`, `,` at
+	// param-list top level, and `)` closing an annotation context. Refs
+	// emitted while true are tagged NSType; the resolveRefs fallback
+	// still catches mistagged cases.
+	typePosition bool
+
 	// pendingFullStart captures the byte position of the most recent
 	// declaration keyword (function, class, interface, type, enum,
 	// namespace, const, let, var). emitDecl uses it as FullSpan.StartByte.
@@ -234,6 +249,21 @@ func (b *builder) run() {
 			b.handleOpenBrace()
 		case c == '}':
 			b.handleCloseBrace()
+		case c == ':':
+			// Type annotation entry. Trigger in three contexts:
+			//   - param annotation: `(x: T)` — inParamList && paramDepth 1
+			//   - var annotation: `let x: T` — declContext is var/let/const
+			//   - return-type annotation: `function f(): T` — prevByte is ')'
+			// Object-literal keys (`{ x: 1 }`) and ternary arms hit this
+			// case too but don't match any of the above, so they stay value.
+			b.s.Pos++
+			if (b.inParamList && b.paramDepth == 1) ||
+				b.varDeclKind == scope.KindVar || b.varDeclKind == scope.KindLet || b.varDeclKind == scope.KindConst ||
+				b.prevByte == ')' {
+				b.typePosition = true
+			}
+			b.prevByte = ':'
+			b.regexOK = true
 		case c == ';':
 			// Close any expression-body arrow whose scope terminates at
 			// this statement boundary before processing the ';' itself.
@@ -243,6 +273,7 @@ func (b *builder) run() {
 			b.regexOK = true
 			b.declContext = ""
 			b.varDeclKind = ""
+			b.typePosition = false
 			b.prevByte = ';'
 			// Interface method signatures (no body) reach ';' with pending
 			// params; drop them — no scope to bind against. Same for
@@ -254,6 +285,18 @@ func (b *builder) run() {
 			// but clear at ; to avoid leaking on malformed input.
 			b.inDestructuring = false
 			b.destructureDepth = 0
+		case c == '=' && b.s.PeekAt(1) != '=' && b.s.PeekAt(1) != '>':
+			// Plain `=`: initializer for a var decl, class-field default,
+			// or assignment. Exits a type annotation (RHS is value).
+			// Exception: type-alias RHS `type X = RHS` — keep type context.
+			b.s.Pos++
+			b.prevByte = '='
+			b.regexOK = true
+			if b.declContext == scope.KindType {
+				b.typePosition = true
+			} else {
+				b.typePosition = false
+			}
 		case c == '=' && b.s.PeekAt(1) == '>':
 			arrowStart := uint32(b.s.Pos)
 			b.s.Advance(2)
@@ -266,9 +309,11 @@ func (b *builder) run() {
 				// pendingParams into the new function scope.
 				k := scope.ScopeFunction
 				b.pendingScope = &k
+				b.typePosition = false
 			} else {
 				b.s.Pos = save
 				b.s.Line = saveLine
+				b.typePosition = false
 				// Expression-body arrow `(x) => x + 1`: open a function
 				// scope now so params bind inside and body refs resolve
 				// through it. Closed on the next terminator (`,`, `;`,
@@ -297,6 +342,9 @@ func (b *builder) run() {
 			b.prevByte = '('
 			b.parenVarStack = append(b.parenVarStack, b.varDeclKind)
 			b.varDeclKind = ""
+			// Entering a `(`: param names are value-position. Annotation
+			// re-entry happens via the `:` handler.
+			b.typePosition = false
 			if b.paramListPending {
 				b.paramListPending = false
 				// Seeing '(' confirms we're in a param list, not a generic
@@ -343,6 +391,13 @@ func (b *builder) run() {
 			b.s.Pos++
 			b.regexOK = true
 			b.prevByte = ','
+			// In a param list at top depth, the next section starts with a
+			// param name (value position). Inside generics, commas separate
+			// type params and values stay in type context (handled by
+			// inGenericParams in emitRef).
+			if b.inParamList && b.paramDepth == 1 {
+				b.typePosition = false
+			}
 			// Re-enter declContext from varDeclKind only when a comma genuinely
 			// separates binders in a var statement. Inside a param list (arrow
 			// function) or destructuring pattern, those paths handle their own
@@ -1214,29 +1269,59 @@ func (b *builder) peekNonWSByte() byte {
 }
 
 func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
-	scopeID := b.currentScope()
-	locID := hashLoc(b.file, span, name)
-	ns := scope.NSValue
-	// Class/interface members (field, method) go in the field namespace so
-	// they do not shadow same-name top-level decls during scope resolution.
-	// Property-access refs (obj.x) are skipped at the tokenizer level, so
-	// field/method names never come up as bare refs.
-	if kind == scope.KindField || kind == scope.KindMethod {
+	primaryNs := b.namespaceFor(kind)
+	idx := b.appendDecl(name, kind, span, primaryNs)
+
+	// Dual-namespace emission: TS classes and enums bind in BOTH the
+	// value namespace (for `new Foo()`, `Foo.X`) and the type namespace
+	// (for `let x: Foo`). Emit a shadow NSType decl; within-file merge
+	// (scope.MergeDuplicateDecls) unifies their DeclIDs so refs-to from
+	// either position returns the same target.
+	if kind == scope.KindClass || kind == scope.KindEnum {
+		b.appendDecl(name, kind, span, scope.NSType)
+	}
+
+	switch kind {
+	case scope.KindFunction, scope.KindMethod, scope.KindClass,
+		scope.KindInterface, scope.KindEnum, scope.KindNamespace,
+		scope.KindType:
+		b.pendingOwnerDecl = idx
+	}
+	b.pendingFullStart = 0
+}
+
+// namespaceFor returns the primary namespace for a declaration kind.
+// Type-only kinds (interface, type alias) go in NSType; class/interface
+// members go in NSField when inside a class/interface body; everything
+// else is NSValue. Classes and enums additionally emit a shadow NSType
+// decl (see emitDecl).
+func (b *builder) namespaceFor(kind scope.DeclKind) scope.Namespace {
+	switch kind {
+	case scope.KindInterface, scope.KindType:
+		return scope.NSType
+	case scope.KindField, scope.KindMethod:
 		if sk := b.currentScopeKind(); sk == scope.ScopeClass || sk == scope.ScopeInterface {
-			ns = scope.NSField
+			return scope.NSField
 		}
 	}
+	return scope.NSValue
+}
+
+// appendDecl writes a single Decl to b.res.Decls with the given
+// namespace and returns its index. FullSpan covers [decl keyword → end
+// of body]: scope-owning decls get FullSpan.EndByte patched when the
+// body's closing brace closes the scope; class methods have no
+// preceding keyword but DO own a scope, so they use the identifier
+// position as FullSpan.Start.
+//
+// pendingFullStart uses a +1 offset to reserve 0 as "unset" (byte 0 is
+// a valid declaration-keyword position when a file begins with e.g.
+// `function x() {}`).
+func (b *builder) appendDecl(name string, kind scope.DeclKind, span scope.Span, ns scope.Namespace) int {
+	scopeID := b.currentScope()
+	locID := hashLoc(b.file, span, name)
 	declID := hashDecl(b.file, name, ns, scopeID)
 
-	// FullSpan covers [decl keyword → end of body]. Scope-owning decls
-	// get FullSpan.EndByte patched when the body's closing brace closes
-	// the scope. Class methods do not have their own preceding keyword
-	// but DO own a scope; we use the identifier position as FullSpan.Start
-	// for those, and the closing brace patches the End.
-	//
-	// pendingFullStart uses a +1 offset to reserve 0 as "unset" (byte 0
-	// is a valid declaration-keyword position when a file begins with
-	// e.g. `function x() {}`).
 	var fullStart uint32
 	if b.pendingFullStart > 0 && b.pendingFullStart-1 <= span.StartByte {
 		fullStart = b.pendingFullStart - 1
@@ -1257,25 +1342,22 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 		Span:      span,
 		FullSpan:  fullSpan,
 	})
-
-	switch kind {
-	case scope.KindFunction, scope.KindMethod, scope.KindClass,
-		scope.KindInterface, scope.KindEnum, scope.KindNamespace,
-		scope.KindType:
-		b.pendingOwnerDecl = idx
-	}
-	b.pendingFullStart = 0
+	return idx
 }
 
 func (b *builder) emitRef(name string, span scope.Span) {
 	scopeID := b.currentScope()
 	locID := hashLoc(b.file, span, name)
+	ns := scope.NSValue
+	if b.typePosition || b.inGenericParams {
+		ns = scope.NSType
+	}
 	b.res.Refs = append(b.res.Refs, scope.Ref{
 		LocID:     locID,
 		File:      b.file,
 		Span:      span,
 		Name:      name,
-		Namespace: scope.NSValue,
+		Namespace: ns,
 		Scope:     scopeID,
 	})
 }
@@ -1380,36 +1462,50 @@ func (b *builder) resolveRefs() {
 		}
 		cur := r.Scope
 		resolved := false
-		for {
-			if d, ok := byKey[key{scope: cur, name: r.Name, ns: r.Namespace}]; ok {
-				r.Binding = scope.RefBinding{
-					Kind:   scope.BindResolved,
-					Decl:   d.ID,
-					Reason: "direct_scope",
-				}
-				resolved = true
-				break
-			}
-			p, ok := parent[cur]
-			if !ok {
-				break
-			}
-			if p == 0 && cur != 0 {
-				// Reached file scope; try one more lookup there.
-				if d, ok := byKey[key{scope: 0, name: r.Name, ns: r.Namespace}]; ok {
+		// Try the ref's own namespace first. On miss, fall back to the
+		// other value/type namespace — position detection at ref-emission
+		// time is imprecise, so a value-tagged ref to an interface (which
+		// lives only in NSType) should still resolve.
+		alt := altNamespace(r.Namespace)
+		namespaces := []scope.Namespace{r.Namespace}
+		if alt != r.Namespace {
+			namespaces = append(namespaces, alt)
+		}
+		for _, ns := range namespaces {
+			cur = r.Scope
+			for {
+				if d, ok := byKey[key{scope: cur, name: r.Name, ns: ns}]; ok {
 					r.Binding = scope.RefBinding{
 						Kind:   scope.BindResolved,
 						Decl:   d.ID,
 						Reason: "direct_scope",
 					}
 					resolved = true
+					break
 				}
+				p, ok := parent[cur]
+				if !ok {
+					break
+				}
+				if p == 0 && cur != 0 {
+					if d, ok := byKey[key{scope: 0, name: r.Name, ns: ns}]; ok {
+						r.Binding = scope.RefBinding{
+							Kind:   scope.BindResolved,
+							Decl:   d.ID,
+							Reason: "direct_scope",
+						}
+						resolved = true
+					}
+					break
+				}
+				if cur == 0 {
+					break
+				}
+				cur = p
+			}
+			if resolved {
 				break
 			}
-			if cur == 0 {
-				break
-			}
-			cur = p
 		}
 		if !resolved {
 			// Signature-position generics: `function foo<T>(x: T)` — the
@@ -1418,10 +1514,13 @@ func (b *builder) resolveRefs() {
 			// Pass 2: for an unresolved ref, look for a KindType decl
 			// whose source position precedes the ref AND whose enclosing
 			// scope's end-byte follows the ref. Bind with a distinct
-			// reason so consumers can tell it apart.
+			// reason so consumers can tell it apart. Namespace match is
+			// relaxed here: type-param decls are NSType but annotation
+			// refs are emitted as NSValue until Stage 2 ref-position
+			// tagging lands.
 			for j := range b.res.Decls {
 				d := &b.res.Decls[j]
-				if d.Kind != scope.KindType || d.Name != r.Name || d.Namespace != r.Namespace {
+				if d.Kind != scope.KindType || d.Name != r.Name {
 					continue
 				}
 				if d.Span.EndByte >= r.Span.StartByte {
@@ -1813,6 +1912,19 @@ func hashLoc(file string, span scope.Span, name string) scope.LocID {
 	h.Write(buf[:])
 	sum := h.Sum(nil)
 	return scope.LocID(binary.LittleEndian.Uint64(sum[:8]))
+}
+
+// altNamespace returns the opposite value/type namespace. For NSField
+// and other non-value/type namespaces it returns the input unchanged —
+// fields and params never fall back.
+func altNamespace(ns scope.Namespace) scope.Namespace {
+	switch ns {
+	case scope.NSValue:
+		return scope.NSType
+	case scope.NSType:
+		return scope.NSValue
+	}
+	return ns
 }
 
 func hashDecl(canonicalPath, name string, ns scope.Namespace, scopeID scope.ScopeID) scope.DeclID {

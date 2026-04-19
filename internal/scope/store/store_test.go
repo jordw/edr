@@ -262,3 +262,178 @@ func TestResultFor_DoesNotMaterializeAll(t *testing.T) {
 	}
 	delete(all, "__probe__")
 }
+
+// TestReconcile_CSharpPartialClassCrossFile: two files each with
+// `partial class Foo` should end up with identical DeclIDs so refs-to
+// and rename can treat them as one symbol.
+func TestReconcile_CSharpPartialClassCrossFile(t *testing.T) {
+	root, edrDir := setupRepo(t, map[string]string{
+		"a.cs": `partial class Foo {
+    public int a;
+}
+`,
+		"b.cs": `partial class Foo {
+    public int b;
+}
+`,
+	})
+	if _, err := Build(root, edrDir, walkDir(t)); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	idx, err := Load(edrDir)
+	if err != nil || idx == nil {
+		t.Fatalf("Load: err=%v idx=%v", err, idx)
+	}
+	ra := idx.ResultFor(root, "a.cs")
+	rb := idx.ResultFor(root, "b.cs")
+	if ra == nil || rb == nil {
+		t.Fatalf("ResultFor: a=%v b=%v", ra, rb)
+	}
+	var fooA, fooB uint64
+	for _, d := range ra.Decls {
+		if d.Name == "Foo" {
+			fooA = uint64(d.ID)
+			break
+		}
+	}
+	for _, d := range rb.Decls {
+		if d.Name == "Foo" {
+			fooB = uint64(d.ID)
+			break
+		}
+	}
+	if fooA == 0 || fooB == 0 {
+		t.Fatalf("missing Foo decl: a=%d b=%d", fooA, fooB)
+	}
+	if fooA != fooB {
+		t.Errorf("partial class Foo has distinct IDs across files: a=%d b=%d", fooA, fooB)
+	}
+}
+
+// TestReconcile_RubyClassReopenCrossFile: class Foo defined in one file
+// and reopened in another should share a DeclID post-reconciliation.
+func TestReconcile_RubyClassReopenCrossFile(t *testing.T) {
+	root, edrDir := setupRepo(t, map[string]string{
+		"a.rb": `class Foo
+  def one; end
+end
+`,
+		"b.rb": `class Foo
+  def two; end
+end
+`,
+	})
+	if _, err := Build(root, edrDir, walkDir(t)); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	idx, err := Load(edrDir)
+	if err != nil || idx == nil {
+		t.Fatalf("Load: err=%v idx=%v", err, idx)
+	}
+	ra := idx.ResultFor(root, "a.rb")
+	rb := idx.ResultFor(root, "b.rb")
+	if ra == nil || rb == nil {
+		t.Fatalf("ResultFor: a=%v b=%v", ra, rb)
+	}
+	var fooA, fooB uint64
+	for _, d := range ra.Decls {
+		if d.Name == "Foo" {
+			fooA = uint64(d.ID)
+			break
+		}
+	}
+	for _, d := range rb.Decls {
+		if d.Name == "Foo" {
+			fooB = uint64(d.ID)
+			break
+		}
+	}
+	if fooA == 0 || fooB == 0 {
+		t.Fatalf("missing Foo decl: a=%d b=%d", fooA, fooB)
+	}
+	if fooA != fooB {
+		t.Errorf("reopened class Foo has distinct IDs across files: a=%d b=%d", fooA, fooB)
+	}
+}
+
+// TestReconcile_DoesNotMergeAcrossNamespaces: two C# classes with the
+// same bare name but different namespaces must stay distinct.
+func TestReconcile_DoesNotMergeAcrossNamespaces(t *testing.T) {
+	root, edrDir := setupRepo(t, map[string]string{
+		"a.cs": `namespace Alpha {
+    class Foo { }
+}
+`,
+		"b.cs": `namespace Beta {
+    class Foo { }
+}
+`,
+	})
+	if _, err := Build(root, edrDir, walkDir(t)); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	idx, err := Load(edrDir)
+	if err != nil || idx == nil {
+		t.Fatalf("Load: err=%v idx=%v", err, idx)
+	}
+	ra := idx.ResultFor(root, "a.cs")
+	rb := idx.ResultFor(root, "b.cs")
+	var fooA, fooB uint64
+	for _, d := range ra.Decls {
+		if d.Name == "Foo" {
+			fooA = uint64(d.ID)
+			break
+		}
+	}
+	for _, d := range rb.Decls {
+		if d.Name == "Foo" {
+			fooB = uint64(d.ID)
+			break
+		}
+	}
+	if fooA == 0 || fooB == 0 {
+		t.Fatalf("missing Foo decl: a=%d b=%d", fooA, fooB)
+	}
+	if fooA == fooB {
+		t.Errorf("Alpha.Foo and Beta.Foo should NOT merge: shared ID %d", fooA)
+	}
+}
+
+// TestReconcile_DoesNotMergeAcrossLanguages: a .cs Foo and a .ts Foo
+// must never merge, even at file scope with the same bare name.
+func TestReconcile_DoesNotMergeAcrossLanguages(t *testing.T) {
+	root, edrDir := setupRepo(t, map[string]string{
+		"a.cs": `class Foo { }
+`,
+		"b.ts": `class Foo { }
+`,
+	})
+	if _, err := Build(root, edrDir, walkDir(t)); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	idx, err := Load(edrDir)
+	if err != nil || idx == nil {
+		t.Fatalf("Load: err=%v idx=%v", err, idx)
+	}
+	ra := idx.ResultFor(root, "a.cs")
+	rb := idx.ResultFor(root, "b.ts")
+	var fooA, fooB uint64
+	for _, d := range ra.Decls {
+		if d.Name == "Foo" {
+			fooA = uint64(d.ID)
+			break
+		}
+	}
+	for _, d := range rb.Decls {
+		if d.Name == "Foo" {
+			fooB = uint64(d.ID)
+			break
+		}
+	}
+	if fooA == 0 || fooB == 0 {
+		t.Fatalf("missing Foo decl: a=%d b=%d", fooA, fooB)
+	}
+	if fooA == fooB {
+		t.Errorf("C# Foo and TS Foo must not merge across languages: shared ID %d", fooA)
+	}
+}

@@ -10,9 +10,17 @@ import (
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/scope"
+	scopec "github.com/jordw/edr/internal/scope/c"
+	"github.com/jordw/edr/internal/scope/csharp"
 	"github.com/jordw/edr/internal/scope/golang"
+	"github.com/jordw/edr/internal/scope/java"
+	"github.com/jordw/edr/internal/scope/kotlin"
+	"github.com/jordw/edr/internal/scope/php"
 	"github.com/jordw/edr/internal/scope/python"
+	"github.com/jordw/edr/internal/scope/ruby"
+	"github.com/jordw/edr/internal/scope/rust"
 	scopestore "github.com/jordw/edr/internal/scope/store"
+	"github.com/jordw/edr/internal/scope/swift"
 	"github.com/jordw/edr/internal/scope/ts"
 )
 
@@ -138,6 +146,22 @@ func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []stri
 			entries = append(entries, tsCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
 		case ".py", ".pyi":
 			entries = append(entries, pyCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
+		case ".java":
+			entries = append(entries, javaCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
+		case ".rb":
+			entries = append(entries, rubyCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
+		case ".rs":
+			entries = append(entries, rustCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
+		case ".kt", ".kts":
+			entries = append(entries, kotlinCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
+		case ".swift":
+			entries = append(entries, swiftCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
+		case ".php":
+			entries = append(entries, phpCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
+		case ".c", ".h":
+			entries = append(entries, cCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
+		case ".cs":
+			entries = append(entries, csharpCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
 		}
 	}
 
@@ -676,6 +700,180 @@ func tsCrossFileRefs(root, originFile, name string, idx *scopestore.Index) []ref
 		return nil
 	})
 	return out
+}
+
+// genericCrossFileRefs is the shared implementation used by java/ruby/rust
+// cross-file resolution. Mirrors pyCrossFileRefs: for each non-origin file
+// whose extension is in `exts`, collect refs named `name` and tag them as
+// probable with a cross_file_* reason derived from the source binding.
+// Builtin-resolved refs are skipped (not our symbol). Uses the persisted
+// scope index when available; falls back to an on-demand filesystem walk.
+func genericCrossFileRefs(
+	root, originFile, name string,
+	idx *scopestore.Index,
+	exts map[string]bool,
+	skipDirs map[string]bool,
+	parseFn func(path string, src []byte) *scope.Result,
+) []refEntry {
+	var out []refEntry
+	collect := func(path string, r *scope.Result, src []byte) {
+		if path == originFile {
+			return
+		}
+		if !exts[strings.ToLower(filepath.Ext(path))] {
+			return
+		}
+		seen := false
+		for _, ref := range r.Refs {
+			if ref.Name == name {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			return
+		}
+		sibLines := computeLineStarts(src)
+		for _, ref := range r.Refs {
+			if ref.Name != name {
+				continue
+			}
+			var reason string
+			switch {
+			case ref.Binding.Reason == "property_access":
+				reason = "property_access"
+			case ref.Binding.Kind == scope.BindResolved && ref.Binding.Reason == "builtin":
+				continue
+			case ref.Binding.Kind == scope.BindResolved:
+				reason = "cross_file_import"
+			case ref.Binding.Kind == scope.BindUnresolved:
+				reason = "cross_file_unresolved"
+			default:
+				continue
+			}
+			line, col := byteToLineCol(sibLines, ref.Span.StartByte)
+			out = append(out, refEntry{
+				file:   output.Rel(path),
+				line:   line,
+				col:    col,
+				span:   [2]uint32{ref.Span.StartByte, ref.Span.EndByte},
+				reason: reason,
+				kind:   scope.BindProbable,
+			})
+		}
+	}
+	if idx != nil {
+		for rel, r := range idx.AllResults() {
+			abs := filepath.Join(root, rel)
+			src, err := os.ReadFile(abs)
+			if err != nil {
+				continue
+			}
+			collect(abs, r, src)
+		}
+		return out
+	}
+	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			if skipDirs[info.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if path == originFile || !exts[strings.ToLower(filepath.Ext(path))] {
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		collect(path, parseFn(path, src), src)
+		return nil
+	})
+	return out
+}
+
+// javaCrossFileRefs: same-project .java files that reference `name`.
+// Heuristic (no import-path resolution); false positives possible when
+// unrelated files happen to use the same simple class/method name.
+func javaCrossFileRefs(root, originFile, name string, idx *scopestore.Index) []refEntry {
+	return genericCrossFileRefs(root, originFile, name, idx,
+		map[string]bool{".java": true},
+		map[string]bool{".git": true, ".edr": true, "target": true, "build": true, ".gradle": true, "out": true, "node_modules": true},
+		java.Parse)
+}
+
+// rubyCrossFileRefs: same-project .rb files that reference `name`.
+// Ruby's dynamic dispatch means unresolved bare idents are plausible
+// method calls on any receiver; this walk surfaces same-name call sites
+// across the repo.
+func rubyCrossFileRefs(root, originFile, name string, idx *scopestore.Index) []refEntry {
+	return genericCrossFileRefs(root, originFile, name, idx,
+		map[string]bool{".rb": true},
+		map[string]bool{".git": true, ".edr": true, "vendor": true, ".bundle": true, "coverage": true, "tmp": true, "log": true, "node_modules": true},
+		ruby.Parse)
+}
+
+// rustCrossFileRefs: same-project .rs files that reference `name`.
+// Rust `use` paths are not followed; false positives possible for
+// same-name types across unrelated modules.
+func rustCrossFileRefs(root, originFile, name string, idx *scopestore.Index) []refEntry {
+	return genericCrossFileRefs(root, originFile, name, idx,
+		map[string]bool{".rs": true},
+		map[string]bool{".git": true, ".edr": true, "target": true, "node_modules": true},
+		rust.Parse)
+}
+
+// kotlinCrossFileRefs: same-project .kt/.kts files that reference
+// `name`. Heuristic (no import resolution); false positives possible
+// when unrelated files use the same simple name.
+func kotlinCrossFileRefs(root, originFile, name string, idx *scopestore.Index) []refEntry {
+	return genericCrossFileRefs(root, originFile, name, idx,
+		map[string]bool{".kt": true, ".kts": true},
+		map[string]bool{".git": true, ".edr": true, "build": true, ".gradle": true, "out": true, "node_modules": true},
+		kotlin.Parse)
+}
+
+// swiftCrossFileRefs: same-project .swift files that reference `name`.
+// Swift `import` statements are not followed.
+func swiftCrossFileRefs(root, originFile, name string, idx *scopestore.Index) []refEntry {
+	return genericCrossFileRefs(root, originFile, name, idx,
+		map[string]bool{".swift": true},
+		map[string]bool{".git": true, ".edr": true, ".build": true, "Pods": true, "DerivedData": true, "build": true, "node_modules": true},
+		swift.Parse)
+}
+
+// phpCrossFileRefs: same-project .php files that reference `name`.
+// PHP `use` / `namespace` paths are not followed — false positives
+// possible for unqualified names across namespaces.
+func phpCrossFileRefs(root, originFile, name string, idx *scopestore.Index) []refEntry {
+	return genericCrossFileRefs(root, originFile, name, idx,
+		map[string]bool{".php": true},
+		map[string]bool{".git": true, ".edr": true, "vendor": true, "node_modules": true, "cache": true},
+		php.Parse)
+}
+
+// cCrossFileRefs: same-project .c/.h files that reference `name`.
+// #include directives are not followed; cross-file refs are name-only.
+func cCrossFileRefs(root, originFile, name string, idx *scopestore.Index) []refEntry {
+	return genericCrossFileRefs(root, originFile, name, idx,
+		map[string]bool{".c": true, ".h": true},
+		map[string]bool{".git": true, ".edr": true, "build": true, "dist": true, "out": true, "node_modules": true},
+		scopec.Parse)
+}
+
+// csharpCrossFileRefs: same-project .cs files that reference `name`.
+// `using` directives are not followed; `partial class` sites across
+// files are picked up both as refs and (via store reconciliation) as
+// merged DeclIDs.
+func csharpCrossFileRefs(root, originFile, name string, idx *scopestore.Index) []refEntry {
+	return genericCrossFileRefs(root, originFile, name, idx,
+		map[string]bool{".cs": true},
+		map[string]bool{".git": true, ".edr": true, "bin": true, "obj": true, "packages": true, "node_modules": true},
+		csharp.Parse)
 }
 
 // computeLineStarts returns the byte offset of the start of each line.

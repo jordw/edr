@@ -418,3 +418,28 @@ void use(Fn f) { int r = f(1); }
 		t.Errorf("use function missing; decls=%v", declNames(r))
 	}
 }
+
+// TestParse_Builtins: libc functions and types referenced by name bind
+// as builtins, not as BindUnresolved missing_import.
+func TestParse_Builtins(t *testing.T) {
+	src := []byte(`int greet(const char *name) {
+    printf("hello %s\n", name);
+    return strlen(name);
+}
+`)
+	r := Parse("a.c", src)
+	for _, name := range []string{"printf", "strlen"} {
+		refs := refsNamed(r, name)
+		if len(refs) == 0 {
+			t.Errorf("no ref to builtin %q; refs=%+v", name, r.Refs)
+			continue
+		}
+		if refs[0].Binding.Kind != scope.BindResolved {
+			t.Errorf("%q not resolved: %+v", name, refs[0].Binding)
+			continue
+		}
+		if refs[0].Binding.Reason != "builtin" {
+			t.Errorf("%q reason = %q, want \"builtin\"", name, refs[0].Binding.Reason)
+		}
+	}
+}

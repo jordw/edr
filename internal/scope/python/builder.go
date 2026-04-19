@@ -18,7 +18,11 @@
 //     the current behavior actually matches Python semantics.
 //   - Decorators are refs to the decorator name, but no deeper analysis.
 //   - Multi-target assignment `a = b = 1` records only the first target.
-//   - Destructuring tuple assignment records the first target only.
+//   - Destructuring tuple assignment records all comma-separated LHS
+//     targets — including parenthesized groupings (`(a, b) = point`)
+//     and starred targets (`a, *rest = xs`). Deeply nested patterns
+//     like `(a, (b, c)) = ...` extract every leaf name correctly, but
+//     only because the extractor flattens — it does not track structure.
 //   - `except E as e` doesn't introduce `e` as a decl.
 //   - Augmented assignments (`x += 1`) are treated as refs, not decls.
 package python
@@ -110,6 +114,12 @@ type builder struct {
 	inAssignLHS      bool
 	assignLineIndent int
 
+	// lhsGroupDepth counts open '(' that were opened as part of a
+	// tuple-destructuring LHS (e.g. '(a, b) = point'). Such parens are
+	// transparent for LHS ident collection and are NOT pushed onto
+	// bracketStack. Decremented on the matching ')'.
+	lhsGroupDepth int
+
 	// decoratorLine: when we see '@' at line start, the next ident is
 	// the decorator name (a ref). Set to true temporarily.
 	decoratorLine bool
@@ -177,6 +187,7 @@ func (b *builder) run() {
 			b.prevByte = c
 		case c == '(':
 			openPos := b.s.Pos
+			prevPrev := b.prevByte
 			b.s.Pos++
 			b.prevByte = '('
 			if b.paramListPending {
@@ -186,6 +197,13 @@ func (b *builder) run() {
 				b.paramSectionNeedsName = true
 			} else if b.inParamList {
 				b.paramDepth++
+			} else if b.lhsGroupDepth > 0 ||
+				prevPrev == 0 || prevPrev == '\n' || prevPrev == ';' ||
+				b.forVarExpected ||
+				(prevPrev == ',' && (b.inAssignLHS || b.lhsGroupDepth > 0)) {
+				// Tuple-LHS grouping paren. Transparent for ident collection;
+				// do NOT push onto bracketStack (no comprehension check).
+				b.lhsGroupDepth++
 			} else {
 				b.pushBracket('(', openPos)
 			}
@@ -198,6 +216,8 @@ func (b *builder) run() {
 					b.inParamList = false
 					b.paramSectionNeedsName = false
 				}
+			} else if b.lhsGroupDepth > 0 {
+				b.lhsGroupDepth--
 			} else {
 				b.popBracket('(', uint32(b.s.Pos))
 			}
@@ -378,6 +398,7 @@ func (b *builder) endStatement() {
 	b.inImport = false
 	b.inFromImport = false
 	b.fromImportTarget = false
+	b.lhsGroupDepth = 0
 }
 
 func (b *builder) handleIdent(word []byte) {
@@ -532,7 +553,13 @@ func (b *builder) atStatementStartLike() bool {
 	case 0, '\n', ';':
 		return true
 	case ',':
-		return b.inAssignLHS
+		return b.inAssignLHS || b.lhsGroupDepth > 0 || b.forVarExpected
+	case '(':
+		// Paren opened as part of a tuple-LHS grouping at statement start.
+		return b.lhsGroupDepth > 0
+	case '*':
+		// Starred target in a tuple LHS: 'a, *rest = xs' or 'for a, *rest in xs'.
+		return b.inAssignLHS || b.lhsGroupDepth > 0 || b.forVarExpected
 	}
 	return false
 }

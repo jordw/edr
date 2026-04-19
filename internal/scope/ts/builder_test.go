@@ -1120,3 +1120,162 @@ interface Shape {
 			d.FullSpan.EndByte, d.Span.EndByte)
 	}
 }
+
+// TestParse_ClassInterfaceMerging: TS allows `class Foo {}` and
+// `interface Foo {}` to declare-merge — they should share a DeclID
+// after parse so refs-to against one finds references to both. Also
+// covers `class Foo {}` + `type Foo = ...` (less common but same rule).
+func TestParse_ClassInterfaceMerging(t *testing.T) {
+	src := []byte(`class Foo {}
+interface Foo { x: number }
+function use(f: Foo) {
+  return f
+}
+`)
+	r := Parse("a.ts", src)
+	// Find both Foo decls.
+	var foos []*scope.Decl
+	for i := range r.Decls {
+		if r.Decls[i].Name == "Foo" {
+			foos = append(foos, &r.Decls[i])
+		}
+	}
+	if len(foos) < 2 {
+		t.Fatalf("expected >=2 Foo decls; got %d; decls=%v", len(foos), declNames(r))
+	}
+	if foos[0].ID != foos[1].ID {
+		t.Errorf("class Foo and interface Foo have distinct IDs %d vs %d (should merge)",
+			foos[0].ID, foos[1].ID)
+	}
+}
+
+// TestParse_ValueTypeNameCollision: when a value and a type share the
+// same name (`const X = 1; type X = string`), they emit DISTINCT decls
+// — the value in NSValue, the type in NSType. Refs in type position
+// bind to the type decl; refs in value position bind to the value decl.
+func TestParse_ValueTypeNameCollision(t *testing.T) {
+	src := []byte(`const X = 1
+type X = string
+let v = X
+let t: X = "hi"
+`)
+	r := Parse("a.ts", src)
+
+	var constX, typeX *scope.Decl
+	for i := range r.Decls {
+		d := &r.Decls[i]
+		if d.Name != "X" {
+			continue
+		}
+		if d.Kind == scope.KindConst && d.Namespace == scope.NSValue {
+			constX = d
+		} else if d.Kind == scope.KindType && d.Namespace == scope.NSType {
+			typeX = d
+		}
+	}
+	if constX == nil || typeX == nil {
+		t.Fatalf("missing decls: const=%v type=%v\nall decls: %v", constX, typeX, declNames(r))
+	}
+	if constX.ID == typeX.ID {
+		t.Fatalf("const X and type X should have distinct DeclIDs; both are %d", constX.ID)
+	}
+
+	// Find the ref to X in `let v = X` (value position) and `let t: X`
+	// (type position). Assert each binds to the correct decl.
+	refs := refsNamed(r, "X")
+	if len(refs) < 2 {
+		t.Fatalf("expected at least 2 refs to X; got %d", len(refs))
+	}
+	var vRef, tRef *scope.Ref
+	for i := range refs {
+		// Crude positional disambiguation: type ref is after the second `:`.
+		if refs[i].Namespace == scope.NSValue && vRef == nil {
+			vRef = &refs[i]
+		} else if refs[i].Namespace == scope.NSType && tRef == nil {
+			tRef = &refs[i]
+		}
+	}
+	if vRef == nil {
+		t.Errorf("no NSValue ref to X (value position)")
+	} else if vRef.Binding.Decl != constX.ID {
+		t.Errorf("value-position ref bound to %d, want const X %d", vRef.Binding.Decl, constX.ID)
+	}
+	if tRef == nil {
+		t.Errorf("no NSType ref to X (type position)")
+	} else if tRef.Binding.Decl != typeX.ID {
+		t.Errorf("type-position ref bound to %d, want type X %d", tRef.Binding.Decl, typeX.ID)
+	}
+}
+
+// TestParse_ClassDualResident: a class resolves in BOTH namespaces —
+// `new Foo()` (value) and `let f: Foo` (type) must bind to the same
+// DeclID so refs-to finds both uses.
+func TestParse_ClassDualResident(t *testing.T) {
+	src := []byte(`class Foo {}
+const a = new Foo()
+let b: Foo
+`)
+	r := Parse("a.ts", src)
+
+	// After within-file merge, all Foo decls share one ID.
+	var fooID scope.DeclID
+	for i := range r.Decls {
+		if r.Decls[i].Name == "Foo" {
+			if fooID == 0 {
+				fooID = r.Decls[i].ID
+			} else if r.Decls[i].ID != fooID {
+				t.Errorf("class Foo decls have distinct IDs %d vs %d (should merge)",
+					fooID, r.Decls[i].ID)
+			}
+		}
+	}
+	if fooID == 0 {
+		t.Fatalf("no Foo decl found; decls=%v", declNames(r))
+	}
+	refs := refsNamed(r, "Foo")
+	if len(refs) < 2 {
+		t.Fatalf("expected >=2 Foo refs; got %d", len(refs))
+	}
+	for i, ref := range refs {
+		if ref.Binding.Kind != scope.BindResolved {
+			t.Errorf("Foo ref %d not resolved: %+v", i, ref.Binding)
+			continue
+		}
+		if ref.Binding.Decl != fooID {
+			t.Errorf("Foo ref %d bound to %d, want %d", i, ref.Binding.Decl, fooID)
+		}
+	}
+}
+
+// TestParse_InterfaceNSType: interface Foo emits a KindInterface decl
+// in NSType only (no shadow NSValue). Refs bind to it via NSType lookup.
+func TestParse_InterfaceNSType(t *testing.T) {
+	src := []byte(`interface Foo { x: number }
+function use(f: Foo) { return f }
+`)
+	r := Parse("a.ts", src)
+	var foo *scope.Decl
+	for i := range r.Decls {
+		if r.Decls[i].Name == "Foo" && r.Decls[i].Kind == scope.KindInterface {
+			foo = &r.Decls[i]
+			break
+		}
+	}
+	if foo == nil {
+		t.Fatalf("no interface Foo decl; decls=%v", declNames(r))
+	}
+	if foo.Namespace != scope.NSType {
+		t.Errorf("interface Foo namespace = %q, want NSType", foo.Namespace)
+	}
+	// The `f: Foo` ref should bind.
+	refs := refsNamed(r, "Foo")
+	if len(refs) == 0 {
+		t.Fatalf("no Foo ref found")
+	}
+	if refs[0].Binding.Kind != scope.BindResolved {
+		t.Errorf("Foo ref not resolved: %+v", refs[0].Binding)
+	}
+	if refs[0].Binding.Decl != foo.ID {
+		t.Errorf("Foo ref bound to %d, want %d", refs[0].Binding.Decl, foo.ID)
+	}
+}

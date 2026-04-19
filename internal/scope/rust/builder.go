@@ -30,8 +30,10 @@
 // v1 limitations:
 //   - Complex patterns (tuple, slice, struct destructuring) only emit
 //     the first binder. Subsequent binders are collected as refs.
-//   - No trait resolution: `impl Trait for T` does not materialize
-//     trait methods on T.
+//   - Limited trait resolution: `self.X` inside `impl Trait for T { }`
+//     can reach trait-declared methods (including default impls) when
+//     the trait is defined in the same file. Cross-file trait lookup
+//     and external trait-bound dispatch are out of scope for v1.
 //   - No lifetime refs; only lifetime decls in generic param lists.
 //   - No procedural-macro expansion; macro bodies are opaque.
 //   - No type inference: `let x = expr` emits x as KindVar, no type.
@@ -46,6 +48,7 @@ import (
 
 	"github.com/jordw/edr/internal/lexkit"
 	"github.com/jordw/edr/internal/scope"
+	"github.com/jordw/edr/internal/scope/builtins"
 )
 
 // Parse extracts a scope.Result from a Rust source buffer.
@@ -56,6 +59,7 @@ func Parse(file string, src []byte) *scope.Result {
 		s:                    lexkit.New(src),
 		pendingOwnerDecl:     -1,
 		pendingImplTargetIdx: -1,
+		implForRefIdx:        -1,
 	}
 	b.openScope(scope.ScopeFile, 0)
 	b.stmtStart = true
@@ -78,6 +82,11 @@ type scopeEntry struct {
 	// decl this impl scope targets, or -1 if not applicable. Used by
 	// self.X resolution.
 	implTargetDeclIdx int
+	// implTraitName is the simple trait name when this scope is an
+	// `impl Trait for Type { }` body, or empty otherwise. Used by
+	// self.X resolution to reach trait-declared methods (including
+	// trait default impls not overridden in this impl block).
+	implTraitName string
 }
 
 type builder struct {
@@ -115,10 +124,20 @@ type builder struct {
 	// openScope.
 	pendingImplTargetIdx int
 
+	// pendingImplTraitName is the simple trait name for an upcoming
+	// `impl Trait for Type { }` body, or empty. Consumed by openScope.
+	pendingImplTraitName string
+
 	// implRefStartIdx is the index into res.Refs at which we started
 	// collecting refs emitted between `impl` and the opening `{`. Used
 	// to find the last ref that looks like the target type name.
 	implRefStartIdx int
+
+	// implForRefIdx is the index into res.Refs at the moment the `for`
+	// keyword was seen inside an impl header (splitting `Trait` refs
+	// from `Type` refs in `impl Trait for Type`). -1 when not in an
+	// impl header or when the impl has no `for` clause.
+	implForRefIdx int
 
 	// paramListPending: after `fn name` (with optional generics), the
 	// next `(` starts params.
@@ -674,6 +693,7 @@ func (b *builder) handleIdent(word []byte) {
 		b.pendingFullStart = startByte + 1
 		b.genericParamsPending = true
 		b.implRefStartIdx = len(b.res.Refs)
+		b.implForRefIdx = -1
 		b.prevByte = 'k'
 		return
 	case "mod":
@@ -737,6 +757,14 @@ func (b *builder) handleIdent(word []byte) {
 		b.prevByte = 'k'
 		return
 	case "if", "else", "while", "for", "loop", "unsafe", "move", "async":
+		// Inside an impl header (between `impl` and `{`), `for` splits
+		// the trait name from the target type. Record the split point so
+		// resolveImplTarget can pick out the trait separately.
+		if name == "for" && b.pendingScopeIsImpl && b.implRefStartIdx >= 0 {
+			b.implForRefIdx = len(b.res.Refs)
+			b.prevByte = 'k'
+			return
+		}
 		b.controlBlockExpected = true
 		b.prevByte = 'k'
 		return
@@ -1089,21 +1117,46 @@ func (b *builder) resolveImplTarget() {
 	if b.implRefStartIdx < 0 || b.implRefStartIdx > len(b.res.Refs) {
 		return
 	}
-	slice := b.res.Refs[b.implRefStartIdx:]
-	// Scan right-to-left for the last uppercase-start ident (type-ish name).
+	// When `for` was seen in the impl header, refs before it are the
+	// trait path (last one = simple trait name), refs after are the
+	// target type path. Otherwise the single path is the target type.
+	traitSliceEnd := len(b.res.Refs)
+	targetSliceStart := b.implRefStartIdx
+	if b.implForRefIdx >= b.implRefStartIdx && b.implForRefIdx <= len(b.res.Refs) {
+		traitSliceEnd = b.implForRefIdx
+		targetSliceStart = b.implForRefIdx
+	} else {
+		// No `for`: no trait.
+		traitSliceEnd = b.implRefStartIdx
+	}
+	// Simple trait name: last ref before `for`.
+	var trait string
+	if traitSliceEnd > b.implRefStartIdx {
+		traitSlice := b.res.Refs[b.implRefStartIdx:traitSliceEnd]
+		for i := len(traitSlice) - 1; i >= 0; i-- {
+			n := traitSlice[i].Name
+			if n == "" {
+				continue
+			}
+			trait = n
+			break
+		}
+	}
+	// Simple target type name: last ref after `for` (or last ref overall
+	// if no `for`).
 	var target string
-	for i := len(slice) - 1; i >= 0; i-- {
-		n := slice[i].Name
+	targetSlice := b.res.Refs[targetSliceStart:]
+	for i := len(targetSlice) - 1; i >= 0; i-- {
+		n := targetSlice[i].Name
 		if n == "" {
 			continue
 		}
-		// Skip property_access-marked refs (path components like `foo::Bar` —
-		// only the last segment is the type, and it was emitted as a
-		// property-access ref). Take it.
 		target = n
 		break
 	}
 	b.implRefStartIdx = -1
+	b.implForRefIdx = -1
+	b.pendingImplTraitName = trait
 	if target == "" {
 		return
 	}
@@ -1138,6 +1191,8 @@ func (b *builder) openScope(kind scope.ScopeKind, startByte uint32) {
 	b.pendingOwnerDecl = -1
 	implTarget := b.pendingImplTargetIdx
 	b.pendingImplTargetIdx = -1
+	implTrait := b.pendingImplTraitName
+	b.pendingImplTraitName = ""
 	b.stack.Push(lexkit.Scope[scopeEntry]{
 		Data: scopeEntry{
 			kind:                 kind,
@@ -1146,6 +1201,7 @@ func (b *builder) openScope(kind scope.ScopeKind, startByte uint32) {
 			savedStructDepth:     b.structDepth,
 			ownerDeclIdx:         owner,
 			implTargetDeclIdx:    implTarget,
+			implTraitName:        implTrait,
 		},
 		SymIdx:   -1,
 		OpenLine: b.s.Line,
@@ -1290,43 +1346,25 @@ func (b *builder) emitRef(name string, span scope.Span) {
 // Mirrors TS tryResolveThisField.
 func (b *builder) tryResolveSelfField(name string, span scope.Span) bool {
 	entries := b.stack.Entries()
-	targetIdx := -1
+	// Find the innermost enclosing impl (ScopeClass with implTargetDeclIdx)
+	// or trait body (ScopeInterface). This is the "method container" whose
+	// own members we try first.
+	var container scope.ScopeID
+	containerIdx := -1
 	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].Data.kind == scope.ScopeClass && entries[i].Data.implTargetDeclIdx >= 0 {
-			targetIdx = entries[i].Data.implTargetDeclIdx
+		e := entries[i].Data
+		if e.kind == scope.ScopeClass && e.implTargetDeclIdx >= 0 {
+			container = e.id
+			containerIdx = i
+			break
+		}
+		if e.kind == scope.ScopeInterface {
+			container = e.id
+			containerIdx = i
 			break
 		}
 	}
-	if targetIdx < 0 || targetIdx >= len(b.res.Decls) {
-		return false
-	}
-	targetDecl := &b.res.Decls[targetIdx]
-	// The target struct/enum's body scope is a ScopeClass whose span starts
-	// at or after the target decl's Span.EndByte and is contained within
-	// targetDecl.FullSpan.
-	var targetScope scope.ScopeID
-	for i := range b.res.Scopes {
-		sc := &b.res.Scopes[i]
-		if sc.Kind != scope.ScopeClass {
-			continue
-		}
-		if sc.Span.StartByte < targetDecl.Span.EndByte {
-			continue
-		}
-		if targetDecl.FullSpan.EndByte > 0 && sc.Span.StartByte >= targetDecl.FullSpan.EndByte {
-			continue
-		}
-		targetScope = sc.ID
-		break
-	}
-	if targetScope == 0 {
-		return false
-	}
-	for i := range b.res.Decls {
-		d := &b.res.Decls[i]
-		if d.Scope != targetScope || d.Namespace != scope.NSField || d.Name != name {
-			continue
-		}
+	emit := func(d *scope.Decl, reason string) bool {
 		scopeID := b.currentScope()
 		locID := hashLoc(b.file, span, name)
 		b.res.Refs = append(b.res.Refs, scope.Ref{
@@ -1339,10 +1377,98 @@ func (b *builder) tryResolveSelfField(name string, span scope.Span) bool {
 			Binding: scope.RefBinding{
 				Kind:   scope.BindResolved,
 				Decl:   d.ID,
-				Reason: "self_dot_field",
+				Reason: reason,
 			},
 		})
 		return true
+	}
+	// 1) Methods (or fields, for interfaces) defined directly in the
+	// enclosing impl/trait body.
+	if container != 0 {
+		for i := range b.res.Decls {
+			d := &b.res.Decls[i]
+			if d.Scope != container || d.Namespace != scope.NSField || d.Name != name {
+				continue
+			}
+			return emit(d, "self_dot_field")
+		}
+	}
+	// 2) Fields of the impl target struct/enum (existing behavior).
+	if containerIdx >= 0 && entries[containerIdx].Data.implTargetDeclIdx >= 0 {
+		targetIdx := entries[containerIdx].Data.implTargetDeclIdx
+		if targetIdx < len(b.res.Decls) {
+			targetDecl := &b.res.Decls[targetIdx]
+			// The target struct/enum's body scope is a ScopeClass whose span
+			// starts at or after the target decl's Span.EndByte and is
+			// contained within targetDecl.FullSpan.
+			var targetScope scope.ScopeID
+			for i := range b.res.Scopes {
+				sc := &b.res.Scopes[i]
+				if sc.Kind != scope.ScopeClass {
+					continue
+				}
+				if sc.Span.StartByte < targetDecl.Span.EndByte {
+					continue
+				}
+				if targetDecl.FullSpan.EndByte > 0 && sc.Span.StartByte >= targetDecl.FullSpan.EndByte {
+					continue
+				}
+				targetScope = sc.ID
+				break
+			}
+			if targetScope != 0 {
+				for i := range b.res.Decls {
+					d := &b.res.Decls[i]
+					if d.Scope != targetScope || d.Namespace != scope.NSField || d.Name != name {
+						continue
+					}
+					return emit(d, "self_dot_field")
+				}
+			}
+		}
+	}
+	// 3) Trait-declared methods: if this is an `impl Trait for Type` body,
+	// find the trait decl (same file) and look inside its body for an
+	// NSField method by this name. Same-file only; cross-file trait
+	// lookup is out of scope for v1.
+	if containerIdx >= 0 {
+		traitName := entries[containerIdx].Data.implTraitName
+		if traitName != "" {
+			var traitScope scope.ScopeID
+			for i := range b.res.Decls {
+				d := &b.res.Decls[i]
+				if d.Scope != 1 || d.Kind != scope.KindInterface || d.Name != traitName {
+					continue
+				}
+				// Find the trait's body scope: first ScopeInterface whose
+				// span starts at/after the trait decl's ident span end and
+				// is contained within its FullSpan.
+				for j := range b.res.Scopes {
+					sc := &b.res.Scopes[j]
+					if sc.Kind != scope.ScopeInterface {
+						continue
+					}
+					if sc.Span.StartByte < d.Span.EndByte {
+						continue
+					}
+					if d.FullSpan.EndByte > 0 && sc.Span.StartByte >= d.FullSpan.EndByte {
+						continue
+					}
+					traitScope = sc.ID
+					break
+				}
+				break
+			}
+			if traitScope != 0 {
+				for i := range b.res.Decls {
+					d := &b.res.Decls[i]
+					if d.Scope != traitScope || d.Namespace != scope.NSField || d.Name != name {
+						continue
+					}
+					return emit(d, "trait_method")
+				}
+			}
+		}
 	}
 	return false
 }
@@ -1400,7 +1526,7 @@ func (b *builder) resolveRefs() {
 	}
 	for i := range b.res.Refs {
 		r := &b.res.Refs[i]
-		if r.Binding.Reason == "property_access" || r.Binding.Reason == "self_dot_field" {
+		if r.Binding.Reason == "property_access" || r.Binding.Reason == "self_dot_field" || r.Binding.Reason == "trait_method" {
 			continue
 		}
 		if tryNS(r, r.Namespace) {
@@ -1450,7 +1576,7 @@ func (b *builder) resolveRefs() {
 		if resolved {
 			continue
 		}
-		if _, ok := rustBuiltins[r.Name]; ok {
+		if builtins.Rust.Has(r.Name) {
 			r.Binding = scope.RefBinding{
 				Kind:   scope.BindResolved,
 				Decl:   hashBuiltinDecl(r.Name),
@@ -1463,33 +1589,6 @@ func (b *builder) resolveRefs() {
 			Reason: "missing_import",
 		}
 	}
-}
-
-// rustBuiltins is a minimal inline set of Rust prelude names — enough to
-// keep test noise down. Not exhaustive. Extend as real code surfaces gaps.
-var rustBuiltins = map[string]struct{}{
-	// Primitive types
-	"bool": {}, "char": {}, "str": {},
-	"i8": {}, "i16": {}, "i32": {}, "i64": {}, "i128": {}, "isize": {},
-	"u8": {}, "u16": {}, "u32": {}, "u64": {}, "u128": {}, "usize": {},
-	"f32": {}, "f64": {},
-	// Core types / enums from prelude
-	"String": {}, "Vec": {}, "Box": {}, "Option": {}, "Result": {},
-	"Some": {}, "None": {}, "Ok": {}, "Err": {},
-	// Common traits
-	"Copy": {}, "Clone": {}, "Debug": {}, "Default": {}, "Drop": {},
-	"Eq": {}, "Hash": {}, "Ord": {}, "PartialEq": {}, "PartialOrd": {},
-	"Send": {}, "Sized": {}, "Sync": {}, "ToString": {}, "Into": {},
-	"From": {}, "TryInto": {}, "TryFrom": {}, "Iterator": {},
-	"IntoIterator": {}, "Fn": {}, "FnMut": {}, "FnOnce": {},
-	"AsRef": {}, "AsMut": {}, "Deref": {}, "DerefMut": {},
-	// Common macros
-	"println": {}, "print": {}, "eprintln": {}, "eprint": {},
-	"format": {}, "write": {}, "writeln": {}, "vec": {},
-	"assert": {}, "assert_eq": {}, "assert_ne": {}, "panic": {},
-	"todo": {}, "unreachable": {}, "dbg": {}, "matches": {},
-	// Common std types
-	"HashMap": {}, "HashSet": {}, "BTreeMap": {}, "BTreeSet": {},
 }
 
 func mkSpan(start, end uint32) scope.Span {

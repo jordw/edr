@@ -15,8 +15,16 @@
 //   - `var x = expr` local type inference: x is emitted as KindVar with
 //     no type tracked. Same for diamond operator `new ArrayList<>()`.
 //   - Inheritance resolution: `extends` / `implements` types are emitted
-//     as refs, but members of supertypes are not injected into the
-//     subclass scope for this.X resolution.
+//     as refs. resolveRefs walks ONE level of same-file inheritance for
+//     unqualified and `this.X` field lookups: if a subclass's own fields
+//     do not contain name X, its direct supertype's fields (defined in
+//     the same file) are checked. v1 punts:
+//       * Multi-level chains (`C extends P extends G`) — fields on G
+//         are NOT resolved from C.
+//       * Cross-file supertypes — if the supertype class is not declared
+//         in this file, the ref stays unresolved.
+//       * Interface default methods and abstract method inheritance.
+//     Reason code for successful inherited lookups is "inherited_field".
 //   - Sealed classes, switch expressions, and pattern matching beyond
 //     basic scope machinery (no special handling for patterns / yield).
 //   - Lambda expressions push a function scope on '(' … ')' … '->' (like
@@ -45,10 +53,13 @@ import (
 // pass the same path the caller will use when querying.
 func Parse(file string, src []byte) *scope.Result {
 	b := &builder{
-		file:             file,
-		res:              &scope.Result{File: file},
-		s:                lexkit.New(src),
-		pendingOwnerDecl: -1,
+		file:                file,
+		res:                 &scope.Result{File: file},
+		s:                   lexkit.New(src),
+		pendingOwnerDecl:    -1,
+		pendingClassDeclIdx: -1,
+		classSuperTypes:     make(map[int][]string),
+		classBodyScope:      make(map[int]scope.ScopeID),
 	}
 	b.openScope(scope.ScopeFile, 0)
 	b.stmtStart = true
@@ -171,6 +182,38 @@ type builder struct {
 	// like a function-body statement (type-then-name local var).
 	inForHeader bool
 	forHeaderDepth int
+
+	// inSuperTypes: between an `extends` / `implements` keyword in a
+	// class/interface header and the opening `{` of its body. Idents
+	// encountered here are supertype names and are recorded against
+	// the pending class decl so resolveRefs can walk one level of
+	// inheritance (same-file only) for field lookup.
+	inSuperTypes bool
+
+	// superTypeNeedsName: true at the start of a supertype section
+	// (after `extends` / `implements` or a top-level `,`). Only the
+	// first ident in the section is recorded as the supertype name —
+	// subsequent idents inside `<...>` type args are ignored for
+	// supertype purposes.
+	superTypeNeedsName bool
+
+	// pendingClassDeclIdx: index in res.Decls of the class/interface
+	// decl currently being parsed (between its name and its body `{`).
+	// -1 when not in a class header. Used to associate supertype names
+	// with the right class.
+	pendingClassDeclIdx int
+
+	// classSuperTypes maps a class/interface decl's index in res.Decls
+	// to the list of supertype names declared via extends/implements
+	// in the same file. Used by resolveRefs for one-level same-file
+	// inheritance lookup.
+	classSuperTypes map[int][]string
+
+	// classBodyScope maps a class/interface decl's index in res.Decls
+	// to the ScopeID of its body scope. Populated when the body `{`
+	// opens. Used by resolveRefs to find a supertype's class body
+	// scope and index its fields.
+	classBodyScope map[int]scope.ScopeID
 }
 
 type pendingParam struct {
@@ -227,6 +270,11 @@ func (b *builder) run() {
 			b.pendingGenerics = nil
 			b.anonInnerExpected = false
 			b.forHeaderExpected = false
+			// Safety: clear class-header state if we somehow hit `;`
+			// (e.g. malformed source or `class Foo;` forward decls).
+			b.inSuperTypes = false
+			b.superTypeNeedsName = false
+			b.pendingClassDeclIdx = -1
 		case c == '(':
 			b.s.Pos++
 			b.parenVarStack = append(b.parenVarStack, b.localVarDeclKind)
@@ -304,6 +352,11 @@ func (b *builder) run() {
 			// typePositionIdent so the next ident is another var name.
 			if b.localVarDeclKind != "" && !b.inParamList && !b.inGenericParams {
 				b.typePositionIdent = true
+			}
+			// Supertype list (`implements A, B, C`) — re-arm to capture
+			// the next ident as the next supertype name.
+			if b.inSuperTypes && !b.inGenericParams {
+				b.superTypeNeedsName = true
 			}
 		case c == '<':
 			if b.genericParamsExpected {
@@ -481,8 +534,18 @@ func (b *builder) handleIdent(word []byte) {
 		return
 	case "return", "if", "else", "while", "do", "switch", "case",
 		"break", "continue", "throw", "try", "catch", "finally",
-		"instanceof", "assert", "throws", "extends", "implements",
+		"instanceof", "assert", "throws",
 		"yield", "permits":
+		b.prevByte = 'k'
+		return
+	case "extends", "implements":
+		// Inside a class/interface header (pendingClassDeclIdx is set),
+		// idents that follow until the body `{` are supertype names —
+		// capture them for one-level same-file inheritance resolution.
+		if b.pendingClassDeclIdx >= 0 {
+			b.inSuperTypes = true
+			b.superTypeNeedsName = true
+		}
 		b.prevByte = 'k'
 		return
 	case "new":
@@ -550,6 +613,17 @@ func (b *builder) handleIdent(word []byte) {
 	b.prevIdentIsThis = false
 	b.prevIdentIsSuper = false
 
+	// Supertype capture: in a class header after `extends` / `implements`,
+	// the first ident per comma-section is the supertype's simple name.
+	// Record it against the pending class decl, then fall through so the
+	// ident is still emitted as a normal ref (existing behavior).
+	if b.inSuperTypes && b.superTypeNeedsName && b.pendingClassDeclIdx >= 0 &&
+		!b.inGenericParams {
+		b.classSuperTypes[b.pendingClassDeclIdx] = append(
+			b.classSuperTypes[b.pendingClassDeclIdx], name)
+		b.superTypeNeedsName = false
+	}
+
 	// Generic type-param list: first ident per section becomes a pending
 	// type decl. `T extends Foo` — `extends` is a keyword, so `Foo`
 	// arrives here with genericSectionNeedsName=false and is emitted as
@@ -600,6 +674,11 @@ func (b *builder) handleIdent(word []byte) {
 	// declContext set (class / interface / enum / record name follows).
 	if b.declContext != "" {
 		kind := b.declContext
+		// Record the decl index so any following `extends` / `implements`
+		// idents can be attached to this class for inheritance resolution.
+		if kind == scope.KindClass || kind == scope.KindInterface || kind == scope.KindEnum {
+			b.pendingClassDeclIdx = len(b.res.Decls)
+		}
 		b.emitDecl(name, kind, mkSpan(startByte, endByte))
 		b.declContext = ""
 		b.genericParamsExpected = true
@@ -771,6 +850,16 @@ func (b *builder) handleOpenBrace() {
 		kind = scope.ScopeClass
 	}
 	b.openScope(kind, uint32(b.s.Pos-1))
+	// If we just opened a class/interface body with a pending class decl,
+	// map the decl index to this body scope for later inheritance lookup,
+	// and clear the class-header state.
+	if (kind == scope.ScopeClass || kind == scope.ScopeInterface) &&
+		b.pendingClassDeclIdx >= 0 {
+		b.classBodyScope[b.pendingClassDeclIdx] = b.currentScope()
+		b.pendingClassDeclIdx = -1
+		b.inSuperTypes = false
+		b.superTypeNeedsName = false
+	}
 	// Flush generics into the newly opened scope (class or method).
 	if kind == scope.ScopeClass || kind == scope.ScopeInterface ||
 		kind == scope.ScopeFunction {
@@ -1007,7 +1096,12 @@ func (b *builder) emitPropertyRef(name string, span scope.Span) {
 }
 
 // tryResolveThisField attempts to resolve `this.name` or `super.name`
-// at `span` against the nearest enclosing class's NSField decls.
+// at `span` against the nearest enclosing class's NSField decls. If a
+// match is found it emits a resolved ref and returns true. If no match
+// is found within the class's own fields but an enclosing class exists,
+// it emits a pending NSField ref (marked "this_dot_field_pending") so
+// resolveRefs can try one level of same-file supertype inheritance,
+// and returns true. Returns false only if no enclosing class exists.
 func (b *builder) tryResolveThisField(name string, span scope.Span) bool {
 	entries := b.stack.Entries()
 	var classScope scope.ScopeID
@@ -1043,11 +1137,33 @@ func (b *builder) tryResolveThisField(name string, span scope.Span) bool {
 		})
 		return true
 	}
-	return false
+	// Not found locally; emit a pending NSField ref for resolveRefs to
+	// try one level of same-file supertype inheritance.
+	scopeID := b.currentScope()
+	locID := hashLoc(b.file, span, name)
+	b.res.Refs = append(b.res.Refs, scope.Ref{
+		LocID:     locID,
+		File:      b.file,
+		Span:      span,
+		Name:      name,
+		Namespace: scope.NSField,
+		Scope:     scopeID,
+		Binding: scope.RefBinding{
+			Kind:   scope.BindUnresolved,
+			Reason: "this_dot_field_pending",
+		},
+	})
+	return true
 }
 
 // resolveRefs binds each Ref to a Decl via scope-chain walk, falling
 // back to signature-position generics, Java builtins, then unresolved.
+//
+// One level of same-file inheritance is resolved here: for unqualified
+// refs and `this.X` refs inside a subclass whose own fields don't have
+// X, the direct supertype's fields (same file) are checked and bound
+// with Reason "inherited_field". Multi-level chains and cross-file
+// supertypes are out of scope for v1.
 func (b *builder) resolveRefs() {
 	parent := make(map[scope.ScopeID]scope.ScopeID, len(b.res.Scopes))
 	for _, s := range b.res.Scopes {
@@ -1101,9 +1217,80 @@ func (b *builder) resolveRefs() {
 		nearestClass[s.ID] = found
 	}
 
+	// classNameToBodyScope maps a class/interface's simple name to the
+	// ScopeID of its body scope. Used to look up a supertype's fields
+	// by name during one-level inheritance resolution. Duplicate names
+	// (multiple classes with the same simple name in one file) resolve
+	// to the first declared — v1 punt.
+	classNameToBodyScope := make(map[string]scope.ScopeID, len(b.classBodyScope))
+	for declIdx, bodyScope := range b.classBodyScope {
+		if declIdx < 0 || declIdx >= len(b.res.Decls) {
+			continue
+		}
+		name := b.res.Decls[declIdx].Name
+		if _, ok := classNameToBodyScope[name]; !ok {
+			classNameToBodyScope[name] = bodyScope
+		}
+	}
+	// classScopeSupers maps a class body scope ID to the list of
+	// supertype body scope IDs declared via extends/implements (same
+	// file). A supertype name that isn't declared in this file is
+	// omitted (no cross-file resolution in v1).
+	classScopeSupers := make(map[scope.ScopeID][]scope.ScopeID, len(b.classBodyScope))
+	for declIdx, bodyScope := range b.classBodyScope {
+		names := b.classSuperTypes[declIdx]
+		if len(names) == 0 {
+			continue
+		}
+		supers := make([]scope.ScopeID, 0, len(names))
+		for _, n := range names {
+			if s, ok := classNameToBodyScope[n]; ok {
+				supers = append(supers, s)
+			}
+		}
+		if len(supers) > 0 {
+			classScopeSupers[bodyScope] = supers
+		}
+	}
+
+	// tryInheritedField walks one level of same-file supertypes of
+	// classScope looking for an NSField decl named `name`. Returns the
+	// decl if found, nil otherwise. Does NOT recurse — v1 is one level.
+	tryInheritedField := func(classScope scope.ScopeID, name string) *scope.Decl {
+		supers, ok := classScopeSupers[classScope]
+		if !ok {
+			return nil
+		}
+		for _, sup := range supers {
+			if d, ok := classField[key{scope: sup, name: name, ns: scope.NSField}]; ok {
+				return d
+			}
+		}
+		return nil
+	}
+
 	for i := range b.res.Refs {
 		r := &b.res.Refs[i]
 		if r.Binding.Reason == "property_access" || r.Binding.Reason == "this_dot_field" {
+			continue
+		}
+		// `this.X` / `super.X` where X wasn't found in the current
+		// class's own fields — try one level of same-file inheritance.
+		if r.Binding.Reason == "this_dot_field_pending" {
+			if cls := nearestClass[r.Scope]; cls != 0 {
+				if d := tryInheritedField(cls, r.Name); d != nil {
+					r.Binding = scope.RefBinding{
+						Kind:   scope.BindResolved,
+						Decl:   d.ID,
+						Reason: "inherited_field",
+					}
+					continue
+				}
+			}
+			r.Binding = scope.RefBinding{
+				Kind:   scope.BindUnresolved,
+				Reason: "missing_import",
+			}
 			continue
 		}
 		cur := r.Scope
@@ -1146,6 +1333,19 @@ func (b *builder) resolveRefs() {
 						Kind:   scope.BindResolved,
 						Decl:   d.ID,
 						Reason: "implicit_this_field",
+					}
+					resolved = true
+				}
+			}
+		}
+		if !resolved {
+			// Inherited implicit-this: one level of same-file supertypes.
+			if cls := nearestClass[r.Scope]; cls != 0 {
+				if d := tryInheritedField(cls, r.Name); d != nil {
+					r.Binding = scope.RefBinding{
+						Kind:   scope.BindResolved,
+						Decl:   d.ID,
+						Reason: "inherited_field",
 					}
 					resolved = true
 				}

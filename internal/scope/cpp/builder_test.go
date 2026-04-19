@@ -179,11 +179,163 @@ T max(T a, T b) {
 }
 `)
 	r := Parse("a.cpp", src)
-	// Inside template<...>, `T` is a template param — v1 does not emit
-	// it as a decl. We at least expect `max` to emit and params to be
-	// captured.
 	if findDecl(r, "max") == nil {
 		t.Errorf("max decl missing; decls=%v", declNames(r))
+	}
+}
+
+// TestParse_TemplateFunctionParam: template<typename T> void f(T x) {}
+// emits T as a KindType decl inside the function scope; refs to T in
+// the body resolve to it (not missing_import).
+func TestParse_TemplateFunctionParam(t *testing.T) {
+	src := []byte(`template<typename T>
+void foo(T x) {
+	T local;
+}
+`)
+	r := Parse("a.cpp", src)
+	tdecl := findDecl(r, "T")
+	if tdecl == nil {
+		t.Fatalf("template param T not emitted as decl; decls=%v", declNames(r))
+	}
+	if tdecl.Kind != scope.KindType {
+		t.Errorf("T: kind=%s want type", tdecl.Kind)
+	}
+	foo := findDecl(r, "foo")
+	if foo == nil {
+		t.Fatalf("foo decl missing")
+	}
+	// T decl should live in the function scope (child of file scope),
+	// not in file scope directly.
+	if tdecl.Scope == foo.Scope {
+		t.Errorf("T should be in function body scope, not same scope as foo (%d)", foo.Scope)
+	}
+	// The body ref `T local` — the T ref should resolve to the template
+	// param.
+	var bodyTRef *scope.Ref
+	for i := range r.Refs {
+		if r.Refs[i].Name == "T" && r.Refs[i].Span.StartByte > foo.Span.EndByte {
+			bodyTRef = &r.Refs[i]
+			break
+		}
+	}
+	if bodyTRef == nil {
+		t.Fatalf("body T ref missing; refs=%+v", r.Refs)
+	}
+	if bodyTRef.Binding.Kind != scope.BindResolved {
+		t.Errorf("body T ref unresolved: %+v", bodyTRef.Binding)
+	}
+	if bodyTRef.Binding.Decl != tdecl.ID {
+		t.Errorf("body T ref bound to %x, want template param %x", bodyTRef.Binding.Decl, tdecl.ID)
+	}
+}
+
+// TestParse_TemplateClassParams: multiple template params become
+// KindType decls inside the class scope.
+func TestParse_TemplateClassParams(t *testing.T) {
+	src := []byte(`template<typename K, typename V>
+class Map {
+	K key() const;
+};
+`)
+	r := Parse("a.cpp", src)
+	for _, name := range []string{"K", "V"} {
+		d := findDecl(r, name)
+		if d == nil {
+			t.Errorf("template param %q not emitted as decl; decls=%v", name, declNames(r))
+			continue
+		}
+		if d.Kind != scope.KindType {
+			t.Errorf("%q: kind=%s want type", name, d.Kind)
+		}
+	}
+	mapCls := findDecl(r, "Map")
+	if mapCls == nil {
+		t.Fatalf("Map class missing")
+	}
+	// The K ref in `K key()` inside the class body should resolve.
+	var kRef *scope.Ref
+	for i := range r.Refs {
+		if r.Refs[i].Name == "K" {
+			kRef = &r.Refs[i]
+			break
+		}
+	}
+	if kRef == nil {
+		t.Fatalf("K ref missing")
+	}
+	if kRef.Binding.Kind != scope.BindResolved {
+		t.Errorf("K ref should resolve to template param; got %+v", kRef.Binding)
+	}
+}
+
+// TestParse_ClassFields: `int x; double y;` inside a class body emit
+// as KindField in NSField.
+func TestParse_ClassFields(t *testing.T) {
+	src := []byte(`class Point {
+public:
+	int x;
+	double y;
+};
+`)
+	r := Parse("a.cpp", src)
+	for _, name := range []string{"x", "y"} {
+		d := findDecl(r, name)
+		if d == nil {
+			t.Errorf("field %q not emitted; decls=%v", name, declNames(r))
+			continue
+		}
+		if d.Kind != scope.KindField {
+			t.Errorf("%q: kind=%s want field", name, d.Kind)
+		}
+		if d.Namespace != scope.NSField {
+			t.Errorf("%q: namespace=%s want field", name, d.Namespace)
+		}
+	}
+}
+
+// TestParse_ClassCommaFields: `int a, b, c;` inside a class emits all
+// three as KindField.
+func TestParse_ClassCommaFields(t *testing.T) {
+	src := []byte(`class C {
+	int a, b, c;
+};
+`)
+	r := Parse("a.cpp", src)
+	for _, name := range []string{"a", "b", "c"} {
+		d := findDecl(r, name)
+		if d == nil {
+			t.Errorf("field %q not emitted; decls=%v", name, declNames(r))
+			continue
+		}
+		if d.Kind != scope.KindField {
+			t.Errorf("%q: kind=%s want field", name, d.Kind)
+		}
+	}
+}
+
+// TestParse_ClassMethodVsField: a method and a field in the same class
+// each get the right DeclKind.
+func TestParse_ClassMethodVsField(t *testing.T) {
+	src := []byte(`class C {
+	int f();
+	int x;
+};
+`)
+	r := Parse("a.cpp", src)
+	f := findDecl(r, "f")
+	if f == nil {
+		t.Fatalf("f decl missing; decls=%v", declNames(r))
+	}
+	if f.Kind != scope.KindMethod {
+		t.Errorf("f: kind=%s want method", f.Kind)
+	}
+	x := findDecl(r, "x")
+	if x == nil {
+		t.Fatalf("x decl missing; decls=%v", declNames(r))
+	}
+	if x.Kind != scope.KindField {
+		t.Errorf("x: kind=%s want field", x.Kind)
 	}
 }
 
@@ -204,5 +356,31 @@ func TestParse_FullSpan(t *testing.T) {
 	if foo.FullSpan.EndByte <= foo.Span.EndByte {
 		t.Errorf("FullSpan.End=%d should be > Span.End=%d (covers body)",
 			foo.FullSpan.EndByte, foo.Span.EndByte)
+	}
+}
+
+// TestParse_Builtins: std types under `using namespace std` bind as
+// builtins rather than BindUnresolved missing_import.
+func TestParse_Builtins(t *testing.T) {
+	src := []byte(`using namespace std;
+void f() {
+    vector<int> v;
+    cout << v.size();
+}
+`)
+	r := Parse("a.cpp", src)
+	for _, name := range []string{"vector", "cout"} {
+		refs := refsNamed(r, name)
+		if len(refs) == 0 {
+			t.Errorf("no ref to builtin %q; refs=%+v", name, r.Refs)
+			continue
+		}
+		if refs[0].Binding.Kind != scope.BindResolved {
+			t.Errorf("%q not resolved: %+v", name, refs[0].Binding)
+			continue
+		}
+		if refs[0].Binding.Reason != "builtin" {
+			t.Errorf("%q reason = %q, want \"builtin\"", name, refs[0].Binding.Reason)
+		}
 	}
 }

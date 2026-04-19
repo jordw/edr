@@ -14,9 +14,11 @@
 //   - Extension-function receiver binding: `fun List<Int>.sum()` — the
 //     receiver type emits as a ref; `sum` is a plain KindFunction at the
 //     declaring scope. No receiver scope is pushed.
-//   - Single-expression functions `fun f(x: Int) = x * x` — we emit the
-//     function decl but do NOT push a scope; the params end up as refs
-//     in the enclosing scope. Block-body functions are correct.
+//   - Single-expression functions `fun f(x: Int) = x * x` — open a
+//     function scope on `=` (unless the RHS is a brace lambda) and
+//     close it at the next top-level newline. Multi-line bodies that
+//     continue past a newline (`= \n    x * x`) are handled only for
+//     the single-line case.
 //   - `by` delegation: `val x by lazy { 42 }` — the delegate lambda's
 //     contents are parsed, but we don't treat `lazy` specially.
 //   - Destructuring `val (a, b) = pair` — emits only the first ident.
@@ -41,6 +43,7 @@ import (
 
 	"github.com/jordw/edr/internal/lexkit"
 	"github.com/jordw/edr/internal/scope"
+	"github.com/jordw/edr/internal/scope/builtins"
 )
 
 // Parse extracts a scope.Result from a Kotlin source buffer. file is the
@@ -92,6 +95,13 @@ type builder struct {
 	// pendingScope, if non-nil, is consumed by the next '{' as the scope
 	// kind to push.
 	pendingScope *scope.ScopeKind
+
+	// singleExprFnScope tracks an open single-expression function body
+	// (opened on `=` when pendingScope is ScopeFunction and the RHS is
+	// not a `{`-lambda). Closed at the next newline where the current
+	// scope matches this ID (i.e., we're not nested inside a brace or
+	// paren that the expression opened).
+	singleExprFnScope scope.ScopeID
 
 	// declContext classifies the next identifier as a declaration of this
 	// kind. Set by class/interface/object/enum/fun/val/var/typealias.
@@ -222,6 +232,16 @@ func (b *builder) run() {
 			}
 			b.isPackageDecl = false
 			b.stmtStart = true
+			// Close single-expression function scope when the newline is
+			// at the fn body's own depth (not inside a nested brace/paren
+			// opened by the expression itself). We approximate this by
+			// requiring currentScope() to still be the single-expr scope.
+			if b.singleExprFnScope != 0 && b.currentScope() == b.singleExprFnScope {
+				b.closeTopScope(uint32(b.s.Pos - 1))
+				b.singleExprFnScope = 0
+				b.lambdaBraceExpected = false
+				b.declContext = ""
+			}
 		case c == '/' && b.s.PeekAt(1) == '/':
 			b.s.SkipLineComment()
 		case c == '/' && b.s.PeekAt(1) == '*':
@@ -432,6 +452,33 @@ func (b *builder) run() {
 			b.paramListPending = false
 			b.genericParamsExpected = false
 			b.lambdaBraceExpected = true
+			// Single-expression function body: `fun f(x) = expr`. If
+			// pendingScope is still ScopeFunction (unclaimed by a `{`),
+			// the RHS is not a brace lambda — open a function scope now
+			// so params bind inside the expression instead of leaking.
+			if b.pendingScope != nil && *b.pendingScope == scope.ScopeFunction &&
+				b.peekNonWSByte() != '{' {
+				b.openScope(scope.ScopeFunction, uint32(b.s.Pos))
+				for _, g := range b.pendingGenerics {
+					pk := g.kind
+					if pk == "" {
+						pk = scope.KindType
+					}
+					b.emitDecl(g.name, pk, g.span)
+				}
+				b.pendingGenerics = nil
+				for _, p := range b.pendingParams {
+					pk := p.kind
+					if pk == "" {
+						pk = scope.KindParam
+					}
+					b.emitDecl(p.name, pk, p.span)
+				}
+				b.pendingParams = nil
+				b.pendingScope = nil
+				b.singleExprFnScope = b.currentScope()
+				b.lambdaBraceExpected = false
+			}
 		case c == '.':
 			b.s.Pos++
 			b.prevByte = '.'
@@ -913,8 +960,18 @@ func (b *builder) handleOpenBrace() {
 		// Lambda expression `{ a, b -> body }` or `{ it * 2 }`. Open a
 		// function scope. Params (if any) are detected by scanning the
 		// body for `->` and pulling the preceding idents as params.
+		// If no explicit params are present (no `->`), synthesize the
+		// implicit `it` param so references to `it` resolve.
 		kind = scope.ScopeFunction
 		params := b.scanLambdaParams()
+		if params == nil {
+			bracePos := uint32(b.s.Pos - 1)
+			params = []pendingParam{{
+				name: "it",
+				span: mkSpan(bracePos, bracePos+1),
+				kind: scope.KindParam,
+			}}
+		}
 		b.pendingParams = params
 	}
 
@@ -970,7 +1027,10 @@ func isLambdaPrev(b byte) bool {
 // scanLambdaParams peeks ahead for a `->` inside the current lambda body
 // and returns any preceding comma-separated idents as pending params.
 // Does not mutate scanner position. If no `->` is found before the body
-// closes, returns nil (implicit `it` lambda).
+// closes, returns nil (implicit `it` lambda); the caller is responsible
+// for synthesizing the implicit `it` param in that case. A present but
+// empty param list `{ -> body }` returns a non-nil empty slice so the
+// caller will NOT synthesize `it`.
 func (b *builder) scanLambdaParams() []pendingParam {
 	save := b.s.Pos
 	saveLine := b.s.Line
@@ -1434,7 +1494,7 @@ func (b *builder) resolveRefs() {
 			}
 		}
 		if !resolved {
-			if isKotlinBuiltin(r.Name) {
+			if builtins.Kotlin.Has(r.Name) {
 				r.Binding = scope.RefBinding{
 					Kind:   scope.BindResolved,
 					Decl:   hashBuiltinDecl(r.Name),
@@ -1448,36 +1508,6 @@ func (b *builder) resolveRefs() {
 			}
 		}
 	}
-}
-
-// isKotlinBuiltin reports whether name is a Kotlin stdlib globally-
-// visible type/value. Conservative v1 list; extend as dogfood surfaces
-// real gaps.
-func isKotlinBuiltin(name string) bool {
-	switch name {
-	case "Boolean", "Byte", "Short", "Int", "Long", "Float", "Double",
-		"Char", "String", "Unit", "Nothing", "Any", "Number",
-		"List", "MutableList", "Set", "MutableSet", "Map", "MutableMap",
-		"Collection", "MutableCollection", "Iterable", "MutableIterable",
-		"Iterator", "MutableIterator", "ListIterator", "MutableListIterator",
-		"Array", "IntArray", "LongArray", "FloatArray", "DoubleArray",
-		"BooleanArray", "CharArray", "ByteArray", "ShortArray",
-		"Sequence", "Pair", "Triple",
-		"listOf", "mutableListOf", "setOf", "mutableSetOf", "mapOf",
-		"mutableMapOf", "arrayOf", "arrayListOf", "hashMapOf", "hashSetOf",
-		"emptyList", "emptyMap", "emptySet", "emptyArray",
-		"println", "print", "error", "check", "require",
-		"TODO", "run", "let", "apply", "also", "with", "takeIf", "takeUnless",
-		"lazy", "lazyOf",
-		"Throwable", "Exception", "RuntimeException", "Error",
-		"IllegalArgumentException", "IllegalStateException",
-		"NullPointerException", "IndexOutOfBoundsException",
-		"ClassCastException", "UnsupportedOperationException",
-		"Comparable", "Comparator", "Function", "Runnable",
-		"null", "true", "false":
-		return true
-	}
-	return false
 }
 
 func mkSpan(start, end uint32) scope.Span {

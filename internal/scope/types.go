@@ -127,7 +127,10 @@ type RefBinding struct {
 	Candidates []DeclID // set when Kind == BindAmbiguous or BindProbable
 	// Reason codes: "direct_scope" | "imported_export" |
 	// "structural_method_match" | "dynamic_dispatch" | "adl" |
-	// "macro" | "missing_import" | "duck_typed" | "eval" | "external"
+	// "macro" | "missing_import" | "duck_typed" | "eval" | "external" |
+	// "inherited_field" (Java: one-level same-file supertype field lookup) |
+	// "trait_method" (Rust: same-file trait-declared method reachable via
+	// `self.X` inside `impl Trait for Type`)
 	Reason string
 }
 

@@ -370,15 +370,55 @@ func TestParse_LambdaImplicitIt(t *testing.T) {
 	src := []byte(`val f = listOf(1, 2, 3).map { it * 2 }
 `)
 	r := Parse("it.kt", src)
-	hasFunc := false
-	for _, s := range r.Scopes {
-		if s.Kind == scope.ScopeFunction {
-			hasFunc = true
+	var lambdaScope *scope.Scope
+	for i := range r.Scopes {
+		if r.Scopes[i].Kind == scope.ScopeFunction {
+			lambdaScope = &r.Scopes[i]
 			break
 		}
 	}
-	if !hasFunc {
-		t.Errorf("expected a ScopeFunction for the lambda")
+	if lambdaScope == nil {
+		t.Fatalf("expected a ScopeFunction for the lambda")
+	}
+	// Synthetic `it` param should be emitted in the lambda scope.
+	itDecl := findDeclKind(r, "it", scope.KindParam)
+	if itDecl == nil {
+		t.Fatalf("synthetic `it` param missing; decls=%v", declNames(r))
+	}
+	if itDecl.Scope != lambdaScope.ID {
+		t.Errorf("`it` scope = %d, want lambda scope %d",
+			itDecl.Scope, lambdaScope.ID)
+	}
+	// The `it` ref inside the lambda body should resolve to the synthetic param.
+	refs := refsNamed(r, "it")
+	if len(refs) < 1 {
+		t.Fatalf("expected at least 1 ref to `it`, got %d", len(refs))
+	}
+	for i, ref := range refs {
+		if ref.Binding.Kind != scope.BindResolved {
+			t.Errorf("ref %d to `it` not resolved: %+v", i, ref.Binding)
+			continue
+		}
+		if ref.Binding.Decl != itDecl.ID {
+			t.Errorf("ref %d to `it` resolves to %d, want synthetic `it` decl %d",
+				i, ref.Binding.Decl, itDecl.ID)
+		}
+	}
+}
+
+// Explicit-param lambdas must NOT additionally synthesize `it`.
+func TestParse_LambdaExplicitParamsNoImplicitIt(t *testing.T) {
+	src := []byte(`val add = { a: Int, b: Int -> a + b }
+`)
+	r := Parse("add.kt", src)
+	if findDeclKind(r, "it", scope.KindParam) != nil {
+		t.Errorf("did not expect synthetic `it` for explicit-param lambda; decls=%v",
+			declNames(r))
+	}
+	// Sanity: explicit params are still there.
+	if findDeclKind(r, "a", scope.KindParam) == nil ||
+		findDeclKind(r, "b", scope.KindParam) == nil {
+		t.Errorf("explicit lambda params missing; decls=%v", declNames(r))
 	}
 }
 
@@ -395,5 +435,43 @@ func TestParse_BuiltinResolves(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("Int ref did not resolve as builtin; refs=%+v", refsNamed(r, "Int"))
+	}
+}
+
+// TestParse_SingleExpressionFn: `fun f(x) = x*x` should open a function
+// scope for the body so the param x is declared in it, and the ref to
+// x resolves to that param (not to some outer-scope binding).
+func TestParse_SingleExpressionFn(t *testing.T) {
+	src := []byte(`fun square(x: Int) = x * x
+`)
+	r := Parse("a.kt", src)
+	// Find the param decl.
+	var paramDecl *scope.Decl
+	for i := range r.Decls {
+		if r.Decls[i].Name == "x" && r.Decls[i].Kind == scope.KindParam {
+			paramDecl = &r.Decls[i]
+			break
+		}
+	}
+	if paramDecl == nil {
+		t.Fatalf("no param decl for x; decls=%v", declNames(r))
+	}
+	if paramDecl.Scope == 1 {
+		t.Errorf("param x was emitted into file scope (=1); expected a function scope")
+	}
+	// Find refs to x. They should resolve to the param.
+	refs := refsNamed(r, "x")
+	if len(refs) < 2 {
+		t.Fatalf("expected at least 2 refs to x, got %d", len(refs))
+	}
+	for i, ref := range refs {
+		if ref.Binding.Kind != scope.BindResolved {
+			t.Errorf("ref %d to x not resolved: %+v", i, ref.Binding)
+			continue
+		}
+		if ref.Binding.Decl != paramDecl.ID {
+			t.Errorf("ref %d to x resolves to %d, want param decl %d",
+				i, ref.Binding.Decl, paramDecl.ID)
+		}
 	}
 }

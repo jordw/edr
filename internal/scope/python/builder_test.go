@@ -121,11 +121,69 @@ z = x + y
 
 func TestParse_TupleAssignment(t *testing.T) {
 	src := []byte(`a, b = 1, 2
+use_b = b
 `)
 	r := Parse("a.py", src)
 	for _, n := range []string{"a", "b"} {
 		if findDecl(r, n) == nil {
 			t.Errorf("tuple-assign decl %q missing; decls=%v", n, declNames(r))
+		}
+	}
+	// Ref to b on line 2 should resolve to the LHS decl.
+	bRefs := refsNamed(r, "b")
+	if len(bRefs) == 0 {
+		t.Fatalf("expected a ref to 'b'; got none")
+	}
+	resolved := false
+	for _, ref := range bRefs {
+		if ref.Binding.Kind == scope.BindResolved {
+			resolved = true
+			break
+		}
+	}
+	if !resolved {
+		t.Errorf("ref to 'b' did not resolve to tuple-LHS decl")
+	}
+}
+
+func TestParse_ParenthesizedTupleAssignment(t *testing.T) {
+	src := []byte(`(a, b) = point
+use_a = a
+use_b = b
+`)
+	r := Parse("a.py", src)
+	for _, n := range []string{"a", "b"} {
+		if findDecl(r, n) == nil {
+			t.Errorf("paren tuple-assign decl %q missing; decls=%v", n, declNames(r))
+		}
+	}
+	// point should be a ref, not a decl.
+	if findDecl(r, "point") != nil {
+		t.Errorf("RHS 'point' should not be a decl")
+	}
+}
+
+func TestParse_StarredTupleAssignment(t *testing.T) {
+	src := []byte(`a, *rest = xs
+`)
+	r := Parse("a.py", src)
+	for _, n := range []string{"a", "rest"} {
+		if findDecl(r, n) == nil {
+			t.Errorf("starred tuple-assign decl %q missing; decls=%v", n, declNames(r))
+		}
+	}
+	if findDecl(r, "xs") != nil {
+		t.Errorf("RHS 'xs' should not be a decl")
+	}
+}
+
+func TestParse_NestedDestructuring(t *testing.T) {
+	src := []byte(`(a, (b, c)) = point
+`)
+	r := Parse("a.py", src)
+	for _, n := range []string{"a", "b", "c"} {
+		if findDecl(r, n) == nil {
+			t.Errorf("nested destructuring decl %q missing; decls=%v", n, declNames(r))
 		}
 	}
 }
@@ -150,6 +208,37 @@ for item in items:
 	}
 	if !resolved {
 		t.Errorf("item ref did not resolve to for-loop var")
+	}
+}
+
+func TestParse_ForLoopMultiTarget(t *testing.T) {
+	src := []byte(`for a, b in pairs:
+    print(a)
+    print(b)
+`)
+	r := Parse("a.py", src)
+	for _, n := range []string{"a", "b"} {
+		if findDecl(r, n) == nil {
+			t.Errorf("for-loop multi-target decl %q missing; decls=%v", n, declNames(r))
+		}
+	}
+	// Both a and b refs inside the body should resolve.
+	for _, n := range []string{"a", "b"} {
+		refs := refsNamed(r, n)
+		if len(refs) == 0 {
+			t.Errorf("expected ref to %q; got none", n)
+			continue
+		}
+		resolved := false
+		for _, ref := range refs {
+			if ref.Binding.Kind == scope.BindResolved {
+				resolved = true
+				break
+			}
+		}
+		if !resolved {
+			t.Errorf("ref to %q did not resolve to for-loop var", n)
+		}
 	}
 }
 

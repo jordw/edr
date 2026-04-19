@@ -424,3 +424,226 @@ func TestParse_ParseDoesNotPanicOnEmptyInput(t *testing.T) {
 	_ = Parse("empty.java", []byte{})
 	_ = Parse("empty.java", []byte("   \n\n  "))
 }
+
+// findFieldDeclInScope returns the NSField decl named `name` whose
+// enclosing class body matches the first declared class of that name.
+func findFieldDeclInClass(r *scope.Result, class, name string) *scope.Decl {
+	for i := range r.Decls {
+		d := &r.Decls[i]
+		if d.Kind != scope.KindClass || d.Name != class {
+			continue
+		}
+		// Find the class body scope: the ScopeClass whose parent is
+		// d.Scope and whose span starts inside d.FullSpan.
+		for _, s := range r.Scopes {
+			if s.Kind != scope.ScopeClass && s.Kind != scope.ScopeInterface {
+				continue
+			}
+			if s.Parent != d.Scope {
+				continue
+			}
+			if s.Span.StartByte < d.FullSpan.StartByte || s.Span.StartByte > d.FullSpan.EndByte {
+				continue
+			}
+			// Look up NSField decl in this scope.
+			for j := range r.Decls {
+				dd := &r.Decls[j]
+				if dd.Scope == s.ID && dd.Namespace == scope.NSField && dd.Name == name {
+					return dd
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func TestParse_InheritedFieldUnqualified(t *testing.T) {
+	// Bare `x` inside Child.use() should resolve to P.x via one-level
+	// same-file inheritance.
+	src := []byte(`class P {
+    int x;
+}
+class C extends P {
+    int use() { return x; }
+}
+`)
+	r := Parse("Inh.java", src)
+
+	px := findFieldDeclInClass(r, "P", "x")
+	if px == nil {
+		t.Fatalf("expected P.x field decl; decls=%v", declNames(r))
+	}
+
+	got := 0
+	for _, ref := range r.Refs {
+		if ref.Name != "x" {
+			continue
+		}
+		if ref.Binding.Reason != "inherited_field" {
+			continue
+		}
+		if ref.Binding.Decl != px.ID {
+			t.Errorf("inherited_field ref for x resolves to %v, want P.x=%v", ref.Binding.Decl, px.ID)
+			continue
+		}
+		got++
+	}
+	if got < 1 {
+		t.Errorf("expected at least one inherited_field ref for x, got %d; refs:\n%s", got, dumpRefs(r, "x"))
+	}
+}
+
+func TestParse_InheritedFieldThisDot(t *testing.T) {
+	// `this.x` inside Child.use() should resolve to P.x via one-level
+	// same-file inheritance and carry Reason "inherited_field".
+	src := []byte(`class P {
+    int x;
+}
+class C extends P {
+    int use() { return this.x; }
+}
+`)
+	r := Parse("Inh.java", src)
+
+	px := findFieldDeclInClass(r, "P", "x")
+	if px == nil {
+		t.Fatalf("expected P.x field decl; decls=%v", declNames(r))
+	}
+
+	got := 0
+	for _, ref := range r.Refs {
+		if ref.Name != "x" {
+			continue
+		}
+		if ref.Binding.Reason == "inherited_field" && ref.Binding.Decl == px.ID {
+			got++
+		}
+	}
+	if got < 1 {
+		t.Errorf("expected this.x to resolve to P.x via inherited_field, got %d;\n%s", got, dumpRefs(r, "x"))
+	}
+}
+
+func TestParse_InheritedFieldMissingSupertype(t *testing.T) {
+	// `class C extends Missing { ... x ... }` — Missing is not declared
+	// in this file. `x` must NOT resolve to any random same-name decl.
+	src := []byte(`class Unrelated {
+    int x;
+}
+class C extends Missing {
+    int use() { return x; }
+}
+`)
+	r := Parse("Inh.java", src)
+
+	for _, ref := range r.Refs {
+		if ref.Name != "x" {
+			continue
+		}
+		if ref.Scope == 0 {
+			continue
+		}
+		// The `x` inside C.use() must not be resolved at all (neither
+		// inherited_field nor direct_scope nor implicit_this_field).
+		// We identify "the ref inside C.use()" by checking it's not
+		// the field decl of Unrelated — Decls are separate from Refs,
+		// so simply scan all refs: none should be "inherited_field".
+		if ref.Binding.Reason == "inherited_field" {
+			t.Errorf("x falsely resolved as inherited_field when supertype Missing is not in file")
+		}
+	}
+	// Positive check: the x ref should end up unresolved.
+	foundUnresolved := false
+	for _, ref := range r.Refs {
+		if ref.Name != "x" {
+			continue
+		}
+		if ref.Binding.Kind == scope.BindUnresolved {
+			foundUnresolved = true
+			break
+		}
+	}
+	if !foundUnresolved {
+		t.Errorf("expected x ref inside C.use() to be unresolved; refs:\n%s", dumpRefs(r, "x"))
+	}
+}
+
+func TestParse_InheritedFieldOneLevelOnly(t *testing.T) {
+	// Multi-level chain: Grand -> Parent -> Child. `x` lives on Grand.
+	// v1 punts on multi-level: the ref inside Child.use() should NOT
+	// resolve to Grand.x.
+	src := []byte(`class Grand {
+    int x;
+}
+class Parent extends Grand {
+}
+class Child extends Parent {
+    int use() { return x; }
+}
+`)
+	r := Parse("Inh.java", src)
+
+	gx := findFieldDeclInClass(r, "Grand", "x")
+	if gx == nil {
+		t.Fatalf("expected Grand.x field decl; decls=%v", declNames(r))
+	}
+
+	for _, ref := range r.Refs {
+		if ref.Name != "x" {
+			continue
+		}
+		if ref.Binding.Kind == scope.BindResolved && ref.Binding.Decl == gx.ID {
+			t.Errorf("x ref falsely resolved to Grand.x across two inheritance levels (v1 punt); reason=%s", ref.Binding.Reason)
+		}
+	}
+}
+
+func dumpRefs(r *scope.Result, name string) string {
+	var lines []string
+	for _, ref := range r.Refs {
+		if ref.Name != name {
+			continue
+		}
+		lines = append(lines, "  "+ref.Name+
+			" scope="+itoa(int(ref.Scope))+
+			" reason="+ref.Binding.Reason+
+			" kind="+bindingKindName(ref.Binding.Kind))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func bindingKindName(k scope.BindingKind) string {
+	switch k {
+	case scope.BindResolved:
+		return "resolved"
+	case scope.BindAmbiguous:
+		return "ambiguous"
+	case scope.BindProbable:
+		return "probable"
+	case scope.BindUnresolved:
+		return "unresolved"
+	}
+	return "unknown"
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
+}

@@ -463,3 +463,161 @@ fn inside() {}
 		t.Errorf("inside missing; decls=%v", declNames(r))
 	}
 }
+
+// TestParse_TraitDefaultMethodSelf: inside a trait body's default impl,
+// `self.other()` resolves to sibling trait methods via direct
+// self_dot_field — the trait scope IS the container.
+func TestParse_TraitDefaultMethodSelf(t *testing.T) {
+	src := []byte(`trait Greet {
+    fn hello(&self) -> String;
+    fn say(&self) -> String {
+        self.hello()
+    }
+}
+`)
+	r := Parse("a.rs", src)
+	var helloID scope.DeclID
+	for i := range r.Decls {
+		d := &r.Decls[i]
+		if d.Name == "hello" && d.Namespace == scope.NSField {
+			helloID = d.ID
+			break
+		}
+	}
+	if helloID == 0 {
+		t.Fatalf("no hello method decl; decls=%v", declNames(r))
+	}
+	refs := refsNamed(r, "hello")
+	var found bool
+	for _, ref := range refs {
+		if ref.Binding.Kind == scope.BindResolved && ref.Binding.Decl == helloID {
+			found = true
+			if ref.Binding.Reason != "self_dot_field" && ref.Binding.Reason != "trait_method" {
+				t.Errorf("hello ref reason = %q, want self_dot_field or trait_method",
+					ref.Binding.Reason)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("self.hello() ref did not resolve to the trait's hello method; refs=%+v", refs)
+	}
+}
+
+// TestParse_ImplTraitMethodOwn: inside `impl T for S`, a method defined
+// in THIS impl block resolves via self_dot_field (not trait_method).
+func TestParse_ImplTraitMethodOwn(t *testing.T) {
+	src := []byte(`trait T {
+    fn base(&self);
+}
+struct S;
+impl T for S {
+    fn base(&self) { }
+    fn driver(&self) {
+        self.base();
+    }
+}
+`)
+	r := Parse("a.rs", src)
+	refs := refsNamed(r, "base")
+	var implBase *scope.Decl
+	for i := range r.Decls {
+		d := &r.Decls[i]
+		if d.Name != "base" || d.Namespace != scope.NSField {
+			continue
+		}
+		// Pick the one inside the impl body (its scope should be different
+		// from the trait's scope). Heuristic: later occurrence in decls.
+		implBase = d
+	}
+	if implBase == nil {
+		t.Fatalf("no base decl; decls=%v", declNames(r))
+	}
+	var selfCall *scope.Ref
+	for i := range refs {
+		if refs[i].Binding.Kind == scope.BindResolved {
+			selfCall = &refs[i]
+		}
+	}
+	if selfCall == nil {
+		t.Fatalf("self.base() did not resolve; refs=%+v", refs)
+	}
+	// Either binding is acceptable — direct self_dot_field from impl or
+	// trait_method fallback would both be correct semantically.
+	if selfCall.Binding.Reason != "self_dot_field" && selfCall.Binding.Reason != "trait_method" {
+		t.Errorf("self.base reason = %q, want self_dot_field or trait_method",
+			selfCall.Binding.Reason)
+	}
+}
+
+// TestParse_ImplTraitDefaultMethod: the key case — impl block has NO
+// override of `default_only`, but the trait provides a default impl.
+// `self.default_only()` in a different impl method must resolve via
+// trait_method.
+func TestParse_ImplTraitDefaultMethod(t *testing.T) {
+	src := []byte(`trait T {
+    fn default_only(&self) -> i32 { 42 }
+}
+struct S;
+impl T for S {
+    fn call(&self) -> i32 {
+        self.default_only()
+    }
+}
+`)
+	r := Parse("a.rs", src)
+	var traitMethodID scope.DeclID
+	for i := range r.Decls {
+		d := &r.Decls[i]
+		if d.Name == "default_only" && d.Namespace == scope.NSField {
+			traitMethodID = d.ID
+			break
+		}
+	}
+	if traitMethodID == 0 {
+		t.Fatalf("no default_only decl; decls=%v", declNames(r))
+	}
+	refs := refsNamed(r, "default_only")
+	var bound *scope.Ref
+	for i := range refs {
+		if refs[i].Binding.Kind == scope.BindResolved {
+			bound = &refs[i]
+			break
+		}
+	}
+	if bound == nil {
+		t.Fatalf("self.default_only() did not resolve; refs=%+v", refs)
+	}
+	if bound.Binding.Decl != traitMethodID {
+		t.Errorf("bound to %d, want trait's default_only %d", bound.Binding.Decl, traitMethodID)
+	}
+	if bound.Binding.Reason != "trait_method" {
+		t.Errorf("reason = %q, want trait_method (key feature)", bound.Binding.Reason)
+	}
+}
+
+// TestParse_ImplTraitUnknownMethod: negative — self.unknown() in an
+// impl block where neither the impl nor the trait define `unknown`
+// must NOT spuriously resolve. Falls to probable property_access.
+func TestParse_ImplTraitUnknownMethod(t *testing.T) {
+	src := []byte(`trait T {
+    fn known(&self);
+}
+struct S;
+impl T for S {
+    fn known(&self) { }
+    fn caller(&self) {
+        self.unknown();
+    }
+}
+`)
+	r := Parse("a.rs", src)
+	refs := refsNamed(r, "unknown")
+	if len(refs) == 0 {
+		t.Fatalf("no ref to unknown; refs=%+v", r.Refs)
+	}
+	for _, ref := range refs {
+		if ref.Binding.Kind == scope.BindResolved {
+			t.Errorf("self.unknown() should not resolve, got %+v", ref.Binding)
+		}
+	}
+}

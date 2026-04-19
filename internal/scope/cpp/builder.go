@@ -7,10 +7,6 @@
 // logical token (with line-continuation support).
 //
 // v1 limitations (documented here so future fixes have a single list):
-//   - Templates: `template<...>` parameter lists are recognized and
-//     skipped via angle-bracket matching, but type params are NOT
-//     emitted as decls. Refs to template params inside bodies fall
-//     through as ordinary idents.
 //   - Out-of-line method definitions `void Foo::bar() {}` are emitted
 //     as a ref to Foo plus a top-level function-like decl named `bar`.
 //     The proper treatment (attaching bar to Foo as a method) needs
@@ -26,9 +22,10 @@
 //     into the current scope — refs to names from X stay unresolved.
 //   - `typedef` / `using T = Expr;` emit the alias as KindType; the
 //     aliased type's identifiers fall through as ordinary refs.
-//   - Field declarations inside a class body (`int x;`) do NOT emit x
-//     as KindField — distinguishing type-name-name patterns without
-//     type info is left for a v2 pass.
+//   - Template specialization and instantiation are not modeled; refs
+//     to template arguments resolve against the surrounding scope only.
+//   - ADL (argument-dependent lookup) and namespace expansion are not
+//     performed — name resolution is strictly lexical.
 package cpp
 
 import (
@@ -37,6 +34,7 @@ import (
 
 	"github.com/jordw/edr/internal/lexkit"
 	"github.com/jordw/edr/internal/scope"
+	"github.com/jordw/edr/internal/scope/builtins"
 )
 
 // Parse extracts a scope.Result from a C or C++ source buffer. The
@@ -106,6 +104,27 @@ type builder struct {
 	// though prevByte is the `k` marker (not an ident).
 	pendingTemplateAngle bool
 
+	// Template parameter tracking. When inTemplateParams is true, we
+	// are inside a `template<...>` decl header and angle-bracket depth
+	// is tracked in templateAngleDepth. Idents captured here become
+	// pending template-param decls that are flushed into the next
+	// opened class/function/struct scope.
+	inTemplateParams         bool
+	templateAngleDepth       int
+	templateSectionNeedsName bool
+	templateParamName        string
+	templateParamSpan        scope.Span
+	pendingTemplateParams    []pendingParam
+
+	// Class-body field tracking. When inside a class/struct scope at
+	// classBodyDepth == 0 (i.e., top of the body, not inside a method
+	// or nested block), consecutive idents on a statement are buffered
+	// in classStmtIdents. On `;` or `,` the last ident is emitted as
+	// KindField and earlier ones as type refs. On `(` (method decl)
+	// or `{` (method body / nested block) the buffer is flushed as
+	// plain refs (no field emitted).
+	classStmtIdents []pendingParam
+
 	prevByte byte
 }
 
@@ -173,12 +192,21 @@ func (b *builder) run() {
 		case c == ',':
 			b.s.Pos++
 			b.prevByte = ','
-			if b.inParamList && b.paramDepth == 1 {
+			if b.inTemplateParams && b.templateAngleDepth == 1 {
+				b.commitPendingTemplateParamSection()
+				b.templateSectionNeedsName = true
+				b.templateParamName = ""
+			} else if b.inParamList && b.paramDepth == 1 {
 				b.commitPendingParamSection()
 				b.paramSectionNeedsName = true
 				b.pendingParamName = ""
+			} else if b.currentScopeKind() == scope.ScopeClass && b.classDepth == 0 {
+				b.flushClassField()
 			}
 		case c == ';':
+			if b.currentScopeKind() == scope.ScopeClass && b.classDepth == 0 {
+				b.flushClassField()
+			}
 			b.s.Pos++
 			b.prevByte = ';'
 			b.stmtStart = true
@@ -198,15 +226,32 @@ func (b *builder) run() {
 			b.s.Advance(2)
 			b.prevByte = '.'
 		case c == '<':
-			if b.prevByte == 'i' || b.angleDepth > 0 || b.pendingTemplateAngle {
-				b.angleDepth++
+			if b.pendingTemplateAngle {
 				b.pendingTemplateAngle = false
+				b.inTemplateParams = true
+				b.templateAngleDepth = 1
+				b.templateSectionNeedsName = true
+				b.angleDepth++
+				b.s.Pos++
+			} else if b.inTemplateParams {
+				b.templateAngleDepth++
+				b.angleDepth++
+				b.s.Pos++
+			} else if b.prevByte == 'i' || b.angleDepth > 0 {
+				b.angleDepth++
 				b.s.Pos++
 			} else {
 				b.s.Pos++
 				b.prevByte = '<'
 			}
 		case c == '>':
+			if b.inTemplateParams {
+				b.templateAngleDepth--
+				if b.templateAngleDepth == 0 {
+					b.commitPendingTemplateParamSection()
+					b.inTemplateParams = false
+				}
+			}
 			if b.angleDepth > 0 {
 				b.angleDepth--
 			}
@@ -303,6 +348,42 @@ func (b *builder) commitPendingParamSection() {
 	b.pendingParamName = ""
 }
 
+func (b *builder) commitPendingTemplateParamSection() {
+	if b.templateParamName != "" {
+		b.pendingTemplateParams = append(b.pendingTemplateParams, pendingParam{
+			name: b.templateParamName,
+			span: b.templateParamSpan,
+			kind: scope.KindType,
+		})
+	}
+	b.templateParamName = ""
+}
+
+// flushClassField emits the buffered class-body idents on a `;` or `,`:
+// the last ident becomes a KindField, earlier ones are type refs.
+func (b *builder) flushClassField() {
+	if len(b.classStmtIdents) == 0 {
+		return
+	}
+	last := b.classStmtIdents[len(b.classStmtIdents)-1]
+	for _, id := range b.classStmtIdents[:len(b.classStmtIdents)-1] {
+		b.emitRef(id.name, id.span)
+	}
+	b.emitDecl(last.name, scope.KindField, last.span)
+	b.classStmtIdents = nil
+}
+
+// flushClassFieldAsRefs drains the buffered class-body idents as plain
+// refs (no field decl). Called when a `{` or method-decl `(` appears,
+// meaning the buffered idents were the return type of a method or
+// preamble to a nested scope.
+func (b *builder) flushClassFieldAsRefs() {
+	for _, id := range b.classStmtIdents {
+		b.emitRef(id.name, id.span)
+	}
+	b.classStmtIdents = nil
+}
+
 func (b *builder) handleIdent(word []byte) {
 	if len(word) == 0 {
 		return
@@ -368,6 +449,26 @@ func (b *builder) handleIdent(word []byte) {
 		return
 	}
 
+	if b.inTemplateParams && b.templateAngleDepth == 1 {
+		// typename / class inside `<...>` introduce a param; they are
+		// not captured as the param name themselves.
+		if name == "typename" || name == "class" {
+			b.templateSectionNeedsName = true
+			b.prevByte = 'i'
+			return
+		}
+		// First non-keyword ident per section is the param name. A
+		// following ident (e.g. default value or trailing junk) is
+		// ignored until the next `,` or `>` commits.
+		if b.templateSectionNeedsName {
+			b.templateParamName = name
+			b.templateParamSpan = mkSpan(startByte, endByte)
+			b.templateSectionNeedsName = false
+		}
+		b.prevByte = 'i'
+		return
+	}
+
 	if b.angleDepth > 0 {
 		b.prevByte = 'i'
 		return
@@ -419,6 +520,9 @@ func (b *builder) handleIdent(word []byte) {
 			return
 		case scope.ScopeClass:
 			if b.classDepth == 0 {
+				// A method decl discards any class-body ident buffer —
+				// those idents were the return type; emit them as refs.
+				b.flushClassFieldAsRefs()
 				b.emitDecl(name, scope.KindMethod, mkSpan(startByte, endByte))
 				b.paramListPending = true
 				b.prevByte = 'i'
@@ -427,11 +531,28 @@ func (b *builder) handleIdent(word []byte) {
 		}
 	}
 
+	// Buffer idents inside a class body at top depth; the last one on
+	// the statement becomes a KindField when we hit `;` or `,`.
+	if scopeK == scope.ScopeClass && b.classDepth == 0 {
+		b.classStmtIdents = append(b.classStmtIdents, pendingParam{
+			name: name,
+			span: mkSpan(startByte, endByte),
+		})
+		b.prevByte = 'i'
+		return
+	}
+
 	b.emitRef(name, mkSpan(startByte, endByte))
 	b.prevByte = 'i'
 }
 
 func (b *builder) handleOpenBrace() {
+	// Any buffered class-body idents at this point were NOT fields —
+	// flush them as plain refs so they don't leak into the inner scope.
+	if b.currentScopeKind() == scope.ScopeClass && b.classDepth == 0 {
+		b.flushClassFieldAsRefs()
+	}
+
 	b.s.Pos++
 	prev := b.prevByte
 	b.stmtStart = true
@@ -450,6 +571,13 @@ func (b *builder) handleOpenBrace() {
 			}
 			b.pendingParams = nil
 		}
+		// Flush template params into the class/struct/union scope.
+		if len(b.pendingTemplateParams) > 0 {
+			for _, tp := range b.pendingTemplateParams {
+				b.emitDecl(tp.name, tp.kind, tp.span)
+			}
+			b.pendingTemplateParams = nil
+		}
 		return
 	}
 
@@ -459,6 +587,13 @@ func (b *builder) handleOpenBrace() {
 			b.emitDecl(p.name, p.kind, p.span)
 		}
 		b.pendingParams = nil
+		// Flush template params into the function scope.
+		if len(b.pendingTemplateParams) > 0 {
+			for _, tp := range b.pendingTemplateParams {
+				b.emitDecl(tp.name, tp.kind, tp.span)
+			}
+			b.pendingTemplateParams = nil
+		}
 		return
 	}
 
@@ -679,9 +814,17 @@ func (b *builder) resolveRefs() {
 			cur = p
 		}
 		if !resolved {
-			r.Binding = scope.RefBinding{
-				Kind:   scope.BindUnresolved,
-				Reason: "missing_import",
+			if builtins.CPP.Has(r.Name) {
+				r.Binding = scope.RefBinding{
+					Kind:   scope.BindResolved,
+					Decl:   hashBuiltinDecl(r.Name),
+					Reason: "builtin",
+				}
+			} else {
+				r.Binding = scope.RefBinding{
+					Kind:   scope.BindUnresolved,
+					Reason: "missing_import",
+				}
 			}
 		}
 	}
@@ -722,6 +865,15 @@ func hashLoc(file string, span scope.Span, name string) scope.LocID {
 	h.Write(buf[:])
 	sum := h.Sum(nil)
 	return scope.LocID(binary.LittleEndian.Uint64(sum[:8]))
+}
+
+func hashBuiltinDecl(name string) scope.DeclID {
+	h := sha256.New()
+	h.Write([]byte("<builtin:cpp>"))
+	h.Write([]byte{0})
+	h.Write([]byte(name))
+	sum := h.Sum(nil)
+	return scope.DeclID(binary.LittleEndian.Uint64(sum[:8]))
 }
 
 func hashDecl(canonicalPath, name string, ns scope.Namespace, scopeID scope.ScopeID) scope.DeclID {

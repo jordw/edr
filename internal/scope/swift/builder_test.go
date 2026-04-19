@@ -433,8 +433,8 @@ func TestParse_ControlFlowBinding(t *testing.T) {
 	if xDecl == nil {
 		t.Fatalf("x missing; decls=%v", declNames(r))
 	}
-	if xDecl.Kind != scope.KindVar {
-		t.Errorf("x kind = %v, want var", xDecl.Kind)
+	if xDecl.Kind != scope.KindLet {
+		t.Errorf("x kind = %v, want let", xDecl.Kind)
 	}
 }
 
@@ -500,5 +500,259 @@ func TestParse_FullSpan_FuncCoversKeywordThroughBrace(t *testing.T) {
 	closeBrace := strings.LastIndex(string(src), "}")
 	if int(fDecl.FullSpan.EndByte) <= closeBrace {
 		t.Errorf("hi FullSpan.EndByte = %d, want > %d", fDecl.FullSpan.EndByte, closeBrace)
+	}
+}
+
+// TestParse_Builtins: stdlib types + top-level functions bind as
+// builtins rather than BindUnresolved missing_import.
+func TestParse_Builtins(t *testing.T) {
+	src := []byte(`func greet(names: [String]) {
+    print(names.count)
+    let xs: Array<Int> = []
+    _ = xs
+}
+`)
+	r := Parse("a.swift", src)
+	for _, name := range []string{"print", "Array"} {
+		refs := refsNamed(r, name)
+		if len(refs) == 0 {
+			t.Errorf("no ref to builtin %q; refs=%+v", name, r.Refs)
+			continue
+		}
+		if refs[0].Binding.Kind != scope.BindResolved {
+			t.Errorf("%q not resolved: %+v", name, refs[0].Binding)
+			continue
+		}
+		if refs[0].Binding.Reason != "builtin" {
+			t.Errorf("%q reason = %q, want \"builtin\"", name, refs[0].Binding.Reason)
+		}
+	}
+}
+
+// TestParse_IfLetBinding: `if let x = foo() { use(x) }` emits `x`
+// as KindLet scoped to the if-block body; the ref to `x` inside the
+// block resolves to that decl.
+func TestParse_IfLetBinding(t *testing.T) {
+	src := []byte(`func g(opt: Int?) {
+    if let x = opt {
+        use(x)
+    }
+}
+`)
+	r := Parse("a.swift", src)
+	xDecl := findDeclKind(r, "x", scope.KindLet)
+	if xDecl == nil {
+		t.Fatalf("x as KindLet missing; decls=%+v", r.Decls)
+	}
+	// The decl should live inside a ScopeBlock (the if-body), not in
+	// the enclosing function scope.
+	var xScope *scope.Scope
+	for i := range r.Scopes {
+		if r.Scopes[i].ID == xDecl.Scope {
+			xScope = &r.Scopes[i]
+			break
+		}
+	}
+	if xScope == nil || xScope.Kind != scope.ScopeBlock {
+		t.Errorf("x scope = %v, want ScopeBlock (if-body)", xScope)
+	}
+	// `use(x)` inside the block should resolve.
+	resolved := false
+	for _, ref := range refsNamed(r, "x") {
+		if ref.Binding.Kind == scope.BindResolved && ref.Binding.Decl == xDecl.ID {
+			resolved = true
+			break
+		}
+	}
+	if !resolved {
+		t.Errorf("ref(x) not resolved to if-let decl; refs=%+v", refsNamed(r, "x"))
+	}
+}
+
+// TestParse_GuardLetBinding: `guard let y = foo() else { return };
+// use(y)` emits `y` into the ENCLOSING scope (the function body), so
+// the later `use(y)` — which lives outside the else-block — resolves.
+func TestParse_GuardLetBinding(t *testing.T) {
+	src := []byte(`func g(opt: Int?) {
+    guard let y = opt else { return }
+    use(y)
+}
+`)
+	r := Parse("a.swift", src)
+	yDecl := findDeclKind(r, "y", scope.KindLet)
+	if yDecl == nil {
+		t.Fatalf("y as KindLet missing; decls=%+v", r.Decls)
+	}
+	// y should be scoped to the enclosing function body, NOT the
+	// guard's else-block. Find the function scope for g.
+	var gScope scope.ScopeID
+	for _, d := range r.Decls {
+		if d.Name == "g" && d.Kind == scope.KindFunction {
+			// Find the scope whose parent chain includes the file and
+			// whose kind is ScopeFunction opened right after this decl.
+			for _, s := range r.Scopes {
+				if s.Kind == scope.ScopeFunction && s.Parent == d.Scope {
+					gScope = s.ID
+					break
+				}
+			}
+		}
+	}
+	if gScope == 0 {
+		t.Fatalf("could not find g's function scope; scopes=%+v", r.Scopes)
+	}
+	if yDecl.Scope != gScope {
+		t.Errorf("y scope = %d, want enclosing function scope %d (guard binds into enclosing)", yDecl.Scope, gScope)
+	}
+	// The later `use(y)` should resolve.
+	resolved := false
+	for _, ref := range refsNamed(r, "y") {
+		if ref.Binding.Kind == scope.BindResolved && ref.Binding.Decl == yDecl.ID {
+			resolved = true
+			break
+		}
+	}
+	if !resolved {
+		t.Errorf("ref(y) not resolved to guard-let decl; refs=%+v", refsNamed(r, "y"))
+	}
+}
+
+// TestParse_WhileLetBinding: `while let item = iter.next() { process(item) }`
+// emits `item` as KindLet scoped to the while-body; the ref inside
+// the loop resolves.
+func TestParse_WhileLetBinding(t *testing.T) {
+	src := []byte(`func g(iter: Iter) {
+    while let item = iter.next() {
+        process(item)
+    }
+}
+`)
+	r := Parse("a.swift", src)
+	itemDecl := findDeclKind(r, "item", scope.KindLet)
+	if itemDecl == nil {
+		t.Fatalf("item as KindLet missing; decls=%+v", r.Decls)
+	}
+	var itemScope *scope.Scope
+	for i := range r.Scopes {
+		if r.Scopes[i].ID == itemDecl.Scope {
+			itemScope = &r.Scopes[i]
+			break
+		}
+	}
+	if itemScope == nil || itemScope.Kind != scope.ScopeBlock {
+		t.Errorf("item scope = %v, want ScopeBlock (while-body)", itemScope)
+	}
+	resolved := false
+	for _, ref := range refsNamed(r, "item") {
+		if ref.Binding.Kind == scope.BindResolved && ref.Binding.Decl == itemDecl.ID {
+			resolved = true
+			break
+		}
+	}
+	if !resolved {
+		t.Errorf("ref(item) not resolved to while-let decl; refs=%+v", refsNamed(r, "item"))
+	}
+}
+
+// TestParse_IfVarBinding: `if var x = opt { ... }` binds as KindVar.
+func TestParse_IfVarBinding(t *testing.T) {
+	src := []byte(`func g(opt: Int?) {
+    if var x = opt {
+        use(x)
+    }
+}
+`)
+	r := Parse("a.swift", src)
+	xDecl := findDeclKind(r, "x", scope.KindVar)
+	if xDecl == nil {
+		t.Fatalf("x as KindVar missing; decls=%+v", r.Decls)
+	}
+	resolved := false
+	for _, ref := range refsNamed(r, "x") {
+		if ref.Binding.Kind == scope.BindResolved && ref.Binding.Decl == xDecl.ID {
+			resolved = true
+			break
+		}
+	}
+	if !resolved {
+		t.Errorf("ref(x) not resolved to if-var decl; refs=%+v", refsNamed(r, "x"))
+	}
+}
+
+// TestParse_IfLetCommaBindings: `if let x = a, let y = b { ... }`
+// emits both x and y as KindLet scoped to the if-block body.
+func TestParse_IfLetCommaBindings(t *testing.T) {
+	src := []byte(`func g(a: Int?, b: Int?) {
+    if let x = a, let y = b {
+        use(x)
+        use(y)
+    }
+}
+`)
+	r := Parse("a.swift", src)
+	xDecl := findDeclKind(r, "x", scope.KindLet)
+	yDecl := findDeclKind(r, "y", scope.KindLet)
+	if xDecl == nil {
+		t.Fatalf("x as KindLet missing; decls=%+v", r.Decls)
+	}
+	if yDecl == nil {
+		t.Fatalf("y as KindLet missing; decls=%+v", r.Decls)
+	}
+	if xDecl.Scope != yDecl.Scope {
+		t.Errorf("x scope=%d, y scope=%d — both should be in the if-block", xDecl.Scope, yDecl.Scope)
+	}
+	// Both bindings should live in a ScopeBlock.
+	for _, d := range []*scope.Decl{xDecl, yDecl} {
+		var sc *scope.Scope
+		for i := range r.Scopes {
+			if r.Scopes[i].ID == d.Scope {
+				sc = &r.Scopes[i]
+				break
+			}
+		}
+		if sc == nil || sc.Kind != scope.ScopeBlock {
+			t.Errorf("%s scope = %v, want ScopeBlock", d.Name, sc)
+		}
+	}
+	// Both refs should resolve to their decls.
+	for _, tc := range []struct {
+		name string
+		id   scope.DeclID
+	}{{"x", xDecl.ID}, {"y", yDecl.ID}} {
+		resolved := false
+		for _, ref := range refsNamed(r, tc.name) {
+			if ref.Binding.Kind == scope.BindResolved && ref.Binding.Decl == tc.id {
+				resolved = true
+				break
+			}
+		}
+		if !resolved {
+			t.Errorf("ref(%s) not resolved; refs=%+v", tc.name, refsNamed(r, tc.name))
+		}
+	}
+}
+
+// TestParse_GuardVarBinding: `guard var y = opt else { return }; use(y)`
+// emits y as KindVar into the enclosing scope.
+func TestParse_GuardVarBinding(t *testing.T) {
+	src := []byte(`func g(opt: Int?) {
+    guard var y = opt else { return }
+    use(y)
+}
+`)
+	r := Parse("a.swift", src)
+	yDecl := findDeclKind(r, "y", scope.KindVar)
+	if yDecl == nil {
+		t.Fatalf("y as KindVar missing; decls=%+v", r.Decls)
+	}
+	resolved := false
+	for _, ref := range refsNamed(r, "y") {
+		if ref.Binding.Kind == scope.BindResolved && ref.Binding.Decl == yDecl.ID {
+			resolved = true
+			break
+		}
+	}
+	if !resolved {
+		t.Errorf("ref(y) not resolved to guard-var decl; refs=%+v", refsNamed(r, "y"))
 	}
 }

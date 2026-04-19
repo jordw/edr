@@ -14,8 +14,17 @@
 // classes, constants) don't.
 //
 // v1 limitations:
-//   - No type-vs-value namespace split; class/interface/trait/enum all
-//     go into NSValue at file scope.
+//   - Data-side type/value namespace split is in place (Stage 1):
+//     interface and trait bind NSType only; class and enum dual-emit
+//     (NSValue + NSType, unified by within-file merge). But ref-side
+//     tagging is NOT done — refs in type position (parameter type
+//     hints, return types, `extends`/`implements`, `instanceof`,
+//     property types) are still emitted as NSValue. resolveRefs
+//     retries in the alternate namespace on miss, which covers the
+//     common cases but won't distinguish same-name type/value
+//     decls in the rare case where both exist. (Stage 2 follow-up:
+//     tag ref.Namespace = NSType when the syntactic position is
+//     clearly type-shaped.)
 //   - Top-level constants declared via define('X', ...) extract the first
 //     string-literal argument as the const name.
 //   - Short closure `fn($x) => ...` auto-captures everything in the
@@ -37,6 +46,7 @@ import (
 
 	"github.com/jordw/edr/internal/lexkit"
 	"github.com/jordw/edr/internal/scope"
+	"github.com/jordw/edr/internal/scope/builtins"
 )
 
 // Parse extracts a scope.Result from a PHP source buffer. file is the
@@ -53,6 +63,7 @@ func Parse(file string, src []byte) *scope.Result {
 	b.run()
 	b.closeScopesToDepth(0)
 	b.resolveRefs()
+	scope.MergeDuplicateDecls(b.res)
 	return b.res
 }
 
@@ -1083,7 +1094,53 @@ func (b *builder) currentScopeKind() scope.ScopeKind {
 	return ""
 }
 
+// emitDecl emits a decl and applies PHP's type-vs-value namespace split.
+// Callers pass the "natural" namespace (mostly NSValue at file scope),
+// but type-owner kinds are remapped:
+//   - interface / trait (KindType used for traits) → NSType only
+//   - class / enum → DUAL emit: primary NSValue + shadow NSType (so
+//     `$x instanceof Foo`, `function f(Foo $x)`, `new Foo()`, `Foo::X`
+//     all resolve to the same merged decl). scope.MergeDuplicateDecls
+//     unifies the DeclIDs after Parse.
+//
+// Other kinds (function/const/var/field/param/namespace/import) use the
+// namespace the caller supplied unchanged.
 func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span, ns scope.Namespace) {
+	primaryNs := ns
+	var dualNs scope.Namespace
+	switch kind {
+	case scope.KindInterface:
+		primaryNs = scope.NSType
+	case scope.KindType:
+		// PHP builder uses KindType for `trait X`; traits bind in the
+		// type namespace (you `use TraitX` in a class body — that's a
+		// type-shaped ref).
+		primaryNs = scope.NSType
+	case scope.KindClass, scope.KindEnum:
+		// Keep primary NSValue (constructor / static access / enum
+		// cases) and add a shadow NSType decl for type-position refs.
+		dualNs = scope.NSType
+	}
+
+	idx := b.appendDecl(name, kind, span, primaryNs)
+	if dualNs != "" && dualNs != primaryNs {
+		b.appendDecl(name, kind, span, dualNs)
+	}
+
+	switch kind {
+	case scope.KindFunction, scope.KindMethod, scope.KindClass,
+		scope.KindInterface, scope.KindEnum, scope.KindType,
+		scope.KindNamespace:
+		b.pendingOwnerDecl = idx
+	}
+	b.pendingFullStart = 0
+}
+
+// appendDecl appends a single Decl row and returns its index. Used by
+// emitDecl (which handles namespace selection and dual-emit for types)
+// and can be called directly when a caller has already resolved the
+// final namespace.
+func (b *builder) appendDecl(name string, kind scope.DeclKind, span scope.Span, ns scope.Namespace) int {
 	scopeID := b.currentScope()
 	locID := hashLoc(b.file, span, name)
 	declID := hashDecl(b.file, name, ns, scopeID)
@@ -1108,13 +1165,7 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span, ns
 		Span:      span,
 		FullSpan:  fullSpan,
 	})
-	switch kind {
-	case scope.KindFunction, scope.KindMethod, scope.KindClass,
-		scope.KindInterface, scope.KindEnum, scope.KindType,
-		scope.KindNamespace:
-		b.pendingOwnerDecl = idx
-	}
-	b.pendingFullStart = 0
+	return idx
 }
 
 func (b *builder) emitRef(name string, span scope.Span) {
@@ -1221,42 +1272,66 @@ func (b *builder) resolveRefs() {
 		if r.Binding.Reason == "property_access" || r.Binding.Reason == "this_dot_field" {
 			continue
 		}
-		cur := r.Scope
 		resolved := false
-		for {
-			if d, ok := byKey[key{scope: cur, name: r.Name, ns: r.Namespace}]; ok {
-				r.Binding = scope.RefBinding{
-					Kind:   scope.BindResolved,
-					Decl:   d.ID,
-					Reason: "direct_scope",
-				}
-				resolved = true
-				break
-			}
-			p, ok := parent[cur]
-			if !ok {
-				break
-			}
-			if p == 0 && cur != 0 {
-				if d, ok := byKey[key{scope: 0, name: r.Name, ns: r.Namespace}]; ok {
+		// Try the ref's own namespace first; on miss, fall back to the
+		// other value/type namespace. PHP ref-emission doesn't yet tag
+		// type-position refs (annotations, extends, implements,
+		// instanceof) as NSType — they all come in as NSValue — so we
+		// need the fallback so a ref to an `interface Foo` (NSType
+		// only) still resolves.
+		alt := altNamespace(r.Namespace)
+		namespaces := []scope.Namespace{r.Namespace}
+		if alt != r.Namespace {
+			namespaces = append(namespaces, alt)
+		}
+		for _, ns := range namespaces {
+			cur := r.Scope
+			for {
+				if d, ok := byKey[key{scope: cur, name: r.Name, ns: ns}]; ok {
 					r.Binding = scope.RefBinding{
 						Kind:   scope.BindResolved,
 						Decl:   d.ID,
 						Reason: "direct_scope",
 					}
 					resolved = true
+					break
 				}
+				p, ok := parent[cur]
+				if !ok {
+					break
+				}
+				if p == 0 && cur != 0 {
+					if d, ok := byKey[key{scope: 0, name: r.Name, ns: ns}]; ok {
+						r.Binding = scope.RefBinding{
+							Kind:   scope.BindResolved,
+							Decl:   d.ID,
+							Reason: "direct_scope",
+						}
+						resolved = true
+					}
+					break
+				}
+				if cur == 0 {
+					break
+				}
+				cur = p
+			}
+			if resolved {
 				break
 			}
-			if cur == 0 {
-				break
-			}
-			cur = p
 		}
 		if !resolved {
-			r.Binding = scope.RefBinding{
-				Kind:   scope.BindUnresolved,
-				Reason: "missing_import",
+			if builtins.PHP.Has(r.Name) {
+				r.Binding = scope.RefBinding{
+					Kind:   scope.BindResolved,
+					Decl:   hashBuiltinDecl(r.Name),
+					Reason: "builtin",
+				}
+			} else {
+				r.Binding = scope.RefBinding{
+					Kind:   scope.BindUnresolved,
+					Reason: "missing_import",
+				}
 			}
 		}
 	}
@@ -1503,6 +1578,15 @@ func hashLoc(file string, span scope.Span, name string) scope.LocID {
 	return scope.LocID(binary.LittleEndian.Uint64(sum[:8]))
 }
 
+func hashBuiltinDecl(name string) scope.DeclID {
+	h := sha256.New()
+	h.Write([]byte("<builtin:php>"))
+	h.Write([]byte{0})
+	h.Write([]byte(name))
+	sum := h.Sum(nil)
+	return scope.DeclID(binary.LittleEndian.Uint64(sum[:8]))
+}
+
 func hashDecl(canonicalPath, name string, ns scope.Namespace, scopeID scope.ScopeID) scope.DeclID {
 	h := sha256.New()
 	h.Write([]byte(canonicalPath))
@@ -1516,4 +1600,17 @@ func hashDecl(canonicalPath, name string, ns scope.Namespace, scopeID scope.Scop
 	h.Write(buf[:])
 	sum := h.Sum(nil)
 	return scope.DeclID(binary.LittleEndian.Uint64(sum[:8]))
+}
+
+// altNamespace flips between value and type namespaces for the
+// resolveRefs fallback. Non-value/non-type namespaces (NSField,
+// NSNamespace) are returned unchanged.
+func altNamespace(ns scope.Namespace) scope.Namespace {
+	switch ns {
+	case scope.NSValue:
+		return scope.NSType
+	case scope.NSType:
+		return scope.NSValue
+	}
+	return ns
 }

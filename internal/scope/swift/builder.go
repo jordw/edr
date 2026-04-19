@@ -19,6 +19,13 @@
 //     but do not emit named params.
 //   - self.X / Self.X binds to the enclosing class/struct/enum's
 //     field and method decls (NSField) via tryResolveSelfField.
+//   - Conditional bindings `if let NAME = expr`, `while let NAME = expr`
+//     emit NAME scoped to the block body (KindLet, or KindVar for
+//     `if var` / `while var`). `guard let NAME = expr else { ... }`
+//     emits NAME into the enclosing scope (guard unwraps for the rest
+//     of the surrounding block). Pattern-match bindings inside switch
+//     `case .foo(let x)` are emitted as KindVar but `if case` / `guard
+//     case` / `while case` pattern-match bindings are NOT handled.
 package swift
 
 import (
@@ -27,6 +34,7 @@ import (
 
 	"github.com/jordw/edr/internal/lexkit"
 	"github.com/jordw/edr/internal/scope"
+	"github.com/jordw/edr/internal/scope/builtins"
 )
 
 // Parse extracts a scope.Result from a Swift source buffer. file is the
@@ -165,6 +173,19 @@ type builder struct {
 	// a KindVar. We conservatively scope it to the current scope (the
 	// case arm block or the switch body block).
 	caseBindingExpected bool
+
+	// controlBindingMode tracks which conditional-binding construct we
+	// are in the head of: "if", "guard", or "while". Set by the
+	// keyword and cleared when the corresponding '{' opens the body.
+	// For "if" and "while", bindings defer into the body scope via
+	// pendingControlBindings. For "guard", bindings emit immediately
+	// into the enclosing scope (Swift's guard unwraps for the rest of
+	// the surrounding block).
+	controlBindingMode string
+
+	// pendingControlBindings stashes if/while let-bindings until the
+	// body scope opens, then flushes as decls inside that scope.
+	pendingControlBindings []pendingParam
 
 	// closureStack: each entry is the scope stack depth at which this
 	// closure scope was pushed, so ',' / ')' / ']' can close it when the
@@ -629,25 +650,36 @@ func (b *builder) handleIdent(word []byte) {
 		b.prevByte = 'i'
 		return
 	case "var":
-		// In control-flow binding position (`if let`, `guard let`,
-		// `while let`, or `case .foo(let x)`), bind as KindVar. Else,
+		// In control-flow binding position (`if var`, `guard var`,
+		// `while var`, or `case .foo(var x)`), bind as KindVar. Else,
 		// treat as a property/local var.
-		if b.bindingKindInControl == "" {
+		if b.controlBindingMode != "" {
+			b.bindingKindInControl = scope.KindVar
+			b.declContext = scope.KindVar
+			b.pendingFullStart = startByte + 1
+		} else if b.bindingKindInControl != "" {
+			// switch-case pattern binding.
+			b.declContext = scope.KindVar
+		} else {
 			b.declContext = scope.KindVar
 			b.varDeclKind = scope.KindVar
 			b.pendingFullStart = startByte + 1
-		} else {
-			b.declContext = scope.KindVar
 		}
 		b.prevByte = 'k'
 		return
 	case "let":
-		if b.bindingKindInControl == "" {
+		if b.controlBindingMode != "" {
+			// `if let` / `guard let` / `while let` — bind as KindLet.
+			b.bindingKindInControl = scope.KindLet
+			b.declContext = scope.KindLet
+			b.pendingFullStart = startByte + 1
+		} else if b.bindingKindInControl != "" {
+			// switch-case pattern binding: `case .foo(let x)`.
+			b.declContext = scope.KindVar
+		} else {
 			b.declContext = scope.KindLet
 			b.varDeclKind = scope.KindLet
 			b.pendingFullStart = startByte + 1
-		} else {
-			b.declContext = scope.KindVar
 		}
 		b.prevByte = 'k'
 		return
@@ -684,9 +716,19 @@ func (b *builder) handleIdent(word []byte) {
 	case "if", "else", "while", "for", "do", "switch", "guard", "repeat":
 		b.controlBlockExpected = true
 		// `if let X =` / `guard let X =` / `while let X =` — the next
-		// `let` or `var` creates a new binding scoped to the body.
+		// `let` or `var` creates a new binding. For if/while, it's
+		// scoped to the body (deferred via pendingControlBindings). For
+		// guard, it's scoped to the enclosing scope (emitted immediately).
 		if name == "if" || name == "guard" || name == "while" {
 			b.bindingKindInControl = scope.KindVar
+			b.controlBindingMode = name
+			b.pendingControlBindings = nil
+		} else if name == "else" {
+			// `else` after an if-block or guard's else-clause starts a
+			// block, but any in-flight control-binding state is no longer
+			// relevant (guard's bindings were already emitted; the else
+			// block can't introduce new conditional bindings).
+			b.controlBindingMode = ""
 		}
 		b.prevByte = 'k'
 		return
@@ -830,6 +872,23 @@ func (b *builder) handleIdent(word []byte) {
 
 	if b.declContext != "" {
 		kind := b.declContext
+		// For `if let NAME` / `if var NAME` / `while let NAME` /
+		// `while var NAME`, defer emission until the body '{' opens so
+		// the decl is scoped to the block. For `guard let NAME`, emit
+		// immediately — guard binds into the ENCLOSING scope.
+		if (b.controlBindingMode == "if" || b.controlBindingMode == "while") &&
+			(kind == scope.KindLet || kind == scope.KindVar) &&
+			b.bindingKindInControl != "" {
+			b.pendingControlBindings = append(b.pendingControlBindings, pendingParam{
+				name: name,
+				span: mkSpan(startByte, endByte),
+				kind: kind,
+			})
+			b.declContext = ""
+			b.bindingKindInControl = ""
+			b.prevByte = 'i'
+			return
+		}
 		b.emitDecl(name, kind, mkSpan(startByte, endByte))
 		b.declContext = ""
 		switch kind {
@@ -970,6 +1029,16 @@ func (b *builder) handleOpenBrace() {
 		b.openScope(scope.ScopeBlock, uint32(b.s.Pos-1))
 		b.bindingKindInControl = ""
 		b.caseBindingExpected = false
+		// Flush any `if let` / `while let` bindings into this block
+		// scope. `guard let` bindings were already emitted into the
+		// enclosing scope so pendingControlBindings is empty here.
+		if b.controlBindingMode == "if" || b.controlBindingMode == "while" {
+			for _, p := range b.pendingControlBindings {
+				b.emitDecl(p.name, p.kind, p.span)
+			}
+		}
+		b.pendingControlBindings = nil
+		b.controlBindingMode = ""
 		return
 	}
 
@@ -1336,9 +1405,17 @@ func (b *builder) resolveRefs() {
 			}
 		}
 		if !resolved {
-			r.Binding = scope.RefBinding{
-				Kind:   scope.BindUnresolved,
-				Reason: "missing_import",
+			if builtins.Swift.Has(r.Name) {
+				r.Binding = scope.RefBinding{
+					Kind:   scope.BindResolved,
+					Decl:   hashBuiltinDecl(r.Name),
+					Reason: "builtin",
+				}
+			} else {
+				r.Binding = scope.RefBinding{
+					Kind:   scope.BindUnresolved,
+					Reason: "missing_import",
+				}
 			}
 		}
 	}
@@ -1378,6 +1455,15 @@ func hashLoc(file string, span scope.Span, name string) scope.LocID {
 	h.Write(buf[:])
 	sum := h.Sum(nil)
 	return scope.LocID(binary.LittleEndian.Uint64(sum[:8]))
+}
+
+func hashBuiltinDecl(name string) scope.DeclID {
+	h := sha256.New()
+	h.Write([]byte("<builtin:swift>"))
+	h.Write([]byte{0})
+	h.Write([]byte(name))
+	sum := h.Sum(nil)
+	return scope.DeclID(binary.LittleEndian.Uint64(sum[:8]))
 }
 
 func hashDecl(canonicalPath, name string, ns scope.Namespace, scopeID scope.ScopeID) scope.DeclID {

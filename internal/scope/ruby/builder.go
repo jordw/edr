@@ -10,7 +10,10 @@
 //   - Lambda literals `->(x) { ... }` and `lambda { |x| ... }` are treated
 //     as ordinary brace blocks; `->` itself is passed through as tokens.
 //   - Method visibility (public/private/protected) is not tracked.
-//   - `alias` and `alias_method` are not tracked.
+//   - 'alias new_name old_name' and 'alias_method :new_name, :old_name' are
+//     handled: new_name is emitted as a method decl in the current class/
+//     module scope, and old_name is emitted as a ref. Dynamic forms
+//     ('alias_method name_var, ...') are punted.
 //   - `class << self` (singleton classes) is parsed as an ordinary class.
 //   - Complex ivar patterns — each `@foo` in a class body emits one
 //     per-class decl on first sight; subsequent refs bind to it.
@@ -29,6 +32,7 @@ import (
 
 	"github.com/jordw/edr/internal/lexkit"
 	"github.com/jordw/edr/internal/scope"
+	"github.com/jordw/edr/internal/scope/builtins"
 )
 
 // Parse extracts a scope.Result from a Ruby source buffer.
@@ -45,6 +49,7 @@ func Parse(file string, src []byte) *scope.Result {
 	b.run()
 	b.closeScopesToDepth(0)
 	b.resolveRefs()
+	scope.MergeDuplicateDecls(b.res)
 	return b.res
 }
 
@@ -558,6 +563,28 @@ func (b *builder) handleIdent(word []byte) {
 		return
 	case "attr_reader", "attr_writer", "attr_accessor":
 		b.parseAttrs(name)
+		return
+	case "alias_method":
+		if wasStmtStart {
+			b.parseAlias(name, true)
+			return
+		}
+		b.emitRef(name, mkSpan(startByte, endByte))
+		b.regexOK = true
+		b.prevByte = 'i'
+		b.prevWasIdent = true
+		b.braceIsBlock = true
+		return
+	case "alias":
+		if wasStmtStart {
+			b.parseAlias(name, false)
+			return
+		}
+		b.emitRef(name, mkSpan(startByte, endByte))
+		b.regexOK = true
+		b.prevByte = 'i'
+		b.prevWasIdent = true
+		b.braceIsBlock = true
 		return
 	case "return", "yield", "raise", "and", "or", "not", "in", "then",
 		"else", "elsif", "when", "break", "next", "redo", "retry",
@@ -1274,6 +1301,171 @@ func (b *builder) parseAttrs(kind string) {
 	b.prevWasIdent = false
 }
 
+// parseAlias consumes an 'alias' or 'alias_method' statement.
+//
+// Forms handled:
+//   - alias new_name old_name             (bareword, no comma)
+//   - alias :new_name :old_name           (symbols, no comma)
+//   - alias_method :new_name, :old_name   (symbols, comma)
+//   - alias_method :new_name, "old_name"  (symbol + string, comma)
+//   - alias_method "new_name", "old_name" (strings, comma)
+//
+// Emits new_name as a method decl (KindMethod + NSField when inside a
+// class/module, else KindFunction + NSValue) and old_name as a ref so
+// existing resolver rules can bind it to the original method.
+//
+// Dynamic forms (e.g. 'alias_method name_var, :foo') are punted: if the
+// first argument isn't a literal symbol/string/bareword we bail out.
+func (b *builder) parseAlias(kind string, requireComma bool) {
+	endKw := uint32(b.s.Pos)
+	startKw := endKw - uint32(len(kind))
+	b.emitRef(kind, mkSpan(startKw, endKw))
+
+	b.s.SkipSpaces()
+	hasParen := false
+	if !b.s.EOF() && b.s.Peek() == '(' {
+		b.s.Pos++
+		b.s.SkipSpaces()
+		hasParen = true
+	}
+
+	newName, newStart, newEnd, ok := b.scanAliasName()
+	if !ok {
+		b.regexOK = false
+		b.stmtStart = false
+		b.prevByte = 'i'
+		b.prevWasIdent = false
+		return
+	}
+
+	b.s.SkipSpaces()
+	if requireComma {
+		if !b.s.EOF() && b.s.Peek() == ',' {
+			b.s.Pos++
+			b.s.SkipSpaces()
+		} else {
+			// Malformed alias_method — don't emit a decl we can't verify.
+			b.regexOK = false
+			b.stmtStart = false
+			b.prevByte = 'i'
+			b.prevWasIdent = false
+			return
+		}
+	}
+
+	oldName, oldStart, oldEnd, okOld := b.scanAliasName()
+	if !okOld {
+		b.regexOK = false
+		b.stmtStart = false
+		b.prevByte = 'i'
+		b.prevWasIdent = false
+		return
+	}
+
+	if hasParen {
+		b.s.SkipSpaces()
+		if !b.s.EOF() && b.s.Peek() == ')' {
+			b.s.Pos++
+		}
+	}
+
+	// Emit new_name as a method decl in the current scope. Mirrors how
+	// handleDefKeyword picks kind/ns based on enclosing scope.
+	scopeK := b.currentScopeKind()
+	declKind := scope.KindFunction
+	ns := scope.NSValue
+	if scopeK == scope.ScopeClass || scopeK == scope.ScopeNamespace {
+		declKind = scope.KindMethod
+		ns = scope.NSField
+	}
+	b.emitDecl(newName, declKind, mkSpan(newStart, newEnd), ns)
+
+	// Emit old_name as a ref. When inside a class/module, treat it the
+	// same way a property-style access would, so it can bind to a
+	// sibling method decl; otherwise a plain ref is sufficient.
+	if scopeK == scope.ScopeClass || scopeK == scope.ScopeNamespace {
+		b.emitPropertyRef(oldName, mkSpan(oldStart, oldEnd))
+	} else {
+		b.emitRef(oldName, mkSpan(oldStart, oldEnd))
+	}
+
+	b.regexOK = true
+	b.stmtStart = false
+	b.prevByte = 'i'
+	b.prevWasIdent = false
+}
+
+// scanAliasName reads one identifier-like token of the forms used by
+// alias / alias_method: :sym, :"sym", :'sym', "str", 'str', or a bareword
+// ident. On success returns the name plus its source span (excluding
+// surrounding quotes / leading colon) and ok=true. The scanner position
+// is advanced past the token.
+func (b *builder) scanAliasName() (name string, startByte, endByte uint32, ok bool) {
+	if b.s.EOF() {
+		return "", 0, 0, false
+	}
+	c := b.s.Peek()
+	switch c {
+	case ':':
+		// :symbol, :"sym", or :'sym'
+		b.s.Pos++
+		if b.s.EOF() {
+			return "", 0, 0, false
+		}
+		nxt := b.s.Peek()
+		if nxt == '"' || nxt == '\'' {
+			b.s.Pos++
+			ns := b.s.Pos
+			for !b.s.EOF() && b.s.Peek() != nxt && b.s.Peek() != '\n' {
+				b.s.Pos++
+			}
+			ne := b.s.Pos
+			if !b.s.EOF() && b.s.Peek() == nxt {
+				b.s.Pos++
+			}
+			return string(b.s.Src[ns:ne]), uint32(ns), uint32(ne), true
+		}
+		if !lexkit.DefaultIdentStart[nxt] {
+			return "", 0, 0, false
+		}
+		ns := b.s.Pos
+		_ = b.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
+		// Method names may have a trailing ? or ! or =.
+		if !b.s.EOF() {
+			tc := b.s.Peek()
+			if tc == '?' || tc == '!' || tc == '=' {
+				b.s.Pos++
+			}
+		}
+		return string(b.s.Src[ns:b.s.Pos]), uint32(ns), uint32(b.s.Pos), true
+	case '"', '\'':
+		quote := c
+		b.s.Pos++
+		ns := b.s.Pos
+		for !b.s.EOF() && b.s.Peek() != quote && b.s.Peek() != '\n' {
+			b.s.Pos++
+		}
+		ne := b.s.Pos
+		if !b.s.EOF() && b.s.Peek() == quote {
+			b.s.Pos++
+		}
+		return string(b.s.Src[ns:ne]), uint32(ns), uint32(ne), true
+	default:
+		if !lexkit.DefaultIdentStart[c] {
+			return "", 0, 0, false
+		}
+		ns := b.s.Pos
+		_ = b.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
+		if !b.s.EOF() {
+			tc := b.s.Peek()
+			if tc == '?' || tc == '!' || tc == '=' {
+				b.s.Pos++
+			}
+		}
+		return string(b.s.Src[ns:b.s.Pos]), uint32(ns), uint32(b.s.Pos), true
+	}
+}
+
 // scanPipeParams is called right after a scope opener (do or {) to pick
 // up an optional `|x, y, *rest, &blk|` parameter list. It advances past
 // whitespace and if a `|` is present, scans up to the matching `|`,
@@ -1901,9 +2093,11 @@ func (b *builder) emitPropertyRef(name string, span scope.Span) {
 }
 
 // resolveRefs walks each ref's scope chain and binds it to the innermost
-// matching decl. Unresolved value-namespace refs fall through to a
-// probable "method_call" binding (Ruby's dynamic nature means bare idents
-// may well be a method on self that we can't see here).
+// matching decl. Unresolved value-namespace refs fall through to an
+// unresolved "method_call" binding — we don't have a candidate set,
+// just the knowledge that Ruby's dynamic dispatch could route this
+// anywhere (Kernel, method_missing, DSL host). Cross-file consumers
+// key off the Unresolved kind.
 func (b *builder) resolveRefs() {
 	parent := make(map[scope.ScopeID]scope.ScopeID, len(b.res.Scopes))
 	kindOf := make(map[scope.ScopeID]scope.ScopeKind, len(b.res.Scopes))
@@ -1957,9 +2151,17 @@ func (b *builder) resolveRefs() {
 			continue
 		}
 		if !resolved {
-			r.Binding = scope.RefBinding{
-				Kind:   scope.BindProbable,
-				Reason: "method_call",
+			if builtins.Ruby.Has(r.Name) {
+				r.Binding = scope.RefBinding{
+					Kind:   scope.BindResolved,
+					Decl:   hashBuiltinDecl(r.Name),
+					Reason: "builtin",
+				}
+			} else {
+				r.Binding = scope.RefBinding{
+					Kind:   scope.BindUnresolved,
+					Reason: "method_call",
+				}
 			}
 		}
 		_ = kindOf
@@ -1982,6 +2184,15 @@ func hashLoc(file string, span scope.Span, name string) scope.LocID {
 	h.Write(buf[:])
 	sum := h.Sum(nil)
 	return scope.LocID(binary.LittleEndian.Uint64(sum[:8]))
+}
+
+func hashBuiltinDecl(name string) scope.DeclID {
+	h := sha256.New()
+	h.Write([]byte("<builtin:ruby>"))
+	h.Write([]byte{0})
+	h.Write([]byte(name))
+	sum := h.Sum(nil)
+	return scope.DeclID(binary.LittleEndian.Uint64(sum[:8]))
 }
 
 func hashDecl(canonicalPath, name string, ns scope.Namespace, scopeID scope.ScopeID) scope.DeclID {
