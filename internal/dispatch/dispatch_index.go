@@ -20,11 +20,11 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 	edrDir := db.EdrDir()
 
 	if flagBool(flags, "status", false) {
-		s := idx.GetStatus(root, edrDir)
+		rep := idx.NewReporter(root, edrDir).Status()
 
 		// Use index file count when available, fall back to walk.
-		total := s.Files
-		if !s.Exists || s.Stale {
+		total := rep.Files
+		if !rep.Exists || rep.Stale {
 			total = 0
 			index.WalkRepoFiles(root, func(_ string) error {
 				total++
@@ -35,17 +35,19 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 			"status": "ok",
 			"mode":   "status",
 		}
-		if s.Exists {
-			result["files_indexed"] = s.Files
+		if rep.Exists {
+			result["files_indexed"] = rep.Files
 			result["files_total"] = total
-			result["trigrams"] = s.Trigrams
-			result["size_bytes"] = s.SizeBytes
-			result["stale"] = s.Stale
-			if h, err := idx.ReadHeader(edrDir); err == nil && h.NumSymbols > 0 {
-				result["symbols"] = int(h.NumSymbols)
+			if tri, ok := rep.Extra["trigrams"].(int); ok {
+				result["trigrams"] = tri
+			}
+			result["size_bytes"] = rep.Bytes
+			result["stale"] = rep.Stale
+			if syms, ok := rep.Extra["symbols"].(int); ok {
+				result["symbols"] = syms
 			}
 			if total > 0 {
-				result["coverage"] = fmt.Sprintf("%.0f%%", float64(s.Files)/float64(total)*100)
+				result["coverage"] = fmt.Sprintf("%.0f%%", float64(rep.Files)/float64(total)*100)
 			}
 		} else {
 			result["files_indexed"] = 0
@@ -130,20 +132,22 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 	// so its format can evolve independently.
 	scopeFiles, scopeErr := scopestore.Build(root, edrDir, index.WalkRepoFiles)
 
-	s := idx.GetStatus(root, edrDir)
+	rep := idx.NewReporter(root, edrDir).Status()
 	result := map[string]any{
 		"status":        "built",
-		"files_indexed": s.Files,
-		"trigrams":      s.Trigrams,
-		"size_bytes":    s.SizeBytes,
+		"files_indexed": rep.Files,
+		"size_bytes":    rep.Bytes,
+	}
+	if tri, ok := rep.Extra["trigrams"].(int); ok {
+		result["trigrams"] = tri
 	}
 	if scopeErr == nil {
 		result["scope_files"] = scopeFiles
 	} else {
 		result["scope_error"] = scopeErr.Error()
 	}
-	if h, err := idx.ReadHeader(edrDir); err == nil && h.NumSymbols > 0 {
-		result["symbols"] = int(h.NumSymbols)
+	if syms, ok := rep.Extra["symbols"].(int); ok {
+		result["symbols"] = syms
 	}
 	if idx.HasImportGraph(edrDir) {
 		graph := idx.ReadImportGraph(edrDir)
