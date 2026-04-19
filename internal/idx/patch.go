@@ -68,9 +68,19 @@ func PatchDirtyFiles(root, edrDir string, dirty []string, extractSymbols SymbolE
 	}
 	atomicio.WriteFile(filepath.Join(edrDir, MainFile), d.Marshal())
 	InvalidateSymbolCache()
-	// Popularity scores are stale after patching — remove so they get
-	// recomputed on the next full index build.
+	// Auxiliary indices are invalidated by any patch. None of them
+	// survive a remap in place:
+	//   - popularity.bin: scores computed against the old symbol table.
+	//   - refs.bin: stores symbol IDs directly (ForwardOffsets indexed
+	//     by ID, InvSymIDs packed IDs). rebuildSymbolTable renumbers
+	//     IDs, so old graph IDs now point at different symbols.
+	//   - import_graph.bin: frozen path list. Deleted files stay as
+	//     phantom importers; new files are missing.
+	// Invalidation trades freshness for correctness — next full
+	// `edr index` rebuilds them.
 	os.Remove(filepath.Join(edrDir, PopularityFile))
+	os.Remove(filepath.Join(edrDir, RefGraphFile))
+	os.Remove(filepath.Join(edrDir, ImportGraphFile))
 	staleness.OpenTracker(edrDir, DirtyTrackerName).Clear()
 }
 
