@@ -1944,6 +1944,74 @@ func TestSpec_StatusEmpty(t *testing.T) {
 	}
 }
 
+// TestSpec_StatusStorageBlocks checks that edr status surfaces the
+// three storage-health stacks (index / scope / session) after they
+// have on-disk state. Blocks are additive: index is always present,
+// scope + session only appear once their stores exist.
+func TestSpec_StatusStorageBlocks(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",
+	})
+	sessEnv := []string{"EDR_SESSION=test-storage-blocks"}
+
+	// Build both idx and scope stores.
+	_, _, _, exit := specRun(t, binary, dir, sessEnv, "index")
+	if exit != 0 {
+		t.Fatalf("index exit %d", exit)
+	}
+
+	// Writing a session file by calling any command that persists focus.
+	_, _, _, exit = specRun(t, binary, dir, sessEnv, "status", "--focus", "demo")
+	if exit != 0 {
+		t.Fatalf("status --focus exit %d", exit)
+	}
+
+	result, stdout, _, exit := specRun(t, binary, dir, sessEnv, "status")
+	if exit != 0 {
+		t.Fatalf("status exit %d", exit)
+	}
+	if len(result.Ops) == 0 {
+		t.Fatal("expected at least one op")
+	}
+	header := result.Ops[0].Header
+
+	// index block: always present, preserves legacy shape.
+	if _, ok := header["index"]; !ok {
+		t.Errorf("index missing from header: %s", stdout)
+	}
+	// scope + session: present once their stores exist.
+	if _, ok := header["scope"]; !ok {
+		t.Errorf("scope missing from header after edr index: %s", stdout)
+	}
+	if _, ok := header["session"]; !ok {
+		t.Errorf("session missing from header with an active session: %s", stdout)
+	}
+}
+
+// TestSpec_StatusFreshRepo — on a fresh repo (no index, no sessions),
+// index is still reported but scope/session are elided.
+func TestSpec_StatusFreshRepo(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n",
+	})
+	result, _, _, exit := specRun(t, binary, dir, nil, "status")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if len(result.Ops) == 0 {
+		t.Fatal("expected at least one op")
+	}
+	header := result.Ops[0].Header
+	if _, ok := header["scope"]; ok {
+		t.Errorf("scope should be absent on fresh repo, got %v", header["scope"])
+	}
+	// session may or may not be present depending on whether LoadSession
+	// persisted anything — just ensure the header parses and has index.
+	if _, ok := header["index"]; !ok {
+		t.Errorf("index missing on fresh repo: %v", header)
+	}
+}
+
 func TestSpec_StatusFocus(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{
 		"main.go": "package main\n\nfunc hello() { println(\"hi\") }\n",

@@ -14,7 +14,9 @@ import (
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
+	scopestore "github.com/jordw/edr/internal/scope/store"
 	"github.com/jordw/edr/internal/session"
+	"github.com/jordw/edr/internal/status"
 	"github.com/jordw/edr/internal/warnings"
 	"github.com/spf13/cobra"
 )
@@ -667,18 +669,46 @@ func buildNextResult(sess *session.Session, db index.SymbolStore, root, edrDir s
 	// Always show root so agents know which repo context they're in.
 	result["root"] = output.Rel(root)
 
-	// Index status — fast header-only read
-	if h, err := idx.ReadHeader(edrDir); err == nil {
-		idxInfo := map[string]any{
-			"files":    int(h.NumFiles),
-			"complete": idx.IsComplete(root, edrDir),
+	// Storage health: index + scope + session share a uniform Reporter
+	// contract in internal/status. Each block below is populated from an
+	// Aggregate call; the legacy "index" shape (files, complete, symbols)
+	// is preserved for agents that already depend on it, while scope and
+	// session are additive.
+	reports := status.Aggregate(
+		idx.NewReporter(root, edrDir),
+		scopestore.NewReporter(edrDir),
+		session.NewReporter(edrDir),
+	)
+	for _, rep := range reports {
+		switch rep.Name {
+		case "index":
+			idxInfo := map[string]any{
+				"files":    rep.Files,
+				"complete": idx.IsComplete(root, edrDir),
+			}
+			if syms, ok := rep.Extra["symbols"].(int); ok {
+				idxInfo["symbols"] = syms
+			}
+			result["index"] = idxInfo
+		case "scope":
+			if rep.Exists {
+				result["scope"] = map[string]any{
+					"files": rep.Files,
+					"bytes": rep.Bytes,
+				}
+			}
+		case "session":
+			if rep.Exists {
+				sessInfo := map[string]any{
+					"files": rep.Files,
+					"bytes": rep.Bytes,
+				}
+				if cp, ok := rep.Extra["checkpoints"].(int); ok {
+					sessInfo["checkpoints"] = cp
+				}
+				result["session"] = sessInfo
+			}
 		}
-		if h.NumSymbols > 0 {
-			idxInfo["symbols"] = int(h.NumSymbols)
-		}
-		result["index"] = idxInfo
-	} else {
-		result["index"] = map[string]any{"files": 0, "complete": false}
 	}
 
 	// Undo availability

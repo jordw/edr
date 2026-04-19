@@ -740,6 +740,24 @@ func plainNext(w *os.File, op Op) {
 		}
 	}
 
+	// Scope + session summaries — additive, only present when the
+	// stack has something on disk. buildNextResult omits the maps
+	// entirely when Exists=false, so the check here doubles as an
+	// Exists check.
+	if scopeInfo, ok := op["scope"].(map[string]any); ok {
+		files := anyInt(scopeInfo["files"])
+		h["scope"] = fmt.Sprintf("%d files", files)
+	}
+	if sessInfo, ok := op["session"].(map[string]any); ok {
+		files := anyInt(sessInfo["files"])
+		cps := anyInt(sessInfo["checkpoints"])
+		if cps > 0 {
+			h["session"] = fmt.Sprintf("%d sessions, %d checkpoints", files, cps)
+		} else {
+			h["session"] = fmt.Sprintf("%d sessions", files)
+		}
+	}
+
 	hStr(h, "focus", op, "focus")
 
 	// Add build status to header
