@@ -55,21 +55,7 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 		return result, nil
 	}
 
-	symbolExtractor := func(path string, data []byte) []idx.SymbolEntry {
-		syms := index.Parse(path, data)
-		entries := make([]idx.SymbolEntry, len(syms))
-		for i, s := range syms {
-			entries[i] = idx.SymbolEntry{
-				Name:      s.Name,
-				Kind:      idx.ParseKind(s.Type),
-				StartLine: s.StartLine,
-				EndLine:   s.EndLine,
-				StartByte: s.StartByte,
-				EndByte:   s.EndByte,
-			}
-		}
-		return entries
-	}
+	symbolExtractor := DefaultSymbolExtractor()
 
 	importExtractor := func(relPath string, data []byte) []string {
 		ext := strings.ToLower(filepath.Ext(relPath))
