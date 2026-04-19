@@ -103,9 +103,20 @@ type Decl struct {
 	Kind      DeclKind
 	Scope     ScopeID
 	File      string
-	Span      Span    // span of the declaring identifier
-	FullSpan  Span    // span of the full declaration (function body, class body, etc.)
-	Signature string  // opaque, populated when overloading matters
+	Span      Span // span of the declaring identifier
+	FullSpan  Span // span of the full declaration (function body, class body, etc.)
+	// Signature is opaque, populated when overloading matters. For
+	// KindImport decls, the TS builder repurposes this field to carry
+	// the module specifier + original name, encoded as
+	// "<modulePath>\x00<originalName>" — consumed by the import-graph
+	// resolver in internal/scope/store/imports.go. Callers that treat
+	// Signature as a human-readable string should check Kind first.
+	Signature string
+	// Exported is true when a declaration is visible to importers
+	// (TypeScript: prefixed with `export`; other languages may use
+	// capitalization or other conventions — each builder decides).
+	// The import-graph resolver only rewrites refs to exported decls.
+	Exported bool
 }
 
 // BindingKind describes the confidence of a ref -> decl binding.
@@ -130,7 +141,9 @@ type RefBinding struct {
 	// "macro" | "missing_import" | "duck_typed" | "eval" | "external" |
 	// "inherited_field" (Java: one-level same-file supertype field lookup) |
 	// "trait_method" (Rust: same-file trait-declared method reachable via
-	// `self.X` inside `impl Trait for Type`)
+	// `self.X` inside `impl Trait for Type`) |
+	// "import_export" (TS: ref to a local Import decl rewritten by the
+	// import-graph resolver to target the exported decl in the source file)
 	Reason string
 }
 

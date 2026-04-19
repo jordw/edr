@@ -185,6 +185,14 @@ type builder struct {
 	// FullSpan.EndByte. -1 when none.
 	pendingOwnerDecl int
 
+	// pendingExport is true when the current statement is prefixed with
+	// `export` (`export class Foo`, `export function bar`, `export const x`,
+	// `export interface I`, `export type T = ...`, `export default ...`, etc.).
+	// Consumed by emitDecl to set Decl.Exported = true on the emitted decl,
+	// then cleared. Also cleared on statement boundaries ('}', ';', file end)
+	// so a stray `export` keyword doesn't contaminate later decls.
+	pendingExport bool
+
 	// arrowExprStack tracks open expression-body arrow function scopes.
 	// Each entry records the parenVarStack depth at the moment the arrow
 	// opened, so we know which terminator (`,`, `;`, `)`, `]`, `}`, or
@@ -639,10 +647,16 @@ func (b *builder) handleIdent(word []byte) {
 	case "import":
 		b.handleImport()
 		return
-	case "export", "default", "declare":
-		// Module-level decl prefixes: they don't themselves alter the
-		// stmt-start state, so a following decl keyword (type, class,
-		// function, etc.) still sees a statement boundary and activates.
+	case "export":
+		// Module-level decl prefix: remember that the next emitted decl
+		// is exported, but don't alter the stmt-start state so a following
+		// decl keyword (type, class, function, etc.) still sees a statement
+		// boundary and activates. Consumed by emitDecl; cleared on emit.
+		b.pendingExport = true
+		b.stmtStart = wasStmtStart
+		b.prevByte = 'k'
+		return
+	case "default", "declare":
 		b.stmtStart = wasStmtStart
 		b.prevByte = 'k'
 		return
@@ -872,6 +886,25 @@ func (b *builder) handleImport() {
 	if b.s.Peek() == '\'' || b.s.Peek() == '"' {
 		return // side-effect import, no decls
 	}
+	// Track decl indexes we emit here + their "original name" so we can
+	// back-fill Signature = "<modulePath>\x00<originalName>" after the
+	// 'from <path>' string is scanned. The import graph (store/imports.go)
+	// consumes this field to resolve cross-file refs.
+	type pendingImport struct {
+		declIdx  int
+		origName string
+	}
+	var pending []pendingImport
+	recordImport := func(origName string) {
+		if len(b.res.Decls) == 0 {
+			return
+		}
+		pending = append(pending, pendingImport{
+			declIdx:  len(b.res.Decls) - 1,
+			origName: origName,
+		})
+	}
+
 	// Default import: `import foo from '...'`
 	if lexkit.IsDefaultIdentStart(b.s.Peek()) {
 		word := b.s.ScanIdentTable(&identStart, &identCont)
@@ -879,6 +912,7 @@ func (b *builder) handleImport() {
 			start := uint32(b.s.Pos - len(word))
 			end := uint32(b.s.Pos)
 			b.emitDecl(string(word), scope.KindImport, mkSpan(start, end))
+			recordImport("default")
 		}
 		b.skipWS()
 		if b.s.Peek() == ',' {
@@ -898,6 +932,7 @@ func (b *builder) handleImport() {
 				start := uint32(b.s.Pos - len(word))
 				end := uint32(b.s.Pos)
 				b.emitDecl(string(word), scope.KindImport, mkSpan(start, end))
+				recordImport("*")
 			}
 		}
 	}
@@ -931,9 +966,11 @@ func (b *builder) handleImport() {
 					start := uint32(b.s.Pos - len(alias))
 					end := uint32(b.s.Pos)
 					b.emitDecl(string(alias), scope.KindImport, mkSpan(start, end))
+					recordImport(imported)
 				}
 			} else {
 				b.emitDecl(imported, scope.KindImport, mkSpan(importedStart, importedEnd))
+				recordImport(imported)
 			}
 			b.skipWS()
 			if b.s.Peek() == ',' {
@@ -941,6 +978,56 @@ func (b *builder) handleImport() {
 			}
 		}
 	}
+	// Scan for `from '<path>'` (skip whitespace, optional "from" word,
+	// then string literal). If any piece is missing, leave pending decls
+	// without Signature — the resolver treats them as unresolved/external.
+	b.skipWS()
+	if b.peekIdentWord("from") {
+		b.s.Advance(4)
+		b.skipWS()
+	}
+	modulePath := b.scanImportString()
+	if modulePath != "" {
+		for _, pi := range pending {
+			if pi.declIdx < 0 || pi.declIdx >= len(b.res.Decls) {
+				continue
+			}
+			b.res.Decls[pi.declIdx].Signature = modulePath + "\x00" + pi.origName
+		}
+	}
+}
+
+// scanImportString reads a single or double-quoted string literal at the
+// current position and returns its unescaped contents. Returns "" if the
+// current byte is not a quote or the string is malformed. The scanner is
+// advanced past the closing quote on success.
+func (b *builder) scanImportString() string {
+	q := b.s.Peek()
+	if q != '\'' && q != '"' {
+		return ""
+	}
+	b.s.Pos++
+	start := b.s.Pos
+	// Module specifiers in TS/JS don't contain escape sequences we care
+	// about (no newlines inside them). Scan byte-wise until matching quote.
+	src := b.s.Src
+	for b.s.Pos < len(src) {
+		c := src[b.s.Pos]
+		if c == q {
+			path := string(src[start:b.s.Pos])
+			b.s.Pos++
+			return path
+		}
+		if c == '\\' && b.s.Pos+1 < len(src) {
+			b.s.Pos += 2
+			continue
+		}
+		if c == '\n' {
+			return ""
+		}
+		b.s.Pos++
+	}
+	return ""
 }
 
 func (b *builder) handleOpenBrace() {
@@ -1269,8 +1356,27 @@ func (b *builder) peekNonWSByte() byte {
 }
 
 func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
+	// Consume pendingExport once per top-level emission. Import decls,
+	// params, and fields inside a scope owner should never be exported
+	// via this path — the `export` prefix only applies at the statement
+	// that follows it, and pendingExport is cleared here even if the
+	// emitted decl isn't traditionally exportable (defensive).
+	exported := false
+	if b.pendingExport {
+		switch kind {
+		case scope.KindFunction, scope.KindClass, scope.KindInterface,
+			scope.KindType, scope.KindEnum, scope.KindNamespace,
+			scope.KindConst, scope.KindLet, scope.KindVar:
+			exported = true
+		}
+		b.pendingExport = false
+	}
+
 	primaryNs := b.namespaceFor(kind)
 	idx := b.appendDecl(name, kind, span, primaryNs)
+	if exported {
+		b.res.Decls[idx].Exported = true
+	}
 
 	// Dual-namespace emission: TS classes and enums bind in BOTH the
 	// value namespace (for `new Foo()`, `Foo.X`) and the type namespace
@@ -1278,7 +1384,10 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 	// (scope.MergeDuplicateDecls) unifies their DeclIDs so refs-to from
 	// either position returns the same target.
 	if kind == scope.KindClass || kind == scope.KindEnum {
-		b.appendDecl(name, kind, span, scope.NSType)
+		shadowIdx := b.appendDecl(name, kind, span, scope.NSType)
+		if exported {
+			b.res.Decls[shadowIdx].Exported = true
+		}
 	}
 
 	switch kind {

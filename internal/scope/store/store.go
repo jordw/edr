@@ -63,10 +63,10 @@ import (
 )
 
 const (
-	// v6: RecordMeta gained Size. A pre-v6 scope.bin is rejected by
-	// Load, which callers treat as "no index" and trigger a rebuild
-	// on the next `edr index`.
-	currentVersion uint32 = 6
+	// v7: wireDecl gained Exported (import graph, Phase 1). A pre-v7
+	// scope.bin is rejected by Load, which callers treat as "no index"
+	// and trigger a rebuild on the next `edr index`.
+	currentVersion uint32 = 7
 	storeFileName         = "scope.bin"
 )
 
@@ -141,6 +141,7 @@ type wireDecl struct {
 	Span     scope.Span
 	FullSpan scope.Span
 	SigID    uint32
+	Exported bool
 }
 
 type wireRef struct {
@@ -173,6 +174,7 @@ func toWire(r *scope.Result, p *poolBuilder) *wireResult {
 			Span:     d.Span,
 			FullSpan: d.FullSpan,
 			SigID:    p.intern(d.Signature),
+			Exported: d.Exported,
 		}
 	}
 	for i, ref := range r.Refs {
@@ -216,6 +218,7 @@ func fromWire(w *wireResult, pool []string) *scope.Result {
 			Span:      d.Span,
 			FullSpan:  d.FullSpan,
 			Signature: get(d.SigID),
+			Exported:  d.Exported,
 		}
 	}
 	for i, ref := range w.Refs {
@@ -378,6 +381,12 @@ func Build(root, edrDir string, walkFn func(string, func(string) error) error) (
 	// Cross-file declaration merging (C# partial classes, Ruby open-
 	// class reopening, TS declaration merging). Mutates parsed in place.
 	reconcileResults(parsed)
+
+	// Phase 1 TS import graph: rewrite refs bound to local KindImport
+	// decls so they target the exported source-file decl. Runs after
+	// reconcileResults so merged DeclIDs are used. Other languages'
+	// Results are skipped internally. Mutates parsed in place.
+	resolveImports(parsed)
 
 	// Second pass: encode each reconciled Result. The string pool is
 	// built here so that interning reflects the final (post-merge)
