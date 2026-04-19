@@ -6,6 +6,11 @@
 # Used by scope-graph dogfood tests (EDR_SCOPE_DOGFOOD_DIR=<path>) and
 # by the eval harness (scripts/eval/run.sh).
 #
+# Disk usage: the full corpus is ~30 GB shallow (linux ~6 GB, pytorch
+# ~3 GB, roslyn ~2 GB, kotlin ~2 GB, vscode ~1 GB, spring ~1 GB, plus
+# smaller repos). Use --repo NAME to bring in a single repo if you
+# don't need the full set.
+#
 # Usage:
 #   ./scripts/eval/setup.sh                    # clone + index all
 #   ./scripts/eval/setup.sh --skip-index       # clone only
@@ -27,7 +32,7 @@ while [[ $# -gt 0 ]]; do
         --repo) FILTER_REPO="$2"; shift 2 ;;
         --skip-index) SKIP_INDEX=true; shift ;;
         -h|--help)
-            sed -n '2,17p' "$0" | sed 's/^# //; s/^#//'
+            sed -n '2,21p' "$0" | sed 's/^# //; s/^#//'
             exit 0
             ;;
         *) echo "unknown flag: $1" >&2; exit 2 ;;

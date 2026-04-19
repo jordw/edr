@@ -80,3 +80,18 @@ go build -o edr .                  # pure Go, no C compiler needed
 go install
 edr setup /path/to/target/repo     # inject agent instructions
 ```
+
+Test corpus (for scope dogfood + eval harness):
+
+```bash
+./scripts/eval/setup.sh            # clones ~30 GB into $REPO_BASE (default: parent of edr)
+./scripts/eval/setup.sh --skip-index      # clone-only
+./scripts/eval/setup.sh --repo pytorch    # single repo
+```
+
+Dogfood a single repo once cloned:
+
+```bash
+EDR_SCOPE_DOGFOOD_DIR=/Users/jordw/Documents/GitHub/pytorch \
+  go test ./internal/scope/store/ -run TestDogfood_ImportGraph_AllLanguages -v
+```

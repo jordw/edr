@@ -191,6 +191,20 @@ edr reads and edits any text file. Symbol-aware features (symbol reads, `--signa
 - **macOS and Linux only.** Windows is not planned.
 - **Pure Go.** No CGO, no C compiler needed. Single ~6MB binary.
 
+## Development
+
+Setup on a new machine:
+
+```bash
+git clone https://github.com/jordw/edr.git
+cd edr
+./setup.sh                    # build + install edr (deps auto-installed via brew/apt/apk)
+./scripts/eval/setup.sh       # clone the 12-repo test corpus as siblings of edr (~30 GB)
+go test ./internal/...        # run the full suite
+```
+
+`scripts/eval/setup.sh` accepts `--repo NAME` for a single-repo setup and `--skip-index` to clone without indexing. Scope-graph dogfood tests run via `EDR_SCOPE_DOGFOOD_DIR=/path/to/corpus/repo go test ./internal/scope/store/ -run TestDogfood_ImportGraph -v`.
+
 ## License
 
 [MIT](LICENSE)
