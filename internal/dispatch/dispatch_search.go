@@ -13,6 +13,7 @@ import (
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
+	"github.com/jordw/edr/internal/staleness"
 	"github.com/jordw/edr/internal/walk"
 )
 
@@ -46,7 +47,7 @@ func runSearchUnified(ctx context.Context, db index.SymbolStore, root string, ar
 	// (very slow on large repos). Skip it and go straight to text search
 	// which uses the trigram index and is much faster.
 	edrDir := db.EdrDir()
-	symIndexDirty := idx.IsDirty(edrDir) || !idx.HasSymbolIndex(edrDir)
+	symIndexDirty := staleness.OpenTracker(edrDir, idx.DirtyTrackerName).IsDirty() || !idx.HasSymbolIndex(edrDir)
 
 	if symIndexDirty {
 		return runTextSearch(ctx, db, root, pattern, flags)
@@ -137,9 +138,11 @@ func runSymbolSearch(ctx context.Context, db index.SymbolStore, root, pattern st
 
 	// Determine source
 	symSource := "parse"
-	if edrDir := db.EdrDir(); idx.HasSymbolIndex(edrDir) && !idx.IsDirty(edrDir) {
+	edrDir := db.EdrDir()
+	tr := staleness.OpenTracker(edrDir, idx.DirtyTrackerName)
+	if idx.HasSymbolIndex(edrDir) && !tr.IsDirty() {
 		symSource = "symbol_index"
-	} else if edrDir := db.EdrDir(); idx.IsDirty(edrDir) {
+	} else if tr.IsDirty() {
 		symSource = "parse (index dirty)"
 	}
 

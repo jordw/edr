@@ -14,6 +14,7 @@ import (
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
+	"github.com/jordw/edr/internal/staleness"
 )
 
 func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
@@ -294,8 +295,9 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 		return nil, fmt.Errorf("changesig: %w", err)
 	}
 
+	tr := staleness.OpenTracker(db.EdrDir(), idx.DirtyTrackerName)
 	for _, fe := range edits {
-		idx.MarkDirty(db.EdrDir(), output.Rel(fe.file))
+		tr.Mark(output.Rel(fe.file))
 	}
 
 	newHash, _ := edit.FileHash(sym.File)

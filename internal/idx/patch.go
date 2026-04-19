@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	atomicio "github.com/jordw/edr/internal/atomic"
+	"github.com/jordw/edr/internal/staleness"
 )
 
 // PatchDirtyFiles re-indexes only the files in the dirty list, then patches
@@ -203,7 +204,7 @@ func PatchDirtyFiles(root, edrDir string, dirty []string, extractSymbols SymbolE
 	// Popularity scores are stale after patching — remove so they get
 	// recomputed on the next full index build.
 	os.Remove(filepath.Join(edrDir, PopularityFile))
-	ClearDirty(edrDir)
+	staleness.OpenTracker(edrDir, DirtyTrackerName).Clear()
 }
 
 // remapSymbols translates symbol FileIDs from oldFiles to newFiles.

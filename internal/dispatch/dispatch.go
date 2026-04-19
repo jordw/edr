@@ -17,6 +17,7 @@ import (
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
+	"github.com/jordw/edr/internal/staleness"
 )
 
 var setRootOnce sync.Once
@@ -385,10 +386,11 @@ func runRepoMap(ctx context.Context, db index.SymbolStore, flags map[string]any)
 	}
 	// Determine data source for provenance
 	edrDir := db.EdrDir()
+	tr := staleness.OpenTracker(edrDir, idx.DirtyTrackerName)
 	source := "parse"
-	if idx.HasSymbolIndex(edrDir) && !idx.IsDirty(edrDir) {
+	if idx.HasSymbolIndex(edrDir) && !tr.IsDirty() {
 		source = "symbol_index"
-	} else if idx.IsDirty(edrDir) {
+	} else if tr.IsDirty() {
 		source = "parse (index dirty)"
 	}
 
@@ -788,7 +790,7 @@ func commitEdits(ctx context.Context, db index.SymbolStore, edits []resolvedEdit
 	for _, f := range fileList {
 		relFiles = append(relFiles, output.Rel(f))
 	}
-	idx.MarkDirty(db.EdrDir(), relFiles...)
+	staleness.OpenTracker(db.EdrDir(), idx.DirtyTrackerName).Mark(relFiles...)
 
 	hashes := make(map[string]string)
 	for f := range fileSet {

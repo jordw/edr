@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/jordw/edr/internal/idx"
+	"github.com/jordw/edr/internal/staleness"
 	"github.com/jordw/edr/internal/walk"
 )
 
@@ -140,6 +141,13 @@ func findDepsTextBased(ctx context.Context, db SymbolStore, sym *SymbolInfo) ([]
 		if idx.HasSymbolIndex(edrDir) {
 			// Fast path: symbol index available — O(k) lookups via cached lightweight index
 			_, files := idx.LoadAllSymbols(edrDir)
+			// Load dirty set once so the inner loop doesn't re-scan
+			// the dirty file per candidate.
+			dirtyList := staleness.OpenTracker(edrDir, idx.DirtyTrackerName).Dirty()
+			dirtySet := make(map[string]bool, len(dirtyList))
+			for _, p := range dirtyList {
+				dirtySet[p] = true
+			}
 			for _, name := range otherIdents {
 				entries := idx.LookupSymbols(edrDir, name)
 				if len(entries) > 5 {
@@ -155,7 +163,7 @@ func findDepsTextBased(ctx context.Context, db SymbolStore, sym *SymbolInfo) ([]
 					if depSeen[key] {
 						continue
 					}
-					if idx.IsDirtyFile(edrDir, rel) {
+					if dirtySet[rel] {
 						continue
 					}
 					depSeen[key] = true

@@ -12,6 +12,7 @@ import (
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
+	"github.com/jordw/edr/internal/staleness"
 )
 
 // span identifies a byte range in a file that rename should rewrite.
@@ -301,8 +302,9 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 	}
 
 	// Mark files dirty in the trigram index.
+	tr := staleness.OpenTracker(db.EdrDir(), idx.DirtyTrackerName)
 	for _, fe := range edits {
-		idx.MarkDirty(db.EdrDir(), output.Rel(fe.file))
+		tr.Mark(output.Rel(fe.file))
 	}
 
 	result.Status = "applied"

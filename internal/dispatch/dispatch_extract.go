@@ -14,6 +14,7 @@ import (
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
+	"github.com/jordw/edr/internal/staleness"
 )
 
 func runExtract(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
@@ -165,7 +166,7 @@ func runExtract(ctx context.Context, db index.SymbolStore, root string, args []s
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("extract: %w", err)
 	}
-	idx.MarkDirty(db.EdrDir(), output.Rel(sym.File))
+	staleness.OpenTracker(db.EdrDir(), idx.DirtyTrackerName).Mark(output.Rel(sym.File))
 	newHash, _ := edit.FileHash(sym.File)
 
 	return map[string]any{

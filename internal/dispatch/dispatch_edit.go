@@ -10,6 +10,7 @@ import (
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
+	"github.com/jordw/edr/internal/staleness"
 )
 
 func runSmartEdit(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
@@ -33,7 +34,7 @@ func runSmartEdit(ctx context.Context, db index.SymbolStore, root string, args [
 		// For dry-run, add index freshness context
 		if dryRun {
 			edrDir := db.EdrDir()
-			if idx.IsDirty(edrDir) {
+			if staleness.OpenTracker(edrDir, idx.DirtyTrackerName).IsDirty() {
 				m["index_state"] = "dirty"
 			} else if idx.HasSymbolIndex(edrDir) {
 				m["index_state"] = "fresh"
@@ -583,7 +584,7 @@ func smartEditMoveAfter(ctx context.Context, db index.SymbolStore, root string, 
 	if err := os.WriteFile(srcSym.File, []byte(newContent), 0644); err != nil {
 		return nil, fmt.Errorf("write: %w", err)
 	}
-	idx.MarkDirty(db.EdrDir(), output.Rel(srcSym.File))
+	staleness.OpenTracker(db.EdrDir(), idx.DirtyTrackerName).Mark(output.Rel(srcSym.File))
 	newHash, _ := edit.FileHash(srcSym.File)
 
 	return map[string]any{
@@ -686,8 +687,9 @@ func smartEditMoveAcrossFiles(_ context.Context, db index.SymbolStore, srcSym, t
 		return nil, fmt.Errorf("move: %w", err)
 	}
 
-	idx.MarkDirty(db.EdrDir(), output.Rel(srcSym.File))
-	idx.MarkDirty(db.EdrDir(), output.Rel(tgtSym.File))
+	tr := staleness.OpenTracker(db.EdrDir(), idx.DirtyTrackerName)
+	tr.Mark(output.Rel(srcSym.File))
+	tr.Mark(output.Rel(tgtSym.File))
 	newHash, _ := edit.FileHash(tgtSym.File)
 
 	return map[string]any{

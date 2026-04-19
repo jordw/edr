@@ -17,6 +17,8 @@ package idx
 import (
 	"os"
 	"path/filepath"
+
+	"github.com/jordw/edr/internal/staleness"
 )
 
 // MainFile is the index filename within the edr repo directory.
@@ -26,10 +28,19 @@ const MainFile = "trigram.idx"
 // Kept as a public constant for callers that reference it directly.
 const DirtyFile = "trigram.dirty"
 
+// DirtyTrackerName is the staleness.Tracker name to pass to
+// staleness.OpenTracker when accessing the trigram dirty list:
+//
+//	tr := staleness.OpenTracker(edrDir, idx.DirtyTrackerName)
+//
+// The resulting on-disk file is edrDir/<DirtyTrackerName>.dirty,
+// matching DirtyFile — existing .edr/ dirs remain readable.
+const DirtyTrackerName = "trigram"
+
 // IsComplete returns true if the index exists and is not stale, meaning
 // it covers all repo files and the unindexed-file walk can be skipped.
 func IsComplete(repoRoot, edrDir string) bool {
-	if IsDirty(edrDir) {
+	if staleness.OpenTracker(edrDir, DirtyTrackerName).IsDirty() {
 		return false
 	}
 	h, err := ReadHeader(edrDir)
@@ -64,7 +75,7 @@ func GetStatus(repoRoot, edrDir string) Status {
 		s.Files = int(h.NumFiles)
 		s.Trigrams = int(h.NumTrigrams)
 		s.GitMtime = h.GitMtime
-		s.Stale = gitIndexMtime(repoRoot) != h.GitMtime || IsDirty(edrDir)
+		s.Stale = gitIndexMtime(repoRoot) != h.GitMtime || staleness.OpenTracker(edrDir, DirtyTrackerName).IsDirty()
 	} else {
 		s.Stale = true
 	}

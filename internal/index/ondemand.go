@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/jordw/edr/internal/idx"
+	"github.com/jordw/edr/internal/staleness"
 	"github.com/jordw/edr/internal/walk"
 )
 
@@ -394,7 +395,7 @@ func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo,
 	if entries := idx.LookupSymbolsWithIDs(o.edrDir, name); len(entries) > 0 {
 		_, files := idx.LoadAllSymbols(o.edrDir)
 		// Load dirty set once instead of per-candidate disk reads.
-		dirtyList := idx.DirtyFiles(o.edrDir)
+		dirtyList := staleness.OpenTracker(o.edrDir, idx.DirtyTrackerName).Dirty()
 		dirtySet := make(map[string]bool, len(dirtyList))
 		for _, f := range dirtyList {
 			dirtySet[f] = true
@@ -453,7 +454,7 @@ func (o *OnDemand) SearchSymbols(ctx context.Context, pattern string, limit ...i
 	}
 
 	// Fast path: scan symbol names from index
-	if !idx.IsDirty(o.edrDir) && idx.HasSymbolIndex(o.edrDir) {
+	if !staleness.OpenTracker(o.edrDir, idx.DirtyTrackerName).IsDirty() && idx.HasSymbolIndex(o.edrDir) {
 		allSyms, files := idx.LoadAllSymbols(o.edrDir)
 		if allSyms != nil {
 			lowerPattern := strings.ToLower(pattern)
@@ -496,7 +497,7 @@ func (o *OnDemand) SearchSymbols(ctx context.Context, pattern string, limit ...i
 
 func (o *OnDemand) AllSymbols(ctx context.Context) ([]SymbolInfo, error) {
 	// Fast path: read from symbol index
-	if !idx.IsDirty(o.edrDir) && idx.HasSymbolIndex(o.edrDir) {
+	if !staleness.OpenTracker(o.edrDir, idx.DirtyTrackerName).IsDirty() && idx.HasSymbolIndex(o.edrDir) {
 		allSyms, files := idx.LoadAllSymbols(o.edrDir)
 		if allSyms != nil {
 			results := make([]SymbolInfo, 0, len(allSyms))
@@ -540,7 +541,7 @@ func (o *OnDemand) FilteredSymbols(ctx context.Context, dir, symbolType, namePat
 	// The second check catches files modified by other processes (editors,
 	// other agents, git operations) that do not touch edr's dirty file.
 	if idx.HasSymbolIndex(o.edrDir) {
-		explicitDirty := idx.DirtyFiles(o.edrDir)
+		explicitDirty := staleness.OpenTracker(o.edrDir, idx.DirtyTrackerName).Dirty()
 		_, files := idx.LoadAllSymbols(o.edrDir)
 		fsStale := detectFilesystemStale(o.root, files, absDir)
 		dirty := mergeDirtyPaths(explicitDirty, fsStale)
@@ -904,7 +905,7 @@ func (o *OnDemand) parseCandidateFiles(ctx context.Context, text string) map[str
 
 	// Build per-file dirty set for targeted re-checking.
 	dirtySet := make(map[string]bool)
-	for _, f := range idx.DirtyFiles(o.edrDir) {
+	for _, f := range staleness.OpenTracker(o.edrDir, idx.DirtyTrackerName).Dirty() {
 		dirtySet[f] = true
 	}
 

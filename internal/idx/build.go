@@ -12,6 +12,7 @@ import (
 	"time"
 
 	atomicio "github.com/jordw/edr/internal/atomic"
+	"github.com/jordw/edr/internal/staleness"
 )
 
 // SymbolExtractFn extracts symbols from a file's content.
@@ -236,7 +237,7 @@ func rebuildSmart(root, edrDir string, walkFn func(root string, fn func(path str
 	atomicio.WriteFile(filepath.Join(edrDir, MainFile), d.Marshal())
 	InvalidateSymbolCache()
 	if !timedOut {
-		ClearDirty(edrDir)
+		staleness.OpenTracker(edrDir, DirtyTrackerName).Clear()
 	}
 }
 
@@ -441,7 +442,7 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 
 	// Fast path: nothing changed — skip rebuild entirely.
 	if len(needIndex) == 0 && old != nil && old.Header.NumSymbols > 0 {
-		ClearDirty(edrDir)
+		staleness.OpenTracker(edrDir, DirtyTrackerName).Clear()
 		return nil
 	}
 
@@ -625,6 +626,6 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 		WritePopularity(edrDir, popScores)
 	}
 
-	ClearDirty(edrDir)
+	staleness.OpenTracker(edrDir, DirtyTrackerName).Clear()
 	return nil
 }

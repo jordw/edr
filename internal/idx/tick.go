@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/jordw/edr/internal/staleness"
 )
 
 // Staleness returns true if the index is out of date with .git/index.
@@ -52,7 +54,7 @@ func IncrementalTick(root, edrDir string, walkFn func(root string, fn func(path 
 		dirty = append(dirty, changes.New...)
 		// Include any edit-marked files so the patch covers edits
 		// made since the last successful build.
-		dirty = append(dirty, DirtyFiles(edrDir)...)
+		dirty = append(dirty, staleness.OpenTracker(edrDir, DirtyTrackerName).Dirty()...)
 		dirty = dedupStrings(dirty)
 		if len(dirty) > 0 {
 			PatchDirtyFiles(root, edrDir, dirty, extractSymbols)
