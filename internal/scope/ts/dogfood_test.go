@@ -50,6 +50,8 @@ func TestDogfood_RealTSFiles(t *testing.T) {
 		decls      int
 		refs       int
 		resolved   int
+		probable   int
+		ambiguous  int
 		unresolved int
 	}
 	var stats []fileStats
@@ -75,6 +77,10 @@ func TestDogfood_RealTSFiles(t *testing.T) {
 				switch ref.Binding.Kind {
 				case scope.BindResolved:
 					s.resolved++
+				case scope.BindProbable:
+					s.probable++
+				case scope.BindAmbiguous:
+					s.ambiguous++
 				case scope.BindUnresolved:
 					s.unresolved++
 					if ref.Binding.Reason == "" {
@@ -95,11 +101,13 @@ func TestDogfood_RealTSFiles(t *testing.T) {
 	}
 
 	// Summary report.
-	totalDecls, totalRefs, totalRes, totalUnres := 0, 0, 0, 0
+	totalDecls, totalRefs, totalRes, totalProb, totalAmb, totalUnres := 0, 0, 0, 0, 0, 0
 	for _, s := range stats {
 		totalDecls += s.decls
 		totalRefs += s.refs
 		totalRes += s.resolved
+		totalProb += s.probable
+		totalAmb += s.ambiguous
 		totalUnres += s.unresolved
 	}
 	t.Logf("=== dogfood summary ===")
@@ -108,7 +116,12 @@ func TestDogfood_RealTSFiles(t *testing.T) {
 	t.Logf("total refs:         %d", totalRefs)
 	if totalRefs > 0 {
 		t.Logf("resolved:           %d (%.1f%%)", totalRes, 100*float64(totalRes)/float64(totalRefs))
+		t.Logf("probable:           %d (%.1f%%)", totalProb, 100*float64(totalProb)/float64(totalRefs))
+		if totalAmb > 0 {
+			t.Logf("ambiguous:          %d (%.1f%%)", totalAmb, 100*float64(totalAmb)/float64(totalRefs))
+		}
 		t.Logf("unresolved:         %d (%.1f%%)", totalUnres, 100*float64(totalUnres)/float64(totalRefs))
+		t.Logf("combined (res+prob):%d (%.1f%%)", totalRes+totalProb, 100*float64(totalRes+totalProb)/float64(totalRefs))
 	}
 	t.Logf("parse time:         %.1fms total", float64(totalParseNanos)/1e6)
 	t.Logf("unresolved reasons:")
