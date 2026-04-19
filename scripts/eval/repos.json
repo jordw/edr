@@ -7,5 +7,9 @@
   {"name": "tokio", "url": "https://github.com/tokio-rs/tokio.git", "shallow": true},
   {"name": "react", "url": "https://github.com/facebook/react.git", "shallow": true},
   {"name": "spring-framework", "url": "https://github.com/spring-projects/spring-framework.git", "shallow": true},
+  {"name": "laravel", "url": "https://github.com/laravel/framework.git", "shallow": true},
+  {"name": "vapor", "url": "https://github.com/vapor/vapor.git", "shallow": true},
+  {"name": "roslyn", "url": "https://github.com/dotnet/roslyn.git", "shallow": true},
+  {"name": "kotlin", "url": "https://github.com/JetBrains/kotlin.git", "shallow": true},
   {"name": "edr", "url": "self", "shallow": false}
 ]
