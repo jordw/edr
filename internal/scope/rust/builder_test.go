@@ -647,3 +647,124 @@ func TestParse_UnderscoreNotARef(t *testing.T) {
 		}
 	}
 }
+
+// TestParse_UseSimple_Signature verifies `use foo::Bar;` produces a
+// KindImport decl with Signature="foo\x00Bar".
+func TestParse_UseSimple_Signature(t *testing.T) {
+	src := []byte(`use foo::Bar;
+`)
+	r := Parse("a.rs", src)
+	d := findDecl(r, "Bar")
+	if d == nil {
+		t.Fatalf("Bar decl missing; decls=%v", declNames(r))
+	}
+	if d.Kind != scope.KindImport {
+		t.Errorf("Bar kind = %v, want import", d.Kind)
+	}
+	if d.Signature != "foo\x00Bar" {
+		t.Errorf("Bar signature = %q, want %q", d.Signature, "foo\x00Bar")
+	}
+}
+
+// TestParse_UseBraced_Signature verifies `use foo::{A, B};` produces two
+// decls with the shared prefix path and their own orig names.
+func TestParse_UseBraced_Signature(t *testing.T) {
+	src := []byte(`use foo::{A, B};
+`)
+	r := Parse("a.rs", src)
+	a := findDecl(r, "A")
+	b := findDecl(r, "B")
+	if a == nil || b == nil {
+		t.Fatalf("decls missing: A=%v B=%v (all=%v)", a, b, declNames(r))
+	}
+	if a.Signature != "foo\x00A" {
+		t.Errorf("A sig = %q, want foo\\x00A", a.Signature)
+	}
+	if b.Signature != "foo\x00B" {
+		t.Errorf("B sig = %q, want foo\\x00B", b.Signature)
+	}
+}
+
+// TestParse_UseAliased_Signature verifies `use foo::Bar as Qux;` sets
+// Name=Qux but Signature keeps Bar as the original.
+func TestParse_UseAliased_Signature(t *testing.T) {
+	src := []byte(`use foo::Bar as Qux;
+`)
+	r := Parse("a.rs", src)
+	q := findDecl(r, "Qux")
+	if q == nil {
+		t.Fatalf("Qux missing; decls=%v", declNames(r))
+	}
+	if q.Signature != "foo\x00Bar" {
+		t.Errorf("Qux sig = %q, want foo\\x00Bar", q.Signature)
+	}
+	// Bar should NOT be a decl (the alias replaces it as the binder).
+	if findDecl(r, "Bar") != nil {
+		t.Errorf("Bar should not be a decl when aliased to Qux")
+	}
+}
+
+// TestParse_PubExported verifies that `pub fn foo()` and `pub struct S`
+// set Decl.Exported=true, and non-pub does not.
+func TestParse_PubExported(t *testing.T) {
+	src := []byte(`pub fn foo() {}
+fn bar() {}
+pub struct S {}
+struct T {}
+pub(crate) fn baz() {}
+`)
+	r := Parse("a.rs", src)
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"foo", true},
+		{"bar", false},
+		{"S", true},
+		{"T", false},
+		{"baz", true},
+	}
+	for _, tc := range cases {
+		d := findDecl(r, tc.name)
+		if d == nil {
+			t.Errorf("%s: decl missing", tc.name)
+			continue
+		}
+		if d.Exported != tc.want {
+			t.Errorf("%s: Exported=%v, want %v", tc.name, d.Exported, tc.want)
+		}
+	}
+}
+
+// TestParse_UseCratePrefix verifies `use crate::foo::Bar` keeps the
+// `crate` prefix verbatim in the modulePath.
+func TestParse_UseCratePrefix(t *testing.T) {
+	src := []byte(`use crate::foo::Bar;
+use self::x::Y;
+use super::Z;
+`)
+	r := Parse("a.rs", src)
+	bar := findDecl(r, "Bar")
+	if bar == nil {
+		t.Fatalf("Bar missing; decls=%v", declNames(r))
+	}
+	if bar.Signature != "crate::foo\x00Bar" {
+		t.Errorf("Bar sig = %q, want crate::foo\\x00Bar", bar.Signature)
+	}
+	y := findDecl(r, "Y")
+	if y == nil || y.Signature != "self::x\x00Y" {
+		sig := "<nil>"
+		if y != nil {
+			sig = y.Signature
+		}
+		t.Errorf("Y sig = %q, want self::x\\x00Y", sig)
+	}
+	z := findDecl(r, "Z")
+	if z == nil || z.Signature != "super\x00Z" {
+		sig := "<nil>"
+		if z != nil {
+			sig = z.Signature
+		}
+		t.Errorf("Z sig = %q, want super\\x00Z", sig)
+	}
+}

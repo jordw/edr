@@ -226,9 +226,64 @@ func TestParse_Include(t *testing.T) {
 	if h.Kind != scope.KindImport {
 		t.Errorf("header.h kind = %v, want import", h.Kind)
 	}
+	// Quoted include: Signature = `header.h\x00"`.
+	if h.Signature != "header.h\x00\"" {
+		t.Errorf("header.h Signature = %q, want %q", h.Signature, "header.h\x00\"")
+	}
+	// Imports are never marked Exported (filtered by the resolver).
+	if h.Exported {
+		t.Errorf("header.h Exported = true; imports should not be Exported")
+	}
 	sys := findDecl(r, "stdio.h")
 	if sys == nil {
-		t.Errorf("stdio.h system include not found; decls=%v", declNames(r))
+		t.Fatalf("stdio.h system include not found; decls=%v", declNames(r))
+	}
+	// Angle-bracket include: Signature = `stdio.h\x00<>`.
+	if sys.Signature != "stdio.h\x00<>" {
+		t.Errorf("stdio.h Signature = %q, want %q", sys.Signature, "stdio.h\x00<>")
+	}
+}
+
+// TestParse_ExportedFileScope: non-static decls at file scope have
+// external linkage (Exported=true); `static` ones are internal.
+func TestParse_ExportedFileScope(t *testing.T) {
+	src := []byte(`extern int x;
+static int y;
+int f(void) { return 0; }
+static int g(void) { return 0; }
+`)
+	r := Parse("a.c", src)
+
+	x := findDecl(r, "x")
+	if x == nil {
+		t.Fatalf("x not found; decls=%v", declNames(r))
+	}
+	if !x.Exported {
+		t.Errorf("extern int x: Exported=false, want true")
+	}
+
+	y := findDecl(r, "y")
+	if y == nil {
+		t.Fatalf("y not found; decls=%v", declNames(r))
+	}
+	if y.Exported {
+		t.Errorf("static int y: Exported=true, want false")
+	}
+
+	f := findDecl(r, "f")
+	if f == nil {
+		t.Fatalf("f not found; decls=%v", declNames(r))
+	}
+	if !f.Exported {
+		t.Errorf("int f(...): Exported=false, want true")
+	}
+
+	g := findDecl(r, "g")
+	if g == nil {
+		t.Fatalf("g not found; decls=%v", declNames(r))
+	}
+	if g.Exported {
+		t.Errorf("static int g(...): Exported=true, want false")
 	}
 }
 

@@ -171,15 +171,32 @@ type builder struct {
 	// previous ident was a type, so the next ident is the var name.
 	typePositionIdent bool
 
-	// isImportDecl / importBuf: consuming an `import foo.bar.Baz` — emit
-	// final ident as a KindImport decl on the terminating newline / `;`.
-	isImportDecl  bool
-	importBuf     []byte
-	importBufSpan scope.Span
-	importIsStar  bool
+	// isImportDecl: consuming an `import foo.bar.Baz [as Alias]`. See
+	// flushImport for emission; Signature = "<modulePath>\x00<origName>"
+	// is stamped for the Phase-1 import graph resolver.
+	isImportDecl        bool
+	importPathBuf       []byte
+	importOrigName      []byte
+	importBuf           []byte
+	importBufSpan       scope.Span
+	importAliasExpected bool
+	importIsStar        bool
+	importWildcard      bool
+	importWildSpan      scope.Span
 
-	// isPackageDecl: consuming `package a.b.c` — emit nothing.
+	// isPackageDecl: consuming `package a.b.c`. Accumulates into
+	// packageBuf; on `\n` / `;` flushed (emits a synthetic KindNamespace
+	// decl at file scope, and stamps b.packagePath). The resolver reads
+	// the KindNamespace to build FQNs of top-level decls.
 	isPackageDecl bool
+	packageBuf    []byte
+	packagePath   string
+
+	// pendingPrivate: `private` modifier seen at stmtStart. Consumed by
+	// emitDecl so top-level decls stay Exported=false. Kotlin defaults
+	// to public at file scope, so any top-level decl without `private`
+	// is treated as Exported (v1: `internal` counts as exported).
+	pendingPrivate bool
 
 	// annotationExpected: previous byte was '@', so the next ident is
 	// part of an annotation and should be emitted as a ref (not a decl).
@@ -230,7 +247,9 @@ func (b *builder) run() {
 			if b.isImportDecl {
 				b.flushImport()
 			}
-			b.isPackageDecl = false
+			if b.isPackageDecl {
+				b.flushPackage()
+			}
 			b.stmtStart = true
 			// Close single-expression function scope when the newline is
 			// at the fn body's own depth (not inside a nested brace/paren
@@ -293,7 +312,9 @@ func (b *builder) run() {
 			if b.isImportDecl {
 				b.flushImport()
 			}
-			b.isPackageDecl = false
+			if b.isPackageDecl {
+				b.flushPackage()
+			}
 			b.pendingParams = nil
 			b.pendingGenerics = nil
 			b.forHeaderExpected = false
@@ -501,6 +522,30 @@ func (b *builder) run() {
 			}
 			b.stmtStart = false
 			b.prevByte = '0'
+		case c == '*':
+			// Inside an import after '.', `*` is the wildcard marker:
+			// `import com.acme.*`. Elsewhere `*` is arithmetic /
+			// vararg spread — skip.
+			if b.isImportDecl && b.prevByte == '.' {
+				startByte := uint32(b.s.Pos)
+				b.s.Pos++
+				b.importWildcard = true
+				b.importWildSpan = mkSpan(startByte, uint32(b.s.Pos))
+				// Promote importBuf into the path so modulePath is
+				// complete; clear importBuf so flushImport doesn't emit
+				// a decl for it (wildcards are punted in v1).
+				if len(b.importBuf) > 0 {
+					if len(b.importPathBuf) > 0 {
+						b.importPathBuf = append(b.importPathBuf, '.')
+					}
+					b.importPathBuf = append(b.importPathBuf, b.importBuf...)
+					b.importBuf = b.importBuf[:0]
+				}
+				b.prevByte = '*'
+				continue
+			}
+			b.s.Pos++
+			b.prevByte = c
 		default:
 			b.s.Pos++
 			b.prevByte = c
@@ -537,14 +582,50 @@ func (b *builder) handleIdent(word []byte) {
 	wasStmtStart := b.stmtStart
 	b.stmtStart = false
 
-	// Package declaration: consume dotted name; emit nothing.
+	// Package declaration: accumulate dotted name; emit nothing. The
+	// complete path is stamped into b.packagePath at `\n` / `;`.
 	if b.isPackageDecl {
+		if len(b.packageBuf) == 0 {
+			b.packageBuf = append(b.packageBuf[:0], word...)
+		} else if b.prevByte == '.' {
+			b.packageBuf = append(b.packageBuf, '.')
+			b.packageBuf = append(b.packageBuf, word...)
+		} else {
+			// Malformed: adjacent idents with no '.'. Replace defensively.
+			b.packageBuf = append(b.packageBuf[:0], word...)
+		}
 		b.prevByte = 'i'
 		return
 	}
 
-	// Import declaration: collect final unqualified name.
+	// Import declaration: collect the dotted module path, the source-
+	// side last segment, and (on `as`) the local alias. See
+	// parseImportSignature() in internal/scope/store/imports.go.
 	if b.isImportDecl {
+		if name == "as" && len(b.importBuf) > 0 && !b.importAliasExpected {
+			// `import com.foo.Bar as X` — binding name becomes X;
+			// origName stays as Bar. Save Bar, await the alias.
+			b.importOrigName = append(b.importOrigName[:0], b.importBuf...)
+			b.importAliasExpected = true
+			b.prevByte = 'k'
+			return
+		}
+		if b.importAliasExpected {
+			// Alias ident becomes the new binding name. origName stays.
+			b.importBuf = append(b.importBuf[:0], word...)
+			b.importBufSpan = mkSpan(startByte, endByte)
+			b.importAliasExpected = false
+			b.prevByte = 'i'
+			return
+		}
+		// Regular dotted path segment. Promote any existing importBuf
+		// into the path prefix when a `.` precedes this ident.
+		if len(b.importBuf) > 0 && b.prevByte == '.' {
+			if len(b.importPathBuf) > 0 {
+				b.importPathBuf = append(b.importPathBuf, '.')
+			}
+			b.importPathBuf = append(b.importPathBuf, b.importBuf...)
+		}
 		b.importBuf = append(b.importBuf[:0], word...)
 		b.importBufSpan = mkSpan(startByte, endByte)
 		b.prevByte = 'i'
@@ -573,7 +654,11 @@ func (b *builder) handleIdent(word []byte) {
 	case "import":
 		b.isImportDecl = true
 		b.importBuf = b.importBuf[:0]
+		b.importPathBuf = b.importPathBuf[:0]
+		b.importOrigName = b.importOrigName[:0]
+		b.importAliasExpected = false
 		b.importIsStar = false
+		b.importWildcard = false
 		b.prevByte = 'k'
 		return
 	case "class":
@@ -620,7 +705,11 @@ func (b *builder) handleIdent(word []byte) {
 		"noinline", "reified", "tailrec", "suspend", "external", "operator",
 		"infix", "expect", "actual":
 		// Modifiers — preserve stmtStart so a following decl keyword still
-		// activates.
+		// activates. Track `private` at stmtStart so the next top-level
+		// decl is NOT marked Exported (Kotlin defaults to public).
+		if name == "private" && wasStmtStart {
+			b.pendingPrivate = true
+		}
 		b.stmtStart = wasStmtStart
 		b.prevByte = 'k'
 		return
@@ -925,19 +1014,67 @@ func (b *builder) classBodyFollows() bool {
 	return false
 }
 
-// flushImport emits the collected import ident as a KindImport decl.
-// Skips wildcard imports (`import foo.bar.*`).
+// flushImport emits the collected import as a KindImport decl with
+// Signature = "<modulePath>\x00<origName>" for consumption by the
+// Phase-1 import graph resolver (internal/scope/store/imports_kotlin.go).
+//
+// Wildcard imports (`import foo.bar.*`) are not emitted as decls in v1
+// — per-file enumeration of wildcard-imported symbols is punted to a
+// future pass; the resolver ignores them.
 func (b *builder) flushImport() {
-	if b.isImportDecl && len(b.importBuf) > 0 && !b.importIsStar {
-		// Wildcard-import check: if the last non-ident byte before the
-		// newline/`;` was `*`, skip emission. We don't directly track
-		// that; the simplest check is whether the importBuf text ends
-		// with an ident (it does, by construction).
-		b.emitDecl(string(b.importBuf), scope.KindImport, b.importBufSpan)
+	if b.isImportDecl && !b.importWildcard && len(b.importBuf) > 0 {
+		// Binding name = importBuf (alias if `as` was used, else last
+		// dotted segment). origName = importOrigName if alias was used,
+		// else same as binding name.
+		bindingName := string(b.importBuf)
+		var origName string
+		if len(b.importOrigName) > 0 {
+			origName = string(b.importOrigName)
+		} else {
+			origName = bindingName
+		}
+		modPath := string(b.importPathBuf)
+		idx := len(b.res.Decls)
+		b.emitDecl(bindingName, scope.KindImport, b.importBufSpan)
+		if idx < len(b.res.Decls) {
+			b.res.Decls[idx].Signature = modPath + "\x00" + origName
+		}
 	}
 	b.isImportDecl = false
 	b.importBuf = b.importBuf[:0]
+	b.importPathBuf = b.importPathBuf[:0]
+	b.importOrigName = b.importOrigName[:0]
+	b.importAliasExpected = false
 	b.importIsStar = false
+	b.importWildcard = false
+}
+
+// flushPackage finalizes a `package a.b.c` clause. Stamps the dotted
+// path onto b.packagePath and emits a synthetic KindNamespace decl at
+// file scope with Name = full dotted path, so the Phase-1 import graph
+// resolver (internal/scope/store/imports_kotlin.go) can associate each
+// parsed file with its package to build FQNs of top-level decls.
+func (b *builder) flushPackage() {
+	if b.isPackageDecl {
+		if len(b.packageBuf) > 0 {
+			b.packagePath = string(b.packageBuf)
+			// Emit a synthetic KindNamespace decl at file scope so the
+			// resolver can discover each file's package without
+			// reparsing. The span is conservative (covers whatever
+			// idents were parsed into packageBuf up to the current
+			// position); exact span isn't used by the resolver.
+			end := uint32(b.s.Pos)
+			startU := uint32(len(b.packageBuf))
+			var nameStart uint32
+			if end >= startU {
+				nameStart = end - startU
+			}
+			b.emitDecl(b.packagePath, scope.KindNamespace,
+				mkSpan(nameStart, end))
+		}
+		b.packageBuf = b.packageBuf[:0]
+	}
+	b.isPackageDecl = false
 }
 
 func (b *builder) handleOpenBrace() {
@@ -1272,6 +1409,17 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 	}
 	fullSpan := scope.Span{StartByte: fullStart, EndByte: span.EndByte}
 
+	// Exported: Kotlin defaults to `public` at file scope, so any top-
+	// level decl without `private` is importable. Only applies to file-
+	// scope decls (not nested members, not imports — imports are local
+	// bindings, not exports — and not package-marker namespaces).
+	exported := false
+	if kind != scope.KindImport && kind != scope.KindParam &&
+		kind != scope.KindNamespace &&
+		b.currentScopeKind() == scope.ScopeFile && !b.pendingPrivate {
+		exported = true
+	}
+
 	idx := len(b.res.Decls)
 	b.res.Decls = append(b.res.Decls, scope.Decl{
 		ID:        declID,
@@ -1283,6 +1431,7 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 		File:      b.file,
 		Span:      span,
 		FullSpan:  fullSpan,
+		Exported:  exported,
 	})
 
 	switch kind {
@@ -1291,6 +1440,11 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 		b.pendingOwnerDecl = idx
 	}
 	b.pendingFullStart = 0
+	// Clear pendingPrivate once consumed. Imports and package markers
+	// don't consume it.
+	if kind != scope.KindImport && kind != scope.KindNamespace {
+		b.pendingPrivate = false
+	}
 }
 
 func (b *builder) emitRef(name string, span scope.Span) {

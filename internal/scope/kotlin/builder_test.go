@@ -475,3 +475,201 @@ func TestParse_SingleExpressionFn(t *testing.T) {
 		}
 	}
 }
+
+// TestParse_ImportSignatureSimple: `import com.foo.Bar` emits a
+// KindImport decl named "Bar" with Signature="com.foo\x00Bar".
+func TestParse_ImportSignatureSimple(t *testing.T) {
+	src := []byte(`import com.foo.Bar
+
+class A
+`)
+	r := Parse("A.kt", src)
+	bar := findDeclKind(r, "Bar", scope.KindImport)
+	if bar == nil {
+		t.Fatalf("import decl Bar missing; decls=%v", declNames(r))
+	}
+	want := "com.foo" + "\x00" + "Bar"
+	if bar.Signature != want {
+		t.Errorf("Bar.Signature = %q, want %q", bar.Signature, want)
+	}
+}
+
+// TestParse_ImportSignatureTopLevelFun: `import com.foo.bar` (lowercase,
+// could be a top-level fun or val) emits a KindImport with Signature
+// "com.foo\x00bar". The builder doesn't care whether the imported name
+// is a class or a top-level fun — that's the resolver's job.
+func TestParse_ImportSignatureTopLevelFun(t *testing.T) {
+	src := []byte(`import com.foo.bar
+`)
+	r := Parse("A.kt", src)
+	bar := findDeclKind(r, "bar", scope.KindImport)
+	if bar == nil {
+		t.Fatalf("import decl bar missing; decls=%v", declNames(r))
+	}
+	want := "com.foo" + "\x00" + "bar"
+	if bar.Signature != want {
+		t.Errorf("bar.Signature = %q, want %q", bar.Signature, want)
+	}
+}
+
+// TestParse_ImportAliased: `import com.foo.Bar as B` binds the local
+// name B but records origName=Bar in the Signature.
+func TestParse_ImportAliased(t *testing.T) {
+	src := []byte(`import com.foo.Bar as B
+
+class A
+`)
+	r := Parse("A.kt", src)
+	b := findDeclKind(r, "B", scope.KindImport)
+	if b == nil {
+		t.Fatalf("import decl B missing; decls=%v", declNames(r))
+	}
+	want := "com.foo" + "\x00" + "Bar"
+	if b.Signature != want {
+		t.Errorf("B.Signature = %q, want %q", b.Signature, want)
+	}
+	// The un-aliased name should NOT be present as an import decl.
+	if findDeclKind(r, "Bar", scope.KindImport) != nil {
+		t.Errorf("aliased import should not leave a `Bar` import decl")
+	}
+}
+
+// TestParse_ImportWildcard: `import com.foo.*` is punted in v1 — no
+// decl is emitted, but the parser doesn't crash and subsequent decls
+// still extract correctly.
+func TestParse_ImportWildcard(t *testing.T) {
+	src := []byte(`import com.foo.*
+
+class A
+`)
+	r := Parse("A.kt", src)
+	for _, d := range r.Decls {
+		if d.Name == "*" {
+			t.Errorf("wildcard import should not emit a `*` decl; decls=%v",
+				declNames(r))
+		}
+		// Also verify no decl was emitted for the last dotted path
+		// segment (`foo`) as an import — common past bug.
+		if d.Name == "foo" && d.Kind == scope.KindImport {
+			t.Errorf("wildcard import incorrectly emitted `foo` as import")
+		}
+	}
+	if findDeclKind(r, "A", scope.KindClass) == nil {
+		t.Errorf("class A missing; decls=%v", declNames(r))
+	}
+}
+
+// TestParse_PackageCaptured: `package com.acme` is recorded as a
+// synthetic KindNamespace decl at file scope with the full dotted path
+// as Name. The Phase-1 import graph resolver reads this to compute
+// FQNs of top-level decls.
+func TestParse_PackageCaptured(t *testing.T) {
+	src := []byte(`package com.acme.sub
+
+class A
+`)
+	r := Parse("A.kt", src)
+	var pkgDecl *scope.Decl
+	for i := range r.Decls {
+		if r.Decls[i].Kind == scope.KindNamespace {
+			pkgDecl = &r.Decls[i]
+			break
+		}
+	}
+	if pkgDecl == nil {
+		t.Fatalf("no KindNamespace decl for package; decls=%v", declNames(r))
+	}
+	if pkgDecl.Name != "com.acme.sub" {
+		t.Errorf("package decl Name = %q, want %q", pkgDecl.Name, "com.acme.sub")
+	}
+	// Class A should still parse fine alongside the package clause.
+	if findDeclKind(r, "A", scope.KindClass) == nil {
+		t.Errorf("class A missing alongside package clause; decls=%v",
+			declNames(r))
+	}
+}
+
+// TestParse_PackageNone: a file without any `package` clause has no
+// KindNamespace decl — packagePath is the empty default package.
+func TestParse_PackageNone(t *testing.T) {
+	src := []byte(`class A
+`)
+	r := Parse("A.kt", src)
+	for _, d := range r.Decls {
+		if d.Kind == scope.KindNamespace {
+			t.Errorf("unexpected KindNamespace decl %q when no package clause",
+				d.Name)
+		}
+	}
+}
+
+// TestParse_ExportedVsPrivate: file-scope classes/funs/vals without
+// `private` are marked Exported=true; `private` at stmtStart prevents
+// export. `internal` and default visibility both count as exported.
+func TestParse_ExportedVsPrivate(t *testing.T) {
+	src := []byte(`class Public1
+private class Private1
+internal class Internal1
+fun publicFun() {}
+private fun privateFun() {}
+val publicVal = 1
+private val privateVal = 2
+`)
+	r := Parse("A.kt", src)
+	cases := []struct {
+		name     string
+		kind     scope.DeclKind
+		exported bool
+	}{
+		{"Public1", scope.KindClass, true},
+		{"Private1", scope.KindClass, false},
+		{"Internal1", scope.KindClass, true},
+		{"publicFun", scope.KindFunction, true},
+		{"privateFun", scope.KindFunction, false},
+		{"publicVal", scope.KindVar, true},
+		{"privateVal", scope.KindVar, false},
+	}
+	for _, c := range cases {
+		d := findDeclKind(r, c.name, c.kind)
+		if d == nil {
+			t.Errorf("decl %q (%v) missing; decls=%v", c.name, c.kind, declNames(r))
+			continue
+		}
+		if d.Exported != c.exported {
+			t.Errorf("decl %q Exported = %v, want %v", c.name, d.Exported, c.exported)
+		}
+	}
+}
+
+// TestParse_MembersNotExported: class members (methods/fields) do NOT
+// get Exported=true regardless of the class's export state — export is
+// a file-scope property in our v1 model.
+func TestParse_MembersNotExported(t *testing.T) {
+	src := []byte(`class Foo {
+    fun bar() {}
+    val x = 1
+}
+`)
+	r := Parse("Foo.kt", src)
+	foo := findDeclKind(r, "Foo", scope.KindClass)
+	if foo == nil {
+		t.Fatalf("class Foo missing")
+	}
+	if !foo.Exported {
+		t.Errorf("Foo Exported = false, want true (file-scope, default public)")
+	}
+	bar := findDeclKind(r, "bar", scope.KindMethod)
+	if bar == nil {
+		t.Fatalf("method bar missing")
+	}
+	if bar.Exported {
+		t.Errorf("method bar Exported = true, want false (member, not top-level)")
+	}
+	x := findDeclKind(r, "x", scope.KindField)
+	if x == nil {
+		t.Fatalf("field x missing")
+	}
+	if x.Exported {
+		t.Errorf("field x Exported = true, want false (member, not top-level)")
+	}
+}

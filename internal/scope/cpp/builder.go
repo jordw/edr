@@ -99,6 +99,23 @@ type builder struct {
 	controlBlockExpected bool
 	compositeLitDepth    int
 
+	// functionDeclPending is set when a function or method name has
+	// been emitted as a decl. It survives the `(...)` param list and
+	// any trailing qualifiers (`const`, `noexcept`, `override`, etc.),
+	// clearing on `{` (body opens a proper function scope) or `;`
+	// (prototype-only declaration). Without this flag, the `{` after
+	// a function's `)` would be misclassified as a compound-literal
+	// opener because prevByte == ')' matches the composite-lit
+	// heuristic in handleOpenBrace.
+	functionDeclPending bool
+
+	// scopeQualifierPending is set by `::` so the next ident's
+	// emitPropertyRef stamps Reason="scope_qualified_access" instead
+	// of "property_access". The distinction lets the post-pass
+	// resolver target qualified chains (`Foo::bar`, `A::B::C`) without
+	// over-firing on object member access (`obj.name` / `obj->name`).
+	scopeQualifierPending bool
+
 	// pendingTemplateAngle is set by the `template` keyword so the
 	// next `<` is recognized as a template-parameter-list opener even
 	// though prevByte is the `k` marker (not an ident).
@@ -124,6 +141,11 @@ type builder struct {
 	// or `{` (method body / nested block) the buffer is flushed as
 	// plain refs (no field emitted).
 	classStmtIdents []pendingParam
+
+	// sawStatic: set on `static`; cleared on `;` or on emitDecl for
+	// function/method/var/const. File-scope functions/vars declared
+	// `static` are NOT Exported (internal linkage).
+	sawStatic bool
 
 	prevByte byte
 }
@@ -211,11 +233,16 @@ func (b *builder) run() {
 			b.prevByte = ';'
 			b.stmtStart = true
 			b.declContext = ""
+			b.sawStatic = false
+			// A prototype-only function declaration (`void foo();`)
+			// terminates here without opening a body.
+			b.functionDeclPending = false
 		case c == ':':
 			b.s.Pos++
 			if b.s.Peek() == ':' {
 				b.s.Pos++
 				b.prevByte = '.'
+				b.scopeQualifierPending = true
 			} else {
 				b.prevByte = ':'
 			}
@@ -287,7 +314,9 @@ func (b *builder) skipPreprocLine() {
 	case "include":
 		b.skipWS()
 		start := b.s.Pos
+		quoteStyle := ""
 		if b.s.Peek() == '<' {
+			quoteStyle = "<>"
 			b.s.Pos++
 			for !b.s.EOF() && b.s.Peek() != '>' && b.s.Peek() != '\n' {
 				b.s.Pos++
@@ -296,6 +325,7 @@ func (b *builder) skipPreprocLine() {
 				b.s.Pos++
 			}
 		} else if b.s.Peek() == '"' {
+			quoteStyle = "\""
 			b.s.ScanSimpleString('"')
 		}
 		end := b.s.Pos
@@ -308,6 +338,13 @@ func (b *builder) skipPreprocLine() {
 				}
 			}
 			b.emitDecl(pathText, scope.KindImport, mkSpan(uint32(start), uint32(end)))
+			// Stamp Signature = "<path>\x00<quoteStyle>" so the Phase
+			// 1 include-graph resolver (imports_cpp.go) can resolve
+			// quoted includes against repo files while leaving system
+			// <> includes alone.
+			if len(b.res.Decls) > 0 && quoteStyle != "" {
+				b.res.Decls[len(b.res.Decls)-1].Signature = pathText + "\x00" + quoteStyle
+			}
 		}
 	}
 	for !b.s.EOF() {
@@ -421,7 +458,16 @@ func (b *builder) handleIdent(word []byte) {
 		b.prevByte = 'k'
 		return
 	case "using":
+		// Three forms:
+		//   1) `using namespace Foo;`     → KindImport, Sig=`Foo\x00*`.
+		//   2) `using Foo::Bar;`          → KindImport Bar, Sig=`Foo\x00Bar`.
+		//   3) `using T = Expr;`          → type alias; falls through.
 		b.prevByte = 'k'
+		if b.handleUsingDirective(startByte) {
+			return
+		}
+		b.declContext = scope.KindType
+		b.pendingFullStart = startByte + 1
 		return
 	case "template":
 		// The following `<...>` is a template param list; force angle-
@@ -436,7 +482,13 @@ func (b *builder) handleIdent(word []byte) {
 	case "case", "default", "break", "continue", "return", "goto", "throw":
 		b.prevByte = 'k'
 		return
-	case "public", "private", "protected", "virtual", "static", "const",
+	case "static":
+		// `static` at file scope marks internal linkage. Cleared on
+		// `;` or on decl emission.
+		b.sawStatic = true
+		b.prevByte = 'k'
+		return
+	case "public", "private", "protected", "virtual", "const",
 		"extern", "inline", "constexpr", "consteval", "noexcept",
 		"explicit", "friend", "mutable", "volatile", "register", "auto",
 		"signed", "unsigned", "short", "long", "new", "delete", "this",
@@ -499,6 +551,7 @@ func (b *builder) handleIdent(word []byte) {
 		switch kind {
 		case scope.KindFunction, scope.KindMethod:
 			b.paramListPending = true
+			b.functionDeclPending = true
 		}
 		b.prevByte = 'i'
 		return
@@ -516,6 +569,7 @@ func (b *builder) handleIdent(word []byte) {
 		case scope.ScopeFile, scope.ScopeNamespace:
 			b.emitDecl(name, scope.KindFunction, mkSpan(startByte, endByte))
 			b.paramListPending = true
+			b.functionDeclPending = true
 			b.prevByte = 'i'
 			return
 		case scope.ScopeClass:
@@ -525,6 +579,7 @@ func (b *builder) handleIdent(word []byte) {
 				b.flushClassFieldAsRefs()
 				b.emitDecl(name, scope.KindMethod, mkSpan(startByte, endByte))
 				b.paramListPending = true
+				b.functionDeclPending = true
 				b.prevByte = 'i'
 				return
 			}
@@ -544,6 +599,186 @@ func (b *builder) handleIdent(word []byte) {
 
 	b.emitRef(name, mkSpan(startByte, endByte))
 	b.prevByte = 'i'
+}
+
+// handleUsingDirective scans a `using ...;` statement after the
+// `using` keyword has been consumed. Returns true if it handled a
+// directive or using declaration (and consumed up through `;`).
+// Returns false for `using T = Expr;` (type alias), leaving the
+// scanner at its original position so the caller falls through.
+//
+// Directive form:   `using namespace Foo[::Bar]*;` → emits KindImport
+//                   name=<full>, Signature=`<full>\x00*`.
+// Declaration form: `using Qual::Name;`            → emits KindImport
+//                   name=Name, Signature=`Qual\x00Name`.
+func (b *builder) handleUsingDirective(keywordStart uint32) bool {
+	b.skipUsingWS()
+	if b.s.EOF() {
+		return false
+	}
+	savePos := b.s.Pos
+
+	// `using namespace Foo[::Bar]*;`
+	if b.peekCppKeyword("namespace") {
+		b.s.Pos += len("namespace")
+		b.skipUsingWS()
+		full := b.scanQualifiedName()
+		if full == "" {
+			b.consumeToSemicolon()
+			return true
+		}
+		nameSpan := mkSpan(keywordStart, uint32(b.s.Pos))
+		b.emitDecl(full, scope.KindImport, nameSpan)
+		if len(b.res.Decls) > 0 {
+			b.res.Decls[len(b.res.Decls)-1].Signature = full + "\x00*"
+		}
+		b.consumeToSemicolon()
+		return true
+	}
+
+	// Using declaration or type alias.
+	qual := b.scanQualifiedName()
+	if qual == "" {
+		b.s.Pos = savePos
+		return false
+	}
+	b.skipUsingWS()
+	if !b.s.EOF() && b.s.Peek() == '=' {
+		// Type alias: rewind so the outer loop re-scans the alias
+		// ident under declContext = KindType.
+		b.s.Pos = savePos
+		return false
+	}
+	idx := lastDoubleColon(qual)
+	if idx < 0 {
+		// `using Name;` (namespace-scope redeclaration). Not modeled.
+		b.consumeToSemicolon()
+		return true
+	}
+	qualifier := qual[:idx]
+	member := qual[idx+2:]
+	nameSpan := mkSpan(keywordStart, uint32(b.s.Pos))
+	b.emitDecl(member, scope.KindImport, nameSpan)
+	if len(b.res.Decls) > 0 {
+		b.res.Decls[len(b.res.Decls)-1].Signature = qualifier + "\x00" + member
+	}
+	b.consumeToSemicolon()
+	return true
+}
+
+// skipUsingWS skips whitespace / newlines / comments inside a `using`
+// statement.
+func (b *builder) skipUsingWS() {
+	for !b.s.EOF() {
+		c := b.s.Peek()
+		switch {
+		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
+			b.s.Pos++
+		case c == '/' && b.s.PeekAt(1) == '/':
+			b.s.SkipLineComment()
+		case c == '/' && b.s.PeekAt(1) == '*':
+			b.s.Advance(2)
+			b.s.SkipBlockComment("*/")
+		default:
+			return
+		}
+	}
+}
+
+// peekCppKeyword reports whether the next ident scan would yield
+// word. Does not advance the scanner.
+func (b *builder) peekCppKeyword(word string) bool {
+	if b.s.EOF() {
+		return false
+	}
+	n := len(word)
+	if b.s.Pos+n > len(b.s.Src) {
+		return false
+	}
+	for i := 0; i < n; i++ {
+		if b.s.Src[b.s.Pos+i] != word[i] {
+			return false
+		}
+	}
+	if b.s.Pos+n < len(b.s.Src) {
+		c := b.s.Src[b.s.Pos+n]
+		if identCont[c] {
+			return false
+		}
+	}
+	return true
+}
+
+// scanQualifiedName reads ident (`::` ident)* from the current
+// position, returning the full `A::B::C` text. Advances past the
+// name. Returns "" when no leading ident is present.
+func (b *builder) scanQualifiedName() string {
+	first := b.s.ScanIdentTable(&identStart, &identCont)
+	if len(first) == 0 {
+		return ""
+	}
+	parts := string(first)
+	for {
+		save := b.s.Pos
+		b.skipUsingWS()
+		if b.s.Pos+1 >= len(b.s.Src) || b.s.Peek() != ':' || b.s.PeekAt(1) != ':' {
+			b.s.Pos = save
+			return parts
+		}
+		b.s.Pos += 2
+		b.skipUsingWS()
+		next := b.s.ScanIdentTable(&identStart, &identCont)
+		if len(next) == 0 {
+			return parts
+		}
+		parts += "::" + string(next)
+	}
+}
+
+// consumeToSemicolon advances past the next top-level `;`, swallowing
+// matched `{}` groups along the way.
+func (b *builder) consumeToSemicolon() {
+	depth := 0
+	for !b.s.EOF() {
+		c := b.s.Peek()
+		switch {
+		case c == '{':
+			depth++
+			b.s.Pos++
+		case c == '}':
+			if depth > 0 {
+				depth--
+			}
+			b.s.Pos++
+		case c == ';' && depth == 0:
+			b.s.Pos++
+			b.stmtStart = true
+			b.declContext = ""
+			b.sawStatic = false
+			b.prevByte = ';'
+			return
+		case c == '/' && b.s.PeekAt(1) == '/':
+			b.s.SkipLineComment()
+		case c == '/' && b.s.PeekAt(1) == '*':
+			b.s.Advance(2)
+			b.s.SkipBlockComment("*/")
+		case c == '"' || c == '\'':
+			b.s.ScanSimpleString(c)
+		default:
+			b.s.Pos++
+		}
+	}
+}
+
+// lastDoubleColon returns the byte index of the last `::` in s, or
+// -1 if not found.
+func lastDoubleColon(s string) int {
+	for i := len(s) - 2; i >= 0; i-- {
+		if s[i] == ':' && s[i+1] == ':' {
+			return i
+		}
+	}
+	return -1
 }
 
 func (b *builder) handleOpenBrace() {
@@ -600,6 +835,17 @@ func (b *builder) handleOpenBrace() {
 	if b.controlBlockExpected {
 		b.controlBlockExpected = false
 		b.openScope(scope.ScopeBlock, uint32(b.s.Pos-1))
+		return
+	}
+
+	// A function/method decl emitted upstream and whose param list has
+	// now closed opens a proper function scope here. This must precede
+	// the composite-lit heuristic below because `) {` matches both
+	// (prev==')'), and function bodies would otherwise be silently
+	// misclassified as compound literals.
+	if b.functionDeclPending {
+		b.functionDeclPending = false
+		b.openScope(scope.ScopeFunction, uint32(b.s.Pos-1))
 		return
 	}
 
@@ -718,6 +964,7 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 	fullSpan := scope.Span{StartByte: fullStart, EndByte: span.EndByte}
 
 	idx := len(b.res.Decls)
+	exported := b.computeExported(kind, scopeID)
 	b.res.Decls = append(b.res.Decls, scope.Decl{
 		ID:        declID,
 		LocID:     locID,
@@ -728,6 +975,7 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 		File:      b.file,
 		Span:      span,
 		FullSpan:  fullSpan,
+		Exported:  exported,
 	})
 
 	switch kind {
@@ -736,7 +984,47 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 		scope.KindNamespace:
 		b.pendingOwnerDecl = idx
 	}
+	// `static` applies to one decl only. Clear once consumed by a
+	// function/method/var/const.
+	switch kind {
+	case scope.KindFunction, scope.KindMethod, scope.KindVar, scope.KindConst:
+		b.sawStatic = false
+	}
 	b.pendingFullStart = 0
+}
+
+// computeExported decides whether a freshly-emitted decl has external
+// linkage for the Phase 1 include-graph resolver. C++ rules:
+//   - NSField members, params, imports, non-file/-namespace-scope
+//     decls: never exported.
+//   - At file or namespace scope: classes / interfaces / enums /
+//     typedefs / namespaces default to external linkage.
+//   - Functions and file-scope vars/consts: external UNLESS `static`.
+//   - Out-of-line method definitions in .cpp (emitted as KindFunction
+//     at file/namespace scope) are exported — linker-visible.
+func (b *builder) computeExported(kind scope.DeclKind, scopeID scope.ScopeID) bool {
+	switch kind {
+	case scope.KindField, scope.KindParam, scope.KindImport, scope.KindLet:
+		return false
+	}
+	sk := scope.ScopeFile
+	for _, s := range b.res.Scopes {
+		if s.ID == scopeID {
+			sk = s.Kind
+			break
+		}
+	}
+	if sk != scope.ScopeFile && sk != scope.ScopeNamespace {
+		return false
+	}
+	switch kind {
+	case scope.KindClass, scope.KindInterface, scope.KindEnum,
+		scope.KindType, scope.KindNamespace:
+		return true
+	case scope.KindFunction, scope.KindMethod, scope.KindVar, scope.KindConst:
+		return !b.sawStatic
+	}
+	return false
 }
 
 func (b *builder) emitRef(name string, span scope.Span) {
@@ -755,6 +1043,11 @@ func (b *builder) emitRef(name string, span scope.Span) {
 func (b *builder) emitPropertyRef(name string, span scope.Span) {
 	scopeID := b.currentScope()
 	locID := hashLoc(b.file, span, name)
+	reason := "property_access"
+	if b.scopeQualifierPending {
+		reason = "scope_qualified_access"
+		b.scopeQualifierPending = false
+	}
 	b.res.Refs = append(b.res.Refs, scope.Ref{
 		LocID:     locID,
 		File:      b.file,
@@ -764,7 +1057,7 @@ func (b *builder) emitPropertyRef(name string, span scope.Span) {
 		Scope:     scopeID,
 		Binding: scope.RefBinding{
 			Kind:   scope.BindProbable,
-			Reason: "property_access",
+			Reason: reason,
 		},
 	})
 }
@@ -789,7 +1082,7 @@ func (b *builder) resolveRefs() {
 	}
 	for i := range b.res.Refs {
 		r := &b.res.Refs[i]
-		if r.Binding.Reason == "property_access" {
+		if r.Binding.Reason == "property_access" || r.Binding.Reason == "scope_qualified_access" {
 			continue
 		}
 		cur := r.Scope
@@ -825,6 +1118,100 @@ func (b *builder) resolveRefs() {
 					Kind:   scope.BindUnresolved,
 					Reason: "missing_import",
 				}
+			}
+		}
+	}
+
+	b.resolveQualifiedMemberRefs()
+}
+
+// resolveQualifiedMemberRefs rebinds scope_qualified_access refs
+// (emitted from `Foo::bar` where the `::` was seen) by finding the
+// preceding ref's target scope and looking up the member inside it.
+// Handles chains like `A::B::C` because each link of the chain gets
+// rebound in source order before being read as "preceding ref" for
+// the next link.
+//
+// Only same-file resolution here — cross-file namespace qualification
+// (e.g., pytorch's `at::Tensor` where `at` is declared in a header)
+// happens in the store-level resolver.
+func (b *builder) resolveQualifiedMemberRefs() {
+	if len(b.res.Refs) < 2 {
+		return
+	}
+	// DeclID → body ScopeID for every scope-owning decl (namespace,
+	// class, struct, interface).
+	ownerBody := make(map[scope.DeclID]scope.ScopeID)
+	for _, s := range b.res.Scopes {
+		var want func(scope.DeclKind) bool
+		switch s.Kind {
+		case scope.ScopeNamespace:
+			want = func(k scope.DeclKind) bool { return k == scope.KindNamespace }
+		case scope.ScopeClass:
+			want = func(k scope.DeclKind) bool { return k == scope.KindClass || k == scope.KindType }
+		case scope.ScopeInterface:
+			want = func(k scope.DeclKind) bool { return k == scope.KindInterface }
+		default:
+			continue
+		}
+		var best *scope.Decl
+		for i := range b.res.Decls {
+			d := &b.res.Decls[i]
+			if d.Scope != s.Parent {
+				continue
+			}
+			if !want(d.Kind) {
+				continue
+			}
+			if d.Span.EndByte > s.Span.StartByte {
+				continue
+			}
+			if best == nil || d.Span.EndByte > best.Span.EndByte {
+				best = d
+			}
+		}
+		if best != nil {
+			ownerBody[best.ID] = s.ID
+		}
+	}
+	if len(ownerBody) == 0 {
+		return
+	}
+	type key struct {
+		scope scope.ScopeID
+		name  string
+		ns    scope.Namespace
+	}
+	byKey := make(map[key]*scope.Decl, len(b.res.Decls))
+	for i := range b.res.Decls {
+		d := &b.res.Decls[i]
+		k := key{scope: d.Scope, name: d.Name, ns: d.Namespace}
+		if _, ok := byKey[k]; !ok {
+			byKey[k] = d
+		}
+	}
+	for i := 1; i < len(b.res.Refs); i++ {
+		r := &b.res.Refs[i]
+		if r.Binding.Reason != "scope_qualified_access" {
+			continue
+		}
+		prev := &b.res.Refs[i-1]
+		if prev.Binding.Kind != scope.BindResolved {
+			continue
+		}
+		body, ok := ownerBody[prev.Binding.Decl]
+		if !ok {
+			continue
+		}
+		// Try value, type, field namespaces in turn.
+		for _, ns := range []scope.Namespace{scope.NSValue, scope.NSType, scope.NSField, r.Namespace} {
+			if d, ok := byKey[key{scope: body, name: r.Name, ns: ns}]; ok {
+				r.Binding = scope.RefBinding{
+					Kind:   scope.BindResolved,
+					Decl:   d.ID,
+					Reason: "qualified_member",
+				}
+				break
 			}
 		}
 	}

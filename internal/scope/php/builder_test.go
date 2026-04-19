@@ -780,3 +780,158 @@ function useIt(Foo $x) { return $x; }
 		t.Errorf("Foo type-hint ref didn't resolve to interface Foo; refs=%+v", fooRefs)
 	}
 }
+
+// TestParse_UseSignature_Simple verifies `use Foo\Bar;` stamps
+// Decl.Signature = "Foo\x00Bar" on the KindImport decl so the
+// cross-file resolver can route to the source namespace.
+func TestParse_UseSignature_Simple(t *testing.T) {
+	src := []byte(`<?php use Foo\Bar; ?>`)
+	r := Parse("a.php", src)
+	bar := findDeclOfKind(r, "Bar", scope.KindImport)
+	if bar == nil {
+		t.Fatalf("Bar import missing; decls=%v", declNames(r))
+	}
+	if want := "Foo\x00Bar"; bar.Signature != want {
+		t.Errorf("Signature = %q, want %q", bar.Signature, want)
+	}
+}
+
+// TestParse_UseSignature_DeepPath verifies `use Foo\Bar\Baz;` stamps
+// a backslash-separated modulePath.
+func TestParse_UseSignature_DeepPath(t *testing.T) {
+	src := []byte(`<?php use Foo\Bar\Baz; ?>`)
+	r := Parse("a.php", src)
+	baz := findDeclOfKind(r, "Baz", scope.KindImport)
+	if baz == nil {
+		t.Fatalf("Baz import missing; decls=%v", declNames(r))
+	}
+	if want := "Foo\\Bar\x00Baz"; baz.Signature != want {
+		t.Errorf("Signature = %q, want %q", baz.Signature, want)
+	}
+}
+
+// TestParse_UseSignature_Aliased verifies `use Foo\Bar as B;` stamps
+// the ORIGINAL name in Signature (the decl's Name is the alias).
+func TestParse_UseSignature_Aliased(t *testing.T) {
+	src := []byte(`<?php use Foo\Bar as B; ?>`)
+	r := Parse("a.php", src)
+	b := findDeclOfKind(r, "B", scope.KindImport)
+	if b == nil {
+		t.Fatalf("B import missing; decls=%v", declNames(r))
+	}
+	if want := "Foo\x00Bar"; b.Signature != want {
+		t.Errorf("Signature = %q, want %q (Name=%q should stay the alias)", b.Signature, want, b.Name)
+	}
+}
+
+// TestParse_UseSignature_Grouped covers `use Foo\{A, B as C};`.
+func TestParse_UseSignature_Grouped(t *testing.T) {
+	src := []byte(`<?php use Foo\{A, B as C}; ?>`)
+	r := Parse("a.php", src)
+	a := findDeclOfKind(r, "A", scope.KindImport)
+	c := findDeclOfKind(r, "C", scope.KindImport)
+	if a == nil || c == nil {
+		t.Fatalf("grouped imports missing; decls=%v", declNames(r))
+	}
+	if want := "Foo\x00A"; a.Signature != want {
+		t.Errorf("A.Signature = %q, want %q", a.Signature, want)
+	}
+	if want := "Foo\x00B"; c.Signature != want {
+		t.Errorf("C.Signature = %q, want %q (orig is B)", c.Signature, want)
+	}
+}
+
+// TestParse_UseSignature_Function verifies `use function Foo\bar;`
+// carries the "function:" prefix in Signature.
+func TestParse_UseSignature_Function(t *testing.T) {
+	src := []byte(`<?php use function Foo\bar; ?>`)
+	r := Parse("a.php", src)
+	bar := findDeclOfKind(r, "bar", scope.KindImport)
+	if bar == nil {
+		t.Fatalf("use-function import bar missing; decls=%v", declNames(r))
+	}
+	if want := "function:Foo\x00bar"; bar.Signature != want {
+		t.Errorf("Signature = %q, want %q", bar.Signature, want)
+	}
+}
+
+// TestParse_NamespaceFullPath verifies the file's KindNamespace decl
+// carries the full backslash-qualified path in Signature.
+func TestParse_NamespaceFullPath(t *testing.T) {
+	src := []byte(`<?php namespace A\B\C; ?>`)
+	r := Parse("a.php", src)
+	ns := findDeclOfKind(r, "C", scope.KindNamespace)
+	if ns == nil {
+		t.Fatalf("namespace C decl missing; decls=%v", declNames(r))
+	}
+	if want := "A\\B\\C"; ns.Signature != want {
+		t.Errorf("namespace Signature = %q, want %q", ns.Signature, want)
+	}
+}
+
+// TestParse_ExportedDecls verifies top-level class/interface/trait/
+// enum/function/const are marked Exported under PHP's implicit-public
+// semantics.
+func TestParse_ExportedDecls(t *testing.T) {
+	src := []byte(`<?php
+class Clazz {}
+interface Iface {}
+trait Tr {}
+enum En {}
+function fn1() {}
+const K = 1;
+?>`)
+	r := Parse("a.php", src)
+	for _, name := range []string{"Clazz", "Iface", "Tr", "En", "fn1", "K"} {
+		d := findDecl(r, name)
+		if d == nil {
+			t.Errorf("%s decl missing; decls=%v", name, declNames(r))
+			continue
+		}
+		if !d.Exported {
+			t.Errorf("%s (kind=%s) not Exported; want true", name, d.Kind)
+		}
+	}
+}
+
+// TestParse_ExportedInNamespaceScope verifies top-level decls inside
+// a `namespace A\B;` scope are still marked Exported.
+func TestParse_ExportedInNamespaceScope(t *testing.T) {
+	src := []byte(`<?php
+namespace A\B;
+class Foo {}
+function bar() {}
+?>`)
+	r := Parse("a.php", src)
+	for _, name := range []string{"Foo", "bar"} {
+		d := findDecl(r, name)
+		if d == nil {
+			t.Errorf("%s decl missing; decls=%v", name, declNames(r))
+			continue
+		}
+		if !d.Exported {
+			t.Errorf("namespaced %s not Exported; want true", name)
+		}
+	}
+}
+
+// TestParse_NotExportedInClassBody verifies methods/fields are NOT
+// marked Exported (they're class members, not file-scope exports).
+func TestParse_NotExportedInClassBody(t *testing.T) {
+	src := []byte(`<?php
+class Foo {
+  public function hello() {}
+  public $x;
+}
+?>`)
+	r := Parse("a.php", src)
+	for _, name := range []string{"hello", "$x"} {
+		d := findDecl(r, name)
+		if d == nil {
+			continue
+		}
+		if d.Exported {
+			t.Errorf("class member %s is Exported; want false", name)
+		}
+	}
+}

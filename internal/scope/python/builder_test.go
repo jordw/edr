@@ -522,3 +522,135 @@ class Box:
 		t.Errorf("Box: FullSpan starts with %q, want %q", got, "class")
 	}
 }
+
+// TestParse_ImportSignature_FromSimple: `from X import Y` stamps the
+// binding decl with Signature = "X\x00Y".
+func TestParse_ImportSignature_FromSimple(t *testing.T) {
+	r := Parse("a.py", []byte("from foo.bar import Baz\n"))
+	d := findDecl(r, "Baz")
+	if d == nil {
+		t.Fatalf("Baz decl missing; decls=%v", declNames(r))
+	}
+	if d.Kind != scope.KindImport {
+		t.Errorf("Baz: kind=%v, want KindImport", d.Kind)
+	}
+	if want := "foo.bar\x00Baz"; d.Signature != want {
+		t.Errorf("Baz: Signature=%q, want %q", d.Signature, want)
+	}
+}
+
+// TestParse_ImportSignature_FromAliased: `from X import Y as Z` stamps
+// Z's decl with Signature = "X\x00Y" (origName is the source name, not
+// the alias).
+func TestParse_ImportSignature_FromAliased(t *testing.T) {
+	r := Parse("a.py", []byte("from foo.bar import Baz as B\n"))
+	d := findDecl(r, "B")
+	if d == nil {
+		t.Fatalf("B decl missing; decls=%v", declNames(r))
+	}
+	if d.Kind != scope.KindImport {
+		t.Errorf("B: kind=%v, want KindImport", d.Kind)
+	}
+	if want := "foo.bar\x00Baz"; d.Signature != want {
+		t.Errorf("B: Signature=%q, want %q", d.Signature, want)
+	}
+}
+
+// TestParse_ImportSignature_ImportDotted: `import X.Y` binds the
+// top-level name `X` with Signature = "X.Y\x00*" (whole-module import).
+func TestParse_ImportSignature_ImportDotted(t *testing.T) {
+	r := Parse("a.py", []byte("import foo.bar\n"))
+	d := findDecl(r, "foo")
+	if d == nil {
+		t.Fatalf("foo decl missing; decls=%v", declNames(r))
+	}
+	if d.Kind != scope.KindImport {
+		t.Errorf("foo: kind=%v, want KindImport", d.Kind)
+	}
+	if want := "foo.bar\x00*"; d.Signature != want {
+		t.Errorf("foo: Signature=%q, want %q", d.Signature, want)
+	}
+}
+
+// TestParse_ImportSignature_ImportDottedAliased: `import X.Y as Z`
+// binds `Z` (not `X`) with Signature = "X.Y\x00*".
+func TestParse_ImportSignature_ImportDottedAliased(t *testing.T) {
+	r := Parse("a.py", []byte("import foo.bar as fb\n"))
+	d := findDecl(r, "fb")
+	if d == nil {
+		t.Fatalf("fb decl missing; decls=%v", declNames(r))
+	}
+	if want := "foo.bar\x00*"; d.Signature != want {
+		t.Errorf("fb: Signature=%q, want %q", d.Signature, want)
+	}
+}
+
+// TestParse_ImportSignature_Relative: `from . import X` → path=".".
+// `from ..foo import X` → path="..foo".
+func TestParse_ImportSignature_Relative(t *testing.T) {
+	t.Run("from . import X", func(t *testing.T) {
+		r := Parse("a.py", []byte("from . import X\n"))
+		d := findDecl(r, "X")
+		if d == nil {
+			t.Fatalf("X decl missing; decls=%v", declNames(r))
+		}
+		if want := ".\x00X"; d.Signature != want {
+			t.Errorf("X: Signature=%q, want %q", d.Signature, want)
+		}
+	})
+	t.Run("from ..foo import X", func(t *testing.T) {
+		r := Parse("a.py", []byte("from ..foo import X\n"))
+		d := findDecl(r, "X")
+		if d == nil {
+			t.Fatalf("X decl missing; decls=%v", declNames(r))
+		}
+		if want := "..foo\x00X"; d.Signature != want {
+			t.Errorf("X: Signature=%q, want %q", d.Signature, want)
+		}
+	})
+}
+
+// TestParse_Exported_FileScope: file-scope decls whose name doesn't
+// start with '_' are marked Exported; underscore-prefixed names are not.
+// Nested (non-file-scope) decls are never Exported even if they don't
+// start with '_'.
+func TestParse_Exported_FileScope(t *testing.T) {
+	src := []byte(`def public_fn():
+    pass
+
+def _private_fn():
+    pass
+
+class PublicClass:
+    def method(self):
+        pass
+
+CONST = 1
+_HIDDEN = 2
+`)
+	r := Parse("a.py", src)
+	cases := []struct {
+		name         string
+		wantExported bool
+	}{
+		{"public_fn", true},
+		{"_private_fn", false},
+		{"PublicClass", true},
+		{"CONST", true},
+		{"_HIDDEN", false},
+		// Nested: never exported.
+		{"method", false},
+		{"self", false},
+	}
+	for _, tc := range cases {
+		d := findDecl(r, tc.name)
+		if d == nil {
+			t.Errorf("decl %q missing", tc.name)
+			continue
+		}
+		if d.Exported != tc.wantExported {
+			t.Errorf("%s: Exported=%v, want %v (scope=%d kind=%v)",
+				tc.name, d.Exported, tc.wantExported, d.Scope, d.Kind)
+		}
+	}
+}

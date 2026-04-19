@@ -107,6 +107,24 @@ type builder struct {
 	// collecting imported-name decls (until newline).
 	fromImportTarget bool
 
+	// Import-graph signature tracking (drives resolveImportsPython in
+	// internal/scope/store). For each decl emitted by an import statement
+	// we stamp Signature = "<modulePath>\x00<origName>" so the cross-file
+	// resolver can rewrite refs to their exported source.
+	//
+	// fromModulePath accumulates the module path as the import statement
+	// is parsed: "foo.bar" for `from foo.bar import X`, "..foo" for
+	// `from ..foo import X`, "X.Y" for `import X.Y`. Reset in endStatement.
+	fromModulePath string
+	// pyPendingImports collects (declIdx, origName) for each binding the
+	// current import statement emits. Signature is stamped in endStatement
+	// once the path is fully assembled.
+	pyPendingImports []pendingPyImport
+	// importAsPending is true between the `as` keyword and the alias
+	// ident inside an import statement — the next KindImport decl emitted
+	// is the alias binding (it retargets the most recent pending entry).
+	importAsPending bool
+
 	// assignLHS: at statement start, collect idents that might be the LHS
 	// of an assignment. Flushed as decls on '=' (but not '=='), or as
 	// refs otherwise.
@@ -162,6 +180,15 @@ type pendingParam struct {
 	name string
 	span scope.Span
 	kind scope.DeclKind
+}
+
+// pendingPyImport records an import binding decl awaiting Signature
+// back-fill at endStatement. declIdx indexes into b.res.Decls; origName
+// is the source-module name ("Bar" in `from foo import Bar as B`) or
+// "*" for `import X[.Y]` whole-module binds.
+type pendingPyImport struct {
+	declIdx  int
+	origName string
 }
 
 func (b *builder) run() {
@@ -236,6 +263,13 @@ func (b *builder) run() {
 			if b.inAssignLHS {
 				// Next ident may be another LHS target.
 			}
+			// `from X import A, B as C, D` — after a comma in
+			// fromImportTarget mode, the next ident is again an import
+			// binding. Re-arm declContext so the handleIdent fast path
+			// emits it as a KindImport decl rather than a ref.
+			if b.fromImportTarget {
+				b.declContext = scope.KindImport
+			}
 		case c == '=' && b.s.PeekAt(1) != '=':
 			b.s.Pos++
 			b.prevByte = '='
@@ -258,6 +292,13 @@ func (b *builder) run() {
 				}
 				b.assignLHS = nil
 				b.inAssignLHS = false
+			}
+			// Import path accumulation: every '.' extends the path during
+			// `from <path> import ...` or `import <path>[ as alias]`.
+			// Leading dots for relative imports (`from . import X`,
+			// `from ..foo import X`) are meaningful markers.
+			if b.inImport || (b.inFromImport && !b.fromImportTarget) {
+				b.fromModulePath += "."
 			}
 		case c == '@':
 			b.s.Pos++
@@ -384,6 +425,7 @@ func (b *builder) measureIndent() {
 
 // endStatement fires on '\n' and ';'. Flushes any pending LHS idents
 // as REFS (they weren't followed by '=', so they're not assignments).
+// Also stamps Signature on any import decls emitted by this statement.
 func (b *builder) endStatement() {
 	if b.inAssignLHS {
 		for _, p := range b.assignLHS {
@@ -392,6 +434,20 @@ func (b *builder) endStatement() {
 		b.assignLHS = nil
 		b.inAssignLHS = false
 	}
+	// Stamp Signature on each pending import binding. Convention:
+	// "<modulePath>\x00<origName>" — consumed by the cross-file import
+	// resolver (internal/scope/store/imports_python.go).
+	if len(b.pyPendingImports) > 0 && b.fromModulePath != "" {
+		for _, pi := range b.pyPendingImports {
+			if pi.declIdx < 0 || pi.declIdx >= len(b.res.Decls) {
+				continue
+			}
+			b.res.Decls[pi.declIdx].Signature = b.fromModulePath + "\x00" + pi.origName
+		}
+	}
+	b.pyPendingImports = nil
+	b.fromModulePath = ""
+	b.importAsPending = false
 	b.declContext = ""
 	b.decoratorLine = false
 	b.forVarExpected = false
@@ -434,13 +490,21 @@ func (b *builder) handleIdent(word []byte) {
 		b.prevByte = 'k'
 		return
 	case "import":
+		fromBefore := b.inFromImport
 		b.inImport = !b.inFromImport // if we already saw `from`, this is `from X import ...`
 		b.fromImportTarget = b.inFromImport
 		b.declContext = scope.KindImport
 		b.prevByte = 'k'
+		if !fromBefore {
+			// Plain `import X[.Y][,...]` — path accumulation starts fresh.
+			// (The `from-import` prefix is captured while processing the
+			// module prefix idents.)
+			b.fromModulePath = ""
+		}
 		return
 	case "from":
 		b.inFromImport = true
+		b.fromModulePath = ""
 		b.prevByte = 'k'
 		return
 	case "as":
@@ -450,6 +514,7 @@ func (b *builder) handleIdent(word []byte) {
 		// For others (with/except), v1 doesn't emit a decl.
 		if b.inImport || b.fromImportTarget {
 			b.declContext = scope.KindImport
+			b.importAsPending = true
 		}
 		b.prevByte = 'k'
 		return
@@ -471,6 +536,12 @@ func (b *builder) handleIdent(word []byte) {
 
 	// Property access after '.' — probable ref.
 	if b.prevByte == '.' {
+		// During an import statement, a dotted segment extends the
+		// module path. The leading '.' was already appended by the
+		// dot-case handler, so we only add the segment name.
+		if b.inImport || (b.inFromImport && !b.fromImportTarget) {
+			b.fromModulePath += name
+		}
 		b.emitPropertyRef(name, mkSpan(startByte, endByte))
 		b.prevByte = 'i'
 		return
@@ -505,6 +576,37 @@ func (b *builder) handleIdent(word []byte) {
 		if kind == scope.KindFunction {
 			b.paramListPending = true
 		}
+		// Import-binding bookkeeping. Track which decl this emit
+		// produced so `as <alias>` can retarget the pending entry, and
+		// so endStatement can stamp Signature.
+		if kind == scope.KindImport {
+			declIdx := len(b.res.Decls) - 1
+			switch {
+			case b.importAsPending:
+				// This emit is the alias (`... as <name>`). Keep origName
+				// on the prior pending entry; rebind its declIdx.
+				if n := len(b.pyPendingImports); n > 0 {
+					b.pyPendingImports[n-1].declIdx = declIdx
+				}
+				b.importAsPending = false
+			case b.fromImportTarget:
+				// `from X import <name>[, ...]` — name is a binding.
+				b.pyPendingImports = append(b.pyPendingImports, pendingPyImport{
+					declIdx:  declIdx,
+					origName: name,
+				})
+			default:
+				// `import X[.Y][ as Z]` — origName is "*" (whole module).
+				// The first ident IS the start of the module path;
+				// subsequent `.Y` segments flow through the property-ref
+				// branch and append there.
+				b.fromModulePath = name
+				b.pyPendingImports = append(b.pyPendingImports, pendingPyImport{
+					declIdx:  declIdx,
+					origName: "*",
+				})
+			}
+		}
 		b.prevByte = 'i'
 		return
 	}
@@ -514,6 +616,9 @@ func (b *builder) handleIdent(word []byte) {
 	// fromImportTarget=false); once we see `import`, flip on.
 	if b.inFromImport && !b.fromImportTarget {
 		// This is part of the `from X.Y` path — emit as ref, not decl.
+		// The first module segment is accumulated here; subsequent dotted
+		// segments go through the property-ref branch above.
+		b.fromModulePath += name
 		b.emitRef(name, mkSpan(startByte, endByte))
 		b.prevByte = 'i'
 		return
@@ -851,6 +956,16 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 	}
 	fullSpan := scope.Span{StartByte: fullStart, EndByte: span.EndByte}
 
+	// Python convention: file-scope names NOT prefixed with '_' are
+	// externally visible. v1 gap: we don't yet parse __all__, which
+	// would otherwise override this heuristic.
+	exported := false
+	if len(name) > 0 && name[0] != '_' {
+		if top := b.stack.Top(); top != nil && top.Data.kind == scope.ScopeFile {
+			exported = true
+		}
+	}
+
 	idx := len(b.res.Decls)
 	b.res.Decls = append(b.res.Decls, scope.Decl{
 		ID:        declID,
@@ -862,6 +977,7 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 		File:      b.file,
 		Span:      span,
 		FullSpan:  fullSpan,
+		Exported:  exported,
 	})
 
 	switch kind {

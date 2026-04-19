@@ -391,3 +391,149 @@ func make() entry {
 		}
 	}
 }
+
+
+// TestParse_ImportSignature_Basic: `import "fmt"` emits a KindImport decl
+// named "fmt" (last path segment) with Signature = "fmt\x00*". The
+// import-graph resolver relies on this format.
+func TestParse_ImportSignature_Basic(t *testing.T) {
+	src := []byte(`package foo
+
+import "fmt"
+
+func X() { fmt.Println() }
+`)
+	r := Parse("a.go", src)
+	d := findDecl(r, "fmt")
+	if d == nil {
+		t.Fatalf("no fmt import decl; decls=%v", declNames(r))
+	}
+	if d.Kind != scope.KindImport {
+		t.Errorf("fmt: kind=%v, want KindImport", d.Kind)
+	}
+	want := "fmt\x00*"
+	if d.Signature != want {
+		t.Errorf("fmt.Signature = %q, want %q", d.Signature, want)
+	}
+	if d.Exported {
+		t.Errorf("fmt.Exported = true (imports should never be exported)")
+	}
+}
+
+// TestParse_ImportSignature_MultiSegment: `import "net/http"` binds to
+// the last segment ("http"). Signature keeps the full path.
+func TestParse_ImportSignature_MultiSegment(t *testing.T) {
+	src := []byte(`package foo
+
+import "net/http"
+`)
+	r := Parse("a.go", src)
+	if findDecl(r, "http") == nil {
+		t.Fatalf("no http import decl; decls=%v", declNames(r))
+	}
+	d := findDecl(r, "http")
+	want := "net/http\x00*"
+	if d.Signature != want {
+		t.Errorf("http.Signature = %q, want %q", d.Signature, want)
+	}
+}
+
+// TestParse_ImportSignature_Aliased: an aliased import keeps the alias
+// as the decl name but the Signature carries the actual import path.
+// Origname slot is "*" because Go imports bind a whole package.
+func TestParse_ImportSignature_Aliased(t *testing.T) {
+	src := []byte(`package foo
+
+import (
+	"fmt"
+	alias "strings"
+)
+
+func X() {
+	fmt.Println(alias.ToUpper(""))
+}
+`)
+	r := Parse("a.go", src)
+	if findDecl(r, "fmt") == nil {
+		t.Errorf("no fmt decl; decls=%v", declNames(r))
+	}
+	aliasDecl := findDecl(r, "alias")
+	if aliasDecl == nil {
+		t.Fatalf("no alias decl; decls=%v", declNames(r))
+	}
+	if aliasDecl.Kind != scope.KindImport {
+		t.Errorf("alias: kind=%v, want KindImport", aliasDecl.Kind)
+	}
+	want := "strings\x00*"
+	if aliasDecl.Signature != want {
+		t.Errorf("alias.Signature = %q, want %q", aliasDecl.Signature, want)
+	}
+	// The non-aliased "fmt" should also carry its signature.
+	fmtDecl := findDecl(r, "fmt")
+	if fmtDecl.Signature != "fmt\x00*" {
+		t.Errorf("fmt.Signature = %q, want %q", fmtDecl.Signature, "fmt\x00*")
+	}
+}
+
+// TestParse_ExportedFlag: file-scope decls whose first rune is uppercase
+// get Exported=true. Lowercase decls and non-file-scope decls (params,
+// block locals) do not. KindImport always stays unexported regardless
+// of name casing.
+func TestParse_ExportedFlag(t *testing.T) {
+	src := []byte(`package foo
+
+import "fmt"
+
+const Pi = 3.14
+const e = 2.71
+
+var Name = "edr"
+var hidden = 1
+
+type Config struct{ Debug bool }
+type internal struct{}
+
+func Public(x int) int {
+	y := x + 1
+	return y
+}
+
+func private() {}
+
+func (c *Config) Method() {}
+`)
+	r := Parse("a.go", src)
+	cases := map[string]bool{
+		"Pi":       true,
+		"e":        false,
+		"Name":     true,
+		"hidden":   false,
+		"Config":   true,
+		"internal": false,
+		"Public":   true,
+		"private":  false,
+		"Method":   true,
+		// import: never exported
+		"fmt": false,
+	}
+	for name, want := range cases {
+		d := findDecl(r, name)
+		if d == nil {
+			t.Errorf("missing decl %q; decls=%v", name, declNames(r))
+			continue
+		}
+		if d.Exported != want {
+			t.Errorf("%q: Exported=%v, want %v", name, d.Exported, want)
+		}
+	}
+	// Non-file-scope decls: params and block-local vars must never be
+	// Exported. `Public`'s param `x` and its local `y` are both at
+	// function scope.
+	for _, d := range r.Decls {
+		if d.Name == "x" || d.Name == "y" {
+			if d.Exported {
+				t.Errorf("non-file-scope decl %q should not be Exported", d.Name)
+			}
+		}
+	}
+}

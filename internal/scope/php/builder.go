@@ -795,6 +795,13 @@ func (b *builder) handleNamespaceKeyword(kwStart uint32) {
 			}
 		}
 		b.emitDecl(leaf, scope.KindNamespace, mkSpan(leafStart, leafStart+uint32(len(leaf))), scope.NSNamespace)
+		// Stash the full backslash-qualified namespace path on the
+		// just-emitted decl's Signature so the cross-file import
+		// resolver (internal/scope/store/imports_php.go) can compute
+		// FQN("<namespace>\\<DeclName>") for file-scope decls.
+		if n := len(b.res.Decls); n > 0 {
+			b.res.Decls[n-1].Signature = fullName
+		}
 	}
 	if next == '{' {
 		// Block form: the next '{' opens the namespace scope.
@@ -831,15 +838,28 @@ func (b *builder) closeStatementNamespaceIfOpen() {
 
 // handleUseImport parses `use Foo\Bar;`, `use Foo\Bar as Baz;`, and
 // `use Foo\{A, B as C};`. Consumes up through the terminating `;`.
+//
+// Populates Decl.Signature = "[<prefix>:]<modulePath>\x00<origName>"
+// on each emitted KindImport decl, where modulePath is the backslash-
+// separated namespace prefix (no trailing backslash) and origName is
+// the imported symbol's own name in that namespace (differs from the
+// emitted decl name when aliased with `as`). `<prefix>` is "function"
+// or "const" for `use function` / `use const`; omitted (no leading
+// colon) for plain class/interface/trait/enum imports. Consumed by
+// internal/scope/store/imports_php.go.
 func (b *builder) handleUseImport() {
 	// Optional `function` or `const` prefix (PHP allows `use function
-	// strlen;` etc.) — skip it for decl-kind purposes.
+	// strlen;` etc.). Recognise it so the resolver can route function
+	// and const imports separately from type imports.
 	b.skipWS()
 	save := b.s.Pos
+	sigPrefix := "" // "", "function", or "const"
 	if lexkit.IsDefaultIdentStart(b.s.Peek()) {
 		word := b.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 		wl := phpLower(string(word))
-		if wl != "function" && wl != "const" {
+		if wl == "function" || wl == "const" {
+			sigPrefix = wl
+		} else {
 			b.s.Pos = save
 		}
 	}
@@ -855,8 +875,9 @@ func (b *builder) handleUseImport() {
 		b.s.Pos++
 	}
 	if b.s.Peek() == '{' {
-		// Grouped: `use Foo\{A, B as C};`. Path is the prefix (with
-		// trailing `\` dropped).
+		// Grouped: `use Foo\{A, B as C};`. Path is the group prefix
+		// (with trailing `\` stripped).
+		groupPrefix := trimTrailingBackslash(path)
 		b.s.Pos++ // consume '{'
 		for !b.s.EOF() {
 			b.skipWS()
@@ -864,12 +885,16 @@ func (b *builder) handleUseImport() {
 				b.s.Pos++
 				break
 			}
-			// Optional prefix keyword.
+			// Optional per-entry `function`/`const` prefix. Overrides
+			// the group-level sigPrefix for this entry.
+			entryPrefix := sigPrefix
 			svp := b.s.Pos
 			if lexkit.IsDefaultIdentStart(b.s.Peek()) {
 				w := b.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 				wl := phpLower(string(w))
-				if wl != "function" && wl != "const" {
+				if wl == "function" || wl == "const" {
+					entryPrefix = wl
+				} else {
 					b.s.Pos = svp
 				}
 			}
@@ -886,6 +911,7 @@ func (b *builder) handleUseImport() {
 			emitName := leaf
 			emitStart := uint32(subStart + leafOff)
 			emitEnd := uint32(subEnd)
+			origName := leaf
 			if b.peekIdentWordCI("as") {
 				b.s.Advance(2)
 				b.skipWS()
@@ -899,6 +925,18 @@ func (b *builder) handleUseImport() {
 				}
 			}
 			b.emitDecl(emitName, scope.KindImport, mkSpan(emitStart, emitEnd), scope.NSValue)
+			// modulePath = groupPrefix (+ "\\" + subPrefix)?. subPrefix
+			// is everything in `sub` before the leaf, trimmed.
+			modulePath := groupPrefix
+			subPrefix := trimTrailingBackslash(sub[:leafOff])
+			if subPrefix != "" {
+				if modulePath != "" {
+					modulePath = modulePath + "\\" + subPrefix
+				} else {
+					modulePath = subPrefix
+				}
+			}
+			b.stampImportSignature(modulePath, origName, entryPrefix)
 			b.skipWS()
 			if b.s.Peek() == ',' {
 				b.s.Pos++
@@ -913,6 +951,7 @@ func (b *builder) handleUseImport() {
 		emitName := leaf
 		emitStart := uint32(pathStart + leafOff)
 		emitEnd := uint32(pathStart + len(path))
+		origName := leaf
 		if b.peekIdentWordCI("as") {
 			b.s.Advance(2)
 			b.skipWS()
@@ -926,12 +965,47 @@ func (b *builder) handleUseImport() {
 			}
 		}
 		b.emitDecl(emitName, scope.KindImport, mkSpan(emitStart, emitEnd), scope.NSValue)
+		// modulePath = everything before the leaf, trailing `\` dropped.
+		// `use Foo\Bar;` -> "Foo"; `use \Foo\Bar;` -> "\\Foo"; `use Bar;`
+		// -> "" (resolver strips a leading `\\` and treats empty-path as
+		// global-namespace FQN).
+		modulePath := trimTrailingBackslash(path[:leafOff])
+		b.stampImportSignature(modulePath, origName, sigPrefix)
 	}
 	// Consume through ';'.
 	for !b.s.EOF() && b.s.Peek() != ';' && b.s.Peek() != '\n' {
 		b.s.Pos++
 	}
 	b.prevByte = 'k'
+}
+
+// stampImportSignature writes Signature on the most recently emitted
+// KindImport decl. Format: "[<prefix>:]<modulePath>\x00<origName>".
+// No-op if the last decl is not a KindImport (defensive).
+func (b *builder) stampImportSignature(modulePath, origName, prefix string) {
+	n := len(b.res.Decls)
+	if n == 0 {
+		return
+	}
+	d := &b.res.Decls[n-1]
+	if d.Kind != scope.KindImport {
+		return
+	}
+	if prefix != "" {
+		d.Signature = prefix + ":" + modulePath + "\x00" + origName
+	} else {
+		d.Signature = modulePath + "\x00" + origName
+	}
+}
+
+// trimTrailingBackslash strips a single trailing `\` from a qualified
+// PHP name (as produced by scanQualifiedName when parsing group-form
+// `use Foo\{…}`).
+func trimTrailingBackslash(s string) string {
+	if n := len(s); n > 0 && s[n-1] == '\\' {
+		return s[:n-1]
+	}
+	return s
 }
 
 // scanQualifiedName reads a possibly-qualified PHP name like Foo\Bar\Baz.
@@ -1123,8 +1197,24 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span, ns
 	}
 
 	idx := b.appendDecl(name, kind, span, primaryNs)
+	shadowIdx := -1
 	if dualNs != "" && dualNs != primaryNs {
-		b.appendDecl(name, kind, span, dualNs)
+		shadowIdx = b.appendDecl(name, kind, span, dualNs)
+	}
+
+	// PHP has no explicit export keyword: default visibility at file or
+	// namespace scope is public. Mark file-scope / namespace-scope
+	// classes, interfaces, traits (KindType), enums, functions, and
+	// top-level constants as Exported so the cross-file import resolver
+	// (internal/scope/store/imports_php.go) can rewrite refs to them.
+	// `private` / `protected` only apply inside class bodies; those
+	// decls (methods/fields) emit under class scopes, which this check
+	// excludes.
+	if isTopLevelExportKind(kind) && b.isFileOrNamespaceScope() {
+		b.res.Decls[idx].Exported = true
+		if shadowIdx >= 0 {
+			b.res.Decls[shadowIdx].Exported = true
+		}
 	}
 
 	switch kind {
@@ -1134,6 +1224,25 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span, ns
 		b.pendingOwnerDecl = idx
 	}
 	b.pendingFullStart = 0
+}
+
+// isTopLevelExportKind reports whether kind is one of PHP's file-scope
+// publicly-visible decl kinds (under PHP's implicit-public semantics).
+func isTopLevelExportKind(kind scope.DeclKind) bool {
+	switch kind {
+	case scope.KindClass, scope.KindInterface, scope.KindType,
+		scope.KindEnum, scope.KindFunction, scope.KindConst:
+		return true
+	}
+	return false
+}
+
+// isFileOrNamespaceScope reports whether the current emit scope is the
+// file scope or a namespace scope (block or statement form). Everything
+// else (class/function/block body) is non-exporting.
+func (b *builder) isFileOrNamespaceScope() bool {
+	k := b.currentScopeKind()
+	return k == scope.ScopeFile || k == scope.ScopeNamespace
 }
 
 // appendDecl appends a single Decl row and returns its index. Used by

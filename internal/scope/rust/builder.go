@@ -45,6 +45,7 @@ package rust
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"strings"
 
 	"github.com/jordw/edr/internal/lexkit"
 	"github.com/jordw/edr/internal/scope"
@@ -162,6 +163,23 @@ type builder struct {
 	// usePendingBind: the most recent ident in the current path segment.
 	// Flushed as a KindImport decl on `;`, `,`, `}`, or `as`-alias.
 	usePendingBind *pendingParam
+	// useSegments: accumulated path prefix for the current use-item
+	// (everything before the final binder). Each `::` pushes the current
+	// pending ident into this list. Cleared on `;`.
+	useSegments []string
+	// useGroupSegments: snapshot of useSegments at the moment a use-group
+	// `{` opened. On `,` inside a group we reset useSegments back to this
+	// prefix so each member gets the correct path.
+	useGroupSegments []string
+	// useOrigFrozen: when `as` is seen inside `use`, the current binder's
+	// name is snapshotted here for the Signature. The next ident becomes
+	// the local binding but Signature uses this snapshot name.
+	useOrigFrozen string
+
+	// pendingPub: the most recent keyword was `pub` (possibly followed by
+	// `pub(crate)` etc.). Consumed by next emitDecl to mark Exported at
+	// file scope.
+	pendingPub bool
 
 	// inLetPattern: `let [mut] PAT = ...`. First ident on LHS is the binder.
 	inLetPattern bool
@@ -385,6 +403,11 @@ func (b *builder) run() {
 			}
 			if b.inUse {
 				b.flushUsePendingBind()
+				if b.inUseGroup {
+					// Reset segments to the group prefix snapshot so the
+					// next member starts from the same path.
+					b.useSegments = append(b.useSegments[:0], b.useGroupSegments...)
+				}
 			}
 			// In a match body at arm-delimiter depth, the `,` ends an arm
 			// expression and the next arm begins with another pattern.
@@ -396,6 +419,12 @@ func (b *builder) run() {
 			// probable ref.
 			b.s.Advance(2)
 			b.prevByte = '.' // re-use '.' marker to trigger property-access path
+			if b.inUse && b.usePendingBind != nil {
+				// Push the current segment into useSegments and clear.
+				// Consumed by flushUsePendingBind to form Decl.Signature.
+				b.useSegments = append(b.useSegments, b.usePendingBind.name)
+				b.usePendingBind = nil
+			}
 		case c == '.':
 			b.s.Pos++
 			b.prevByte = '.'
@@ -441,6 +470,22 @@ func (b *builder) run() {
 			}
 			b.stmtStart = false
 			b.prevByte = '0'
+		case c == '*':
+			b.s.Pos++
+			// Inside `use foo::*;` the glob `*` synthesizes a pending
+			// binder named "*" so the `;` flush emits an import decl
+			// with Signature "<path>\x00*". V1 does not enumerate
+			// re-exports from the target module — the decl records
+			// the intent only.
+			if b.inUse && b.prevByte == '.' {
+				b.usePendingBind = &pendingParam{
+					name: "*",
+					span: mkSpan(uint32(b.s.Pos-1), uint32(b.s.Pos)),
+				}
+				b.prevByte = 'i'
+			} else {
+				b.prevByte = c
+			}
 		default:
 			b.s.Pos++
 			b.prevByte = c
@@ -629,6 +674,13 @@ func (b *builder) onStatementBoundary() {
 	if b.prevByte == ';' {
 		b.inUse = false
 		b.inUseGroup = false
+		b.useSegments = nil
+		b.useGroupSegments = nil
+		b.useOrigFrozen = ""
+		// Discard any pending `pub` that was never attached to a decl
+		// (e.g. malformed input). Normal `pub item` flows reset the
+		// flag at the next emitDecl.
+		b.pendingPub = false
 	}
 }
 
@@ -752,6 +804,11 @@ func (b *builder) handleIdent(word []byte) {
 		// ident overwrite it. In `x as T` cast expressions, `as` is a
 		// no-op here — the following ident emits as a normal ref.
 		if b.inUse {
+			// Snapshot the original name (for the Signature) before we
+			// clear the pending binder. flushUsePendingBind consumes it.
+			if b.usePendingBind != nil {
+				b.useOrigFrozen = b.usePendingBind.name
+			}
 			b.usePendingBind = nil
 		}
 		b.prevByte = 'k'
@@ -773,12 +830,85 @@ func (b *builder) handleIdent(word []byte) {
 		b.matchBlockExpected = true
 		b.prevByte = 'k'
 		return
-	case "return", "break", "continue", "in", "where", "dyn", "pub", "crate",
-		"super", "Self", "true", "false", "await", "yield", "box", "extern":
+	case "pub":
+		// Mark the next file-scope decl as Exported. Consume optional
+		// visibility qualifier `(crate)`, `(super)`, `(self)`, or
+		// `(in path::to)` — finer-grained visibility is not distinguished
+		// in v1; any `pub*` marks Exported.
+		b.pendingPub = true
+		b.prevIdentIsSelf = false
+		b.prevByte = 'k'
+		// Skip optional `(...)` balanced parens.
+		for !b.s.EOF() {
+			ch := b.s.Peek()
+			if ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' {
+				b.s.Next()
+				continue
+			}
+			break
+		}
+		if b.s.Peek() == '(' {
+			b.s.Pos++
+			depth := 1
+			for !b.s.EOF() && depth > 0 {
+				ch := b.s.Peek()
+				switch ch {
+				case '(':
+					depth++
+					b.s.Pos++
+				case ')':
+					depth--
+					b.s.Pos++
+				case '"':
+					b.scanString()
+				case '\'':
+					b.scanCharOrLifetime()
+				case '/':
+					if b.s.PeekAt(1) == '/' {
+						b.s.SkipLineComment()
+					} else if b.s.PeekAt(1) == '*' {
+						b.s.Advance(2)
+						b.skipNestedBlockComment()
+					} else {
+						b.s.Pos++
+					}
+				default:
+					b.s.Next()
+				}
+			}
+			b.prevByte = ')'
+		}
+		return
+	case "crate", "super":
+		// Inside a `use` item these are path prefixes (`use crate::...`,
+		// `use super::...`) and must flow into path segment accumulation.
+		// Outside `use` they are keywords with no binder effect.
+		if b.inUse {
+			b.usePendingBind = &pendingParam{
+				name: name,
+				span: mkSpan(startByte, endByte),
+			}
+			b.prevByte = 'i'
+			return
+		}
+		b.prevIdentIsSelf = false
+		b.prevByte = 'k'
+		return
+	case "return", "break", "continue", "in", "where", "dyn",
+		"Self", "true", "false", "await", "yield", "box", "extern":
 		b.prevIdentIsSelf = false
 		b.prevByte = 'k'
 		return
 	case "self":
+		// Inside `use` this is a path prefix (`use self::X`).
+		if b.inUse {
+			b.usePendingBind = &pendingParam{
+				name: name,
+				span: mkSpan(startByte, endByte),
+			}
+			b.prevByte = 'i'
+			return
+		}
 		if b.inParamList && b.paramDepth == 1 && b.paramSectionNeedsName {
 			b.pendingParams = append(b.pendingParams, pendingParam{
 				name: "self",
@@ -1003,6 +1133,8 @@ func (b *builder) handleOpenBrace() {
 	// `use foo::{a, b};` — group braces are not a scope.
 	if b.inUse {
 		b.inUseGroup = true
+		// Snapshot the prefix so each group member resets back to it.
+		b.useGroupSegments = append([]string{}, b.useSegments...)
 		return
 	}
 
@@ -1088,6 +1220,7 @@ func (b *builder) handleCloseBrace() {
 	if b.inUseGroup {
 		b.flushUsePendingBind()
 		b.inUseGroup = false
+		b.useGroupSegments = nil
 		return
 	}
 
@@ -1285,7 +1418,7 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 	fullSpan := scope.Span{StartByte: fullStart, EndByte: span.EndByte}
 
 	idx := len(b.res.Decls)
-	b.res.Decls = append(b.res.Decls, scope.Decl{
+	d := scope.Decl{
 		ID:        declID,
 		LocID:     locID,
 		Name:      name,
@@ -1295,7 +1428,16 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 		File:      b.file,
 		Span:      span,
 		FullSpan:  fullSpan,
-	})
+	}
+	// `pub` at file scope marks a decl Exported. KindImport is handled
+	// separately by flushUsePendingBind (which also controls Signature).
+	// Inner `pub` (struct fields, methods) is not reflected here — the
+	// import resolver only reads file-scope decls for cross-file exports.
+	if b.pendingPub && b.currentScopeKind() == scope.ScopeFile && kind != scope.KindImport {
+		d.Exported = true
+		b.pendingPub = false
+	}
+	b.res.Decls = append(b.res.Decls, d)
 
 	switch kind {
 	case scope.KindFunction, scope.KindMethod, scope.KindType,
@@ -1324,14 +1466,35 @@ func (b *builder) emitPropertyRef(name string, span scope.Span) {
 }
 
 // flushUsePendingBind emits the current use-segment's pending binder as
-// a KindImport decl and clears it.
+// a KindImport decl and clears it. Stamps Decl.Signature as
+// "<modulePath>\x00<origName>" so store/imports_rust.go can resolve
+// cross-file. modulePath is the `::`-joined path prefix; origName is
+// the snapshot captured when `as` was seen, or the binder name itself
+// when there was no alias. pub-qualified use (e.g. `pub use X`) at
+// file scope marks the decl Exported.
 func (b *builder) flushUsePendingBind() {
 	if b.usePendingBind == nil {
+		b.useOrigFrozen = ""
 		return
 	}
 	p := *b.usePendingBind
 	b.usePendingBind = nil
+	origName := b.useOrigFrozen
+	b.useOrigFrozen = ""
+	if origName == "" {
+		origName = p.name
+	}
+	exported := b.pendingPub
+	declIdx := len(b.res.Decls)
 	b.emitDecl(p.name, scope.KindImport, p.span)
+	if declIdx < len(b.res.Decls) {
+		modulePath := strings.Join(b.useSegments, "::")
+		b.res.Decls[declIdx].Signature = modulePath + "\x00" + origName
+		if exported && b.currentScopeKind() == scope.ScopeFile {
+			b.res.Decls[declIdx].Exported = true
+		}
+	}
+	b.pendingPub = false
 }
 
 func (b *builder) emitRef(name string, span scope.Span) {

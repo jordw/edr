@@ -24,6 +24,9 @@ package golang
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jordw/edr/internal/lexkit"
 	"github.com/jordw/edr/internal/scope"
@@ -33,10 +36,11 @@ import (
 // Parse extracts a scope.Result from a Go source buffer.
 func Parse(file string, src []byte) *scope.Result {
 	b := &builder{
-		file:             file,
-		res:              &scope.Result{File: file},
-		s:                lexkit.New(src),
-		pendingOwnerDecl: -1,
+		file:              file,
+		res:               &scope.Result{File: file},
+		s:                 lexkit.New(src),
+		pendingOwnerDecl:  -1,
+		lastImportDeclIdx: -1,
 	}
 	b.openScope(scope.ScopeFile, 0)
 	b.stmtStart = true
@@ -147,6 +151,13 @@ type builder struct {
 	// bind to same-named top-level decls.
 	compositeLitDepth int
 
+	// lastImportDeclIdx is the index in res.Decls of the most recently
+	// emitted KindImport alias decl (e.g. `alias` in `alias "strings"`)
+	// that is still awaiting its path string. When the upcoming import
+	// path literal is consumed, its Signature is back-filled on that decl.
+	// -1 when none pending. Cleared on statement boundaries.
+	lastImportDeclIdx int
+
 	prevByte byte
 }
 
@@ -171,7 +182,13 @@ func (b *builder) run() {
 			b.s.Advance(2)
 			b.s.SkipBlockComment("*/")
 		case c == '"':
+			start := b.s.Pos
 			b.s.ScanSimpleString('"')
+			if (b.declContext == scope.KindImport || b.lastImportDeclIdx >= 0) && b.s.Pos > start+1 {
+				path := string(b.s.Src[start+1 : b.s.Pos-1])
+				b.handleImportPath(path, uint32(start), uint32(b.s.Pos))
+				b.declContext = ""
+			}
 			b.stmtStart = false
 			b.prevByte = '"'
 		case c == '\'':
@@ -180,12 +197,18 @@ func (b *builder) run() {
 			b.prevByte = '\''
 		case c == '`':
 			// Go raw string — no escapes. Skip to matching backtick.
+			start := b.s.Pos
 			b.s.Pos++
 			for !b.s.EOF() && b.s.Peek() != '`' {
 				b.s.Next()
 			}
 			if !b.s.EOF() {
 				b.s.Pos++
+			}
+			if (b.declContext == scope.KindImport || b.lastImportDeclIdx >= 0) && b.s.Pos > start+1 {
+				path := string(b.s.Src[start+1 : b.s.Pos-1])
+				b.handleImportPath(path, uint32(start), uint32(b.s.Pos))
+				b.declContext = ""
 			}
 			b.stmtStart = false
 			b.prevByte = '`'
@@ -790,6 +813,17 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 	}
 	fullSpan := scope.Span{StartByte: fullStart, EndByte: span.EndByte}
 
+	// Go export rule: a top-level (file-scope) identifier whose first
+	// rune is uppercase is visible to importers. The import-graph
+	// resolver uses this flag to pick cross-file rewrite targets. Skip
+	// KindImport (imports themselves aren't exported names) and anything
+	// not at file scope (params, block locals, struct fields, interface
+	// methods — these don't cross package boundaries via pkg.Name).
+	exported := false
+	if kind != scope.KindImport && b.currentScopeKind() == scope.ScopeFile && isExportedName(name) {
+		exported = true
+	}
+
 	idx := len(b.res.Decls)
 	b.res.Decls = append(b.res.Decls, scope.Decl{
 		ID:        declID,
@@ -801,7 +835,14 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 		File:      b.file,
 		Span:      span,
 		FullSpan:  fullSpan,
+		Exported:  exported,
 	})
+
+	// Track the most recent import alias decl so the upcoming path
+	// string literal back-fills Signature on it.
+	if kind == scope.KindImport {
+		b.lastImportDeclIdx = idx
+	}
 
 	// Scope-owning decls: remember the decl index so the next openScope
 	// can attach it and closeTopScope can patch FullSpan.EndByte.
@@ -989,4 +1030,62 @@ func hashBuiltinDecl(name string) scope.DeclID {
 	h.Write([]byte(name))
 	sum := h.Sum(nil)
 	return scope.DeclID(binary.LittleEndian.Uint64(sum[:8]))
+}
+
+// handleImportPath is called when the scanner consumes a string literal
+// while declContext == KindImport. The literal is the Go import path
+// (e.g. "net/http"). If an alias decl was just emitted (`alias "strings"`
+// or `_ "pkg"`), we back-fill Signature onto that decl. Otherwise we
+// synthesize a fresh KindImport decl named after the last path segment.
+// Either way the Signature format matches the cross-language convention:
+// "<importPath>\x00*" — Go imports bind the whole package, so the
+// original-name slot is always "*" (see internal/scope/store/imports.go).
+func (b *builder) handleImportPath(path string, startByte, endByte uint32) {
+	sig := path + "\x00*"
+	if b.lastImportDeclIdx >= 0 && b.lastImportDeclIdx < len(b.res.Decls) {
+		d := &b.res.Decls[b.lastImportDeclIdx]
+		if d.Kind == scope.KindImport {
+			d.Signature = sig
+			b.lastImportDeclIdx = -1
+			return
+		}
+	}
+	// No alias — emit a decl for the implicit binding name (last path
+	// segment after the final '/'). Skip empty/ill-formed paths.
+	name := lastPathSegment(path)
+	if name == "" {
+		return
+	}
+	span := scope.Span{StartByte: startByte, EndByte: endByte}
+	b.emitDecl(name, scope.KindImport, span)
+	// emitDecl stamped lastImportDeclIdx; back-fill Signature directly
+	// so the reset on the next statement boundary doesn't lose it.
+	if b.lastImportDeclIdx >= 0 && b.lastImportDeclIdx < len(b.res.Decls) {
+		b.res.Decls[b.lastImportDeclIdx].Signature = sig
+	}
+	b.lastImportDeclIdx = -1
+}
+
+// lastPathSegment returns the substring after the final '/', or the
+// whole input when there is no slash. Used to derive the default
+// binding name for `import "net/http"` → "http".
+func lastPathSegment(p string) string {
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
+// isExportedName reports whether a Go identifier is exported — i.e. its
+// first rune is uppercase. Mirrors go/token.IsExported but avoids a
+// dependency on that package.
+func isExportedName(name string) bool {
+	if name == "" {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(name)
+	if r == utf8.RuneError {
+		return false
+	}
+	return unicode.IsUpper(r)
 }

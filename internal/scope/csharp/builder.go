@@ -42,12 +42,13 @@ import (
 // pass the same path the caller will use when querying.
 func Parse(file string, src []byte) *scope.Result {
 	b := &builder{
-		file:               file,
-		res:                &scope.Result{File: file},
+		file:                    file,
+		res:                     &scope.Result{File: file},
 		s:                       lexkit.New(src),
 		pendingOwnerDecl:        -1,
 		recordOwnerDeclIdx:      -1,
 		pendingNamespaceDeclIdx: -1,
+		namespacePathDeclIdx:    -1,
 	}
 	b.openScope(scope.ScopeFile, 0)
 	b.stmtStart = true
@@ -163,6 +164,17 @@ type builder struct {
 	// isUsingDecl: consuming a `using [static] a.b.c;` or
 	// `using Alias = System.List;` — emit the appropriate ident as a
 	// KindImport decl on ';'.
+	//
+	// usingBuf holds the most recently consumed ident (the last
+	// segment of a dotted name); usingPathBuf accumulates the full
+	// dotted prefix so the import-graph resolver can reconstruct
+	// the FQN. Signature convention (shared with Java, decoded by
+	// parseImportSignature in internal/scope/store/imports.go):
+	//   using System;               -> Signature="System\x00*"
+	//   using Foo.Bar;              -> Signature="Foo.Bar\x00*"
+	//   using Alias = Foo.Bar;      -> Signature="Foo\x00Bar"
+	//   using Alias = Foo.Bar.Baz;  -> Signature="Foo.Bar\x00Baz"
+	//   using static Foo.Util;      -> Signature="static:Foo.Util\x00*"
 	isUsingDecl     bool
 	usingStaticFlag bool
 	usingIsAlias    bool
@@ -170,6 +182,28 @@ type builder struct {
 	usingAliasSpan  scope.Span
 	usingBuf        []byte
 	usingBufSpan    scope.Span
+	// usingPathBuf: when consuming `using a.b.c;`, on each ident
+	// after a '.' we promote the previous usingBuf contents into
+	// this prefix (joined with '.') so usingBuf always holds the
+	// trailing segment.
+	usingPathBuf []byte
+
+	// pendingPublic: the most recent modifier run included
+	// `public`. Consumed by emitDecl to set Exported=true on
+	// top-level class/interface/enum decls. `internal`/`protected`/
+	// `private` stay unexported; Phase-1 treats `internal` as
+	// not-exported because assembly boundaries aren't modeled — the
+	// conservative-correct choice leaves the ref bound to the local
+	// Import decl when we can't prove the target is visible.
+	pendingPublic bool
+
+	// namespacePathBuf / namespacePathDeclIdx: accumulate the full
+	// dotted namespace name while consuming `namespace A.B.C`. On
+	// the first ident after `namespace`, the decl is emitted and
+	// its index cached here; subsequent idents (after '.') extend
+	// the Signature stamped on that decl. Reset on '{' or ';'.
+	namespacePathBuf     []byte
+	namespacePathDeclIdx int
 
 	// foreachHeaderExpected: `foreach` was just parsed; the next '('
 	// begins a header whose `var x in coll` declares x.
@@ -266,6 +300,9 @@ func (b *builder) run() {
 				b.namespaceFileScoped = true
 				b.pendingNamespaceDeclIdx = -1
 			}
+			// Namespace header consumed (file-scoped form or stray
+			// ';'): stop extending the namespace's Signature.
+			b.namespacePathDeclIdx = -1
 			b.stmtStart = true
 			b.prevByte = ';'
 			b.declContext = ""
@@ -274,6 +311,9 @@ func (b *builder) run() {
 			b.paramListPending = false
 			b.genericParamsExpected = false
 			b.recordPrimaryCtor = false
+			// Statement boundary: drop any leftover `public` that
+			// didn't land on a decl.
+			b.pendingPublic = false
 			// If we had a record with no body (`record Point(int X, int Y);`),
 			// flush pending record fields into the current scope.
 			if len(b.pendingRecordFields) > 0 {
@@ -511,13 +551,44 @@ func (b *builder) run() {
 }
 
 // flushUsingDecl handles the semicolon at the end of a `using ...;`.
+// Emits a KindImport decl and stamps Signature for the import-graph
+// resolver — see the builder struct's isUsingDecl comment for the
+// encoding table.
 func (b *builder) flushUsingDecl() {
+	modPath := string(b.usingPathBuf)
+	trailing := string(b.usingBuf)
+
 	if b.usingIsAlias {
 		if len(b.usingAliasName) > 0 {
+			// `using X = A.B.C;` -> Signature="A.B\x00C" Name="X".
+			// `using X = Foo;`   -> Signature="\x00Foo"  Name="X".
+			idx := len(b.res.Decls)
 			b.emitDecl(string(b.usingAliasName), scope.KindImport, b.usingAliasSpan)
+			if idx < len(b.res.Decls) {
+				orig := trailing
+				if orig == "" {
+					orig = "*"
+				}
+				b.res.Decls[idx].Signature = modPath + "\x00" + orig
+			}
 		}
 	} else if len(b.usingBuf) > 0 {
-		b.emitDecl(string(b.usingBuf), scope.KindImport, b.usingBufSpan)
+		// Namespace widening: `using Foo.Bar;` ->
+		// Signature="Foo.Bar\x00*". `using static Foo.Util;` ->
+		// Signature="static:Foo.Util\x00*".
+		full := trailing
+		if modPath != "" {
+			full = modPath + "." + trailing
+		}
+		idx := len(b.res.Decls)
+		b.emitDecl(trailing, scope.KindImport, b.usingBufSpan)
+		if idx < len(b.res.Decls) {
+			sigPath := full
+			if b.usingStaticFlag {
+				sigPath = "static:" + full
+			}
+			b.res.Decls[idx].Signature = sigPath + "\x00*"
+		}
 	}
 	b.isUsingDecl = false
 	b.usingStaticFlag = false
@@ -527,6 +598,9 @@ func (b *builder) flushUsingDecl() {
 	}
 	if b.usingBuf != nil {
 		b.usingBuf = b.usingBuf[:0]
+	}
+	if b.usingPathBuf != nil {
+		b.usingPathBuf = b.usingPathBuf[:0]
 	}
 }
 
@@ -548,17 +622,23 @@ func (b *builder) handleIdent(word []byte) {
 		return
 	}
 
-	// Using declaration: collect final unqualified name, handling the
-	// `using Alias = Target;` form.
+	// Using declaration: collect final unqualified name + dotted
+	// prefix, handling the `using Alias = Target;` form. On each
+	// ident after a '.', promote the previous usingBuf contents
+	// into usingPathBuf so the trailing segment lives in usingBuf
+	// and the prefix in usingPathBuf. flushUsingDecl reads both to
+	// build Signature.
 	if b.isUsingDecl {
 		if name == "static" && !b.usingStaticFlag && len(b.usingBuf) == 0 && !b.usingIsAlias {
 			b.usingStaticFlag = true
 			b.prevByte = 'k'
 			return
 		}
-		// Peek ahead: if the next non-ws byte is '=', this ident is the
-		// alias LHS of `using Alias = Target;`.
-		if !b.usingIsAlias && len(b.usingBuf) == 0 {
+		// Peek ahead: if the next non-ws byte is '=', this ident is
+		// the alias LHS of `using Alias = Target;`. The alias ident
+		// must be the first thing we see after `using` (and any
+		// `static` flag), so both buffers are empty.
+		if !b.usingIsAlias && len(b.usingBuf) == 0 && len(b.usingPathBuf) == 0 {
 			if b.peekNonWSByte() == '=' {
 				b.usingIsAlias = true
 				b.usingAliasName = append(b.usingAliasName[:0], word...)
@@ -566,6 +646,14 @@ func (b *builder) handleIdent(word []byte) {
 				b.prevByte = 'i'
 				return
 			}
+		}
+		// Continuing a dotted name: promote old trailing segment
+		// into the prefix, joined by '.'.
+		if len(b.usingBuf) > 0 && b.prevByte == '.' {
+			if len(b.usingPathBuf) > 0 {
+				b.usingPathBuf = append(b.usingPathBuf, '.')
+			}
+			b.usingPathBuf = append(b.usingPathBuf, b.usingBuf...)
 		}
 		b.usingBuf = append(b.usingBuf[:0], word...)
 		b.usingBufSpan = mkSpan(startByte, endByte)
@@ -682,6 +770,16 @@ func (b *builder) handleIdent(word []byte) {
 	case "public", "private", "protected", "internal", "static", "readonly",
 		"const", "sealed", "abstract", "virtual", "override", "async",
 		"partial", "unsafe", "extern", "volatile", "required", "file":
+		// Track `public` so the next-emitted top-level type decl
+		// gets Exported=true. Phase-1 approximation: only `public`
+		// counts — `internal` is assembly-wide in C# but without
+		// assembly analysis the conservative-correct answer at
+		// repo scope is to leave it unexported, and cross-file
+		// refs to internal types continue to resolve via the
+		// per-file scope walk (which sees the decl directly).
+		if name == "public" {
+			b.pendingPublic = true
+		}
 		b.stmtStart = wasStmtStart
 		b.prevByte = 'k'
 		return
@@ -757,6 +855,18 @@ func (b *builder) handleIdent(word []byte) {
 				return
 			}
 		}
+		// Namespace header continuation: `namespace A.B.C` — extend
+		// the pending namespace decl's Signature with each dotted
+		// segment. Gated by namespacePathDeclIdx so we only do this
+		// until the namespace's '{' or ';' closes the header.
+		if b.namespacePathDeclIdx >= 0 &&
+			b.pendingNamespaceDeclIdx == b.namespacePathDeclIdx {
+			b.namespacePathBuf = append(b.namespacePathBuf, '.')
+			b.namespacePathBuf = append(b.namespacePathBuf, word...)
+			b.res.Decls[b.namespacePathDeclIdx].Signature = string(b.namespacePathBuf)
+			b.prevByte = 'i'
+			return
+		}
 		b.emitPropertyRef(name, mkSpan(startByte, endByte))
 		b.prevByte = 'i'
 		return
@@ -807,13 +917,20 @@ func (b *builder) handleIdent(word []byte) {
 	if b.declContext != "" {
 		kind := b.declContext
 		b.emitDecl(name, kind, mkSpan(startByte, endByte))
-		// Namespace: remember the decl index + start byte so the ';'
-		// handler can open a file-scoped namespace scope if we reach ';'
-		// before we see '{'. Dotted names `namespace A.B;` consume
-		// intermediate idents as property_access refs before the ';'.
+		// Namespace: remember the decl index + start byte so the
+		// ';' handler can open a file-scoped namespace scope if we
+		// reach ';' before we see '{'. Dotted names `namespace A.B;`
+		// consume intermediate idents; we intercept them below (in
+		// the `prevByte == '.'` branch) to extend the namespace's
+		// Signature rather than emitting property_access refs.
 		if kind == scope.KindNamespace {
 			b.pendingNamespaceDeclIdx = len(b.res.Decls) - 1
 			b.pendingNamespaceStartByte = startByte
+			b.namespacePathDeclIdx = len(b.res.Decls) - 1
+			b.namespacePathBuf = append(b.namespacePathBuf[:0], word...)
+			// Stamp initial single-component FQN on the decl.
+			// Overwritten if more dotted components follow.
+			b.res.Decls[b.namespacePathDeclIdx].Signature = string(b.namespacePathBuf)
 		}
 		// Record / struct primary constructor: `record Foo(...)` — the
 		// next `(` begins a field list.
@@ -977,10 +1094,12 @@ func (b *builder) handleOpenBrace() {
 		b.pendingScope = nil
 		b.genericParamsExpected = false
 	}
-	// Any pending namespace decl becomes a block namespace scope; drop
-	// the pending marker so it isn't also opened on the next ';'.
+	// Any pending namespace decl becomes a block namespace scope;
+	// drop the pending marker so it isn't also opened on the next
+	// ';', and stop extending the namespace's Signature.
 	if kind == scope.ScopeNamespace {
 		b.pendingNamespaceDeclIdx = -1
+		b.namespacePathDeclIdx = -1
 	}
 	b.openScope(kind, uint32(b.s.Pos-1))
 	// Flush generics into the newly opened scope.
@@ -1184,6 +1303,30 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 		Span:      span,
 		FullSpan:  fullSpan,
 	})
+
+	// Exported flag. Phase-1 approximation: a top-level class /
+	// interface / enum preceded by `public` is externally
+	// referenceable. The resolver uses this to decide which decls
+	// in a namespace are eligible for cross-file import rewrites.
+	// Only top-level (file scope or directly-in-namespace) counts;
+	// nested types like Outer.Inner are addressed via property
+	// access, not imports.
+	if b.pendingPublic {
+		switch kind {
+		case scope.KindClass, scope.KindInterface, scope.KindEnum:
+			sk := b.currentScopeKind()
+			if sk == scope.ScopeFile || sk == scope.ScopeNamespace {
+				b.res.Decls[idx].Exported = true
+			}
+		}
+	}
+	// Clear pendingPublic once a non-namespace decl consumes it so
+	// it doesn't leak. KindNamespace is preserved (defensive — the
+	// normal pattern is modifiers preceding an inner decl, not the
+	// namespace itself).
+	if kind != scope.KindNamespace {
+		b.pendingPublic = false
+	}
 
 	switch kind {
 	case scope.KindClass, scope.KindInterface, scope.KindEnum,

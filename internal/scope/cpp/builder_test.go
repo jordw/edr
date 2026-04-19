@@ -156,7 +156,11 @@ func TestParse_ScopeResolution(t *testing.T) {
 }
 `)
 	r := Parse("a.cpp", src)
-	// `std` is a ref; `cout` should be a property_access ref via `::`.
+	// `cout` is emitted via `::` qualification; the builder stamps
+	// Reason="scope_qualified_access" (distinct from `.`/`->` access
+	// which uses "property_access"). Same-file resolution doesn't
+	// fire here (no `namespace std` decl in the file), so the ref
+	// stays probable with that reason.
 	var coutRef *scope.Ref
 	for i := range r.Refs {
 		if r.Refs[i].Name == "cout" {
@@ -167,8 +171,8 @@ func TestParse_ScopeResolution(t *testing.T) {
 	if coutRef == nil {
 		t.Fatalf("cout ref missing; refs=%+v", r.Refs)
 	}
-	if coutRef.Binding.Reason != "property_access" {
-		t.Errorf("cout: reason=%q want property_access", coutRef.Binding.Reason)
+	if coutRef.Binding.Reason != "scope_qualified_access" {
+		t.Errorf("cout: reason=%q want scope_qualified_access", coutRef.Binding.Reason)
 	}
 }
 
@@ -382,5 +386,159 @@ void f() {
 		if refs[0].Binding.Reason != "builtin" {
 			t.Errorf("%q reason = %q, want \"builtin\"", name, refs[0].Binding.Reason)
 		}
+	}
+}
+
+// TestParse_IncludeQuoted: `#include "foo.hpp"` emits a KindImport
+// decl whose Signature is `<path>\x00"` (quote-style suffix). The
+// Phase 1 resolver (internal/scope/store/imports_cpp.go) uses the
+// quote-style marker to decide whether to resolve against repo files
+// vs treat the include as a system header.
+func TestParse_IncludeQuoted(t *testing.T) {
+	src := []byte(`#include "foo.hpp"
+`)
+	r := Parse("a.cpp", src)
+	imp := findDecl(r, "foo.hpp")
+	if imp == nil {
+		t.Fatalf("no foo.hpp import decl; names=%v", declNames(r))
+	}
+	if imp.Kind != scope.KindImport {
+		t.Errorf("Kind=%s, want import", imp.Kind)
+	}
+	want := "foo.hpp\x00\""
+	if imp.Signature != want {
+		t.Errorf("Signature=%q, want %q", imp.Signature, want)
+	}
+}
+
+// TestParse_IncludeAngle: `#include <vector>` is a system include;
+// Signature must carry the `<>` marker so the resolver skips it.
+func TestParse_IncludeAngle(t *testing.T) {
+	src := []byte(`#include <vector>
+`)
+	r := Parse("a.cpp", src)
+	imp := findDecl(r, "vector")
+	if imp == nil {
+		t.Fatalf("no vector import decl; names=%v", declNames(r))
+	}
+	want := "vector\x00<>"
+	if imp.Signature != want {
+		t.Errorf("Signature=%q, want %q", imp.Signature, want)
+	}
+}
+
+// TestParse_UsingNamespace: `using namespace Foo;` emits a KindImport
+// decl named Foo with Signature=`Foo\x00*` — the `*` marker signals a
+// widening directive to the resolver.
+func TestParse_UsingNamespace(t *testing.T) {
+	src := []byte(`using namespace Foo;
+int main() { return 0; }
+`)
+	r := Parse("a.cpp", src)
+	imp := findDecl(r, "Foo")
+	if imp == nil {
+		t.Fatalf("no Foo using-directive import decl; names=%v", declNames(r))
+	}
+	if imp.Kind != scope.KindImport {
+		t.Errorf("Kind=%s, want import", imp.Kind)
+	}
+	want := "Foo\x00*"
+	if imp.Signature != want {
+		t.Errorf("Signature=%q, want %q", imp.Signature, want)
+	}
+}
+
+// TestParse_UsingDeclaration: `using Foo::Bar;` emits a KindImport
+// decl named Bar with Signature=`Foo\x00Bar`. The resolver uses the
+// qualifier Foo to look up Bar in the repo's namespace index.
+func TestParse_UsingDeclaration(t *testing.T) {
+	src := []byte(`using Foo::Bar;
+int main() { return 0; }
+`)
+	r := Parse("a.cpp", src)
+	imp := findDecl(r, "Bar")
+	if imp == nil {
+		t.Fatalf("no Bar using-declaration import decl; names=%v", declNames(r))
+	}
+	if imp.Kind != scope.KindImport {
+		t.Errorf("Kind=%s, want import", imp.Kind)
+	}
+	want := "Foo\x00Bar"
+	if imp.Signature != want {
+		t.Errorf("Signature=%q, want %q", imp.Signature, want)
+	}
+}
+
+// TestParse_NamespaceContainsClass: a class declared inside a
+// namespace has a reachable FQN — the builder records the namespace
+// as a scope ancestor of the class. (The resolver joins namespace
+// names via Span containment; we verify both decls exist with
+// appropriate Exported flags and spans.)
+func TestParse_NamespaceContainsClass(t *testing.T) {
+	src := []byte(`namespace Foo {
+	class X {};
+}
+`)
+	r := Parse("a.cpp", src)
+	foo := findDecl(r, "Foo")
+	x := findDecl(r, "X")
+	if foo == nil || foo.Kind != scope.KindNamespace {
+		t.Fatalf("Foo namespace missing/wrong kind: %+v", foo)
+	}
+	if x == nil || x.Kind != scope.KindClass {
+		t.Fatalf("X class missing/wrong kind: %+v", x)
+	}
+	if !foo.Exported {
+		t.Errorf("Foo namespace: Exported=false, want true")
+	}
+	if !x.Exported {
+		t.Errorf("X class inside Foo: Exported=false, want true")
+	}
+	// Span containment: X's Span must lie inside Foo's FullSpan so
+	// the store resolver can compute X's FQN as "Foo::X".
+	if !(x.Span.StartByte >= foo.FullSpan.StartByte && x.Span.EndByte <= foo.FullSpan.EndByte) {
+		t.Errorf("X span %v not inside Foo.FullSpan %v", x.Span, foo.FullSpan)
+	}
+}
+
+// TestParse_ExportedStaticVsExternal: a file-scope function with
+// `static` storage-class is NOT Exported; a plain file-scope function
+// IS Exported.
+func TestParse_ExportedStaticVsExternal(t *testing.T) {
+	src := []byte(`static int internal(int x) { return x; }
+int external(int x) { return x; }
+class Bar {};
+`)
+	r := Parse("a.cpp", src)
+	internalFn := findDecl(r, "internal")
+	externalFn := findDecl(r, "external")
+	bar := findDecl(r, "Bar")
+	if internalFn == nil || externalFn == nil || bar == nil {
+		t.Fatalf("missing decls; names=%v", declNames(r))
+	}
+	if internalFn.Exported {
+		t.Errorf("static function %q: Exported=true, want false", internalFn.Name)
+	}
+	if !externalFn.Exported {
+		t.Errorf("non-static function %q: Exported=false, want true", externalFn.Name)
+	}
+	if !bar.Exported {
+		t.Errorf("class %q: Exported=false, want true", bar.Name)
+	}
+}
+
+// TestParse_UsingTypeAliasFallsThrough: `using T = Expr;` must still
+// emit T as a KindType decl (the builder falls through to the typedef
+// path when it detects `=`).
+func TestParse_UsingTypeAliasFallsThrough(t *testing.T) {
+	src := []byte(`using MyInt = int;
+`)
+	r := Parse("a.cpp", src)
+	t1 := findDecl(r, "MyInt")
+	if t1 == nil {
+		t.Fatalf("MyInt alias missing; names=%v", declNames(r))
+	}
+	if t1.Kind != scope.KindType {
+		t.Errorf("MyInt kind=%s, want type", t1.Kind)
 	}
 }

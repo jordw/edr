@@ -195,6 +195,12 @@ type builder struct {
 	// a bare expression statement). Cleared on statement boundary.
 	sawTypeKeyword bool
 
+	// sawStatic is set when the `static` storage-class specifier
+	// appears in the current statement. In C a file-scope decl has
+	// external linkage unless marked static; this flag lets emitDecl
+	// / emitDeclAtFileScope stamp Decl.Exported correctly.
+	sawStatic bool
+
 	// controlBlockExpected is true after seeing if/while/do/switch/else.
 	// Tells handleOpenBrace to push a plain block scope (not a
 	// composite literal or a function body).
@@ -346,8 +352,10 @@ func (b *builder) handlePreprocessor() {
 		c := b.s.Peek()
 		if c == '"' || c == '<' {
 			closeCh := byte('"')
+			quoteStyle := `"`
 			if c == '<' {
 				closeCh = '>'
+				quoteStyle = "<>"
 			}
 			b.s.Pos++ // consume opener
 			pathStart := b.s.Pos
@@ -362,7 +370,16 @@ func (b *builder) handlePreprocessor() {
 				name := string(b.s.Src[pathStart:b.s.Pos])
 				span := mkSpan(uint32(pathStart), uint32(b.s.Pos))
 				b.pendingFullStart = start + 1
-				b.emitDeclAtFileScope(name, scope.KindImport, span)
+				idx := b.emitDeclAtFileScope(name, scope.KindImport, span)
+				// Stamp Signature = "<includedPath>\x00<quoteStyle>"
+				// so the import-graph resolver can distinguish quoted
+				// (local) from angle-bracket (system) includes. C's
+				// convention differs from other languages (which use
+				// "<modulePath>\x00<origName>") because `#include`
+				// has no per-name "original name".
+				if idx >= 0 && idx < len(b.res.Decls) {
+					b.res.Decls[idx].Signature = name + "\x00" + quoteStyle
+				}
 			}
 			// Skip the closing quote/angle bracket.
 			if !b.s.EOF() && b.s.Peek() == closeCh {
@@ -420,6 +437,7 @@ func (b *builder) resetStmt() {
 	b.funcDef = pendingFuncDef{}
 	b.pendingFullStart = 0
 	b.sawTypeKeyword = false
+	b.sawStatic = false
 }
 
 func (b *builder) handleSemicolon() {
@@ -798,6 +816,11 @@ func (b *builder) handleIdent(word []byte) {
 		// ident can be recognized as a declaration name even when no
 		// user-defined type token precedes it.
 		b.sawTypeKeyword = true
+		if name == "static" {
+			// Track `static` separately: at file scope it marks a decl
+			// as internal linkage (not visible to includers).
+			b.sawStatic = true
+		}
 		if wasStmtStart && b.pendingFullStart == 0 {
 			b.pendingFullStart = startByte + 1
 		}
@@ -1148,6 +1171,15 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) in
 	}
 	fullSpan := scope.Span{StartByte: fullStart, EndByte: span.EndByte}
 
+	// Exported: file-scope decls default to external linkage in C;
+	// `static` flips them to internal (not visible to includers).
+	// KindImport (#include) is not a declaration in the export sense,
+	// so never mark imports Exported — the resolver filters them.
+	exported := false
+	if kind != scope.KindImport && scopeID == scope.ScopeID(1) && !b.sawStatic {
+		exported = true
+	}
+
 	idx := len(b.res.Decls)
 	b.res.Decls = append(b.res.Decls, scope.Decl{
 		ID:        declID,
@@ -1159,6 +1191,7 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) in
 		File:      b.file,
 		Span:      span,
 		FullSpan:  fullSpan,
+		Exported:  exported,
 	})
 	b.pendingFullStart = 0
 	return idx
@@ -1185,6 +1218,14 @@ func (b *builder) emitDeclAtFileScope(name string, kind scope.DeclKind, span sco
 		fullStart = span.StartByte
 	}
 	fullSpan := scope.Span{StartByte: fullStart, EndByte: span.EndByte}
+	// Exported: file-scope decls (macros, enum constants, file-scope
+	// vars/types) have external linkage unless declared `static`.
+	// KindImport (#include) is never marked Exported — it's not a
+	// declaration in the export sense; the resolver filters it.
+	exported := false
+	if kind != scope.KindImport && !b.sawStatic {
+		exported = true
+	}
 	idx := len(b.res.Decls)
 	b.res.Decls = append(b.res.Decls, scope.Decl{
 		ID:        declID,
@@ -1196,6 +1237,7 @@ func (b *builder) emitDeclAtFileScope(name string, kind scope.DeclKind, span sco
 		File:      b.file,
 		Span:      span,
 		FullSpan:  fullSpan,
+		Exported:  exported,
 	})
 	b.pendingFullStart = 0
 	return idx

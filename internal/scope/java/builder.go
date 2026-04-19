@@ -160,14 +160,37 @@ type builder struct {
 	localVarDeclKind scope.DeclKind
 
 	// isImportDecl: consuming an `import [static] a.b.c;` — emit final
-	// ident as a KindImport decl on `;`.
+	// ident as a KindImport decl on `;`. importPathBuf accumulates the
+	// dotted prefix ("com.acme" for "com.acme.Foo"); importBuf holds the
+	// final segment ("Foo"). For wildcard `import com.acme.*;` the emitted
+	// decl is named "*" with Signature="com.acme\x00*" — consumed by the
+	// Phase-1 import graph resolver in internal/scope/store/imports_java.go.
+	// For static imports, the module path is prefixed with "static:" so
+	// the resolver can distinguish them (v1 punts static-import resolution
+	// but the shape is preserved for future work).
 	isImportDecl     bool
 	importStaticFlag bool
 	importBuf        []byte
 	importBufSpan    scope.Span
+	importPathBuf    []byte
+	importWildcard   bool
+	importWildSpan   scope.Span
 
-	// isPackageDecl: consuming `package a.b.c;` — emit nothing.
+	// isPackageDecl: consuming `package a.b.c;` — emit a KindNamespace
+	// decl at file scope with Name=full dotted package name (e.g.
+	// "com.acme"). The Phase-1 import graph resolver reads this to map
+	// fully-qualified type names back to their declaring file.
 	isPackageDecl bool
+	packageBuf    []byte
+	packageStart  uint32
+	packageEnd    uint32
+
+	// pendingPublic: the most recent modifier run included `public`.
+	// Consumed by emitDecl to set Exported=true on class/interface/
+	// enum/method/field decls. Cleared on statement boundaries and
+	// non-modifier keywords. v1 approximation: tracks only `public` —
+	// protected / private / package-private all count as not exported.
+	pendingPublic bool
 
 	// anonInnerExpected: `new Foo(...)` was just parsed; if the next
 	// `{` arrives (after the close ')'), treat as anonymous inner class
@@ -258,14 +281,51 @@ func (b *builder) run() {
 			b.paramListPending = false
 			b.genericParamsExpected = false
 			if b.isImportDecl {
-				if len(b.importBuf) > 0 {
+				// Wildcard `import com.acme.*;` — importWildcard was
+				// set when the '*' was consumed in run()'s default arm.
+				if b.importWildcard {
+					if len(b.importPathBuf) > 0 && len(b.importBuf) > 0 {
+						// Promote the trailing segment into the path.
+						b.importPathBuf = append(b.importPathBuf, '.')
+						b.importPathBuf = append(b.importPathBuf, b.importBuf...)
+					} else if len(b.importBuf) > 0 && len(b.importPathBuf) == 0 {
+						b.importPathBuf = append(b.importPathBuf[:0], b.importBuf...)
+					}
+					modPath := string(b.importPathBuf)
+					if b.importStaticFlag {
+						modPath = "static:" + modPath
+					}
+					idx := len(b.res.Decls)
+					b.emitDecl("*", scope.KindImport, b.importWildSpan)
+					if idx < len(b.res.Decls) {
+						b.res.Decls[idx].Signature = modPath + "\x00*"
+					}
+				} else if len(b.importBuf) > 0 {
+					modPath := string(b.importPathBuf)
+					if b.importStaticFlag {
+						modPath = "static:" + modPath
+					}
+					idx := len(b.res.Decls)
 					b.emitDecl(string(b.importBuf), scope.KindImport, b.importBufSpan)
+					if idx < len(b.res.Decls) {
+						b.res.Decls[idx].Signature = modPath + "\x00" + string(b.importBuf)
+					}
 				}
 				b.isImportDecl = false
 				b.importStaticFlag = false
 				b.importBuf = b.importBuf[:0]
+				b.importPathBuf = b.importPathBuf[:0]
+				b.importWildcard = false
+			}
+			if b.isPackageDecl {
+				if len(b.packageBuf) > 0 {
+					b.emitDecl(string(b.packageBuf), scope.KindNamespace,
+						scope.Span{StartByte: b.packageStart, EndByte: b.packageEnd})
+				}
+				b.packageBuf = b.packageBuf[:0]
 			}
 			b.isPackageDecl = false
+			b.pendingPublic = false
 			b.pendingParams = nil
 			b.pendingGenerics = nil
 			b.anonInnerExpected = false
@@ -432,6 +492,19 @@ func (b *builder) run() {
 			}
 			b.stmtStart = false
 			b.prevByte = '0'
+		case c == '*':
+			// In an import decl after a dot, '*' is the wildcard marker.
+			// Elsewhere in Java, '*' is multiplication — harmless to skip.
+			if b.isImportDecl && b.prevByte == '.' {
+				startByte := uint32(b.s.Pos)
+				b.s.Pos++
+				b.importWildcard = true
+				b.importWildSpan = mkSpan(startByte, uint32(b.s.Pos))
+				b.prevByte = '*'
+				continue
+			}
+			b.s.Pos++
+			b.prevByte = c
 		default:
 			b.s.Pos++
 			b.prevByte = c
@@ -451,18 +524,43 @@ func (b *builder) handleIdent(word []byte) {
 	wasStmtStart := b.stmtStart
 	b.stmtStart = false
 
-	// Package declaration: consume dotted name; emit nothing.
+	// Package declaration: accumulate dotted name; emit a KindNamespace
+	// decl on ';'. Each ident either starts or extends packageBuf (joined
+	// by '.' when prevByte == '.').
 	if b.isPackageDecl {
+		if len(b.packageBuf) == 0 {
+			b.packageBuf = append(b.packageBuf[:0], word...)
+			b.packageStart = startByte
+		} else if b.prevByte == '.' {
+			b.packageBuf = append(b.packageBuf, '.')
+			b.packageBuf = append(b.packageBuf, word...)
+		} else {
+			// Unexpected adjacent idents — replace (defensive).
+			b.packageBuf = append(b.packageBuf[:0], word...)
+			b.packageStart = startByte
+		}
+		b.packageEnd = endByte
 		b.prevByte = 'i'
 		return
 	}
 
-	// Import declaration: collect final unqualified name.
+	// Import declaration: collect final unqualified name and the dotted
+	// prefix separately. On seeing "foo" after "com.acme.", we promote
+	// the existing importBuf into importPathBuf (the prefix) and make
+	// "foo" the new importBuf. See parseImportSignature() in
+	// internal/scope/store/imports.go for the decoded form.
 	if b.isImportDecl {
 		if name == "static" && !b.importStaticFlag && len(b.importBuf) == 0 {
 			b.importStaticFlag = true
 			b.prevByte = 'k'
 			return
+		}
+		if len(b.importBuf) > 0 && b.prevByte == '.' {
+			// Promote existing final segment into path prefix.
+			if len(b.importPathBuf) > 0 {
+				b.importPathBuf = append(b.importPathBuf, '.')
+			}
+			b.importPathBuf = append(b.importPathBuf, b.importBuf...)
 		}
 		b.importBuf = append(b.importBuf[:0], word...)
 		b.importBufSpan = mkSpan(startByte, endByte)
@@ -528,7 +626,11 @@ func (b *builder) handleIdent(word []byte) {
 		"synchronized", "native", "strictfp", "default", "transient",
 		"volatile", "sealed":
 		// Modifiers preserve stmtStart so a following decl keyword still
-		// triggers decl context.
+		// triggers decl context. Track `public` so the next-emitted decl
+		// gets Exported=true (v1 approximation — only `public` counts).
+		if name == "public" {
+			b.pendingPublic = true
+		}
 		b.stmtStart = wasStmtStart
 		b.prevByte = 'k'
 		return
@@ -836,6 +938,11 @@ func (b *builder) handleOpenBrace() {
 	b.prevByte = '{'
 	b.stmtStart = true
 
+	// pendingPublic is consumed by the just-emitted scope-owning decl
+	// (class/interface/enum/method). Clear it now so it doesn't leak
+	// into the body's first decl.
+	b.pendingPublic = false
+
 	kind := scope.ScopeBlock
 	if b.pendingScope != nil {
 		kind = *b.pendingScope
@@ -895,6 +1002,7 @@ func (b *builder) handleCloseBrace() {
 	b.typePositionIdent = false
 	b.localVarDeclKind = ""
 	b.declContext = ""
+	b.pendingPublic = false
 }
 
 func (b *builder) openScope(kind scope.ScopeKind, startByte uint32) {
@@ -1053,6 +1161,21 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 		Span:      span,
 		FullSpan:  fullSpan,
 	})
+
+	// Exported flag. v1 approximation: a decl is "exported" when the
+	// preceding modifier run included `public`, and the kind is one the
+	// import-graph resolver treats as externally referenceable
+	// (class/interface/enum/method/field). Protected/private/package-
+	// private are NOT exported. Imports and local vars/params are never
+	// exported. Consumed here so a bare `public` doesn't re-apply.
+	switch kind {
+	case scope.KindClass, scope.KindInterface, scope.KindEnum,
+		scope.KindMethod, scope.KindField:
+		if b.pendingPublic {
+			b.res.Decls[idx].Exported = true
+			b.pendingPublic = false
+		}
+	}
 
 	switch kind {
 	case scope.KindClass, scope.KindInterface, scope.KindEnum,

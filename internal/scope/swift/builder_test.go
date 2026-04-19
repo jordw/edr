@@ -756,3 +756,173 @@ func TestParse_GuardVarBinding(t *testing.T) {
 		t.Errorf("ref(y) not resolved to guard-var decl; refs=%+v", refsNamed(r, "y"))
 	}
 }
+
+// TestParse_Exported_DefaultIsInternal: Swift's default access is
+// "internal" (visible to the whole module). Unmodified top-level decls
+// should be Exported=true — the import-graph resolver treats internal
+// as exported for repo-module purposes.
+func TestParse_Exported_DefaultIsInternal(t *testing.T) {
+	src := []byte(`class A {}
+struct B {}
+enum C {}
+protocol D {}
+func e() {}
+var f: Int = 0
+let g: Int = 0
+typealias H = Int
+`)
+	r := Parse("a.swift", src)
+	for _, name := range []string{"A", "B", "C", "D", "e", "f", "g", "H"} {
+		d := findDecl(r, name)
+		if d == nil {
+			t.Errorf("%s: decl missing", name)
+			continue
+		}
+		if !d.Exported {
+			t.Errorf("%s: Exported=false, want true (Swift default is internal)", name)
+		}
+	}
+}
+
+// TestParse_Exported_PublicAndOpen: `public` / `open` top-level decls
+// are Exported=true.
+func TestParse_Exported_PublicAndOpen(t *testing.T) {
+	src := []byte(`public class A {}
+open class B {}
+public func c() {}
+`)
+	r := Parse("a.swift", src)
+	for _, name := range []string{"A", "B", "c"} {
+		d := findDecl(r, name)
+		if d == nil {
+			t.Errorf("%s: decl missing", name)
+			continue
+		}
+		if !d.Exported {
+			t.Errorf("%s: Exported=false, want true", name)
+		}
+	}
+}
+
+// TestParse_Exported_PrivateAndFileprivate: `private` and `fileprivate`
+// top-level decls are Exported=false.
+func TestParse_Exported_PrivateAndFileprivate(t *testing.T) {
+	src := []byte(`private class A {}
+fileprivate struct B {}
+private func c() {}
+`)
+	r := Parse("a.swift", src)
+	for _, name := range []string{"A", "B", "c"} {
+		d := findDecl(r, name)
+		if d == nil {
+			t.Errorf("%s: decl missing", name)
+			continue
+		}
+		if d.Exported {
+			t.Errorf("%s: Exported=true, want false (private/fileprivate)", name)
+		}
+	}
+}
+
+// TestParse_Exported_InternalExplicit: explicit `internal` marker works.
+func TestParse_Exported_InternalExplicit(t *testing.T) {
+	src := []byte(`internal class A {}
+`)
+	r := Parse("a.swift", src)
+	d := findDecl(r, "A")
+	if d == nil {
+		t.Fatal("A: decl missing")
+	}
+	if !d.Exported {
+		t.Errorf("A: Exported=false, want true (explicit internal)")
+	}
+}
+
+// TestParse_Exported_ImportDeclNotExported: KindImport decls
+// themselves are never Exported — they don't re-export the imported
+// module.
+func TestParse_Exported_ImportDeclNotExported(t *testing.T) {
+	src := []byte(`import Foundation
+`)
+	r := Parse("a.swift", src)
+	d := findDecl(r, "Foundation")
+	if d == nil || d.Kind != scope.KindImport {
+		t.Fatalf("Foundation import missing; got %+v", d)
+	}
+	if d.Exported {
+		t.Errorf("Foundation import: Exported=true, want false")
+	}
+}
+
+// TestParse_Exported_NestedNotExported: members inside a class body
+// (fields, methods) should not be marked Exported — the import-graph
+// resolver only indexes file-scope decls. Exported=true on a field/
+// method would pollute the cross-file name index.
+func TestParse_Exported_NestedNotExported(t *testing.T) {
+	src := []byte(`public class Outer {
+    public var x: Int = 0
+    public func y() {}
+}
+`)
+	r := Parse("a.swift", src)
+	outer := findDecl(r, "Outer")
+	if outer == nil || !outer.Exported {
+		t.Fatalf("Outer: missing or not exported; got %+v", outer)
+	}
+	x := findDecl(r, "x")
+	if x != nil && x.Exported {
+		t.Errorf("Outer.x (field): Exported=true, want false (not file-scope)")
+	}
+	y := findDecl(r, "y")
+	if y != nil && y.Exported {
+		t.Errorf("Outer.y (method): Exported=true, want false (not file-scope)")
+	}
+}
+
+// TestParse_Import_Signature_SingleModule: `import Foundation` emits
+// Signature "Foundation\x00*" on the KindImport decl.
+func TestParse_Import_Signature_SingleModule(t *testing.T) {
+	src := []byte(`import Foundation
+`)
+	r := Parse("a.swift", src)
+	d := findDecl(r, "Foundation")
+	if d == nil || d.Kind != scope.KindImport {
+		t.Fatalf("Foundation import missing; decls=%v", declNames(r))
+	}
+	want := "Foundation\x00*"
+	if d.Signature != want {
+		t.Errorf("Signature = %q, want %q", d.Signature, want)
+	}
+}
+
+// TestParse_Import_Signature_Submodule: `import Foo.Bar` emits
+// Signature "Foo.Bar\x00*" on the KindImport decl.
+func TestParse_Import_Signature_Submodule(t *testing.T) {
+	src := []byte(`import Foo.Bar
+`)
+	r := Parse("a.swift", src)
+	d := findDecl(r, "Foo")
+	if d == nil || d.Kind != scope.KindImport {
+		t.Fatalf("Foo import missing; decls=%v", declNames(r))
+	}
+	want := "Foo.Bar\x00*"
+	if d.Signature != want {
+		t.Errorf("Signature = %q, want %q", d.Signature, want)
+	}
+}
+
+// TestParse_Import_Signature_DeepSubmodule: `import A.B.C` emits
+// "A.B.C\x00*".
+func TestParse_Import_Signature_DeepSubmodule(t *testing.T) {
+	src := []byte(`import A.B.C
+`)
+	r := Parse("a.swift", src)
+	d := findDecl(r, "A")
+	if d == nil || d.Kind != scope.KindImport {
+		t.Fatalf("A import missing; decls=%v", declNames(r))
+	}
+	want := "A.B.C\x00*"
+	if d.Signature != want {
+		t.Errorf("Signature = %q, want %q", d.Signature, want)
+	}
+}

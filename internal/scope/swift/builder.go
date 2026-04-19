@@ -46,6 +46,7 @@ func Parse(file string, src []byte) *scope.Result {
 		res:              &scope.Result{File: file},
 		s:                lexkit.New(src),
 		pendingOwnerDecl: -1,
+		importDeclIdx:    -1,
 	}
 	b.openScope(scope.ScopeFile, 0)
 	b.stmtStart = true
@@ -136,6 +137,22 @@ type builder struct {
 
 	// import-handling.
 	inImport bool
+	// importDeclIdx is the index in res.Decls of the KindImport decl just
+	// emitted for the current `import ...` statement, or -1. We stamp its
+	// Signature on statement boundary so `import Foo.Bar` ends up as
+	// "Foo.Bar\x00*".
+	importDeclIdx int
+	// importModulePath accumulates the dotted module path across idents
+	// in an import statement (`import Foo.Bar` → "Foo.Bar").
+	importModulePath string
+
+	// currentAccess is the access-modifier keyword seen in the current
+	// statement (one of "public", "internal", "open", "private",
+	// "fileprivate"), or "" if no explicit modifier. Swift's default is
+	// "internal" for file-scope decls. Consumed and cleared by emitDecl
+	// for the first file-scope decl it emits; always cleared on statement
+	// boundary.
+	currentAccess string
 
 	// Extension target: when we see `extension`, the next ident is the
 	// target type ident. We stash it as the extension's class scope
@@ -429,8 +446,18 @@ func (b *builder) onStatementBoundary() {
 	// Close any import statement that didn't get a terminator (Swift
 	// imports end at newline).
 	if b.inImport {
+		// Stamp the KindImport decl's Signature with the accumulated
+		// module path. Swift imports are module-level, so the "original
+		// name" slot is always "*" — the whole module is imported.
+		if b.importDeclIdx >= 0 && b.importDeclIdx < len(b.res.Decls) && b.importModulePath != "" {
+			b.res.Decls[b.importDeclIdx].Signature = b.importModulePath + "\x00*"
+		}
 		b.inImport = false
+		b.importDeclIdx = -1
+		b.importModulePath = ""
 	}
+	// Access modifier doesn't carry across statements.
+	b.currentAccess = ""
 }
 
 // scanSwiftString consumes a Swift string literal starting at '"'. It
@@ -749,10 +776,17 @@ func (b *builder) handleIdent(word []byte) {
 		}
 		b.prevByte = 'k'
 		return
+	case "public", "internal", "open", "private", "fileprivate":
+		// Access modifiers: track for the current statement so emitDecl
+		// can stamp Decl.Exported appropriately on file-scope decls.
+		// Swift's default access is "internal" (visible within the same
+		// module) — that's treated as exported for import-graph purposes.
+		b.currentAccess = name
+		b.prevByte = 'k'
+		return
 	case "return", "throw", "try", "throws", "rethrows", "async", "await",
 		"break", "continue", "fallthrough", "defer", "where",
 		"true", "false", "nil", "as", "is", "inout", "some", "any",
-		"public", "private", "internal", "fileprivate", "open",
 		"static", "final", "lazy", "weak", "unowned", "mutating",
 		"nonmutating", "override", "required", "convenience",
 		"dynamic", "optional", "indirect", "associatedtype",
@@ -766,6 +800,15 @@ func (b *builder) handleIdent(word []byte) {
 	case "self", "Self":
 		b.prevIdentIsSelf = true
 		b.prevByte = 'k'
+		return
+	}
+
+	// Inside `import Foo.Bar.Baz`: after the first ident (emitted as the
+	// KindImport decl named "Foo"), subsequent `.ident` chunks extend the
+	// module path. Don't emit them as property refs.
+	if b.inImport && b.prevByte == '.' {
+		b.importModulePath += "." + name
+		b.prevByte = 'i'
 		return
 	}
 
@@ -890,6 +933,13 @@ func (b *builder) handleIdent(word []byte) {
 			return
 		}
 		b.emitDecl(name, kind, mkSpan(startByte, endByte))
+		// If we just emitted the KindImport decl, remember its index and
+		// seed the module-path accumulator with this first name. The
+		// statement-boundary flush will stamp its Signature.
+		if kind == scope.KindImport && b.inImport {
+			b.importDeclIdx = len(b.res.Decls) - 1
+			b.importModulePath = name
+		}
 		b.declContext = ""
 		switch kind {
 		case scope.KindFunction, scope.KindMethod:
@@ -1223,6 +1273,22 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 	}
 	fullSpan := scope.Span{StartByte: fullStart, EndByte: span.EndByte}
 
+	// Exported flag: only set on file-scope decls. Swift's default access
+	// is "internal" (visible within the same module) — treated as exported
+	// for import-graph purposes. Only "private" / "fileprivate" mark a
+	// decl as non-exported. Imports are not themselves re-exported.
+	exported := false
+	if b.currentScopeKind() == scope.ScopeFile && kind != scope.KindImport {
+		if b.currentAccess != "private" && b.currentAccess != "fileprivate" {
+			exported = true
+		}
+	}
+	// File-scope decls consume the current access modifier; once emitted,
+	// later decls in the same statement (e.g. `var a, b: Int`) inherit it.
+	// Non-file-scope decls don't consume it — inner scopes' modifiers are
+	// tracked separately per-statement via currentAccess and cleared on
+	// statement boundary.
+
 	idx := len(b.res.Decls)
 	b.res.Decls = append(b.res.Decls, scope.Decl{
 		ID:        declID,
@@ -1234,6 +1300,7 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 		File:      b.file,
 		Span:      span,
 		FullSpan:  fullSpan,
+		Exported:  exported,
 	})
 
 	switch kind {
