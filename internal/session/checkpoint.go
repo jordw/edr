@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jordw/edr/internal/atomic"
 )
 
 // Checkpoint captures the full session state plus dirty file contents at a point in time.
@@ -189,7 +191,7 @@ func (s *Session) RestoreCheckpoint(sessDir, repoRoot, cpID string, saveCurrentF
 		if cur, err := os.ReadFile(abs); err == nil && bytes.Equal(cur, f.Content) {
 			continue
 		}
-		if err := atomicWrite(abs, f.Content); err != nil {
+		if err := atomic.WriteFile(abs, f.Content); err != nil {
 			return restored, nil, preRestoreID, fmt.Errorf("restore %s: %w", f.Path, err)
 		}
 		restored = append(restored, f.Path)
@@ -481,14 +483,3 @@ func (s *Session) enforceAutoCheckpointCap(sessDir string) {
 	}
 }
 
-func atomicWrite(path string, content []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-	tmp := path + ".cp_tmp"
-	if err := os.WriteFile(tmp, content, 0600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}

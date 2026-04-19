@@ -46,6 +46,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	atomicio "github.com/jordw/edr/internal/atomic"
 	"github.com/jordw/edr/internal/scope"
 	"github.com/jordw/edr/internal/scope/c"
 	"github.com/jordw/edr/internal/scope/cpp"
@@ -459,45 +460,24 @@ func Build(root, edrDir string, walkFn func(string, func(string) error) error) (
 		headerBytes = newHeaderBytes
 	}
 
-	tmp, err := os.CreateTemp(edrDir, "scope-*.bin")
-	if err != nil {
-		return 0, fmt.Errorf("scope store: create temp: %w", err)
-	}
-	tmpPath := tmp.Name()
-	cleanup := func() {
-		tmp.Close()
-		os.Remove(tmpPath)
-	}
-
-	var prefix [4]byte
-	binary.LittleEndian.PutUint32(prefix[:], uint32(len(headerBytes)))
-	if _, err := tmp.Write(prefix[:]); err != nil {
-		cleanup()
-		return 0, fmt.Errorf("scope store: write prefix: %w", err)
-	}
-	if _, err := tmp.Write(headerBytes); err != nil {
-		cleanup()
-		return 0, fmt.Errorf("scope store: write header: %w", err)
-	}
-	for _, r := range records {
-		if _, err := tmp.Write(r.body); err != nil {
-			cleanup()
-			return 0, fmt.Errorf("scope store: write record %s: %w", r.rel, err)
-		}
-	}
-	if err := tmp.Sync(); err != nil {
-		cleanup()
-		return 0, fmt.Errorf("scope store: sync: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
-		return 0, fmt.Errorf("scope store: close temp: %w", err)
-	}
-
 	finalPath := filepath.Join(edrDir, storeFileName)
-	if err := os.Rename(tmpPath, finalPath); err != nil {
-		os.Remove(tmpPath)
-		return 0, fmt.Errorf("scope store: rename %s -> %s: %w", tmpPath, finalPath, err)
+	if err := atomicio.WriteVia(finalPath, func(w io.Writer) error {
+		var prefix [4]byte
+		binary.LittleEndian.PutUint32(prefix[:], uint32(len(headerBytes)))
+		if _, err := w.Write(prefix[:]); err != nil {
+			return fmt.Errorf("scope store: write prefix: %w", err)
+		}
+		if _, err := w.Write(headerBytes); err != nil {
+			return fmt.Errorf("scope store: write header: %w", err)
+		}
+		for _, r := range records {
+			if _, err := w.Write(r.body); err != nil {
+				return fmt.Errorf("scope store: write record %s: %w", r.rel, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		return 0, err
 	}
 	return len(records), nil
 }

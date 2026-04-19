@@ -5,6 +5,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+
+	atomicio "github.com/jordw/edr/internal/atomic"
 )
 
 const (
@@ -163,7 +165,7 @@ func WritePopularity(edrDir string, scores []uint16) error {
 	for i, s := range scores {
 		binary.LittleEndian.PutUint16(buf[12+2*i:], s)
 	}
-	return atomicWrite(filepath.Join(edrDir, PopularityFile), buf)
+	return atomicio.WriteFile(filepath.Join(edrDir, PopularityFile), buf)
 }
 
 // ReadPopularity loads per-symbol popularity scores from the edr directory.

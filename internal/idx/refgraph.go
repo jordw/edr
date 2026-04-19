@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	atomicio "github.com/jordw/edr/internal/atomic"
 )
 
 const (
@@ -199,7 +201,7 @@ func WriteRefGraph(edrDir string, g *RefGraphData) error {
 		pos += 4
 	}
 
-	return atomicWrite(path, buf[:pos])
+	return atomicio.WriteFile(path, buf[:pos])
 }
 
 // ReadRefGraph loads the reference graph from the edr directory.

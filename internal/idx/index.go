@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	atomicio "github.com/jordw/edr/internal/atomic"
 	"github.com/jordw/edr/internal/staleness"
 )
 
@@ -693,7 +694,7 @@ func PatchDirtyFiles(root, edrDir string, dirty []string, extractSymbols SymbolE
 		}
 	}
 
-	atomicWrite(filepath.Join(edrDir, MainFile), d.Marshal())
+	atomicio.WriteFile(filepath.Join(edrDir, MainFile), d.Marshal())
 	InvalidateSymbolCache()
 	// Popularity scores are stale after patching — remove so they get
 	// recomputed on the next full index build.
@@ -847,7 +848,7 @@ func rebuildSmart(root, edrDir string, walkFn func(root string, fn func(path str
 		d.Header.GitMtime = 0
 	}
 
-	atomicWrite(filepath.Join(edrDir, MainFile), d.Marshal())
+	atomicio.WriteFile(filepath.Join(edrDir, MainFile), d.Marshal())
 	InvalidateSymbolCache()
 	if !timedOut {
 		ClearDirty(edrDir)
@@ -1187,7 +1188,7 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 		NamePosts:    namePosts,
 		NamePostings: namePostData,
 	}
-	if err := atomicWrite(filepath.Join(edrDir, MainFile), d.Marshal()); err != nil {
+	if err := atomicio.WriteFile(filepath.Join(edrDir, MainFile), d.Marshal()); err != nil {
 		return fmt.Errorf("writing index: %w", err)
 	}
 
@@ -1341,17 +1342,6 @@ func gitIndexMtime(repoRoot string) int64 {
 		return 0
 	}
 	return info.ModTime().UnixNano()
-}
-
-func atomicWrite(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
 }
 
 // Changes holds the result of comparing indexed file metadata against the
