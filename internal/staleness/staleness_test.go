@@ -226,39 +226,6 @@ func TestSnapshot_GobRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSaveLoadSnapshot(t *testing.T) {
-	root := t.TempDir()
-	edrDir := filepath.Join(root, ".edr")
-	if err := os.MkdirAll(edrDir, 0o755); err != nil {
-		t.Fatalf("mkdir edrDir: %v", err)
-	}
-	write(t, root, "a.go", "package a\n")
-	snap := Capture(root, walker())
-	if err := SaveSnapshot(edrDir, "test", snap); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-	loaded, err := LoadSnapshot(edrDir, "test")
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if loaded == nil {
-		t.Fatalf("load returned nil")
-	}
-	if len(loaded.Entries) != len(snap.Entries) {
-		t.Errorf("entry count: got %d, want %d", len(loaded.Entries), len(snap.Entries))
-	}
-
-	// Missing file: (nil, nil).
-	empty := t.TempDir()
-	got, err := LoadSnapshot(empty, "absent")
-	if err != nil {
-		t.Errorf("load missing: err = %v", err)
-	}
-	if got != nil {
-		t.Errorf("load missing: got %+v, want nil", got)
-	}
-}
-
 // Rapid writes within the same mtime tick are a documented limitation:
 // mtime is 1-second granular on some filesystems, and without a content
 // hash we can't distinguish two same-tick writes of different bodies

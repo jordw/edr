@@ -577,23 +577,17 @@ func PatchDirtyFiles(root, edrDir string, dirty []string) {
 		files = append(files, f)
 	}
 
-	// Apply patch entries to the rewritten file table.
+	// Apply patch entries to the rewritten file table. Appends for
+	// brand-new files; overwrites in place when the path already
+	// existed. The trigram merge below resolves IDs by path, so we
+	// don't need to track them on patchEntry here.
 	for _, p := range patches {
 		if newID, ok := oldIDToNewID[uint32(p.fileID)]; ok && p.fileID >= 0 {
 			files[newID] = p.entry
-			// Fix the patch's fileID so the trigram merge below uses
-			// the correct post-renumbering id.
-			p.fileID = int(newID)
 		} else {
-			p.fileID = len(files)
 			files = append(files, p.entry)
 		}
-		// Overwrite the element so the loop variable changes stick.
-		// (Range by index needed because patches is a slice of
-		// values.)
 	}
-	// Re-derive fileIDs from paths for the trigram merge — safer than
-	// relying on the overwrite above to have stuck.
 	newByPath := make(map[string]uint32, len(files))
 	for i, f := range files {
 		newByPath[f.Path] = uint32(i)

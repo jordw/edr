@@ -55,13 +55,23 @@ func TestPhantomSymbols_PruneOnDelete(t *testing.T) {
 		}
 	}
 
-	walkFn := func(root string, fn func(string) error) error {
-		return filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+	walkFn := func(rootArg string, fn func(string) error) error {
+		return filepath.Walk(rootArg, func(p string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() {
 				return nil
 			}
-			if strings.Contains(p, ".edr") || strings.Contains(p, ".git") {
+			// Use relative-path segment matching rather than substring —
+			// substring matches would skip the whole repo if rootArg
+			// itself contained ".edr" or ".git" (e.g. a tempdir named
+			// that way in CI).
+			rel, relErr := filepath.Rel(rootArg, p)
+			if relErr != nil {
 				return nil
+			}
+			for _, seg := range strings.Split(rel, string(filepath.Separator)) {
+				if seg == ".edr" || seg == ".git" {
+					return nil
+				}
 			}
 			return fn(p)
 		})

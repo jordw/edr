@@ -10,12 +10,17 @@ import (
 	"time"
 )
 
-// Tracker accumulates dirty-file markers on disk. Writes are
-// O_APPEND, so concurrent Mark calls from parallel processes don't
-// race — POSIX guarantees atomic writes for payloads under PIPE_BUF
-// (typically 4 KiB on Linux/macOS, far larger than any path we mark).
-// This is the load-bearing property: edr is routinely run by multiple
-// agents in parallel against the same repo, and the previous
+// Tracker accumulates dirty-file markers on disk. Writes use
+// O_APPEND with a single WriteString so concurrent Mark calls from
+// parallel processes don't interleave within an individual write.
+// POSIX only guarantees this strictly for pipes (PIPE_BUF); for
+// regular files the guarantee is de facto on Linux (tmpfs, ext4,
+// xfs) and best-effort on macOS/APFS — paths are well under the
+// threshold in practice, but the 8-goroutine concurrent-Mark test
+// is treated as load-bearing, not redundant.
+//
+// This matters because edr is routinely run by multiple agents in
+// parallel against the same repo, and the previous
 // read-merge-rewrite dirty list would silently drop markers under
 // contention.
 //
@@ -82,9 +87,13 @@ func (t *Tracker) Mark(paths ...string) {
 // Dirty returns the deduplicated, sorted list of marked paths. Legacy
 // boolean markers ("1") and empty lines are ignored.
 func (t *Tracker) Dirty() []string {
+	// Hold the lock through the read so an in-process Mark cannot
+	// append a partial line while the scanner is consuming the file.
+	// Cross-process Mark writes are still atomic-enough per Tracker's
+	// package comment; same-process races are fully prevented here.
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	f, err := os.Open(t.path)
-	t.mu.Unlock()
 	if err != nil {
 		return nil
 	}

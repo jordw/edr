@@ -13,15 +13,13 @@
 // read-merge-rewrite dirty lists that preceded it.
 //
 // Persistence: Snapshot is gob-serializable. idx and scope already
-// embed per-file metadata in their own on-disk formats; callers that
-// want to persist a Snapshot as a sidecar can write it to
-// edrDir/<name>.snap with SaveSnapshot/LoadSnapshot.
+// embed per-file metadata in their own on-disk formats (FileEntry on
+// idx, RecordMeta on scope), so neither needs a sidecar — they pass
+// their own records into Check directly. A future session-delta
+// consumer could add Save/Load helpers; none exist today.
 package staleness
 
 import (
-	"bytes"
-	"encoding/gob"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -221,47 +219,4 @@ func Check(root string, snap *Snapshot, walk WalkFn) *Diff {
 	sort.Strings(diff.Modified)
 	sort.Strings(diff.Deleted)
 	return diff
-}
-
-// SaveSnapshot writes a Snapshot to edrDir/<name>.snap as gob.
-// Caller-chosen persistence — idx and scope keep their own on-disk
-// file tables; this is only for consumers that want a pure snapshot.
-func SaveSnapshot(edrDir, name string, snap *Snapshot) error {
-	if snap == nil {
-		return fmt.Errorf("staleness: SaveSnapshot nil snapshot")
-	}
-	if err := os.MkdirAll(edrDir, 0o755); err != nil {
-		return err
-	}
-	path := filepath.Join(edrDir, name+".snap")
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(snap); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, buf.Bytes(), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
-// LoadSnapshot reads a Snapshot previously written by SaveSnapshot.
-// Returns (nil, nil) if no snapshot exists.
-func LoadSnapshot(edrDir, name string) (*Snapshot, error) {
-	path := filepath.Join(edrDir, name+".snap")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	snap := &Snapshot{}
-	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(snap); err != nil {
-		return nil, err
-	}
-	if snap.Entries == nil {
-		snap.Entries = map[string]Entry{}
-	}
-	return snap, nil
 }
