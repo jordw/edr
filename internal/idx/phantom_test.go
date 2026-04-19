@@ -126,7 +126,10 @@ func TestPhantomSymbols_PruneOnDelete(t *testing.T) {
 		t.Fatalf("bump .git/index: %v", err)
 	}
 
-	IncrementalTick(root, edrDir, walkFn)
+	// Pass the extractor so modify/add paths also cover their gap;
+	// the delete path works either way. See TestPatchSymbols_* for
+	// those paths in isolation.
+	IncrementalTick(root, edrDir, walkFn, extractSymbols)
 
 	// The deleted file's symbols must be pruned. If they survive,
 	// IncrementalTick isn't wired to PatchDirtyFiles — regression.

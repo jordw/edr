@@ -418,13 +418,16 @@ func GetStatus(repoRoot, edrDir string) Status {
 // IncrementalTick reconciles the index against the filesystem.
 //
 //  1. If .git/index hasn't moved, the fast path returns immediately.
-//  2. Otherwise run staleness.Check (via StatChanges) to find deleted
-//     and modified files. If the union is non-empty, call
-//     PatchDirtyFiles — it rebuilds only the affected records and
-//     drops symbols whose source file is in the dirty set, closing
-//     the phantom-symbols bug class.
-//  3. Pure-Added files aren't patched here — dispatch already detects
-//     them at query time via StatChanges and scans them live.
+//  2. Otherwise run staleness.Check (via StatChanges) to find new,
+//     modified, and deleted files. If the union is non-empty, call
+//     PatchDirtyFiles — it rebuilds only the affected records.
+//     Deleted files are pruned (closes the phantom-symbols bug).
+//     Modified and added files are re-extracted (closes the sparse-
+//     symbols bug class) when extractSymbols is non-nil.
+//  3. When extractSymbols is nil, PatchDirtyFiles falls back to the
+//     legacy behavior of dropping symbols for dirty files without
+//     replacement. Bench code and other non-dispatch callers go
+//     through this path.
 //  4. Finally stamp the new git mtime so the next tick's fast path
 //     trips and we don't re-walk on every command.
 //
@@ -432,23 +435,26 @@ func GetStatus(repoRoot, edrDir string) Status {
 // the stat walk is parallel and bounded (~60–70 ms on 93k files).
 // PatchDirtyFiles is cheap when the dirty set is small. When a large
 // rewrite hits, the caller should prefer `edr index` for a full rebuild.
-func IncrementalTick(root, edrDir string, walkFn func(root string, fn func(path string) error) error) {
+func IncrementalTick(root, edrDir string, walkFn func(root string, fn func(path string) error) error, extractSymbols SymbolExtractFn) {
 	if !Staleness(root, edrDir) {
 		return
 	}
 	// Find what changed on disk. Deleted files must be pruned from
 	// the symbol table or queries will return phantom symbols.
+	// New and modified files should have their symbols re-extracted
+	// so the index doesn't bleed coverage between full rebuilds.
 	changes := StatChanges(root, edrDir)
 	if changes != nil {
 		var dirty []string
 		dirty = append(dirty, changes.Modified...)
 		dirty = append(dirty, changes.Deleted...)
+		dirty = append(dirty, changes.New...)
 		// Include any edit-marked files so the patch covers edits
 		// made since the last successful build.
 		dirty = append(dirty, DirtyFiles(edrDir)...)
 		dirty = dedupStrings(dirty)
 		if len(dirty) > 0 {
-			PatchDirtyFiles(root, edrDir, dirty)
+			PatchDirtyFiles(root, edrDir, dirty, extractSymbols)
 			// PatchDirtyFiles stamps the new git mtime via the
 			// rewritten header; no further stamp needed.
 			return
@@ -508,7 +514,14 @@ func stampMtime(root, edrDir string) {
 // behavior preserved the stale FileEntry and symbols that referenced
 // it, so queries would keep finding names for files that no longer
 // existed.
-func PatchDirtyFiles(root, edrDir string, dirty []string) {
+//
+// When extractSymbols is non-nil, symbols for modified and added files
+// are re-extracted and merged into the surviving symbol table. This
+// keeps symbol coverage consistent across ticks — the sparse-symbols
+// bug class. When nil, the legacy drop-only behavior is preserved so
+// non-dispatch callers (bench, tests) don't need to know about the
+// extractor.
+func PatchDirtyFiles(root, edrDir string, dirty []string, extractSymbols SymbolExtractFn) {
 	old := loadIndexTrigrams(edrDir)
 	if old == nil {
 		return
@@ -534,6 +547,7 @@ func PatchDirtyFiles(root, edrDir string, dirty []string) {
 		fileID int
 		entry  FileEntry
 		tris   []Trigram
+		syms   []SymbolEntry // FileID set later once the new table is built
 	}
 	var patches []patchEntry
 	deletedSet := make(map[string]bool, len(dirty))
@@ -560,7 +574,11 @@ func PatchDirtyFiles(root, edrDir string, dirty []string) {
 		if existing, ok := oldByPath[rel]; ok {
 			id = existing
 		}
-		patches = append(patches, patchEntry{fileID: id, entry: entry, tris: tris})
+		pe := patchEntry{fileID: id, entry: entry, tris: tris}
+		if extractSymbols != nil {
+			pe.syms = extractSymbols(absPath, data)
+		}
+		patches = append(patches, pe)
 	}
 
 	// Build the new file table. Start by dropping deleted entries —
@@ -639,10 +657,31 @@ func PatchDirtyFiles(root, edrDir string, dirty []string) {
 	}
 
 	// Preserve symbols from old index, remapping FileIDs to the new file table.
-	// Symbols from dirty files are dropped (they're stale).
+	// Symbols from dirty files are dropped (they're stale); if an extractor
+	// was supplied, re-extracted symbols for modified/added files are merged
+	// back in with their new FileIDs.
+	//
+	// If the old index had no symbols we don't start building one here —
+	// that's the full-index path's job. Ticks stay coverage-preserving
+	// rather than coverage-initiating.
 	if old.Header.NumSymbols > 0 {
 		if full := loadIndex(edrDir); full != nil && len(full.Symbols) > 0 {
 			remapped := remapSymbols(full.Symbols, full.Files, files, dirtySet)
+			if extractSymbols != nil {
+				for _, p := range patches {
+					if len(p.syms) == 0 {
+						continue
+					}
+					newID, ok := newByPath[p.entry.Path]
+					if !ok {
+						continue
+					}
+					for _, s := range p.syms {
+						s.FileID = newID
+						remapped = append(remapped, s)
+					}
+				}
+			}
 			if len(remapped) > 0 {
 				namePostData, namePosts := BuildNamePostings(remapped)
 				d.Symbols = remapped

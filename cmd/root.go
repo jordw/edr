@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jordw/edr/internal/dispatch"
 	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
@@ -142,7 +143,9 @@ func Verbose() bool { return verbose }
 func openStore(root string) (index.SymbolStore, error) {
 	output.SetRoot(root)
 	db := index.NewOnDemand(root)
-	idx.IncrementalTick(root, db.EdrDir(), index.WalkRepoFiles)
+	// Pass the canonical symbol extractor so modify+add tick paths
+	// refresh the symbol table instead of bleeding it between builds.
+	idx.IncrementalTick(root, db.EdrDir(), index.WalkRepoFiles, dispatch.DefaultSymbolExtractor())
 	return db, nil
 }
 
