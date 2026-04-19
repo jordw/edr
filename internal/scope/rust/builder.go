@@ -901,8 +901,9 @@ func (b *builder) handleIdent(word []byte) {
 	// pattern portion of a match arm (before the `=>`) is a potential
 	// binder. We collect all such candidates and flush as KindVar decls
 	// on `=>`. Uppercase-start idents (variant constructors like `Some`,
-	// `None`, path constructors) fall through as regular refs.
-	if b.inMatchBody && b.inMatchArmPattern && isLowerStart(name) {
+	// `None`, path constructors) fall through as regular refs. The
+	// wildcard `_` is NOT a binder — it is the ignore pattern — so skip.
+	if b.inMatchBody && b.inMatchArmPattern && isLowerStart(name) && name != "_" {
 		b.matchArmPendingBind = append(b.matchArmPendingBind, pendingParam{
 			name: name,
 			span: mkSpan(startByte, endByte),
@@ -911,7 +912,12 @@ func (b *builder) handleIdent(word []byte) {
 		return
 	}
 
-	// Default: reference.
+	// Default: reference. Skip the wildcard `_` — it is never a ref to
+	// anything (tuple destructuring, lambda params, type inference holes).
+	if name == "_" {
+		b.prevByte = 'i'
+		return
+	}
 	b.emitRef(name, mkSpan(startByte, endByte))
 	b.prevByte = 'i'
 }

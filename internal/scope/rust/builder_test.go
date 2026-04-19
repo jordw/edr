@@ -621,3 +621,29 @@ impl T for S {
 		}
 	}
 }
+
+// TestParse_UnderscoreNotAref: the wildcard `_` is never a ref to
+// anything — it's the ignore pattern in tuple destructuring, match
+// arms, closures, and type-inference holes. Dogfood on tokio surfaced
+// 6k+ spurious `_` refs; this test locks in the fix.
+func TestParse_UnderscoreNotARef(t *testing.T) {
+	src := []byte(`fn demo() {
+    let (a, _) = (1, 2);
+    let _ = a;
+    let v: Vec<_> = vec![];
+    let _ = v;
+    let f = |_, x| x;
+    let g = |_| 42;
+    match 1 {
+        _ => {},
+    }
+}
+`)
+	r := Parse("a.rs", src)
+	for _, ref := range r.Refs {
+		if ref.Name == "_" {
+			t.Errorf("underscore emitted as ref at span %d-%d with binding %+v",
+				ref.Span.StartByte, ref.Span.EndByte, ref.Binding)
+		}
+	}
+}

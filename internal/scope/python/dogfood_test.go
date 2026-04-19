@@ -10,12 +10,12 @@ import (
 )
 
 // TestDogfood_RealPythonFiles parses real Python files under a directory
-// set via EDR_SCOPE_PY_DOGFOOD_DIR. Reports resolution stats. Enforces:
+// set via EDR_SCOPE_PYTHON_DOGFOOD_DIR. Reports resolution stats. Enforces:
 // no panics, every unresolved ref has a reason code, no scope=0 refs.
 func TestDogfood_RealPythonFiles(t *testing.T) {
-	dir := os.Getenv("EDR_SCOPE_PY_DOGFOOD_DIR")
+	dir := os.Getenv("EDR_SCOPE_PYTHON_DOGFOOD_DIR")
 	if dir == "" {
-		t.Skip("EDR_SCOPE_PY_DOGFOOD_DIR not set")
+		t.Skip("EDR_SCOPE_PYTHON_DOGFOOD_DIR not set")
 	}
 
 	var files []string
