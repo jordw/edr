@@ -387,7 +387,7 @@ func Build(root, edrDir string, walkFn func(string, func(string) error) error) (
 	// decls so they target the exported source-file decl. Runs after
 	// reconcileResults so merged DeclIDs are used. Other languages'
 	// Results are skipped internally. Mutates parsed in place.
-	resolveImports(parsed)
+	resolveImports(parsed, root)
 
 	// Second pass: encode each reconciled Result. The string pool is
 	// built here so that interning reflects the final (post-merge)

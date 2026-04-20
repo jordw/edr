@@ -10,9 +10,14 @@ import "strings"
 // Each language's resolver lives in imports_<lang>.go and is a no-op
 // on files that don't belong to that language. Callers can add a new
 // language by writing imports_<lang>.go and adding a call here.
-func resolveImports(parsed []parsedFile) {
+//
+// `root` is the repo root (absolute filesystem path). Resolvers that
+// need to read sidecar files (go.mod, tsconfig.json, __init__.py) pull
+// them from disk; resolvers that work entirely off the parsed Results
+// ignore the parameter.
+func resolveImports(parsed []parsedFile, root string) {
 	resolveImportsTS(parsed)
-	resolveImportsGo(parsed)
+	resolveImportsGo(parsed, root)
 	resolveImportsPython(parsed)
 	resolveImportsJava(parsed)
 	resolveImportsKotlin(parsed)
