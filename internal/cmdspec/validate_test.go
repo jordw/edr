@@ -68,10 +68,7 @@ func TestCLAUDEmdFlagsMatchRegistry(t *testing.T) {
 	}
 	content := string(data)
 
-	// Map documented flags to commands based on section context
-	// Look for patterns like --flag-name in code blocks
 	flagRe := regexp.MustCompile(`--([a-zA-Z][\w-]*)`)
-	flagMatches := flagRe.FindAllStringSubmatch(content, -1)
 
 	// Build set of all known flags across all commands
 	allFlags := make(map[string]bool)
@@ -98,20 +95,28 @@ func TestCLAUDEmdFlagsMatchRegistry(t *testing.T) {
 	allFlags["cursor"] = true
 	allFlags["codex"] = true
 	allFlags["generic"] = true
-	allFlags["new"] = true   // batch shorthand
-	allFlags["old"] = true   // batch shorthand
-	allFlags["sig"] = true   // batch shorthand
-	allFlags["read"] = true  // batch flag
-	allFlags["edit"] = true  // batch flag
-	allFlags["write"] = true // batch flag
+	allFlags["new"] = true    // batch shorthand
+	allFlags["old"] = true    // batch shorthand
+	allFlags["sig"] = true    // batch shorthand
+	allFlags["read"] = true   // batch flag
+	allFlags["edit"] = true   // batch flag
+	allFlags["write"] = true  // batch flag
 	allFlags["search"] = true // batch flag
 	allFlags["verify"] = true // batch flag
 
+	// Only scan lines that actually invoke edr — CLAUDE.md also
+	// documents third-party scripts (e.g. `./scripts/eval/setup.sh
+	// --repo foo`) whose flags have no relation to cmdspec.
 	unknown := make(map[string]bool)
-	for _, m := range flagMatches {
-		flag := m[1]
-		if !allFlags[flag] {
-			unknown[flag] = true
+	for _, line := range strings.Split(content, "\n") {
+		if !strings.Contains(line, "edr ") {
+			continue
+		}
+		for _, m := range flagRe.FindAllStringSubmatch(line, -1) {
+			flag := m[1]
+			if !allFlags[flag] {
+				unknown[flag] = true
+			}
 		}
 	}
 
