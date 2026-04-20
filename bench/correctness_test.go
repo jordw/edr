@@ -1119,7 +1119,7 @@ func TestCorrectnessIndexRebuildPreservesSymbols(t *testing.T) {
 	initialSymbols := status1.Symbols
 
 	// Touch a file to make git index stale (simulates git operations)
-	// This triggers IncrementalTick → rebuildSmart on next command
+	// This triggers IncrementalTick → PatchDirtyFiles on next command
 	os.WriteFile(filepath.Join(tmp, "pkg", "new.go"), []byte(`package pkg
 
 func NewFunc() {}

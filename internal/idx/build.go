@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	atomicio "github.com/jordw/edr/internal/atomic"
 	"github.com/jordw/edr/internal/staleness"
@@ -86,159 +85,6 @@ func BuildFull(root string, paths []string, gitMtime int64) *IndexData {
 	d.Postings, d.Trigrams = BuildPostings(triMap)
 	d.Header.NumTrigrams = uint32(len(d.Trigrams))
 	return d
-}
-
-// rebuildSmart walks the repo and rebuilds the index, reusing cached trigrams
-// for files whose mtime hasn't changed. Stops re-indexing new/stale files
-// after the time limit but always writes a complete index with what it has.
-func rebuildSmart(root, edrDir string, walkFn func(root string, fn func(path string) error) error, limit time.Duration) {
-	// Load old index (trigrams only — skip symbol parsing which is
-	// 40MB+ of allocations on large repos and dominates IncrementalTick).
-	old := loadIndexTrigrams(edrDir)
-	oldByPath := make(map[string]FileEntry)
-	oldTris := make(map[string][]Trigram)
-	if old != nil {
-		for _, f := range old.Files {
-			oldByPath[f.Path] = f
-		}
-		for _, te := range old.Trigrams {
-			ids := DecodePosting(old.Postings, te.Offset, te.Count)
-			for _, id := range ids {
-				if int(id) < len(old.Files) {
-					oldTris[old.Files[id].Path] = append(oldTris[old.Files[id].Path], te.Tri)
-				}
-			}
-		}
-	}
-
-	// Walk repo
-	var paths []string
-	walkFn(root, func(path string) error {
-		paths = append(paths, path)
-		return nil
-	})
-	if len(paths) == 0 {
-		return
-	}
-
-	gitMt := gitIndexMtime(root)
-	deadline := time.Now().Add(limit)
-
-	type fileResult struct {
-		entry FileEntry
-		tris  []Trigram
-	}
-
-	// Phase 1: classify files as reusable or needing re-index.
-	// This is just stat calls — no file reads yet.
-	var reusable []fileResult
-	var needIndex []struct {
-		path  string
-		entry FileEntry
-	}
-	for _, p := range paths {
-		rel, _ := filepath.Rel(root, p)
-		if rel == "" {
-			rel = p
-		}
-		info, err := os.Stat(p)
-		if err != nil {
-			continue
-		}
-		entry := FileEntry{
-			Path:  rel,
-			Mtime: info.ModTime().UnixNano(),
-			Size:  info.Size(),
-		}
-		if oldEntry, ok := oldByPath[rel]; ok && oldEntry.Mtime == entry.Mtime {
-			if tris, ok := oldTris[rel]; ok {
-				reusable = append(reusable, fileResult{entry: entry, tris: tris})
-				continue
-			}
-		}
-		needIndex = append(needIndex, struct {
-			path  string
-			entry FileEntry
-		}{path: p, entry: entry})
-	}
-
-	// Phase 2: re-index changed files, checking deadline between each.
-	var indexed []fileResult
-	timedOut := false
-	for i := 0; i < len(needIndex); i++ {
-		if time.Now().After(deadline) {
-			timedOut = true
-			for _, rem := range needIndex[i:] {
-				if tris, ok := oldTris[rem.entry.Path]; ok {
-					reusable = append(reusable, fileResult{entry: rem.entry, tris: tris})
-				}
-			}
-			break
-		}
-		f := needIndex[i]
-		data, err := os.ReadFile(f.path)
-		if err != nil || isBinary(data) {
-			continue
-		}
-		tris := ExtractTrigrams(data)
-		indexed = append(indexed, fileResult{entry: f.entry, tris: tris})
-	}
-
-	results := append(reusable, indexed...)
-
-	// Sort for deterministic output
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].entry.Path < results[j].entry.Path
-	})
-
-	files := make([]FileEntry, len(results))
-	triMap := make(map[Trigram][]uint32)
-	for i, r := range results {
-		files[i] = r.entry
-		fileID := uint32(i)
-		for _, t := range r.tris {
-			triMap[t] = append(triMap[t], fileID)
-		}
-	}
-
-	postings, entries := BuildPostings(triMap)
-	d := &IndexData{
-		Header: Header{
-			NumFiles:    uint32(len(files)),
-			NumTrigrams: uint32(len(entries)),
-			GitMtime:    gitMt,
-		},
-		Files:    files,
-		Trigrams: entries,
-		Postings: postings,
-	}
-
-	// Preserve symbol data from old index if available, remapping FileIDs.
-	// rebuildSmart only updates trigrams; full symbol rebuild requires edr index.
-	if old != nil && old.Header.NumSymbols > 0 {
-		if full := loadIndex(edrDir); full != nil && len(full.Symbols) > 0 {
-			remapped := remapSymbols(full.Symbols, full.Files, d.Files)
-			if len(remapped) > 0 {
-				namePostData, namePosts := BuildNamePostings(remapped)
-				d.Symbols = remapped
-				d.NamePosts = namePosts
-				d.NamePostings = namePostData
-				d.Header.NumSymbols = uint32(len(remapped))
-				d.Header.NumNameKeys = uint32(len(namePosts))
-			}
-		}
-	}
-
-	// If timed out, zero the git mtime so next tick retries the remaining files
-	if timedOut {
-		d.Header.GitMtime = 0
-	}
-
-	atomicio.WriteFile(filepath.Join(edrDir, MainFile), d.Marshal())
-	InvalidateSymbolCache()
-	if !timedOut {
-		staleness.OpenTracker(edrDir, DirtyTrackerName).Clear()
-	}
 }
 
 // extractSymIdents tokenizes each symbol body into a set of identifiers.
@@ -410,7 +256,7 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 		}
 		// Reuse old data if mtime matches — skip trigram/symbol extraction.
 		// Still read file to extract per-symbol identifiers for the ref graph.
-		// Only reuse symbols if the old index actually had them (rebuildSmart omits symbols).
+		// Only reuse symbols if the old index actually had them (prior trigram-only builds can leave gaps).
 		hasOldSyms := old != nil && old.Header.NumSymbols > 0
 		if od, ok := oldByPath[rel]; ok && od.entry.Mtime == info.ModTime().UnixNano() && len(od.tris) > 0 && (hasOldSyms || extractSymbols == nil) {
 			fr := fileResult{

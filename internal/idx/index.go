@@ -2,7 +2,7 @@
 // across several files by concern:
 //
 //   - build.go   — full index construction (BuildFull, BuildFullFromWalk,
-//                  BuildFullFromWalkWithImports, rebuildSmart)
+//                  BuildFullFromWalkWithImports)
 //   - tick.go    — incremental reconciliation against .git/index
 //   - patch.go   — dirty-file patching (PatchDirtyFiles)
 //   - query.go   — trigram lookup + posting intersection (Query)
