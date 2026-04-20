@@ -491,19 +491,14 @@ func (s *Session) nextCheckpointID(sessDir string, isAuto bool) (string, error) 
 }
 
 func saveCheckpoint(sessDir string, cp *Checkpoint) error {
-	if err := os.MkdirAll(sessDir, 0700); err != nil {
-		return err
-	}
 	data, err := json.Marshal(cp)
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(sessDir, cp.ID+".json")
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	// atomic.WriteFile creates the parent dir, writes to a per-process temp,
+	// fsyncs, and renames — so parallel session writers can't collide on a
+	// shared ".tmp" path (the earlier hand-rolled version did exactly that).
+	return atomic.WriteFile(filepath.Join(sessDir, cp.ID+".json"), data)
 }
 
 func loadCheckpoint(sessDir, cpID string) (*Checkpoint, error) {
