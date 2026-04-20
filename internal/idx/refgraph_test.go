@@ -169,28 +169,6 @@ func TestCallersByName_CorruptedOffsetReturnsNil(t *testing.T) {
 	}
 }
 
-// Callers and Callees are documented as kept-for-backward-compat —
-// they always return nil for v2 graphs, and consumers are directed to
-// CallersByName / CalleeNames. Pin the contract so a silent revival
-// of these methods doesn't land without touching the test.
-func TestLegacyCallersAndCallees_AlwaysReturnNil(t *testing.T) {
-	g := buildScenarioGraph(t)
-	for id := uint32(0); id < g.NumSymbols; id++ {
-		if got := g.Callers(id); got != nil {
-			t.Errorf("Callers(%d) = %v, want nil (legacy, use CallersByName)", id, got)
-		}
-		if got := g.Callees(id); got != nil {
-			t.Errorf("Callees(%d) = %v, want nil (legacy, use CalleeNames)", id, got)
-		}
-	}
-	// Also handle nil receiver + out-of-range without panic.
-	var nilGraph *RefGraphData
-	_ = nilGraph.Callers(0)
-	_ = nilGraph.Callees(0)
-	_ = g.Callers(999)
-	_ = g.Callees(999)
-}
-
 // --- helpers ---
 
 // sameHashSet reports whether a and b contain the same set of uint64

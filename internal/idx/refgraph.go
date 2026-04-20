@@ -46,17 +46,6 @@ type InvEntry struct {
 	Count    uint32
 }
 
-// Callers returns the symbol IDs that reference the given symbol ID's name.
-func (g *RefGraphData) Callers(calleeID uint32) []uint32 {
-	if g == nil || int(calleeID) >= int(g.NumSymbols) {
-		return nil
-	}
-	// We need the callee's name hash. We can get it from the symbol table,
-	// but the ref graph doesn't store names. The caller must provide it.
-	// This method is kept for backward compat but CallersByName is preferred.
-	return nil
-}
-
 // CallersByName returns symbol IDs that reference the given name hash.
 func (g *RefGraphData) CallersByName(nameHash uint64) []uint32 {
 	if g == nil || len(g.InvEntries) == 0 {
@@ -75,14 +64,6 @@ func (g *RefGraphData) CallersByName(nameHash uint64) []uint32 {
 		return nil
 	}
 	return g.InvSymIDs[e.Offset:end]
-}
-
-// Callees returns the symbol IDs referenced by the given symbol ID.
-// Resolves name hashes to symbol IDs via the provided name lookup function.
-func (g *RefGraphData) Callees(callerID uint32) []uint32 {
-	// Kept for backward compat — returns nil for v2 graphs.
-	// Use CalleesOf + name resolution instead.
-	return nil
 }
 
 // CalleeNames returns the name hashes referenced by the given symbol ID.
