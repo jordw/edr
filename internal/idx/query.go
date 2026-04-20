@@ -141,54 +141,6 @@ func resolveFileIDsFromTable(ftData []byte, numFiles uint32, ids []uint32) []str
 	return paths
 }
 
-// queryIndex intersects posting lists for the given trigrams.
-// Missing trigram → empty slice (no file can match).
-// Empty trigram table → nil (can't filter).
-func queryIndex(d *IndexData, queryTrigrams []Trigram) []uint32 {
-	if len(d.Trigrams) == 0 {
-		return nil
-	}
-	var lists [][]uint32
-	for _, qt := range queryTrigrams {
-		te := findTrigram(d.Trigrams, qt)
-		if te == nil {
-			return []uint32{}
-		}
-		ids := DecodePosting(d.Postings, te.Offset, te.Count)
-		lists = append(lists, ids)
-	}
-	if len(lists) == 0 {
-		return nil
-	}
-	sort.Slice(lists, func(i, j int) bool { return len(lists[i]) < len(lists[j]) })
-	result := lists[0]
-	for _, list := range lists[1:] {
-		result = intersect(result, list)
-		if len(result) == 0 {
-			return result
-		}
-	}
-	return result
-}
-
-func findTrigram(table []TrigramEntry, t Trigram) *TrigramEntry {
-	target := t.ToUint32()
-	lo, hi := 0, len(table)-1
-	for lo <= hi {
-		mid := (lo + hi) / 2
-		v := table[mid].Tri.ToUint32()
-		if v == target {
-			return &table[mid]
-		}
-		if v < target {
-			lo = mid + 1
-		} else {
-			hi = mid - 1
-		}
-	}
-	return nil
-}
-
 func intersect(a, b []uint32) []uint32 {
 	out := make([]uint32, 0, len(a))
 	i, j := 0, 0

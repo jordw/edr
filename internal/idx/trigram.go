@@ -98,16 +98,6 @@ func (t Trigram) ToUint32() uint32 {
 	return uint32(t[0])<<16 | uint32(t[1])<<8 | uint32(t[2])
 }
 
-func popcount(b byte) int {
-	// Brian Kernighan's algorithm
-	n := 0
-	for b != 0 {
-		b &= b - 1
-		n++
-	}
-	return n
-}
-
 func bitIndex(b byte) int {
 	switch b {
 	case 1:
