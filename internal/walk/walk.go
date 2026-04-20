@@ -9,7 +9,6 @@ package walk
 
 import (
 	"io/fs"
-	"os"
 	"path/filepath"
 )
 
@@ -92,10 +91,6 @@ func shouldIgnoreDir(name, path, root string, gitignore *GitIgnoreMatcher) bool 
 		if name == ign {
 			return true
 		}
-	}
-	// Skip git submodules (they have a .git file, not a directory).
-	if info, err := os.Stat(filepath.Join(path, ".git")); err == nil && !info.IsDir() {
-		return true
 	}
 	if gitignore != nil {
 		rel, _ := filepath.Rel(root, path)
