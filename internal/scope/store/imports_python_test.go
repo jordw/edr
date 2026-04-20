@@ -216,3 +216,168 @@ func TestImportGraph_Python_NonExistentModuleStaysLocal(t *testing.T) {
 		}
 	}
 }
+
+// TestImportGraph_Python_ImportAsModuleHandle: `import foo.bar as fb`
+// in user.py binds fb to the foo/bar.py module. Accessing `fb.Helper`
+// should resolve the property ref to foo/bar.py's Helper decl. This
+// is the pattern pytorch code uses extensively:
+// `from torch.nn import functional as F; F.relu(x)`.
+func TestImportGraph_Python_ImportAsModuleHandle(t *testing.T) {
+	root, edrDir := setupRepo(t, map[string]string{
+		"foo/__init__.py": "",
+		"foo/bar.py":      "def Helper():\n    pass\n",
+		"user.py":         "import foo.bar as fb\nfb.Helper()\n",
+	})
+	if _, err := Build(root, edrDir, walkDir(t)); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	idx, err := Load(edrDir)
+	if err != nil || idx == nil {
+		t.Fatalf("Load: err=%v idx=%v", err, idx)
+	}
+	rbar := idx.ResultFor(root, "foo/bar.py")
+	ruser := idx.ResultFor(root, "user.py")
+	if rbar == nil || ruser == nil {
+		t.Fatalf("ResultFor nil: bar=%v user=%v", rbar, ruser)
+	}
+	helper := findDecl(rbar, "Helper")
+	if helper == nil {
+		t.Fatalf("foo/bar.py: no Helper decl; decls=%v", declsOf(rbar))
+	}
+	refs := refsByName(ruser, "Helper")
+	if len(refs) == 0 {
+		t.Fatal("user.py: no refs to Helper")
+	}
+	found := false
+	for _, r := range refs {
+		if r.Binding.Kind == scope.BindResolved && r.Binding.Decl == helper.ID && r.Binding.Reason == "import_export" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("user.py: Helper ref did not resolve through module handle; bindings=%v",
+			bindingsFor(refs))
+	}
+}
+
+// TestImportGraph_Python_FromImportSubmodule: `from foo import bar`
+// where bar is a SUBMODULE of foo (not a name re-exported from
+// foo/__init__.py) still binds `bar` as a module handle so `bar.X`
+// property access resolves. This is the common idiom:
+// `from torch.nn import functional; functional.relu(x)` — where
+// `functional` is torch/nn/functional.py.
+func TestImportGraph_Python_FromImportSubmodule(t *testing.T) {
+	root, edrDir := setupRepo(t, map[string]string{
+		"pkg/__init__.py": "",
+		"pkg/sub.py":      "def Thing():\n    pass\n",
+		"user.py":         "from pkg import sub\nsub.Thing()\n",
+	})
+	if _, err := Build(root, edrDir, walkDir(t)); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	idx, err := Load(edrDir)
+	if err != nil || idx == nil {
+		t.Fatalf("Load: err=%v idx=%v", err, idx)
+	}
+	rsub := idx.ResultFor(root, "pkg/sub.py")
+	ruser := idx.ResultFor(root, "user.py")
+	thing := findDecl(rsub, "Thing")
+	if thing == nil {
+		t.Fatalf("pkg/sub.py: no Thing decl")
+	}
+	refs := refsByName(ruser, "Thing")
+	if len(refs) == 0 {
+		t.Fatal("user.py: no refs to Thing")
+	}
+	found := false
+	for _, r := range refs {
+		if r.Binding.Kind == scope.BindResolved && r.Binding.Decl == thing.ID && r.Binding.Reason == "import_export" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("user.py: Thing ref did not resolve through submodule import; bindings=%v",
+			bindingsFor(refs))
+	}
+}
+
+// TestImportGraph_Python_FromImportPrefersName: when `from foo import bar`
+// could match both a name exported from foo/__init__.py AND a sibling
+// submodule foo/bar.py, the name wins (Python's documented behavior).
+func TestImportGraph_Python_FromImportPrefersName(t *testing.T) {
+	root, edrDir := setupRepo(t, map[string]string{
+		// foo/__init__.py exports a class named `bar`.
+		"foo/__init__.py": "class bar:\n    pass\n",
+		// And there's ALSO a sibling module foo/bar.py.
+		"foo/bar.py": "def Other():\n    pass\n",
+		"user.py":    "from foo import bar\nx = bar()\n",
+	})
+	if _, err := Build(root, edrDir, walkDir(t)); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	idx, err := Load(edrDir)
+	if err != nil || idx == nil {
+		t.Fatalf("Load: err=%v idx=%v", err, idx)
+	}
+	rfoo := idx.ResultFor(root, "foo/__init__.py")
+	ruser := idx.ResultFor(root, "user.py")
+	fooBar := findDecl(rfoo, "bar")
+	if fooBar == nil {
+		t.Fatalf("foo/__init__.py: no bar decl")
+	}
+	// The ref to `bar` in user.py should bind to the CLASS decl in
+	// foo/__init__.py, not be treated as a module handle.
+	refs := refsByName(ruser, "bar")
+	for _, r := range refs {
+		if r.Binding.Kind == scope.BindResolved && r.Binding.Decl == fooBar.ID {
+			return
+		}
+	}
+	t.Errorf("user.py: `bar` ref did not bind to foo/__init__.py's bar class; bindings=%v",
+		bindingsFor(refs))
+}
+
+// TestImportGraph_Python_ModuleHandleUnexportedStaysLocal: property
+// access through a module handle only resolves to EXPORTED names.
+// Underscore-prefixed names in the source module stay unbound.
+func TestImportGraph_Python_ModuleHandleUnexportedStaysLocal(t *testing.T) {
+	root, edrDir := setupRepo(t, map[string]string{
+		"foo/__init__.py": "",
+		"foo/bar.py":      "def _private():\n    pass\n",
+		"user.py":         "import foo.bar as fb\nfb._private()\n",
+	})
+	if _, err := Build(root, edrDir, walkDir(t)); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	idx, err := Load(edrDir)
+	if err != nil || idx == nil {
+		t.Fatalf("Load: err=%v idx=%v", err, idx)
+	}
+	ruser := idx.ResultFor(root, "user.py")
+	for _, r := range refsByName(ruser, "_private") {
+		if r.Binding.Reason == "import_export" {
+			t.Errorf("_private should not rewrite via module handle: %+v", r.Binding)
+		}
+	}
+}
+
+// TestImportGraph_Python_ExternalModuleHandleStaysLocal: `import os;
+// os.getcwd()` must not rewrite — os is stdlib with no repo file.
+func TestImportGraph_Python_ExternalModuleHandleStaysLocal(t *testing.T) {
+	root, edrDir := setupRepo(t, map[string]string{
+		"user.py": "import os\nos.getcwd()\n",
+	})
+	if _, err := Build(root, edrDir, walkDir(t)); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	idx, err := Load(edrDir)
+	if err != nil || idx == nil {
+		t.Fatalf("Load: err=%v idx=%v", err, idx)
+	}
+	ruser := idx.ResultFor(root, "user.py")
+	for _, r := range refsByName(ruser, "getcwd") {
+		if r.Binding.Reason == "import_export" {
+			t.Errorf("external module handle should not rewrite: %+v", r.Binding)
+		}
+	}
+}

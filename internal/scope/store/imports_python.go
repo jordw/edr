@@ -12,19 +12,30 @@ import (
 // currently point at a local KindImport decl so they point at the
 // actual exported decl in the source module.
 //
-// Scope (v1):
+// Resolution is done in two passes over the import decls:
+//
+//  1. Named-export rewrite: `from X import Y` (origName=Y, Y in X's
+//     exports) → refs to Y rebind to X's Y decl.
+//  2. Module-handle + property-access rewrite: `import X[.Y] [as Z]`
+//     and `from X import Y-as-submodule` bind a MODULE (not a name).
+//     When a property-access ref's immediate predecessor is such a
+//     handle, the property name is looked up in that module's exports
+//     and the ref is rebound with Reason="import_export". This mirrors
+//     Go's resolver and catches the pytorch-style idiom
+//     `from torch.nn import functional as F; F.relu(...)`.
+//
+// Scope:
 //   - Repo-internal modules only. Module paths that don't resolve to
-//     a file in the repo (stdlib, third-party) are left as-is; the
-//     ref keeps its binding to the local Import decl.
+//     a file in the repo (stdlib, third-party) are left as-is.
 //   - Module resolution follows the builder's Signature convention:
 //     "<modulePath>\x00<origName>". <modulePath> uses dots between
 //     segments and leading dots for relative imports ("foo.bar",
 //     ".", "..foo"). Absolute: try `foo/bar.py`, then
 //     `foo/bar/__init__.py`. Relative: resolve against the importer's
-//     directory; `.` → `<dir>/__init__.py` (skipped if missing).
-//   - `import X.Y` (origName=="*") is a whole-module binding; v1
-//     doesn't rewrite — property-access like `X.Y.func()` is a v2
-//     concern once we track namespace handles.
+//     directory.
+//   - Chained property access (`a.b.c`) is handled one hop: `c` binds
+//     only when `b` is a direct module-handle. Multi-hop namespace
+//     traversal is future work.
 //   - __all__ is not parsed; exported-ness falls back to the
 //     no-underscore-prefix convention the builder stamps.
 func resolveImportsPython(parsed []parsedFile) {
@@ -75,10 +86,15 @@ func resolveImportsPython(parsed []parsedFile) {
 		return idx
 	}
 
-	// targets: for each KindImport decl we've resolved, the target
-	// DeclID in the source module. Keyed by decl.ID so the rewrite
-	// pass survives scope.MergeDuplicateDecls renaming.
+	// targets: for each KindImport decl bound to a named export, the
+	// target DeclID in the source module. Keyed by decl.ID so the
+	// rewrite pass survives scope.MergeDuplicateDecls renaming.
 	targets := make(map[scope.DeclID]scope.DeclID)
+	// moduleHandles: for each KindImport decl bound to a whole module
+	// (not a name), the repo-relative file path of the target module.
+	// Populated for `import X.Y [as Z]` and for `from X import Y`
+	// where Y is itself a submodule of X rather than an exported name.
+	moduleHandles := make(map[scope.DeclID]string)
 
 	for _, p := range parsed {
 		if !isPyLike(p.rel) {
@@ -97,8 +113,12 @@ func resolveImportsPython(parsed []parsedFile) {
 				continue
 			}
 			if orig == "*" {
-				// Whole-module namespace import (`import X.Y [as Z]`).
-				// v1: no rewrite — property-access is future work.
+				// Whole-module import: `import X.Y [as Z]`. The module
+				// path is `path`; bind this decl to that module so
+				// subsequent property-access refs resolve through it.
+				if sourceRel := resolvePythonModule(p.rel, path, byRel); sourceRel != "" {
+					moduleHandles[d.ID] = sourceRel
+				}
 				continue
 			}
 			sourceRel := resolvePythonModule(p.rel, path, byRel)
@@ -106,16 +126,31 @@ func resolveImportsPython(parsed []parsedFile) {
 				continue
 			}
 			exports := getExports(sourceRel)
-			if exports == nil {
-				continue
+			if exports != nil {
+				if tid, ok := exports[orig]; ok {
+					targets[d.ID] = tid
+					continue
+				}
 			}
-			if tid, ok := exports[orig]; ok {
-				targets[d.ID] = tid
+			// Fall-through: `from X import Y` where Y is not an
+			// exported name in X's module file. Check whether Y is
+			// itself a submodule of X (i.e. X/Y.py, X/Y/__init__.py,
+			// or — when `path` itself is relative — under the same
+			// base). If so, record a module handle so chained
+			// property access `Y.thing` resolves.
+			submodulePath := path
+			if submodulePath == "" || submodulePath == "." || strings.HasSuffix(submodulePath, ".") {
+				submodulePath += orig
+			} else {
+				submodulePath += "." + orig
+			}
+			if subRel := resolvePythonModule(p.rel, submodulePath, byRel); subRel != "" {
+				moduleHandles[d.ID] = subRel
 			}
 		}
 	}
 
-	if len(targets) == 0 {
+	if len(targets) == 0 && len(moduleHandles) == 0 {
 		return
 	}
 
@@ -123,31 +158,56 @@ func resolveImportsPython(parsed []parsedFile) {
 		if !isPyLike(p.rel) {
 			continue
 		}
-		// Quick-exit: does this file have any resolved Import decls?
-		hasAny := false
-		for i := range p.result.Decls {
-			if p.result.Decls[i].Kind != scope.KindImport {
-				continue
-			}
-			if _, ok := targets[p.result.Decls[i].ID]; ok {
-				hasAny = true
-				break
+		refs := p.result.Refs
+
+		// Pass 1: named-export rewrite. Any resolved ref whose Decl
+		// is a named-import target gets rebound to the source decl.
+		if len(targets) > 0 {
+			for i := range refs {
+				ref := &refs[i]
+				if ref.Binding.Kind != scope.BindResolved {
+					continue
+				}
+				tgt, ok := targets[ref.Binding.Decl]
+				if !ok {
+					continue
+				}
+				ref.Binding.Decl = tgt
+				ref.Binding.Reason = "import_export"
 			}
 		}
-		if !hasAny {
-			continue
-		}
-		for i := range p.result.Refs {
-			ref := &p.result.Refs[i]
-			if ref.Binding.Kind != scope.BindResolved {
-				continue
+
+		// Pass 2: property-access-through-module-handle rewrite.
+		// For each probable property_access ref, check whether the
+		// immediately preceding ref resolves to a module-handle
+		// import decl; if so, look up the property name in that
+		// module's exports and rebind.
+		if len(moduleHandles) > 0 {
+			for i := 1; i < len(refs); i++ {
+				cur := &refs[i]
+				if cur.Binding.Reason != "property_access" {
+					continue
+				}
+				prev := refs[i-1]
+				if prev.Binding.Kind != scope.BindResolved {
+					continue
+				}
+				modRel, ok := moduleHandles[prev.Binding.Decl]
+				if !ok {
+					continue
+				}
+				exports := getExports(modRel)
+				if exports == nil {
+					continue
+				}
+				tid, ok := exports[cur.Name]
+				if !ok {
+					continue
+				}
+				cur.Binding.Kind = scope.BindResolved
+				cur.Binding.Decl = tid
+				cur.Binding.Reason = "import_export"
 			}
-			tgt, ok := targets[ref.Binding.Decl]
-			if !ok {
-				continue
-			}
-			ref.Binding.Decl = tgt
-			ref.Binding.Reason = "import_export"
 		}
 	}
 }
