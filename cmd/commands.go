@@ -64,8 +64,9 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 	dryRun, _ := flags["dry_run"].(bool)
 	if !dryRun && sess != nil && cmdspec.ModifiesState(cmdName) {
 		dirtyFiles := sess.GetDirtyFiles()
+		var target string
 		if len(args) > 0 {
-			target := args[0]
+			target = args[0]
 			if idx := strings.Index(target, ":"); idx > 0 {
 				target = target[:idx]
 			}
@@ -84,8 +85,15 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 		if len(args) > 0 {
 			label = cmdName + "_" + args[0]
 		}
-		if _, err := sess.CreateAutoCheckpoint(filepath.Join(edrDir, "sessions"), root, label, dirtyFiles); err != nil {
+		sessDir := filepath.Join(edrDir, "sessions")
+		if _, err := sess.CreateAutoCheckpoint(sessDir, root, label, dirtyFiles); err != nil {
 			fmt.Fprintf(os.Stderr, "edr: checkpoint failed: %v\n", err)
+		}
+		// Stage pre-mutation content of this op's target into the active
+		// transaction's checkpoint. First-write-wins — if the file was
+		// already edited earlier in the txn, its pre-txn snapshot stays.
+		if sess.ActiveTxn != "" && target != "" {
+			_ = sess.AppendFilesToCheckpoint(sessDir, root, sess.ActiveTxn, []string{target})
 		}
 	}
 
@@ -218,8 +226,9 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 	if !dryRun && sess != nil {
 		dirtyFiles := sess.GetDirtyFiles()
 		// Include the current target file so first-edit-in-session is undoable
+		var target string
 		if len(args) > 0 {
-			target := args[0]
+			target = args[0]
 			if idx := strings.Index(target, ":"); idx > 0 {
 				target = target[:idx]
 			}
@@ -238,9 +247,15 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 		if len(args) > 0 {
 			label = cmdName + "_" + args[0]
 		}
-		if _, err := sess.CreateAutoCheckpoint(filepath.Join(edrDir, "sessions"), root, label, dirtyFiles); err != nil {
+		sessDir := filepath.Join(edrDir, "sessions")
+		if _, err := sess.CreateAutoCheckpoint(sessDir, root, label, dirtyFiles); err != nil {
 			// Log checkpoint failure but don't block the edit
 			fmt.Fprintf(os.Stderr, "edr: checkpoint failed: %v\n", err)
+		}
+		// Stage pre-mutation content of this op's target into the active
+		// transaction's checkpoint so `txn diff` / `txn rollback` see it.
+		if sess.ActiveTxn != "" && target != "" {
+			_ = sess.AppendFilesToCheckpoint(sessDir, root, sess.ActiveTxn, []string{target})
 		}
 	}
 

@@ -743,6 +743,25 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 			if _, err := sess.CreateAutoCheckpoint(sessDir, db.Root(), "batch", dirtyFiles); err != nil {
 				fmt.Fprintf(os.Stderr, "edr: checkpoint failed: %v\n", err)
 			}
+			// Stage pre-mutation content of each batch-touched file into
+			// the active txn's checkpoint. First-write-wins keeps pre-txn
+			// state for files already snapshotted earlier in the txn.
+			if sess.ActiveTxn != "" {
+				var touched []string
+				for _, e := range p.Edits {
+					if e.File != "" {
+						touched = append(touched, e.File)
+					}
+				}
+				for _, w := range p.Writes {
+					if w.File != "" {
+						touched = append(touched, w.File)
+					}
+				}
+				if len(touched) > 0 {
+					_ = sess.AppendFilesToCheckpoint(sessDir, db.Root(), sess.ActiveTxn, touched)
+				}
+			}
 		}
 	}
 

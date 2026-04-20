@@ -300,6 +300,56 @@ func LoadCheckpoint(sessDir, cpID string) (*Checkpoint, error) {
 	return loadCheckpoint(sessDir, cpID)
 }
 
+// AppendFilesToCheckpoint stages pre-mutation snapshots of the given
+// paths into an existing checkpoint. Paths already present in the
+// checkpoint are skipped (first-write wins), so the snapshot captured
+// is the file's state at the first edit after checkpoint creation —
+// exactly what rollback needs to restore.
+//
+// Used by the txn path: at each edit, the active txn's checkpoint
+// collects a snapshot of the file being touched, so `txn diff` and
+// `txn rollback` have real pre-begin content to work with. The txn
+// checkpoint itself is created empty at `txn begin`; this is how it
+// fills up.
+//
+// Files that don't exist on disk are recorded with Content=nil (the
+// "new file" marker) so rollback knows to delete them.
+func (s *Session) AppendFilesToCheckpoint(sessDir, repoRoot, cpID string, paths []string) error {
+	if cpID == "" || len(paths) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cp, err := loadCheckpoint(sessDir, cpID)
+	if err != nil {
+		return err
+	}
+	existing := make(map[string]bool, len(cp.Files))
+	for _, f := range cp.Files {
+		existing[f.Path] = true
+	}
+	changed := false
+	for _, rel := range paths {
+		if rel == "" || existing[rel] {
+			continue
+		}
+		existing[rel] = true
+		abs := filepath.Join(repoRoot, rel)
+		content, err := os.ReadFile(abs)
+		if err != nil {
+			cp.Files = append(cp.Files, FileSnapshot{Path: rel, Content: nil})
+		} else {
+			cp.Files = append(cp.Files, FileSnapshot{Path: rel, Content: content})
+		}
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return saveCheckpoint(sessDir, cp)
+}
+
 // DropCheckpoint removes a checkpoint file.
 func DropCheckpoint(sessDir, cpID string) error {
 	path := filepath.Join(sessDir, cpID+".json")
