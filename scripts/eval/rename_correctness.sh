@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # rename_correctness.sh — compiler-oracle correctness eval for rename.
-# Requires bash 4+ (uses `declare -A`). On macOS the default /bin/bash
-# is 3.2; run with `bash` from PATH or install a newer bash via
-# homebrew. The script aborts if the associative-array feature is
-# unavailable, because the clean-tree precondition relies on it.
 #
-# For each tuple, git-stash the repo, apply edr rename (NOT dry-run),
-# run the build, capture PASS/FAIL, restore state. A compile failure
+# For each tuple, apply edr rename (NOT dry-run) inside a disposable
+# git worktree, run the build, capture PASS/FAIL. A compile failure
 # is a definitive correctness signal (something about the rename
 # broke references). A compile pass is a strong but not conclusive
 # positive.
+#
+# Worktrees share `.git` with the source repo but have their own
+# working tree under $WT_DIR — the main checkout is never touched,
+# so uncommitted work is safe.
 
 set -o pipefail
 
@@ -40,26 +40,42 @@ TUPLES=(
 
 check_tool() { command -v "$1" >/dev/null 2>&1; }
 
-# Safety: abort if any targeted repo has uncommitted changes. The
-# eval does `git reset --hard HEAD` between iterations to restore
-# post-rename state; with uncommitted work that would destroy it.
-# declare -A requires bash 4+; fail loudly if unavailable, otherwise
-# the safety check below is silently skipped.
-if ! (declare -A __test_assoc) 2>/dev/null; then
-  echo "ERROR: this script requires bash 4+ for associative arrays." >&2
-  echo "       On macOS, run with a homebrew bash (e.g. /opt/homebrew/bin/bash)." >&2
-  exit 2
-fi
-declare -A seen_repos
+# Worktree root. Per-repo disposable checkouts live under here so the
+# main trees never get modified. Cleaned up on exit.
+WT_DIR="${TMPDIR:-/tmp}/edr-oracle-wt-$$"
+mkdir -p "$WT_DIR"
+
+cleanup() {
+  [ -z "$WT_DIR" ] && return
+  for wt in "$WT_DIR"/*; do
+    [ -d "$wt" ] || continue
+    repo=$(basename "$wt")
+    src="$REPO_BASE/$repo"
+    if [ -d "$src/.git" ] || [ -f "$src/.git" ]; then
+      git -C "$src" worktree remove --force "$wt" >/dev/null 2>&1 || rm -rf "$wt"
+    else
+      rm -rf "$wt"
+    fi
+  done
+  rmdir "$WT_DIR" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+# Collect unique repos referenced by tuples, then create a worktree
+# at HEAD for each. Missing repos are silently skipped — the
+# per-tuple loop below reports them.
+repos_seen=""
 for tuple in "${TUPLES[@]}"; do
   r=$(printf '%s' "$tuple" | cut -d'|' -f2)
-  seen_repos["$r"]=1
-done
-for r in "${!seen_repos[@]}"; do
-  repo_path="$REPO_BASE/$r"
-  [ ! -d "$repo_path" ] && continue
-  if ! git -C "$repo_path" diff --quiet || ! git -C "$repo_path" diff --cached --quiet; then
-    echo "ERROR: $repo_path has uncommitted changes. Commit first; the eval does reset --hard." >&2
+  case " $repos_seen " in
+    *" $r "*) continue ;;
+  esac
+  repos_seen="$repos_seen $r"
+  src_path="$REPO_BASE/$r"
+  [ ! -d "$src_path" ] && continue
+  wt_path="$WT_DIR/$r"
+  if ! git -C "$src_path" worktree add --detach "$wt_path" HEAD >/dev/null 2>&1; then
+    echo "ERROR: failed to create worktree for $r at $wt_path" >&2
     exit 1
   fi
 done
@@ -74,9 +90,14 @@ for tuple in "${TUPLES[@]}"; do
   repo=${rest%%|*};   rest=${rest#*|}
   target=${rest%%|*}; rest=${rest#*|}
   new_name=${rest%%|*}; build_cmd=${rest#*|}
-  repo_path="$REPO_BASE/$repo"
-  if [ ! -d "$repo_path" ]; then
-    printf "%-22s %-6s %-8s %6s  %s\n" "$label" "-" "SKIP" "-" "missing $repo_path"
+  src_path="$REPO_BASE/$repo"
+  wt_path="$WT_DIR/$repo"
+  if [ ! -d "$src_path" ]; then
+    printf "%-22s %-6s %-8s %6s  %s\n" "$label" "-" "SKIP" "-" "missing $src_path"
+    skip=$((skip + 1)); continue
+  fi
+  if [ ! -d "$wt_path" ]; then
+    printf "%-22s %-6s %-8s %6s  %s\n" "$label" "-" "SKIP" "-" "worktree setup failed"
     skip=$((skip + 1)); continue
   fi
   tool="${build_cmd%% *}"
@@ -86,17 +107,17 @@ for tuple in "${TUPLES[@]}"; do
   fi
 
   set +o pipefail
-  rename_json=$(cd "$repo_path" && "$EDR_BIN" rename "$target" --to "$new_name" --cross-file --force 2>&1 | head -1)
+  rename_json=$(cd "$wt_path" && "$EDR_BIN" rename "$target" --to "$new_name" --cross-file --force 2>&1 | head -1)
   set -o pipefail
   status=$(printf "%s" "$rename_json" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')
   mode=$(printf "%s" "$rename_json" | sed -n 's/.*"mode":"\([^"]*\)".*/\1/p')
-  files_changed=$(cd "$repo_path" && git diff --stat 2>/dev/null | tail -1 | awk '{print $1}')
+  files_changed=$(cd "$wt_path" && git diff --stat 2>/dev/null | tail -1 | awk '{print $1}')
   [ -z "$files_changed" ] && files_changed=0
 
   result="-"; notes=""
   if [ "$status" = "applied" ]; then
     log="/tmp/rename_correctness_${label//[^a-zA-Z0-9_]/_}.log"
-    (cd "$repo_path" && eval "$build_cmd") >"$log" 2>&1
+    (cd "$wt_path" && eval "$build_cmd") >"$log" 2>&1
     if [ $? -eq 0 ]; then
       result="PASS"; pass=$((pass + 1))
     else
@@ -113,10 +134,10 @@ for tuple in "${TUPLES[@]}"; do
 
   printf "%-22s %-6s %-8s %6s  %s\n" "$label" "${mode:--}" "$result" "$files_changed" "$notes"
 
-  # Restore tracked state. Clean-tree invariant was asserted up
-  # front, so reset --hard is safe — it only drops post-rename
-  # modifications, nothing pre-existing.
-  git -C "$repo_path" reset --hard HEAD >/dev/null 2>&1
+  # Restore the worktree to HEAD for the next iteration. Safe — the
+  # worktree is disposable and shares .git with the source repo,
+  # which is never touched.
+  git -C "$wt_path" reset --hard HEAD >/dev/null 2>&1
 done
 
 echo
