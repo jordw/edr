@@ -36,6 +36,23 @@ TUPLES=(
 
 check_tool() { command -v "$1" >/dev/null 2>&1; }
 
+# Safety: abort if any targeted repo has uncommitted changes. The
+# eval does `git reset --hard HEAD` between iterations to restore
+# post-rename state; with uncommitted work that would destroy it.
+declare -A seen_repos
+for tuple in "${TUPLES[@]}"; do
+  r=$(printf '%s' "$tuple" | cut -d'|' -f2)
+  seen_repos["$r"]=1
+done
+for r in "${!seen_repos[@]}"; do
+  repo_path="$REPO_BASE/$r"
+  [ ! -d "$repo_path" ] && continue
+  if ! git -C "$repo_path" diff --quiet || ! git -C "$repo_path" diff --cached --quiet; then
+    echo "ERROR: $repo_path has uncommitted changes. Commit first; the eval does reset --hard." >&2
+    exit 1
+  fi
+done
+
 pass=0; fail=0; skip=0; total=0
 printf "%-22s %-6s %-8s %6s  %s\n" "label" "mode" "result" "files" "notes"
 printf "%s\n" "----------------------------------------------------------------------"
@@ -56,12 +73,6 @@ for tuple in "${TUPLES[@]}"; do
     printf "%-22s %-6s %-8s %6s  %s\n" "$label" "-" "SKIP" "-" "tool $tool not installed"
     skip=$((skip + 1)); continue
   fi
-
-  # Snapshot tracked state only. -u would stash untracked files
-  # including this script itself; keep untracked in place.
-  stash_out=$(git -C "$repo_path" stash push -m "rename-eval-$label" 2>&1)
-  stashed="no"
-  echo "$stash_out" | grep -q "No local changes" || stashed="yes"
 
   set +o pipefail
   rename_json=$(cd "$repo_path" && "$EDR_BIN" rename "$target" --to "$new_name" --cross-file --force 2>&1 | head -1)
@@ -91,11 +102,10 @@ for tuple in "${TUPLES[@]}"; do
 
   printf "%-22s %-6s %-8s %6s  %s\n" "$label" "${mode:--}" "$result" "$files_changed" "$notes"
 
-  # Restore tracked-file state only. Do NOT clean untracked files —
-  # this script itself lives as a tracked file now, but fixtures
-  # might be committed too; safer to leave untracked alone.
-  git -C "$repo_path" checkout -- . >/dev/null 2>&1
-  [ "$stashed" = "yes" ] && git -C "$repo_path" stash pop >/dev/null 2>&1 || true
+  # Restore tracked state. Clean-tree invariant was asserted up
+  # front, so reset --hard is safe — it only drops post-rename
+  # modifications, nothing pre-existing.
+  git -C "$repo_path" reset --hard HEAD >/dev/null 2>&1
 done
 
 echo
