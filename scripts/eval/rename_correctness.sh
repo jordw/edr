@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # rename_correctness.sh — compiler-oracle correctness eval for rename.
+# Requires bash 4+ (uses `declare -A`). On macOS the default /bin/bash
+# is 3.2; run with `bash` from PATH or install a newer bash via
+# homebrew. The script aborts if the associative-array feature is
+# unavailable, because the clean-tree precondition relies on it.
 #
 # For each tuple, git-stash the repo, apply edr rename (NOT dry-run),
 # run the build, capture PASS/FAIL, restore state. A compile failure
@@ -39,6 +43,13 @@ check_tool() { command -v "$1" >/dev/null 2>&1; }
 # Safety: abort if any targeted repo has uncommitted changes. The
 # eval does `git reset --hard HEAD` between iterations to restore
 # post-rename state; with uncommitted work that would destroy it.
+# declare -A requires bash 4+; fail loudly if unavailable, otherwise
+# the safety check below is silently skipped.
+if ! (declare -A __test_assoc) 2>/dev/null; then
+  echo "ERROR: this script requires bash 4+ for associative arrays." >&2
+  echo "       On macOS, run with a homebrew bash (e.g. /opt/homebrew/bin/bash)." >&2
+  exit 2
+fi
 declare -A seen_repos
 for tuple in "${TUPLES[@]}"; do
   r=$(printf '%s' "$tuple" | cut -d'|' -f2)

@@ -86,6 +86,25 @@ func goCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 		candidates[sib] = true
 	}
 
+	// For method renames we also need to rewrite call sites through
+	// interface-typed variables. acceptableTypes is the set of type
+	// names whose methods we treat as aliases of the target method:
+	// the concrete receiver plus every same-package interface whose
+	// full method set is a subset of the receiver's method set AND
+	// includes sym.Name.
+	isMethod := sym.Receiver != ""
+	acceptableTypes := map[string]bool{}
+	if sym.Receiver != "" {
+		acceptableTypes[sym.Receiver] = true
+	}
+	var ifaceHits []goIfaceHit
+	if isMethod {
+		ifaceHits = goSatisfiedInterfaces(ctx, db, sym, resolver)
+		for _, h := range ifaceHits {
+			acceptableTypes[h.name] = true
+		}
+	}
+
 	targetPkgPath := canonical
 	pop := namespace.GoPopulator(resolver)
 	for cand := range candidates {
@@ -94,7 +113,12 @@ func goCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 			continue
 		}
 		ns := namespace.Build(cand, candRes, resolver, pop)
-		if !ns.Matches(sym.Name, target.ID) {
+		// For non-method renames the namespace must carry our target
+		// DeclID for sym.Name. For methods the namespace doesn't
+		// surface method names at all (methods live inside type
+		// scopes), so we admit every candidate and rely on per-ref
+		// disambiguation below.
+		if !isMethod && !ns.Matches(sym.Name, target.ID) {
 			continue
 		}
 		// Per-file: shadow guard map + import-gateway map. Gateways
@@ -109,6 +133,14 @@ func goCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 		// Source bytes for base-identifier extraction. The resolver
 		// caches them — same allocation as the Result parse used.
 		src := resolver.Source(cand)
+		// For methods: map each local var/param/field name to the
+		// last identifier of its declared type. Used to accept
+		// property_access refs whose base is a var of an acceptable
+		// type.
+		var varTypes map[string]string
+		if isMethod {
+			varTypes = goBuildVarTypes(candRes, src)
+		}
 
 		for _, ref := range candRes.Refs {
 			if ref.Name != sym.Name {
@@ -137,17 +169,45 @@ func goCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 				if baseIdent == "" {
 					continue
 				}
-				gatewayPath, ok := gateways[baseIdent]
-				if !ok || gatewayPath != targetPkgPath {
+				// Accept when base resolves to an import of the
+				// target package (cross-package function call), OR
+				// (methods only) when base is a local of an
+				// acceptable type (concrete receiver or satisfied
+				// interface).
+				if gatewayPath, ok := gateways[baseIdent]; ok && gatewayPath == targetPkgPath {
+					// ok
+				} else if isMethod && varTypes != nil && acceptableTypes[varTypes[baseIdent]] {
+					// ok
+				} else {
 					continue
 				}
 			}
+			// Expand the span back through a leading `.` for
+			// property-access refs. The rename pipeline's call-site
+			// regex is `\.method\b` when sym.Receiver is set; without
+			// the leading dot in the span, the regex would not match.
+			startByte := ref.Span.StartByte
+			if ref.Binding.Reason == "property_access" && startByte > 0 && len(src) > 0 && src[startByte-1] == '.' {
+				startByte--
+			}
 			out[cand] = append(out[cand], span{
-				start: ref.Span.StartByte,
+				start: startByte,
 				end:   ref.Span.EndByte,
 				isDef: false,
 			})
 		}
+	}
+
+	// Emit spans for each satisfied interface's declaration of
+	// sym.Name. isDef=true makes the rename engine use a bare-name
+	// regex at this location (the span covers the method identifier
+	// itself, not a property-access).
+	for _, h := range ifaceHits {
+		out[h.file] = append(out[h.file], span{
+			start: h.methodSpan.StartByte,
+			end:   h.methodSpan.EndByte,
+			isDef: true,
+		})
 	}
 
 	return out, true
@@ -205,3 +265,190 @@ func goBaseIdentBefore(src []byte, refStart uint32) string {
 	return string(src[i+1 : end])
 }
 
+
+
+// goIfaceHit records a same-package interface whose method set is a
+// subset of sym.Receiver's method set, along with the span of its
+// declaration of sym.Name.
+type goIfaceHit struct {
+	name       string
+	file       string
+	methodSpan scope.Span
+}
+
+// goSatisfiedInterfaces finds same-package interfaces that sym.Receiver
+// structurally implements. An interface qualifies only when every
+// method it declares is also a method on sym.Receiver AND sym.Name is
+// one of them. The Go scope builder emits `type X interface {...}`
+// as a KindType decl plus a child ScopeInterface; we walk scopes and
+// match each ScopeInterface back to its owning type decl by proximity.
+func goSatisfiedInterfaces(
+	ctx context.Context,
+	db index.SymbolStore,
+	sym *index.SymbolInfo,
+	resolver *namespace.GoResolver,
+) []goIfaceHit {
+	if sym.Receiver == "" {
+		return nil
+	}
+	files := append([]string{sym.File}, resolver.SamePackageFiles(sym.File)...)
+	receiverMethods := map[string]bool{}
+	for _, f := range files {
+		syms, err := db.GetSymbolsByFile(ctx, f)
+		if err != nil {
+			continue
+		}
+		for _, s := range syms {
+			if s.Type == "method" && s.Receiver == sym.Receiver {
+				receiverMethods[s.Name] = true
+			}
+		}
+	}
+	if !receiverMethods[sym.Name] {
+		return nil
+	}
+	var hits []goIfaceHit
+	for _, f := range files {
+		res := resolver.Result(f)
+		if res == nil {
+			continue
+		}
+		for si := range res.Scopes {
+			sc := &res.Scopes[si]
+			if sc.Kind != scope.ScopeInterface {
+				continue
+			}
+			var owner *scope.Decl
+			var bestEnd uint32
+			for k := range res.Decls {
+				d := &res.Decls[k]
+				if d.Kind != scope.KindType {
+					continue
+				}
+				if d.Span.EndByte > sc.Span.StartByte {
+					continue
+				}
+				if d.Span.EndByte <= bestEnd {
+					continue
+				}
+				bestEnd = d.Span.EndByte
+				owner = d
+			}
+			if owner == nil {
+				continue
+			}
+			// Collect methods whose Scope matches this interface.
+			// Skip identifiers that don't look like exported method
+			// names — the builder occasionally emits trailing
+			// return-type idents like `error` as KindMethod inside
+			// interface bodies.
+			ifaceMethods := map[string]scope.Span{}
+			allSubset := true
+			for k := range res.Decls {
+				m := &res.Decls[k]
+				if m.Kind != scope.KindMethod || m.Scope != sc.ID {
+					continue
+				}
+				if m.Name == "" || m.Name[0] < 'A' || m.Name[0] > 'Z' {
+					continue
+				}
+				if !receiverMethods[m.Name] {
+					allSubset = false
+					break
+				}
+				ifaceMethods[m.Name] = m.Span
+			}
+			if !allSubset || len(ifaceMethods) == 0 {
+				continue
+			}
+			if methodSpan, ok := ifaceMethods[sym.Name]; ok {
+				hits = append(hits, goIfaceHit{
+					name:       owner.Name,
+					file:       f,
+					methodSpan: methodSpan,
+				})
+			}
+		}
+	}
+	return hits
+}
+
+// goBuildVarTypes maps each local var/param/field decl to the last
+// identifier of its declared type. Handles Go's `name Type`,
+// `name *Type`, and `name pkg.Type` orderings.
+func goBuildVarTypes(r *scope.Result, src []byte) map[string]string {
+	out := make(map[string]string)
+	if r == nil || len(src) == 0 {
+		return out
+	}
+	for _, d := range r.Decls {
+		if d.Kind != scope.KindVar && d.Kind != scope.KindParam && d.Kind != scope.KindField {
+			continue
+		}
+		if name := goFindTypeAfterDecl(r, src, d.Span.EndByte); name != "" {
+			out[d.Name] = name
+		}
+	}
+	return out
+}
+
+// goFindTypeAfterDecl returns the tail identifier of the type
+// annotation that begins immediately after declEnd.
+func goFindTypeAfterDecl(r *scope.Result, src []byte, declEnd uint32) string {
+	var first *scope.Ref
+	var firstStart uint32 = ^uint32(0)
+	for i := range r.Refs {
+		ref := &r.Refs[i]
+		if ref.Span.StartByte < declEnd {
+			continue
+		}
+		if ref.Span.StartByte >= firstStart {
+			continue
+		}
+		gap := src[declEnd:ref.Span.StartByte]
+		if !onlyWsOrStar(gap) {
+			continue
+		}
+		firstStart = ref.Span.StartByte
+		first = ref
+	}
+	if first == nil {
+		return ""
+	}
+	cur := first
+	for {
+		var next *scope.Ref
+		var nextStart uint32 = ^uint32(0)
+		for i := range r.Refs {
+			ref := &r.Refs[i]
+			if ref.Span.StartByte < cur.Span.EndByte {
+				continue
+			}
+			if ref.Span.StartByte >= nextStart {
+				continue
+			}
+			gap := src[cur.Span.EndByte:ref.Span.StartByte]
+			if len(gap) != 1 || gap[0] != '.' {
+				continue
+			}
+			nextStart = ref.Span.StartByte
+			next = ref
+		}
+		if next == nil {
+			break
+		}
+		cur = next
+	}
+	return cur.Name
+}
+
+func onlyWsOrStar(gap []byte) bool {
+	for _, c := range gap {
+		switch c {
+		case ' ', '\t', '\n', '\r', '*':
+			continue
+		}
+		return false
+	}
+	return true
+}
