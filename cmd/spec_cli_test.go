@@ -2904,6 +2904,51 @@ void main(void) {
 	}
 }
 
+// TestSpec_RenameModeScope verifies that an admitted language (Go) reports
+// mode:scope and emits no fallback warning.
+func TestSpec_RenameModeScope(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"main.go": "package main\n\nfunc Hello() {}\n\nfunc main() { Hello() }\n",
+	})
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"rename", "main.go:Hello", "--to", "Greet")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	h := result.Ops[0].Header
+	if h["mode"] != "scope" {
+		t.Errorf("mode = %v, want scope", h["mode"])
+	}
+	if warnings, ok := h["warnings"]; ok {
+		t.Errorf("unexpected warnings on scope path: %v", warnings)
+	}
+}
+
+// TestSpec_RenameModeNameMatch verifies that an unadmitted language (Kotlin)
+// reports mode:name-match and attaches a fallback warning naming the extension.
+func TestSpec_RenameModeNameMatch(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"lib.rb": "def compute(x)\n  x * 2\nend\n",
+	})
+	result, stdout, stderr, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"rename", "lib.rb:compute", "--to", "calculate")
+	if exit != 0 {
+		t.Fatalf("exit %d, stderr: %s, stdout: %s", exit, stderr, stdout)
+	}
+	h := result.Ops[0].Header
+	if h["mode"] != "name-match" {
+		t.Errorf("mode = %v, want name-match", h["mode"])
+	}
+	warnings, ok := h["warnings"].([]any)
+	if !ok || len(warnings) == 0 {
+		t.Fatalf("expected fallback warning on name-match path; got %v", h["warnings"])
+	}
+	msg, _ := warnings[0].(string)
+	if !strings.Contains(msg, ".rb") {
+		t.Errorf("warning should name the extension .rb; got %q", msg)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Extract
 // ---------------------------------------------------------------------------

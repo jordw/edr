@@ -20,75 +20,10 @@ type goIdentRef struct {
 	endByte   uint32 // identifier end
 }
 
-// goReadPackageClause extracts the package name from a Go source file.
-// Returns "" if the clause is missing or malformed. Accepts the common
-// leading-comment + package-clause layout; does NOT attempt to parse
-// build tags or cgo.
+// goReadPackageClause is a thin alias around the canonical Go
+// PackageClause parser shared with package namespace.
 func goReadPackageClause(src []byte) string {
-	i := 0
-	n := len(src)
-	for i < n {
-		// Skip whitespace.
-		for i < n && (src[i] == ' ' || src[i] == '\t' || src[i] == '\r' || src[i] == '\n') {
-			i++
-		}
-		if i >= n {
-			return ""
-		}
-		// Skip line comment //...
-		if i+1 < n && src[i] == '/' && src[i+1] == '/' {
-			for i < n && src[i] != '\n' {
-				i++
-			}
-			continue
-		}
-		// Skip block comment /* ... */
-		if i+1 < n && src[i] == '/' && src[i+1] == '*' {
-			i += 2
-			for i+1 < n && !(src[i] == '*' && src[i+1] == '/') {
-				i++
-			}
-			if i+1 < n {
-				i += 2
-			}
-			continue
-		}
-		break
-	}
-	// Expect "package"
-	if i+7 > n || string(src[i:i+7]) != "package" {
-		return ""
-	}
-	i += 7
-	// Require at least one whitespace.
-	if i >= n || !(src[i] == ' ' || src[i] == '\t') {
-		return ""
-	}
-	for i < n && (src[i] == ' ' || src[i] == '\t') {
-		i++
-	}
-	// Read identifier.
-	start := i
-	for i < n && (isGoIdentByte(src[i])) {
-		i++
-	}
-	if i == start {
-		return ""
-	}
-	return string(src[start:i])
-}
-
-func isGoIdentByte(b byte) bool {
-	if b >= 'a' && b <= 'z' {
-		return true
-	}
-	if b >= 'A' && b <= 'Z' {
-		return true
-	}
-	if b >= '0' && b <= '9' {
-		return true
-	}
-	return b == '_'
+	return golang.PackageClause(src)
 }
 
 // goSamePackageRefs walks sibling .go files in origin's directory,

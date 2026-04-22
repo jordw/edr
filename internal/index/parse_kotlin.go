@@ -555,10 +555,14 @@ func (p *kotlinParser) parseFun() {
 		case c == '<':
 			p.s.SkipAngles()
 		case c == '=':
-			// Single-expression function — record symbol, skip rest of expression.
-			// We do NOT skip to EOL because the expression may span lines with
-			// proper indentation. Just record; the outer run() loop handles the rest.
-			p.recordFunction(name, startLine)
+			// Single-expression function. Record symbol with an explicit
+			// EndLine at the current line so the adapter produces a valid
+			// byte span; without this, expression-bodied fns have EndLine=0,
+			// fail hasValidSpan, and become unresolvable by rename/changesig.
+			// Multi-line expression bodies are under-reported here (we do not
+			// trace balanced delimiters to the actual end); acceptable for now.
+			sym := p.recordFunction(name, startLine)
+			p.result.Symbols[sym].EndLine = p.s.Line
 			p.memberStart = true
 			return
 		case c == ';':

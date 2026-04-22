@@ -130,8 +130,10 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 	// symbol-index path for languages without a scope builder or when
 	// the target decl cannot be resolved.
 	var refFileSpans map[string][]sigSpan
+	scopeDone := false
 	if spans, ok := scopeAwareRefSpansByFile(ctx, db, sym, crossFile); ok {
 		refFileSpans = spans
+		scopeDone = true
 	} else {
 		var refs []index.SymbolInfo
 		if crossFile {
@@ -260,11 +262,25 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 		combinedDiff += edit.UnifiedDiff(output.Rel(fe.file), fe.oldData, fe.newData)
 	}
 
+	mode := "scope"
+	var warnings []string
+	if !scopeDone {
+		mode = "name-match"
+		warnings = []string{fmt.Sprintf(
+			"changesig used name-based matching: scope builder for %s is not yet admitted for writes; verify diffs for cross-class false positives before committing",
+			filepath.Ext(sym.File))}
+	}
+
 	if totalFiles == 0 {
-		return map[string]any{
+		out := map[string]any{
 			"file":   output.Rel(sym.File),
 			"status": "noop",
-		}, nil
+			"mode":   mode,
+		}
+		if len(warnings) > 0 {
+			out["warnings"] = warnings
+		}
+		return out, nil
 	}
 
 	msg := ""
@@ -275,12 +291,17 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 	}
 
 	if dryRun {
-		return map[string]any{
+		out := map[string]any{
 			"file":    output.Rel(sym.File),
 			"status":  "dry_run",
 			"diff":    combinedDiff,
 			"message": msg,
-		}, nil
+			"mode":    mode,
+		}
+		if len(warnings) > 0 {
+			out["warnings"] = warnings
+		}
+		return out, nil
 	}
 
 	tx := edit.NewTransaction()
@@ -301,13 +322,18 @@ func runChangeSig(ctx context.Context, db index.SymbolStore, root string, args [
 	}
 
 	newHash, _ := edit.FileHash(sym.File)
-	return map[string]any{
+	out := map[string]any{
 		"file":    output.Rel(sym.File),
 		"status":  "applied",
 		"diff":    combinedDiff,
 		"hash":    newHash,
 		"message": msg,
-	}, nil
+		"mode":    mode,
+	}
+	if len(warnings) > 0 {
+		out["warnings"] = warnings
+	}
+	return out, nil
 }
 
 // computeExcludeOpens scans every file we're about to rewrite and records the

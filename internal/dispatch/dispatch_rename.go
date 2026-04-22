@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 
@@ -263,14 +264,27 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 			len(edits), totalOccurrences, crossFileFileCap, crossFileEditCap, oldName)
 	}
 
-	// Build result.
+	// Build result. Mode reports whether the scope-aware path carried
+	// the rewrite ("scope") or the regex + symbol-index fallback did
+	// ("name-match") — the latter has no shadow filtering and may touch
+	// cross-class same-name identifiers, so we attach a warning.
+	mode := "scope"
+	if !scopeDone {
+		mode = "name-match"
+	}
 	result := &output.RenameResult{
 		OldName:            oldName,
 		NewName:            newName,
+		Mode:               mode,
 		Occurrences:        totalOccurrences,
 		CodeOccurrences:    totalCodeEdits,
 		CommentOccurrences: totalCommentMatches,
 		CommentMode:        commentMode,
+	}
+	if mode == "name-match" {
+		result.Warnings = append(result.Warnings, fmt.Sprintf(
+			"rename used name-based matching: scope builder for %s is not yet admitted for writes; verify diffs for cross-class false positives before committing",
+			filepath.Ext(sym.File)))
 	}
 
 	result.OldContents = make(map[string][]byte, len(edits))

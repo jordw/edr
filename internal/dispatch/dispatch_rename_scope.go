@@ -21,8 +21,18 @@ import (
 // use the regex + symbol-index fallback. Widen this gate per-language
 // as each builder matures.
 func scopeSupported(path string) bool {
+	// Eval hook: forces the scope-aware or regex path for every language,
+	// used by scripts/eval/rename_fp.sh to measure per-language over-rewrite
+	// rate against the same corpus. Not intended for agent use — there is no
+	// CLI flag. Presence of the env var is cheap to check per-call.
+	switch os.Getenv("EDR_EVAL_FORCE_MODE") {
+	case "scope":
+		return true
+	case "name-match":
+		return false
+	}
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".go", ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".py", ".pyi":
+	case ".go", ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".py", ".pyi", ".java", ".kt", ".kts", ".rs", ".c", ".h":
 		return true
 	}
 	return false
@@ -84,7 +94,12 @@ func scopeAwareSameFileSpans(sym *index.SymbolInfo) ([]span, bool) {
 	// --comments=rewrite picks up the leading /// or // documentation
 	// block. End stays at the identifier so we do not rewrite mentions
 	// inside the function body that scope did not bind to us.
-	defStart := expandToDocComment(sym.File, target.Span.StartByte)
+	// Start from sym.StartByte (whole-symbol start) rather than
+	// target.Span.StartByte (identifier), because expandToDocComment
+	// looks for a newline immediately before its argument, and the
+	// identifier is typically preceded by a keyword (`void`, `fn`) on
+	// the same line, not by a newline.
+	defStart := expandToDocComment(sym.File, sym.StartByte)
 	out := []span{{start: defStart, end: target.Span.EndByte, isDef: true}}
 
 	for _, ref := range result.Refs {
@@ -263,6 +278,40 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 	}
 	out := map[string][]span{sym.File: originSpans}
 
+	// Namespace-driven cross-file resolution per language. Each
+	// branch parses the target file with canonical DeclID hashing,
+	// resolves the candidate files' imports + same-package siblings,
+	// and emits refs that bind to the target by canonical DeclID.
+	switch ext := strings.ToLower(filepath.Ext(sym.File)); ext {
+	case ".go":
+		crossSpans, ok := goCrossFileSpans(ctx, db, sym)
+		if !ok {
+			return nil, false
+		}
+		for f, spans := range crossSpans {
+			out[f] = append(out[f], spans...)
+		}
+		return out, true
+	case ".java":
+		crossSpans, ok := javaCrossFileSpans(ctx, db, sym)
+		if !ok {
+			return nil, false
+		}
+		for f, spans := range crossSpans {
+			out[f] = append(out[f], spans...)
+		}
+		return out, true
+	case ".kt", ".kts":
+		crossSpans, ok := kotlinCrossFileSpans(ctx, db, sym)
+		if !ok {
+			return nil, false
+		}
+		for f, spans := range crossSpans {
+			out[f] = append(out[f], spans...)
+		}
+		return out, true
+	}
+
 	// Candidate files: symbol-index narrowed by import graph.
 	refs, err := db.FindSemanticReferences(ctx, sym.Name, sym.File)
 	if err != nil {
@@ -295,9 +344,23 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 		// Property-access refs from the wrong target class are a common
 		// false-positive source when renaming. Gate them: only include
 		// `x.Name` hits when the target is actually a field/method
-		// (something expected to be dotted into). For types, functions,
-		// vars, etc., property access to a same-named member on an
-		// unrelated object is NOT a rename target.
+		// (something expected to be dotted into). For types, vars, etc.,
+		// property access to a same-named member on an unrelated object
+		// is NOT a rename target.
+		//
+		// Exception for Go: `pkg.Func()` (package-qualified call) is
+		// emitted as a property_access ref by the scope builder. Without
+		// this exception, cross-package Go renames silently drop all
+		// call sites. Methods have sym.Receiver != "" (so sym.Type ==
+		// "method") and hit the first branch; free functions have
+		// sym.Type == "function" and the Go-specific branch lets them
+		// through. The tradeoff: `obj.Func()` for an unrelated type
+		// with a method named Func will also be rewritten. Accepted in
+		// exchange for making cross-package rename work at all.
+		// Go is handled by the namespace path above (early return).
+		// Here we keep the original property_access gate for non-Go
+		// languages: only methods/fields legitimately have `x.Name`
+		// rewrites; types/functions/vars don't.
 		propOK := sym.Type == "method" || sym.Type == "field"
 		for _, ref := range result.Refs {
 			if ref.Name != sym.Name {
@@ -330,16 +393,61 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 				isDef: false,
 			})
 		}
+
+		// C-family header/source split: the declaration lives in a .h
+		// header and the definition in a .c/.cpp file. When the caller
+		// of scopeAwareCrossFileSpans renames the `.c` definition, the
+		// header file appears as a candidate but has no Refs for the
+		// name — only a Decl. Emit its decl span so the header''s
+		// declaration is rewritten too. This is idiomatic for C: a
+		// declaration + definition pair represent the SAME logical
+		// symbol (there is no separate DeclID). Restricted to same
+		// language family to avoid false positives in non-C candidates.
+		originIsC := isCFamily(strings.ToLower(filepath.Ext(sym.File)))
+		candIsC := isCFamily(strings.ToLower(filepath.Ext(r.File)))
+		if originIsC && candIsC {
+			for i := range result.Decls {
+				d := &result.Decls[i]
+				if d.Name != sym.Name {
+					continue
+				}
+				// Only file-scope decls — a local `int compute = 42` in
+				// a different function is not our target.
+				var scopeKind scope.ScopeKind
+				if sid := int(d.Scope) - 1; sid >= 0 && sid < len(result.Scopes) {
+					scopeKind = result.Scopes[sid].Kind
+				}
+				if scopeKind != scope.ScopeFile {
+					continue
+				}
+				out[r.File] = append(out[r.File], span{
+					start: d.Span.StartByte,
+					end:   d.Span.EndByte,
+					isDef: true,
+				})
+			}
+		}
 	}
 
-	// Go same-package supplement: FindSemanticReferences uses the import
-	// graph to narrow candidates, and same-package files do not import
-	// each other — so refs to the target from sibling files in the same
-	// directory are MISSED. Walk the origin's package explicitly and add
-	// every BindUnresolved ref whose name matches; refs that resolve to a
-	// local decl are BindResolved and implicitly skipped (shadow guard).
-	if strings.EqualFold(filepath.Ext(sym.File), ".go") {
-		for _, idRef := range goSamePackageRefs(sym.File, goPackageOfFile(sym.File), sym.Name) {
+	// Go, Java, and Kotlin are handled by the early-returning
+	// namespace branches above.
+
+	// Rust same-crate supplement: Rust has no package clause — modules
+	// are defined by file layout (mod foo; → foo.rs). ParseRust does not
+	// emit `mod` as an import and importReachesFile has no Rust case,
+	// so FindSemanticReferences returns nothing cross-file for Rust.
+	// Walk every .rs under the repo root, parse with scope, and emit
+	// refs whose name matches. If the walker detects ambiguity (another
+	// file defines a symbol with the same name), it returns ok=false —
+	// we abort the whole scope-aware path and fall back to regex, since
+	// a partial same-file-only scope result would silently miss legit
+	// cross-file call sites.
+	if strings.EqualFold(filepath.Ext(sym.File), ".rs") {
+		refs, ok := rustSameCrateRefs(db.Root(), sym.File, sym.Name)
+		if !ok {
+			return nil, false
+		}
+		for _, idRef := range refs {
 			out[idRef.file] = append(out[idRef.file], span{
 				start: idRef.startByte,
 				end:   idRef.endByte,

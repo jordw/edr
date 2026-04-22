@@ -273,6 +273,7 @@ func Caller() int { return Compute(5) }
 // site in a sibling same-package file.
 func TestRename_GoSamePackageCrossFile(t *testing.T) {
 	db, dir := setupRefsRepo(t, map[string]string{
+		"go.mod": "module example.com/foo\n",
 		"a.go": `package foo
 
 func Compute(x int) int { return x * 2 }
@@ -301,6 +302,7 @@ func Caller() int { return Compute(5) }
 // rewrite a shadowed local `Compute := 42` in the same caller file.
 func TestRename_GoSamePackageShadowNotRewritten(t *testing.T) {
 	db, dir := setupRefsRepo(t, map[string]string{
+		"go.mod": "module example.com/foo\n",
 		"a.go": `package foo
 
 func Compute(x int) int { return x * 2 }
@@ -339,6 +341,7 @@ func Shadowed() int {
 // rewrites a sibling same-package caller's call args.
 func TestChangeSig_GoSamePackageCrossFile(t *testing.T) {
 	db, dir := setupRefsRepo(t, map[string]string{
+		"go.mod": "module example.com/foo\n",
 		"a.go": `package foo
 
 func Compute(x int) int { return x * 2 }
@@ -366,6 +369,7 @@ func Caller() int { return Compute(5) }
 // the real call are in the same file.
 func TestChangeSig_GoSamePackageShadowSafe(t *testing.T) {
 	db, dir := setupRefsRepo(t, map[string]string{
+		"go.mod": "module example.com/foo\n",
 		"a.go": `package foo
 
 func Compute(x int) int { return x * 2 }
@@ -670,5 +674,526 @@ func TestRefsTo_CSharpCrossFile(t *testing.T) {
 	}
 	if !gotCaller {
 		t.Errorf("expected caller.cs ref; got %+v", refs)
+	}
+}
+
+// TestRename_JavaShadowNotRewritten verifies that renaming a public
+// method across package-level Java files does not touch a local
+// variable with the same name in a sibling file. Same safety contract
+// as TestRename_GoSamePackageShadowNotRewritten.
+func TestRename_JavaShadowNotRewritten(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"Lib.java": `package foo;
+
+public class Lib {
+    public static int compute(int x) { return x * 2; }
+}
+`,
+		"Caller.java": `package foo;
+
+public class Caller {
+    public int callIt() { return Lib.compute(5); }
+
+    public int shadowed() {
+        int compute = 42;
+        return compute + 1;
+    }
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"Lib.java:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	cData, _ := os.ReadFile(filepath.Join(dir, "Caller.java"))
+	body := string(cData)
+	if !strings.Contains(body, "Lib.calculate(5)") {
+		t.Errorf("cross-file call not rewritten; got:\n%s", body)
+	}
+	if !strings.Contains(body, "int compute = 42") {
+		t.Errorf("shadowed local MUST remain as `int compute = 42`; got:\n%s", body)
+	}
+	if !strings.Contains(body, "return compute + 1") {
+		t.Errorf("use of shadowed local MUST remain as `compute + 1`; got:\n%s", body)
+	}
+}
+
+// TestChangeSig_JavaShadowSafe: same guarantee as TestChangeSig_
+// GoSamePackageShadowSafe — changesig must not rewrite call-site-like
+// tokens that bind to a shadowed local, only genuine call sites of
+// the target method.
+func TestChangeSig_JavaShadowSafe(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"Lib.java": `package foo;
+
+public class Lib {
+    public static int compute(int x) { return x * 2; }
+}
+`,
+		"Caller.java": `package foo;
+
+public class Caller {
+    public int callIt() { return Lib.compute(5); }
+
+    public int shadowed() {
+        int compute = 42;
+        return compute + 1;
+    }
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "changesig",
+		[]string{"Lib.java:compute"},
+		map[string]any{"add": "int extra", "callarg": "0", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	cData, _ := os.ReadFile(filepath.Join(dir, "Caller.java"))
+	body := string(cData)
+	if !strings.Contains(body, "Lib.compute(5, 0)") {
+		t.Errorf("cross-file call not rewritten; got:\n%s", body)
+	}
+	if !strings.Contains(body, "int compute = 42") {
+		t.Errorf("shadowed local MUST remain as `int compute = 42`; got:\n%s", body)
+	}
+}
+
+// TestRename_KotlinShadowNotRewritten: cross-file Kotlin rename must
+// rewrite the class-qualified call and leave same-named locals alone.
+// Same safety contract as TestRename_JavaShadowNotRewritten.
+func TestRename_KotlinShadowNotRewritten(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"Lib.kt": `package foo
+
+object Lib {
+    fun compute(x: Int): Int = x * 2
+}
+`,
+		"Caller.kt": `package foo
+
+class Caller {
+    fun callIt(): Int = Lib.compute(5)
+
+    fun shadowed(): Int {
+        val compute = 42
+        return compute + 1
+    }
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"Lib.kt:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	cData, _ := os.ReadFile(filepath.Join(dir, "Caller.kt"))
+	body := string(cData)
+	if !strings.Contains(body, "Lib.calculate(5)") {
+		t.Errorf("cross-file call not rewritten; got:\n%s", body)
+	}
+	if !strings.Contains(body, "val compute = 42") {
+		t.Errorf("shadowed local MUST remain as `val compute = 42`; got:\n%s", body)
+	}
+	if !strings.Contains(body, "return compute + 1") {
+		t.Errorf("use of shadowed local MUST remain as `compute + 1`; got:\n%s", body)
+	}
+}
+
+// TestRename_RustShadowNotRewritten: cross-file rename rewrites the
+// module-qualified call and preserves a same-named local.
+func TestRename_RustShadowNotRewritten(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"lib.rs": `pub fn compute(x: i32) -> i32 { x * 2 }
+`,
+		"main.rs": `mod lib;
+
+fn run() -> i32 { lib::compute(5) }
+
+fn shadowed() -> i32 {
+    let compute = 42;
+    compute + 1
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"lib.rs:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	mData, _ := os.ReadFile(filepath.Join(dir, "main.rs"))
+	body := string(mData)
+	if !strings.Contains(body, "lib::calculate(5)") {
+		t.Errorf("cross-file call not rewritten; got:\n%s", body)
+	}
+	if !strings.Contains(body, "let compute = 42") {
+		t.Errorf("shadowed local MUST remain as `let compute = 42`; got:\n%s", body)
+	}
+	if !strings.Contains(body, "compute + 1") {
+		t.Errorf("use of shadowed local MUST remain as `compute + 1`; got:\n%s", body)
+	}
+}
+
+// TestChangeSig_RustShadowSafe: same guarantee, changesig flavor.
+func TestChangeSig_RustShadowSafe(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"lib.rs": `pub fn compute(x: i32) -> i32 { x * 2 }
+`,
+		"main.rs": `mod lib;
+
+fn run() -> i32 { lib::compute(5) }
+
+fn shadowed() -> i32 {
+    let compute = 42;
+    compute + 1
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "changesig",
+		[]string{"lib.rs:compute"},
+		map[string]any{"add": "scale: f64", "callarg": "1.0", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	mData, _ := os.ReadFile(filepath.Join(dir, "main.rs"))
+	body := string(mData)
+	if !strings.Contains(body, "lib::compute(5, 1.0)") {
+		t.Errorf("cross-file call not rewritten; got:\n%s", body)
+	}
+	if !strings.Contains(body, "let compute = 42") {
+		t.Errorf("shadowed local MUST remain as `let compute = 42`; got:\n%s", body)
+	}
+}
+
+// TestChangeSig_KotlinShadowSafe: same guarantee, changesig flavor.
+func TestChangeSig_KotlinShadowSafe(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"Lib.kt": `package foo
+
+object Lib {
+    fun compute(x: Int): Int = x * 2
+}
+`,
+		"Caller.kt": `package foo
+
+class Caller {
+    fun callIt(): Int = Lib.compute(5)
+
+    fun shadowed(): Int {
+        val compute = 42
+        return compute + 1
+    }
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "changesig",
+		[]string{"Lib.kt:compute"},
+		map[string]any{"add": "extra: Int", "callarg": "0", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	cData, _ := os.ReadFile(filepath.Join(dir, "Caller.kt"))
+	body := string(cData)
+	if !strings.Contains(body, "Lib.compute(5, 0)") {
+		t.Errorf("cross-file call not rewritten; got:\n%s", body)
+	}
+	if !strings.Contains(body, "val compute = 42") {
+		t.Errorf("shadowed local MUST remain as `val compute = 42`; got:\n%s", body)
+	}
+}
+
+// TestRename_CShadowNotRewritten: cross-file C rename rewrites the
+// call in a sibling .c file AND the declaration in the matching .h
+// file, but leaves a same-named local variable alone.
+func TestRename_CShadowNotRewritten(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"foo.h": `int compute(int x);
+`,
+		"foo.c": `#include "foo.h"
+
+int compute(int x) { return x * 2; }
+`,
+		"caller.c": `#include "foo.h"
+
+int run() { return compute(5); }
+
+int shadowed() {
+    int compute = 42;
+    return compute + 1;
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"foo.c:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	hData, _ := os.ReadFile(filepath.Join(dir, "foo.h"))
+	if !strings.Contains(string(hData), "int calculate(int x);") {
+		t.Errorf("header declaration not rewritten; got:\n%s", hData)
+	}
+	cData, _ := os.ReadFile(filepath.Join(dir, "caller.c"))
+	body := string(cData)
+	if !strings.Contains(body, "return compute(5)") && !strings.Contains(body, "return calculate(5)") {
+		t.Errorf("caller.c unexpected state; got:\n%s", body)
+	}
+	if !strings.Contains(body, "return calculate(5)") {
+		t.Errorf("cross-file call not rewritten; got:\n%s", body)
+	}
+	if !strings.Contains(body, "int compute = 42") {
+		t.Errorf("shadowed local MUST remain as `int compute = 42`; got:\n%s", body)
+	}
+	if !strings.Contains(body, "return compute + 1") {
+		t.Errorf("use of shadowed local MUST remain as `compute + 1`; got:\n%s", body)
+	}
+}
+
+// TestChangeSig_CShadowSafe: same guarantee, changesig flavor.
+func TestChangeSig_CShadowSafe(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"foo.h": `int compute(int x);
+`,
+		"foo.c": `#include "foo.h"
+
+int compute(int x) { return x * 2; }
+`,
+		"caller.c": `#include "foo.h"
+
+int run() { return compute(5); }
+
+int shadowed() {
+    int compute = 42;
+    return compute + 1;
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "changesig",
+		[]string{"foo.c:compute"},
+		map[string]any{"add": "int extra", "callarg": "0", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	cData, _ := os.ReadFile(filepath.Join(dir, "caller.c"))
+	body := string(cData)
+	if !strings.Contains(body, "compute(5, 0)") {
+		t.Errorf("cross-file call not rewritten; got:\n%s", body)
+	}
+	if !strings.Contains(body, "int compute = 42") {
+		t.Errorf("shadowed local MUST remain as `int compute = 42`; got:\n%s", body)
+	}
+}
+
+// ----------------------------------------------------------------------
+// Kotlin oracle-equivalent tests
+//
+// kotlinc is not available in our dev environment. These tests parallel
+// the Java oracle cases in scripts/eval/rename_correctness.sh and assert
+// the expected byte patterns after each rename — same accuracy coverage
+// minus the compile-pass signal.
+//
+// The three cases mirror the Java fixture:
+//   1. Static method call via object qualifier (Lib.compute)
+//   2. Instance method call via local variable (lib.process)
+//   3. Interface implementation rename (ServiceImpl.run)
+// ----------------------------------------------------------------------
+
+// TestRename_KotlinStaticMethodOracle — object-qualified call; the
+// namespace-driven disambiguation via canonical class DeclID should
+// rewrite Lib.compute across package-aware imports.
+func TestRename_KotlinStaticMethodOracle(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"com/example/lib/Lib.kt": `package com.example.lib
+
+object Lib {
+    fun compute(x: Int): Int = x * 2
+}
+`,
+		"com/example/other/Other.kt": `package com.example.other
+
+object Other {
+    fun compute(s: String): String = s + s
+}
+`,
+		"com/example/caller/Caller.kt": `package com.example.caller
+
+import com.example.lib.Lib
+import com.example.other.Other
+
+class Caller {
+    fun useStatic(): Int = Lib.compute(5) + Other.compute("x").length
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"com/example/lib/Lib.kt:compute"},
+		map[string]any{"new_name": "compute2", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "com/example/caller/Caller.kt"))
+	body := string(got)
+	if !strings.Contains(body, "Lib.compute2(5)") {
+		t.Errorf("Lib.compute should become Lib.compute2; got:\n%s", body)
+	}
+	if strings.Contains(body, "Other.compute2") {
+		t.Errorf("Other.compute must NOT be rewritten; got:\n%s", body)
+	}
+}
+
+// TestRename_KotlinInstanceMethodOracle — instance method called via
+// a locally-typed variable (`val lib: Lib = ...; lib.process(...)`).
+// Without receiver-type hints this would FAIL; with them the var's
+// type annotation resolves through the namespace to our target class.
+//
+// Kotlin's annotation syntax is `val x: Type` — the type comes AFTER
+// the name separated by `:`. Our buildVarTypes currently pairs types
+// BEFORE the name. This test documents that gap: it will FAIL until
+// we add Kotlin-style trailing-type pairing. When it starts passing,
+// the Kotlin equivalent of Java's lib-instance-method oracle is green.
+func TestRename_KotlinInstanceMethodOracle(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"com/example/lib/Lib.kt": `package com.example.lib
+
+class Lib {
+    fun process(s: String): Int = s.length
+}
+`,
+		"com/example/caller/Caller.kt": `package com.example.caller
+
+import com.example.lib.Lib
+
+class Caller {
+    fun useInstance(): Int {
+        val lib: Lib = Lib()
+        return lib.process("hello")
+    }
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"com/example/lib/Lib.kt:process"},
+		map[string]any{"new_name": "process2", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "com/example/caller/Caller.kt"))
+	body := string(got)
+	if !strings.Contains(body, "lib.process2(") {
+		t.Errorf("lib.process should become lib.process2; got:\n%s", body)
+	}
+}
+
+// TestRename_JavaVarConstructorInfer — Java 10+ `var lib = new Lib()`
+// has no explicit type annotation; type must be inferred from the
+// `new Lib()` RHS. Exercises findTypeFromConstructorInit.
+func TestRename_JavaVarConstructorInfer(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"com/example/lib/Lib.java": `package com.example.lib;
+
+public class Lib {
+    public int process(String s) { return s.length(); }
+}
+`,
+		"com/example/caller/Caller.java": `package com.example.caller;
+
+import com.example.lib.Lib;
+
+public class Caller {
+    public int useInstance() {
+        var lib = new Lib();
+        return lib.process("hello");
+    }
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"com/example/lib/Lib.java:process"},
+		map[string]any{"new_name": "process2", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "com/example/caller/Caller.java"))
+	body := string(got)
+	if !strings.Contains(body, "lib.process2(") {
+		t.Errorf("var-inferred lib.process should become lib.process2; got:\n%s", body)
+	}
+}
+
+// TestRename_KotlinValConstructorInfer — Kotlin `val lib = Lib()` has
+// no explicit type annotation; type must be inferred from the `Lib()`
+// constructor call. Same mechanism as Java var, no `new` keyword.
+func TestRename_KotlinValConstructorInfer(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"com/example/lib/Lib.kt": `package com.example.lib
+
+class Lib {
+    fun process(s: String): Int = s.length
+}
+`,
+		"com/example/caller/Caller.kt": `package com.example.caller
+
+import com.example.lib.Lib
+
+class Caller {
+    fun useInstance(): Int {
+        val lib = Lib()
+        return lib.process("hello")
+    }
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"com/example/lib/Lib.kt:process"},
+		map[string]any{"new_name": "process2", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "com/example/caller/Caller.kt"))
+	body := string(got)
+	if !strings.Contains(body, "lib.process2(") {
+		t.Errorf("val-inferred lib.process should become lib.process2; got:\n%s", body)
+	}
+}
+
+// TestRename_KotlinInterfaceImplOracle — renaming ServiceImpl.run
+// should ALSO rename Service.run on the interface, but we do not
+// (hierarchy index is a separate phase). This test documents the
+// current behavior: ServiceImpl.run IS rewritten, Service.run is NOT.
+// When the hierarchy index lands, update the assertion.
+func TestRename_KotlinInterfaceImplOracle(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"com/example/iface/Service.kt": `package com.example.iface
+
+interface Service {
+    fun run(input: String): String
+}
+`,
+		"com/example/iface/ServiceImpl.kt": `package com.example.iface
+
+class ServiceImpl : Service {
+    override fun run(input: String): String = input.uppercase()
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"com/example/iface/ServiceImpl.kt:run"},
+		map[string]any{"new_name": "runImpl", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	impl, _ := os.ReadFile(filepath.Join(dir, "com/example/iface/ServiceImpl.kt"))
+	svc, _ := os.ReadFile(filepath.Join(dir, "com/example/iface/Service.kt"))
+	if !strings.Contains(string(impl), "fun runImpl(") {
+		t.Errorf("ServiceImpl.run should have been rewritten; got:\n%s", impl)
+	}
+	// Document the current limitation: interface decl is NOT updated.
+	// When Phase 8 ships, flip this to Contains("runImpl") and drop the
+	// NotContains check.
+	if strings.Contains(string(svc), "fun runImpl(") {
+		t.Errorf("Phase 8 not yet landed — Service.run should still read `fun run`; got:\n%s", svc)
 	}
 }

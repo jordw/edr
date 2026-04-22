@@ -52,8 +52,20 @@ import (
 // file is the canonical file path used to stamp Decl.File and Ref.File;
 // pass the same path the caller will use when querying.
 func Parse(file string, src []byte) *scope.Result {
+	return ParseCanonical(file, "", src)
+}
+
+// ParseCanonical is Parse with an explicit canonical namespace path
+// used to hash file-scope DeclIDs. For Java, canonicalPath is the
+// file's package clause (e.g. "org.springframework.core.io"). When
+// canonicalPath is "" the behavior reduces to Parse — file-local
+// DeclIDs. A non-empty canonicalPath makes the file's top-level
+// class declaration hash to the same DeclID as any cross-file
+// reference to that class through a matching import.
+func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 	b := &builder{
 		file:                file,
+		canonicalPath:       canonicalPath,
 		res:                 &scope.Result{File: file},
 		s:                   lexkit.New(src),
 		pendingOwnerDecl:    -1,
@@ -66,6 +78,13 @@ func Parse(file string, src []byte) *scope.Result {
 	b.run()
 	b.closeScopesToDepth(0)
 	b.resolveRefs()
+	// Copy classSuperTypes (keyed by decl index) onto Decl.SuperTypes
+	// so the Phase 8 hierarchy-aware rename can consult them.
+	for idx, supers := range b.classSuperTypes {
+		if idx >= 0 && idx < len(b.res.Decls) && len(supers) > 0 {
+			b.res.Decls[idx].SuperTypes = supers
+		}
+	}
 	return b.res
 }
 
@@ -80,9 +99,10 @@ type scopeEntry struct {
 }
 
 type builder struct {
-	file string
-	res  *scope.Result
-	s    lexkit.Scanner
+	file          string
+	canonicalPath string // "" ⇒ fall back to file for DeclID hashing
+	res           *scope.Result
+	s             lexkit.Scanner
 
 	stack lexkit.ScopeStack[scopeEntry]
 
@@ -1139,7 +1159,16 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 			ns = scope.NSField
 		}
 	}
-	declID := hashDecl(b.file, name, ns, scopeID)
+	// Canonical DeclID for file-scope decls — same identity across
+	// every file in the same Java package, enabling cross-file rename
+	// to match an import-resolved ref to the target decl by ID. For
+	// nested scopes (methods, fields, locals) we keep the file path
+	// to avoid collisions (scope IDs are file-local).
+	hashPath := b.file
+	if scopeID == scope.ScopeID(1) && b.canonicalPath != "" {
+		hashPath = b.canonicalPath
+	}
+	declID := hashDecl(hashPath, name, ns, scopeID)
 
 	var fullStart uint32
 	if b.pendingFullStart > 0 && b.pendingFullStart-1 <= span.StartByte {

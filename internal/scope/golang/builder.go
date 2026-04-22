@@ -35,8 +35,23 @@ import (
 
 // Parse extracts a scope.Result from a Go source buffer.
 func Parse(file string, src []byte) *scope.Result {
+	return ParseCanonical(file, "", src)
+}
+
+// ParseCanonical is Parse with an explicit canonical path used to hash
+// file-scope DeclIDs. When canonicalPath is "" the behavior reduces to
+// Parse (file-local DeclIDs). A non-empty canonicalPath makes file-
+// scope DeclIDs identity-equal across files in the same logical
+// package, which is how cross-file rename matches a caller's imported
+// ref to the target decl.
+//
+// Nested-scope decls (function locals, block vars) always hash with
+// the file path — they have no cross-file identity and two different
+// files could have colliding nested scope IDs otherwise.
+func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 	b := &builder{
 		file:              file,
+		canonicalPath:     canonicalPath,
 		res:               &scope.Result{File: file},
 		s:                 lexkit.New(src),
 		pendingOwnerDecl:  -1,
@@ -64,9 +79,10 @@ type scopeEntry struct {
 }
 
 type builder struct {
-	file string
-	res  *scope.Result
-	s    lexkit.Scanner
+	file          string
+	canonicalPath string // "" ⇒ fall back to file for DeclID hashing
+	res           *scope.Result
+	s             lexkit.Scanner
 
 	stack lexkit.ScopeStack[scopeEntry]
 
@@ -793,7 +809,16 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 			ns = scope.NSField
 		}
 	}
-	declID := hashDecl(b.file, name, ns, scopeID)
+	// Canonical DeclID for file-scope decls — same identity across
+	// every file in the same Go package, enabling cross-file rename
+	// to match a caller's imported ref to the target decl by ID. For
+	// nested scopes we keep the file to avoid collisions (scope IDs
+	// are file-local).
+	hashPath := b.file
+	if scopeID == scope.ScopeID(1) && b.canonicalPath != "" {
+		hashPath = b.canonicalPath
+	}
+	declID := hashDecl(hashPath, name, ns, scopeID)
 
 	// FullSpan covers keyword → end of declaration. Scope-owning decls
 	// (function, method, type, interface class/struct bodies) get

@@ -48,6 +48,8 @@ func importReachesFile(imp ImportInfo, targetFile, importingFile, root, langID s
 		return pythonImportReaches(imp, targetFile, importingFile, root)
 	case "java", "kotlin", "scala":
 		return jvmImportReaches(imp, targetFile, root)
+	case "rust":
+		return rustImportReaches(imp, targetFile, importingFile)
 	case "c", "cpp":
 		return cIncludeReaches(imp, targetFile, importingFile)
 	case "ruby":
@@ -374,4 +376,33 @@ func rubyRequireReaches(imp ImportInfo, targetFile, importingFile, root string) 
 	}
 	rel = strings.TrimSuffix(rel, ".rb")
 	return strings.HasSuffix(filepath.ToSlash(rel), reqPath)
+}
+
+// rustImportReaches maps a Rust import entry to a target file.
+//
+// Handles two forms:
+//   - "mod:name" — a `mod name;` declaration. The target is either
+//     `<dir>/name.rs` or `<dir>/name/mod.rs`, where <dir> is the
+//     directory of the importing file. This is the high-signal case.
+//   - "crate::...", "super::...", "self::...", plain paths — `use`
+//     paths. Resolution requires knowing the crate root, which we do
+//     not attempt here; returning false is conservative (produces
+//     false negatives, not false positives). The scope-aware rename
+//     path has a separate same-crate walker that catches these.
+func rustImportReaches(imp ImportInfo, targetFile, importingFile string) bool {
+	path := imp.ImportPath
+	if !strings.HasPrefix(path, "mod:") {
+		return false
+	}
+	name := strings.TrimPrefix(path, "mod:")
+	dir := filepath.Dir(importingFile)
+	// `dir/name.rs`
+	if filepath.Clean(filepath.Join(dir, name+".rs")) == filepath.Clean(targetFile) {
+		return true
+	}
+	// `dir/name/mod.rs`
+	if filepath.Clean(filepath.Join(dir, name, "mod.rs")) == filepath.Clean(targetFile) {
+		return true
+	}
+	return false
 }

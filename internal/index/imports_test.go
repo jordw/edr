@@ -295,3 +295,31 @@ func TestResolveImport_Java(t *testing.T) {
 		t.Errorf("expected 1 match, got %d: %v", len(matches), matches)
 	}
 }
+
+// TestRustImportReaches verifies that `mod foo;` imports map to the
+// corresponding file layout. `use` paths are not yet resolved.
+func TestRustImportReaches(t *testing.T) {
+	cases := []struct {
+		name        string
+		impPath     string
+		target      string
+		importing   string
+		wantReaches bool
+	}{
+		{"mod-sibling", "mod:lib", "/tmp/crate/src/lib.rs", "/tmp/crate/src/main.rs", true},
+		{"mod-dir-modrs", "mod:foo", "/tmp/crate/src/foo/mod.rs", "/tmp/crate/src/main.rs", true},
+		{"mod-wrong-name", "mod:lib", "/tmp/crate/src/other.rs", "/tmp/crate/src/main.rs", false},
+		{"use-path-not-resolved", "crate::foo", "/tmp/crate/src/foo.rs", "/tmp/crate/src/main.rs", false},
+		{"plain-path-not-resolved", "std::collections::HashMap", "/tmp/crate/src/lib.rs", "/tmp/crate/src/main.rs", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			imp := ImportInfo{ImportPath: tc.impPath}
+			got := rustImportReaches(imp, tc.target, tc.importing)
+			if got != tc.wantReaches {
+				t.Errorf("rustImportReaches(%q, %q, %q) = %v, want %v",
+					tc.impPath, tc.target, tc.importing, got, tc.wantReaches)
+			}
+		})
+	}
+}

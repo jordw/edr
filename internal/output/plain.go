@@ -369,6 +369,10 @@ func plainEdit(w *os.File, op Op, multi bool) {
 	hStr(h, "edit_mode", op, "edit_mode")
 	hStr(h, "target_origin", op, "target_origin")
 	hStr(h, "index_state", op, "index_state")
+	hStr(h, "mode", op, "mode")
+	if ws, ok := op["warnings"].([]any); ok && len(ws) > 0 {
+		h["warnings"] = ws
+	}
 
 	// Include read_back metadata in the header if present
 	if rb, ok := op["read_back"].(map[string]any); ok {
@@ -403,8 +407,12 @@ func plainRename(w *os.File, op Op) {
 	hStr(h, "status", op, "status")
 	hStr(h, "from", op, "old_name")
 	hStr(h, "to", op, "new_name")
+	hStr(h, "mode", op, "mode")
 	if v := anyInt(op["occurrences"]); v > 0 {
 		h["n"] = v
+	}
+	if ws, ok := op["warnings"].([]any); ok && len(ws) > 0 {
+		h["warnings"] = ws
 	}
 	if v := anyInt(op["code_occurrences"]); v > 0 {
 		h["code"] = v

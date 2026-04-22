@@ -66,6 +66,13 @@ type EditResult struct {
 type RenameResult struct {
 	OldName      string             `json:"old_name"`
 	NewName      string             `json:"new_name"`
+	// Mode reports how reference sites were located: "scope" means the
+	// scope builder resolved each span with shadow filtering; "name-match"
+	// means the language's scope builder is not yet admitted for writes
+	// and the regex + symbol-index fallback was used. Consumers should
+	// treat "name-match" results as possibly containing cross-class
+	// false positives and verify diffs before committing.
+	Mode         string             `json:"mode,omitempty"`
 	FilesChanged []string           `json:"files_changed"`
 	Occurrences  int                `json:"occurrences"`
 	// CodeOccurrences and CommentOccurrences split Occurrences by where the

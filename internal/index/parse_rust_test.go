@@ -154,6 +154,7 @@ mod tests {
 		"std::collections::HashMap",
 		"std::io::",
 		"crate::utils::*",
+		"mod:external",
 	}
 	if len(r.Imports) != len(wantImps) {
 		t.Errorf("got %d imports, want %d", len(r.Imports), len(wantImps))

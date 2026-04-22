@@ -117,6 +117,16 @@ type Decl struct {
 	// capitalization or other conventions — each builder decides).
 	// The import-graph resolver only rewrites refs to exported decls.
 	Exported bool
+	// SuperTypes lists the class/interface/trait names this decl
+	// extends or implements. Populated only for KindClass and
+	// KindInterface decls in languages with explicit hierarchy
+	// syntax (Java `extends`/`implements`, Kotlin `: Base, Iface`,
+	// Rust `impl Trait for Struct` — the trait name). Enables the
+	// Phase 8 hierarchy-aware rename: renaming a method on a class
+	// that implements an interface also rewrites the interface's
+	// same-name method declaration. Go's structural interfaces are
+	// not populated here (they have no explicit syntax).
+	SuperTypes []string
 }
 
 // BindingKind describes the confidence of a ref -> decl binding.

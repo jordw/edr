@@ -597,6 +597,10 @@ func (p *rustParser) parseMod() {
 		p.result.Symbols = append(p.result.Symbols, RustSymbol{
 			Type: "class", Name: name, StartLine: startLine, EndLine: p.s.Line, Parent: parent,
 		})
+		// Record the `mod` as an import edge so the resolver can map
+		// it to the corresponding file (dir/name.rs or dir/name/mod.rs).
+		// Prefixed with "mod:" to distinguish from `use` path imports.
+		p.result.Imports = append(p.result.Imports, RustImport{Path: "mod:" + name, Line: startLine})
 		return
 	}
 	// Inline module: mod name { ... }
