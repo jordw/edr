@@ -1197,3 +1197,38 @@ class ServiceImpl : Service {
 		t.Errorf("Phase 8 not yet landed — Service.run should still read `fun run`; got:\n%s", svc)
 	}
 }
+
+
+func TestRename_RustUseImportRewritten(t *testing.T) {
+	// With a Cargo.toml present, the namespace path should resolve
+	// `use crate::runtime::Handle` and rewrite both the definition
+	// in runtime.rs and the import + call sites in task.rs.
+	db, dir := setupRefsRepo(t, map[string]string{
+		"Cargo.toml": "[package]\nname = \"demo\"\n",
+		"src/lib.rs": "",
+		"src/runtime.rs": `pub fn spawn() {}
+`,
+		"src/task.rs": `use crate::runtime::spawn;
+
+pub fn run() { spawn(); }
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"src/runtime.rs:spawn"},
+		map[string]any{"new_name": "launch", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	runtimeData, _ := os.ReadFile(filepath.Join(dir, "src", "runtime.rs"))
+	if !strings.Contains(string(runtimeData), "pub fn launch") {
+		t.Errorf("runtime.rs def not renamed; got:\n%s", runtimeData)
+	}
+	taskData, _ := os.ReadFile(filepath.Join(dir, "src", "task.rs"))
+	body := string(taskData)
+	if !strings.Contains(body, "use crate::runtime::launch") {
+		t.Errorf("task.rs use-import not rewritten; got:\n%s", body)
+	}
+	if !strings.Contains(body, "launch();") {
+		t.Errorf("task.rs call site not rewritten; got:\n%s", body)
+	}
+}

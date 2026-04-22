@@ -53,9 +53,21 @@ import (
 )
 
 // Parse extracts a scope.Result from a Rust source buffer.
+// File-scope decls hash their DeclIDs with the file path.
 func Parse(file string, src []byte) *scope.Result {
+	return ParseCanonical(file, "", src)
+}
+
+// ParseCanonical is Parse with an explicit canonical path for
+// file-scope DeclID hashing. When canonicalPath is non-empty,
+// file-scope decls hash with it instead of the file path — so
+// `crate::foo::Bar` declared in a/foo.rs hashes identically to
+// `use crate::foo::Bar` in a/baz.rs, enabling the namespace-driven
+// cross-file rename path.
+func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 	b := &builder{
 		file:                 file,
+		canonicalPath:        canonicalPath,
 		res:                  &scope.Result{File: file},
 		s:                    lexkit.New(src),
 		pendingOwnerDecl:     -1,
@@ -91,9 +103,10 @@ type scopeEntry struct {
 }
 
 type builder struct {
-	file string
-	res  *scope.Result
-	s    lexkit.Scanner
+	file          string
+	canonicalPath string
+	res           *scope.Result
+	s             lexkit.Scanner
 
 	stack lexkit.ScopeStack[scopeEntry]
 
@@ -1407,7 +1420,15 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 			ns = scope.NSField
 		}
 	}
-	declID := hashDecl(b.file, name, ns, scopeID)
+	// For file-scope decls hash with canonical path (crate::module
+	// form) so identities match across files that `use` the same
+	// item. Nested scopes keep the file path — scope IDs are
+	// file-local, so cross-file collisions aren't possible.
+	hashPath := b.file
+	if scopeID == scope.ScopeID(1) && b.canonicalPath != "" {
+		hashPath = b.canonicalPath
+	}
+	declID := hashDecl(hashPath, name, ns, scopeID)
 
 	var fullStart uint32
 	if b.pendingFullStart > 0 && b.pendingFullStart-1 <= span.StartByte {

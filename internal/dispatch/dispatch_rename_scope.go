@@ -310,6 +310,18 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 			out[f] = append(out[f], spans...)
 		}
 		return out, true
+	case ".rs":
+		// Only use the namespace-driven Rust path when we can
+		// compute a canonical module path (Cargo.toml reachable).
+		// Otherwise fall through to the generic ref-filtering path
+		// below — which uses rustSameCrateRefs and preserves the
+		// shadow guard for test-fixture setups with no Cargo.toml.
+		if crossSpans, ok := rustCrossFileSpans(ctx, db, sym); ok {
+			for f, spans := range crossSpans {
+				out[f] = append(out[f], spans...)
+			}
+			return out, true
+		}
 	}
 
 	// Candidate files: symbol-index narrowed by import graph.
