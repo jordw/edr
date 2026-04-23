@@ -113,8 +113,12 @@ func (r *PythonResolver) FilesForImport(importSpec, importingFile string) []stri
 
 	var baseDir string
 	if dots == 0 {
-		// Absolute import — rooted at repoRoot.
-		baseDir = r.repoRoot
+		// Absolute import — rooted at the Python project root, which
+		// is the nearest ancestor directory of importingFile that
+		// does NOT contain __init__.py. That's the implicit sys.path
+		// entry in the common layout where a repo contains a package
+		// tree somewhere below the Git root (e.g. fixtures, src/).
+		baseDir = pythonProjectRoot(filepath.Dir(importingFile), r.repoRoot)
 	} else {
 		// Relative — start at importer's directory, walk up dots-1.
 		baseDir = filepath.Dir(importingFile)
@@ -178,4 +182,31 @@ func (r *PythonResolver) SamePackageFiles(importingFile string) []string {
 		out = append(out, sib)
 	}
 	return out
+}
+
+
+// pythonProjectRoot walks up from startDir and returns the first
+// ancestor that does NOT contain __init__.py / __init__.pyi. That
+// directory is the implicit sys.path entry: anything below it with
+// __init__.py chains forms dotted absolute import paths rooted at
+// this boundary. Stops at repoRoot to avoid escaping the project.
+func pythonProjectRoot(startDir, repoRoot string) string {
+	cur := startDir
+	rootAbs, _ := filepath.Abs(repoRoot)
+	for {
+		absCur, err := filepath.Abs(cur)
+		if err != nil {
+			return repoRoot
+		}
+		_, errPy := os.Stat(filepath.Join(absCur, "__init__.py"))
+		_, errPyi := os.Stat(filepath.Join(absCur, "__init__.pyi"))
+		if errPy != nil && errPyi != nil {
+			return absCur
+		}
+		parent := filepath.Dir(absCur)
+		if parent == absCur || absCur == rootAbs {
+			return absCur
+		}
+		cur = parent
+	}
 }

@@ -2,6 +2,7 @@
 #include <iostream>
 
 int main() {
-    std::cout << compute(5) << std::endl;
+    int r = compute(5);
+    std::cout << r << std::endl;
     return 0;
 }
