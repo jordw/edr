@@ -36,6 +36,20 @@ TUPLES=(
   "rust:tokio-unique|tokio|tokio/src/runtime/blocking/pool.rs:BlockingPool|BlockingPool2|cargo check --quiet --package tokio"
   "rust:tokio-common|tokio|tokio/src/task/spawn.rs:spawn|spawn_renamed|cargo check --quiet --package tokio"
   "rust:tokio-mid|tokio|tokio/src/runtime/handle.rs:Handle|Handle2|cargo check --quiet --package tokio"
+  # C: hand-built fixture. Renames a function with prototype in .h,
+  # def in .c, and caller in main.c — exercises the sibling-canonical
+  # merge plus #include-graph caller detection.
+  "c:compute-free|edr|scripts/eval/fixtures/c-demo/src/compute.c:compute|calculate|cd scripts/eval/fixtures/c-demo && gcc -Wall -Werror -o /tmp/cbuild src/*.c"
+  # C++: same shape as C, .cpp/.hpp pair + caller.
+  "cpp:compute-free|edr|scripts/eval/fixtures/cpp-demo/src/compute.cpp:compute|calculate|cd scripts/eval/fixtures/cpp-demo && g++ -std=c++17 -Wall -Werror -o /tmp/cppbuild src/*.cpp"
+  # Python: `from pkg.lib import compute` — runs the package so any
+  # broken ref surfaces as an ImportError / NameError at runtime.
+  "py:compute-free|edr|scripts/eval/fixtures/python-demo/pkg/lib.py:compute|calculate|cd scripts/eval/fixtures/python-demo && python3 -m pkg"
+  # Ruby: require_relative + call. Running exercises name resolution.
+  "rb:compute-free|edr|scripts/eval/fixtures/ruby-demo/lib.rb:compute|calculate|cd scripts/eval/fixtures/ruby-demo && ruby app.rb"
+  # Swift: free function callable across files in the same compile
+  # unit. swiftc typechecks calls across files when compiled together.
+  "swift:compute-free|edr|scripts/eval/fixtures/swift-demo/Lib.swift:compute|calculate|cd scripts/eval/fixtures/swift-demo && swiftc Lib.swift App.swift main.swift -o /tmp/swiftbuild"
 )
 
 check_tool() { command -v "$1" >/dev/null 2>&1; }
