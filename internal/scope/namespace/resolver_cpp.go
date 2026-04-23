@@ -45,7 +45,19 @@ func (r *CppResolver) Source(file string) []byte {
 }
 
 func (r *CppResolver) CanonicalPath(file string) string {
-	return cppCanonicalPathForFile(file, r.repoRoot)
+	// Per-directory canonical: every .cpp/.hpp (and related
+	// extensions) in the same directory shares a DeclID space.
+	// Static decls still use file-path. See CResolver.CanonicalPath
+	// for the reasoning and tradeoffs. Namespace-qualified decls
+	// (`namespace Foo { … }`) are not yet factored in.
+	if file == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(file)
+	if err != nil {
+		return ""
+	}
+	return "cpp::" + filepath.ToSlash(filepath.Dir(abs))
 }
 
 func (r *CppResolver) Result(file string) *scope.Result {

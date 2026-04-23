@@ -175,8 +175,9 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 			if end > len(data) {
 				end = len(data)
 			}
-			if start < pos {
-				// Overlapping or out-of-order span; skip.
+			if start < pos || start > end {
+				// Overlapping, out-of-order, or malformed (start>end);
+				// skip so a bad upstream span can't crash the apply.
 				continue
 			}
 			buf.Write(data[pos:start])

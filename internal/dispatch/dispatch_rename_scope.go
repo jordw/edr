@@ -65,6 +65,17 @@ func scopeAwareSameFileSpans(sym *index.SymbolInfo) ([]span, bool) {
 	// decl name matches AND the identifier span falls inside the
 	// symbol-index range. Fall back to FullSpan containment for scope
 	// builders that populate it.
+	// Select the target decl. Priority order:
+	//   1. Identifier span exactly equals sym.StartByte (strict match).
+	//   2. Identifier span is tightly contained in sym's range
+	//      (sym.StartByte <= d.Span.StartByte && d.Span.EndByte <= sym.EndByte).
+	//   3. d's FullSpan loosely contains sym.StartByte.
+	// (2) outranks (3) so a builder bug that extends FullSpan past
+	// the actual decl body can't win over a clean identifier match
+	// — e.g. Swift's protocol method FullSpan bleeding into a
+	// subsequent extension block containing an overriding method of
+	// the same name.
+	var tightTarget, looseTarget *scope.Decl
 	var target *scope.Decl
 	for i := range result.Decls {
 		d := &result.Decls[i]
@@ -75,15 +86,24 @@ func scopeAwareSameFileSpans(sym *index.SymbolInfo) ([]span, bool) {
 			target = d
 			break
 		}
-		if target == nil {
-			if sym.StartByte <= d.Span.StartByte && d.Span.EndByte <= sym.EndByte {
-				target = d
-				continue
+		if sym.StartByte <= d.Span.StartByte && d.Span.EndByte <= sym.EndByte {
+			if tightTarget == nil {
+				tightTarget = d
 			}
-			if d.FullSpan.EndByte > 0 &&
-				d.FullSpan.StartByte <= sym.StartByte && sym.StartByte < d.FullSpan.EndByte {
-				target = d
+			continue
+		}
+		if d.FullSpan.EndByte > 0 &&
+			d.FullSpan.StartByte <= sym.StartByte && sym.StartByte < d.FullSpan.EndByte {
+			if looseTarget == nil {
+				looseTarget = d
 			}
+		}
+	}
+	if target == nil {
+		if tightTarget != nil {
+			target = tightTarget
+		} else if looseTarget != nil {
+			target = looseTarget
 		}
 	}
 	if target == nil {

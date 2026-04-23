@@ -57,7 +57,25 @@ func (r *CResolver) Source(file string) []byte {
 }
 
 func (r *CResolver) CanonicalPath(file string) string {
-	return cCanonicalPathForFile(file)
+	// Use the containing directory as the canonical. Every .c/.h
+	// in the same directory shares a DeclID space, so prototypes
+	// in one file bind identity-equal to definitions in sibling
+	// files — covering the common "all TUs of one module live in
+	// one dir" layout. Static decls still hash with file-path (via
+	// the builder's gate), keeping them file-local.
+	//
+	// Tradeoff: multi-directory C projects (include/ + src/ split,
+	// or module subdirs) will NOT merge prototypes across dirs.
+	// Those layouts need header #includes to bring decls into
+	// scope, which the populator already walks.
+	if file == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(file)
+	if err != nil {
+		return ""
+	}
+	return "c::" + filepath.ToSlash(filepath.Dir(abs))
 }
 
 // Result parses a C/header file with its canonical path so exported
