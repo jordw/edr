@@ -54,6 +54,12 @@ func phpCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 		candidates[sib] = true
 	}
 
+	isMethod := sym.Receiver != ""
+	acceptableTypes := map[string]bool{}
+	if sym.Receiver != "" {
+		acceptableTypes[sym.Receiver] = true
+	}
+
 	pop := namespace.PHPPopulator(resolver)
 	for cand := range candidates {
 		candRes := resolver.Result(cand)
@@ -61,12 +67,17 @@ func phpCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 			continue
 		}
 		ns := namespace.Build(cand, candRes, resolver, pop)
-		if !ns.Matches(sym.Name, target.ID) {
+		if !isMethod && !ns.Matches(sym.Name, target.ID) {
 			continue
 		}
 		declByID := make(map[scope.DeclID]*scope.Decl, len(candRes.Decls))
 		for i := range candRes.Decls {
 			declByID[candRes.Decls[i].ID] = &candRes.Decls[i]
+		}
+		src := resolver.Source(cand)
+		var varTypes map[string]string
+		if isMethod {
+			varTypes = buildVarTypes(candRes, src)
 		}
 
 		// File-scope decls whose ID matches the target (the
@@ -97,11 +108,26 @@ func phpCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 				}
 			}
 			startByte := ref.Span.StartByte
-			src := resolver.Source(cand)
 			if ref.Binding.Reason == "property_access" && startByte > 0 && len(src) > 0 {
 				prev := src[startByte-1]
-				if prev == '.' || (startByte >= 2 && src[startByte-2] == '-' && prev == '>') || (startByte >= 2 && src[startByte-2] == ':' && prev == ':') {
+				isDot := prev == '.'
+				isOther := (startByte >= 2 && src[startByte-2] == '-' && prev == '>') ||
+					(startByte >= 2 && src[startByte-2] == ':' && prev == ':')
+				if isOther {
 					continue
+				}
+				if isDot {
+					if !isMethod {
+						continue
+					}
+					baseIdent := dotBaseIdentBefore(src, startByte)
+					if baseIdent == "" {
+						continue
+					}
+					if !acceptableTypes[varTypes[baseIdent]] && !acceptableTypes[baseIdent] {
+						continue
+					}
+					startByte--
 				}
 			}
 			out[cand] = append(out[cand], span{
