@@ -351,6 +351,41 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 			}
 			return out, true
 		}
+	case ".rb":
+		if crossSpans, ok := rubyCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
+			for f, spans := range crossSpans {
+				out[f] = append(out[f], spans...)
+			}
+			return out, true
+		}
+	case ".cpp", ".cxx", ".cc", ".c++", ".hpp", ".hxx", ".hh", ".h++":
+		if crossSpans, ok := cppCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
+			for f, spans := range crossSpans {
+				out[f] = append(out[f], spans...)
+			}
+			return out, true
+		}
+	case ".cs":
+		if crossSpans, ok := csharpCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
+			for f, spans := range crossSpans {
+				out[f] = append(out[f], spans...)
+			}
+			return out, true
+		}
+	case ".swift":
+		if crossSpans, ok := swiftCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
+			for f, spans := range crossSpans {
+				out[f] = append(out[f], spans...)
+			}
+			return out, true
+		}
+	case ".php", ".phtml":
+		if crossSpans, ok := phpCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
+			for f, spans := range crossSpans {
+				out[f] = append(out[f], spans...)
+			}
+			return out, true
+		}
 	}
 
 	// Candidate files: symbol-index narrowed by import graph.

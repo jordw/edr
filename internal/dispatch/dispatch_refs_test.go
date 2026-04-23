@@ -1366,3 +1366,47 @@ def run():
 		t.Errorf("app.py call not rewritten; got:\n%s", body)
 	}
 }
+
+
+func TestRename_RubyRequireRelativeRewritten(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"lib.rb": "def compute(x)\n  x * 2\nend\n",
+		"app.rb": "require_relative \"./lib\"\n\ndef run\n  compute(5)\nend\n",
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"lib.rb:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	libData, _ := os.ReadFile(filepath.Join(dir, "lib.rb"))
+	if !strings.Contains(string(libData), "def calculate") {
+		t.Errorf("lib.rb def not renamed; got:\n%s", libData)
+	}
+	appData, _ := os.ReadFile(filepath.Join(dir, "app.rb"))
+	if !strings.Contains(string(appData), "calculate(5)") {
+		t.Errorf("app.rb caller not renamed; got:\n%s", appData)
+	}
+}
+
+func TestRename_CppHeaderProtoRewritten(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"foo.hpp": "int compute(int x);\n",
+		"foo.cpp": "int compute(int x) { return x * 2; }\n",
+		"main.cpp": "#include \"foo.hpp\"\n\nint run(void) { return compute(5); }\n",
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"foo.cpp:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	hData, _ := os.ReadFile(filepath.Join(dir, "foo.hpp"))
+	if !strings.Contains(string(hData), "int calculate(int x);") {
+		t.Errorf("foo.hpp proto not renamed; got:\n%s", hData)
+	}
+	mData, _ := os.ReadFile(filepath.Join(dir, "main.cpp"))
+	if !strings.Contains(string(mData), "return calculate(5)") {
+		t.Errorf("main.cpp caller not renamed; got:\n%s", mData)
+	}
+}

@@ -40,9 +40,18 @@ import (
 // Parse extracts a scope.Result from a C# source buffer.
 // file is the canonical file path used to stamp Decl.File and Ref.File;
 // pass the same path the caller will use when querying.
+// Parse extracts a scope.Result from a C# source buffer.
+// File-scope decls hash with the file path.
 func Parse(file string, src []byte) *scope.Result {
+	return ParseCanonical(file, "", src)
+}
+
+// ParseCanonical is Parse with an explicit canonical path for
+// file-scope DeclID hashing.
+func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 	b := &builder{
 		file:                    file,
+		canonicalPath:           canonicalPath,
 		res:                     &scope.Result{File: file},
 		s:                       lexkit.New(src),
 		pendingOwnerDecl:        -1,
@@ -70,9 +79,10 @@ type scopeEntry struct {
 }
 
 type builder struct {
-	file string
-	res  *scope.Result
-	s    lexkit.Scanner
+	file          string
+	canonicalPath string
+	res           *scope.Result
+	s             lexkit.Scanner
 
 	stack lexkit.ScopeStack[scopeEntry]
 
@@ -1281,7 +1291,14 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 			ns = scope.NSField
 		}
 	}
-	declID := hashDecl(b.file, name, ns, scopeID)
+	// File-scope decls hash with canonicalPath when set, so
+	// cross-file references through imports/includes bind to
+	// matching DeclIDs. Nested-scope decls keep the file path.
+	hashPath := b.file
+	if scopeID == scope.ScopeID(1) && b.canonicalPath != "" {
+		hashPath = b.canonicalPath
+	}
+	declID := hashDecl(hashPath, name, ns, scopeID)
 
 	var fullStart uint32
 	if b.pendingFullStart > 0 && b.pendingFullStart-1 <= span.StartByte {
