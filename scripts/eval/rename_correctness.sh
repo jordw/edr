@@ -50,6 +50,16 @@ TUPLES=(
   # Swift: free function callable across files in the same compile
   # unit. swiftc typechecks calls across files when compiled together.
   "swift:compute-free|edr|scripts/eval/fixtures/swift-demo/Lib.swift:compute|calculate|cd scripts/eval/fixtures/swift-demo && swiftc Lib.swift App.swift main.swift -o /tmp/swiftbuild"
+  # TS: ES-module import + call across two files; strict tsc.
+  "ts:compute-free|edr|scripts/eval/fixtures/ts-demo/src/lib.ts:compute|calculate|cd scripts/eval/fixtures/ts-demo && tsc"
+  # Kotlin: top-level function in a package, called from another file.
+  "kt:compute-free|edr|scripts/eval/fixtures/kotlin-demo/Lib.kt:compute|calculate|cd scripts/eval/fixtures/kotlin-demo && kotlinc *.kt -include-runtime -d /tmp/kt_demo.jar"
+  # PHP: require_once + cross-file call; `php` runs the script so any
+  # missing symbol raises a fatal error.
+  "php:compute-free|edr|scripts/eval/fixtures/php-demo/lib.php:compute|calculate|cd scripts/eval/fixtures/php-demo && php app.php"
+  # C#: static class method across two files in the same namespace.
+  # `dotnet build` type-checks the whole project.
+  "cs:compute-free|edr|scripts/eval/fixtures/csharp-demo/Lib.cs:Compute|Calculate|cd scripts/eval/fixtures/csharp-demo && dotnet build --nologo"
   # C: same-name static in a.c and b.c — rename one, verify the other
   # stays intact (linker would complain about duplicate externs
   # otherwise; statics are TU-local so independent).
