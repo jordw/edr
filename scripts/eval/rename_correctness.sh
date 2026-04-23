@@ -50,6 +50,39 @@ TUPLES=(
   # Swift: free function callable across files in the same compile
   # unit. swiftc typechecks calls across files when compiled together.
   "swift:compute-free|edr|scripts/eval/fixtures/swift-demo/Lib.swift:compute|calculate|cd scripts/eval/fixtures/swift-demo && swiftc Lib.swift App.swift main.swift -o /tmp/swiftbuild"
+  # C: same-name static in a.c and b.c — rename one, verify the other
+  # stays intact (linker would complain about duplicate externs
+  # otherwise; statics are TU-local so independent).
+  "c:static-isolation|edr|scripts/eval/fixtures/c-static/a.c:helper|worker|cd scripts/eval/fixtures/c-static && gcc -Wall -Werror -o /tmp/c_static a.c b.c"
+  # C: global function named compute, unrelated local var also named
+  # compute in another file. Rename must rewrite the global + its
+  # prototype but leave the local.
+  "c:shadow-local|edr|scripts/eval/fixtures/c-shadow/compute.c:compute|calculate|cd scripts/eval/fixtures/c-shadow && gcc -Wall -Werror -o /tmp/c_shadow compute.c use.c"
+  # C++: method on a class called via obj.method(). Exercises the
+  # (currently missing) receiver disambiguation — expected to FAIL
+  # until C++ gains method-call rewriting.
+  "cpp:class-method|edr|scripts/eval/fixtures/cpp-method/src/Counter.cpp:value|magnitude|cd scripts/eval/fixtures/cpp-method && g++ -std=c++17 -Wall -Werror -o /tmp/cpp_method src/*.cpp"
+  # C++: same-name static in a.cpp and b.cpp — rename one, verify
+  # the other stays intact.
+  "cpp:static-isolation|edr|scripts/eval/fixtures/cpp-static/a.cpp:helper|worker|cd scripts/eval/fixtures/cpp-static && g++ -std=c++17 -Wall -Werror -o /tmp/cpp_static a.cpp b.cpp"
+  # Python: method on class called via obj.method(). Exercises the
+  # (currently missing) receiver disambiguation — expected to FAIL.
+  "py:class-method|edr|scripts/eval/fixtures/python-method/pkg/counter.py:value|magnitude|cd scripts/eval/fixtures/python-method && python3 -m pkg"
+  # Python: common name defined in two unrelated packages. Rename
+  # pkg.lib.compute without touching other.util.compute.
+  "py:ambiguous-name|edr|scripts/eval/fixtures/python-ambig/pkg/lib.py:compute|calculate|cd scripts/eval/fixtures/python-ambig && python3 -m pkg"
+  # Python: relative sibling import — `from .lib import compute`.
+  "py:sibling-import|edr|scripts/eval/fixtures/python-sibling/pkg/lib.py:compute|calculate|cd scripts/eval/fixtures/python-sibling && python3 -m pkg"
+  # Ruby: instance method on a class called via obj.method. Exercises
+  # receiver disambiguation — expected to FAIL.
+  "rb:class-method|edr|scripts/eval/fixtures/ruby-method/counter.rb:value|magnitude|cd scripts/eval/fixtures/ruby-method && ruby app.rb"
+  # Ruby: module method invoked as Module.method.
+  "rb:module-method|edr|scripts/eval/fixtures/ruby-module/mathx.rb:compute|calculate|cd scripts/eval/fixtures/ruby-module && ruby app.rb"
+  # Swift: struct method. Like class-method, tests receiver handling.
+  "swift:struct-method|edr|scripts/eval/fixtures/swift-method/Counter.swift:value|magnitude|cd scripts/eval/fixtures/swift-method && swiftc Counter.swift App.swift main.swift -o /tmp/swift_method"
+  # Swift: protocol extension default method. Tests hierarchy-like
+  # propagation of method renames.
+  "swift:protocol-default|edr|scripts/eval/fixtures/swift-protocol/Greeter.swift:greet|salute|cd scripts/eval/fixtures/swift-protocol && swiftc Greeter.swift App.swift main.swift -o /tmp/swift_protocol"
 )
 
 check_tool() { command -v "$1" >/dev/null 2>&1; }
