@@ -42,6 +42,25 @@ func swiftCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.S
 		return out, true
 	}
 
+	// For method renames: find sibling methods in sym.File whose
+	// enclosing scope is owned by sym.Receiver (either directly as
+	// the protocol/class body, or indirectly via an `extension X`
+	// block that precedes the scope). These decls must rename in
+	// lockstep so the protocol + default impl stay consistent.
+	if sym.Receiver != "" {
+		src := resolver.Source(sym.File)
+		for _, sib := range swiftSiblingMethodDecls(targetRes, src, sym.Name, sym.Receiver) {
+			if sib.ID == target.ID {
+				continue
+			}
+			out[sym.File] = append(out[sym.File], span{
+				start: sib.Span.StartByte,
+				end:   sib.Span.EndByte,
+				isDef: true,
+			})
+		}
+	}
+
 	candidates := map[string]bool{}
 	if refs, err := db.FindSemanticReferences(ctx, sym.Name, sym.File); err == nil {
 		for _, r := range refs {
@@ -159,4 +178,87 @@ func swift_ext_matches(file string, exts []string) bool {
 		}
 	}
 	return false
+}
+
+
+// swiftSiblingMethodDecls returns method decls in res whose name
+// matches methodName AND whose enclosing scope is owned by a type
+// named ownerName — either the body of a protocol/class/struct
+// named ownerName, or an `extension ownerName { … }` block
+// identified by a preceding REF to ownerName.
+func swiftSiblingMethodDecls(res *scope.Result, src []byte, methodName, ownerName string) []*scope.Decl {
+	if res == nil {
+		return nil
+	}
+	// Determine which scopes are owned by ownerName.
+	ownedScopes := map[scope.ScopeID]bool{}
+	for si := range res.Scopes {
+		s := &res.Scopes[si]
+		if s.Kind != scope.ScopeInterface && s.Kind != scope.ScopeClass {
+			continue
+		}
+		// Case 1: owned by a decl whose FullSpan contains this scope
+		// and whose Name == ownerName.
+		for i := range res.Decls {
+			d := &res.Decls[i]
+			if d.Name != ownerName {
+				continue
+			}
+			if d.Kind != scope.KindInterface && d.Kind != scope.KindClass {
+				continue
+			}
+			if d.FullSpan.StartByte <= s.Span.StartByte && s.Span.EndByte <= d.FullSpan.EndByte {
+				ownedScopes[s.ID] = true
+				break
+			}
+		}
+		if ownedScopes[s.ID] {
+			continue
+		}
+		// Case 2: the scope is an `extension X` block. Look for the
+		// nearest ref to ownerName immediately before s.Span.StartByte.
+		// Allow only whitespace / identifier-keyword bytes between
+		// the ref end and the scope start (the opening `{`).
+		for i := range res.Refs {
+			ref := &res.Refs[i]
+			if ref.Name != ownerName {
+				continue
+			}
+			if ref.Span.EndByte >= s.Span.StartByte {
+				continue
+			}
+			// Gap must be whitespace; tolerating `:` (conformance
+			// list in `struct Foo: Bar {}`) is NOT desired for
+			// extensions, but ordinary `extension X {` has only
+			// whitespace between the Greeter ref and the `{`.
+			if s.Span.StartByte > 0 && len(src) > 0 {
+				gap := src[ref.Span.EndByte:s.Span.StartByte]
+				allowed := true
+				for _, c := range gap {
+					if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+						continue
+					}
+					allowed = false
+					break
+				}
+				if allowed {
+					ownedScopes[s.ID] = true
+					break
+				}
+			}
+		}
+	}
+	// Collect matching methods.
+	var out []*scope.Decl
+	for i := range res.Decls {
+		d := &res.Decls[i]
+		if d.Kind != scope.KindMethod || d.Name != methodName {
+			continue
+		}
+		if !ownedScopes[d.Scope] {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
 }

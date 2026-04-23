@@ -1316,13 +1316,53 @@ func (b *builder) resolveRefs() {
 		name  string
 		ns    scope.Namespace
 	}
-	byKey := make(map[key]*scope.Decl, len(b.res.Decls))
+	// Index ALL decls per key (not just the first): a C function body
+	// may legally redeclare a name that shadows a file-scope decl
+	// from its declaration point onward. Lookup picks the decl with
+	// the latest Span.EndByte that is still <= ref.Span.StartByte,
+	// so refs before the local decl bind to the outer decl and refs
+	// after bind to the local.
+	byKey := make(map[key][]*scope.Decl, len(b.res.Decls))
 	for i := range b.res.Decls {
 		d := &b.res.Decls[i]
 		k := key{scope: d.Scope, name: d.Name, ns: d.Namespace}
-		if _, ok := byKey[k]; !ok {
-			byKey[k] = d
+		byKey[k] = append(byKey[k], d)
+	}
+	// Track scope kind so lookupLexical can apply the right rule.
+	scopeKind := make(map[scope.ScopeID]scope.ScopeKind, len(b.res.Scopes))
+	for _, s := range b.res.Scopes {
+		scopeKind[s.ID] = s.Kind
+	}
+	// lookupLexical returns the decl with the latest Span.EndByte
+	// that precedes the ref's StartByte.
+	//
+	// At block/function scope we require strict lexical ordering:
+	// `int x = compute(5); int compute = 42;` must NOT bind the
+	// call to the later local — the call must escalate to the
+	// enclosing scope instead.
+	//
+	// At file scope we allow forward references (common C pattern:
+	// `int main() { foo(); } int foo() {}`), so if no decl precedes
+	// we return the first one anyway.
+	lookupLexical := func(k key, refStart uint32, scopeIsFile bool) *scope.Decl {
+		var best *scope.Decl
+		var bestEnd uint32
+		for _, d := range byKey[k] {
+			if d.Span.EndByte > refStart {
+				continue
+			}
+			if best == nil || d.Span.EndByte > bestEnd {
+				best = d
+				bestEnd = d.Span.EndByte
+			}
 		}
+		if best != nil {
+			return best
+		}
+		if scopeIsFile && len(byKey[k]) > 0 {
+			return byKey[k][0]
+		}
+		return nil
 	}
 	for i := range b.res.Refs {
 		r := &b.res.Refs[i]
@@ -1332,7 +1372,8 @@ func (b *builder) resolveRefs() {
 		cur := r.Scope
 		resolved := false
 		for {
-			if d, ok := byKey[key{scope: cur, name: r.Name, ns: r.Namespace}]; ok {
+			curIsFile := scopeKind[cur] == scope.ScopeFile
+			if d := lookupLexical(key{scope: cur, name: r.Name, ns: r.Namespace}, r.Span.StartByte, curIsFile); d != nil {
 				r.Binding = scope.RefBinding{
 					Kind:   scope.BindResolved,
 					Decl:   d.ID,
@@ -1341,10 +1382,8 @@ func (b *builder) resolveRefs() {
 				resolved = true
 				break
 			}
-			// Also try NSType — C identifiers in declaration position may
-			// be types (e.g., `MyInt x;` where MyInt is a typedef).
 			if r.Namespace == scope.NSValue {
-				if d, ok := byKey[key{scope: cur, name: r.Name, ns: scope.NSType}]; ok {
+				if d := lookupLexical(key{scope: cur, name: r.Name, ns: scope.NSType}, r.Span.StartByte, curIsFile); d != nil {
 					r.Binding = scope.RefBinding{
 						Kind:   scope.BindResolved,
 						Decl:   d.ID,
@@ -1359,7 +1398,7 @@ func (b *builder) resolveRefs() {
 				break
 			}
 			if p == 0 && cur != 0 {
-				if d, ok := byKey[key{scope: 0, name: r.Name, ns: r.Namespace}]; ok {
+				if d := lookupLexical(key{scope: 0, name: r.Name, ns: r.Namespace}, r.Span.StartByte, true); d != nil {
 					r.Binding = scope.RefBinding{
 						Kind:   scope.BindResolved,
 						Decl:   d.ID,
