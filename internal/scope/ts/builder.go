@@ -45,9 +45,21 @@ import (
 // Parse extracts a scope.Result from a TypeScript/JavaScript source buffer.
 // file is the canonical file path used to stamp Decl.File and Ref.File;
 // pass the same path the caller will use when querying.
+// Parse extracts a scope.Result from a TS/JS source buffer.
+// File-scope decls hash with the file path.
 func Parse(file string, src []byte) *scope.Result {
+	return ParseCanonical(file, "", src)
+}
+
+// ParseCanonical is Parse with an explicit canonical path for
+// file-scope DeclID hashing. When canonicalPath is non-empty,
+// file-scope decls hash with it instead of the file path — so an
+// exported `function foo` in a/b.ts and `import { foo } from '../a/b'`
+// in c.ts bind to the same DeclID.
+func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 	b := &builder{
 		file:             file,
+		canonicalPath:    canonicalPath,
 		res:              &scope.Result{File: file},
 		s:                lexkit.New(src),
 		pendingOwnerDecl: -1,
@@ -82,9 +94,10 @@ type scopeEntry struct {
 }
 
 type builder struct {
-	file string
-	res  *scope.Result
-	s    lexkit.Scanner
+	file          string
+	canonicalPath string
+	res           *scope.Result
+	s             lexkit.Scanner
 
 
 
@@ -1429,7 +1442,14 @@ func (b *builder) namespaceFor(kind scope.DeclKind) scope.Namespace {
 func (b *builder) appendDecl(name string, kind scope.DeclKind, span scope.Span, ns scope.Namespace) int {
 	scopeID := b.currentScope()
 	locID := hashLoc(b.file, span, name)
-	declID := hashDecl(b.file, name, ns, scopeID)
+	// File-scope decls hash with canonicalPath so importers bind to
+	// the same DeclID. Nested-scope decls keep the file path — scope
+	// IDs are file-local and cross-file collisions aren't possible.
+	hashPath := b.file
+	if scopeID == scope.ScopeID(1) && b.canonicalPath != "" {
+		hashPath = b.canonicalPath
+	}
+	declID := hashDecl(hashPath, name, ns, scopeID)
 
 	var fullStart uint32
 	if b.pendingFullStart > 0 && b.pendingFullStart-1 <= span.StartByte {

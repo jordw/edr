@@ -37,9 +37,20 @@ import (
 )
 
 // Parse extracts a scope.Result from a Python source buffer.
+// Parse extracts a scope.Result from a Python source buffer.
+// File-scope decls hash with the file path.
 func Parse(file string, src []byte) *scope.Result {
+	return ParseCanonical(file, "", src)
+}
+
+// ParseCanonical is Parse with an explicit canonical path for
+// file-scope DeclID hashing. When canonicalPath is non-empty,
+// file-scope decls hash with it — so `def foo` in pkg/mod.py and
+// `from pkg.mod import foo` in other.py bind to the same DeclID.
+func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 	b := &builder{
 		file:             file,
+		canonicalPath:    canonicalPath,
 		res:              &scope.Result{File: file},
 		s:                lexkit.New(src),
 		atLineStart:      true,
@@ -70,9 +81,10 @@ type scopeEntry struct {
 }
 
 type builder struct {
-	file string
-	res  *scope.Result
-	s    lexkit.Scanner
+	file          string
+	canonicalPath string
+	res           *scope.Result
+	s             lexkit.Scanner
 
 	stack lexkit.ScopeStack[scopeEntry]
 
@@ -941,7 +953,14 @@ func (b *builder) currentScope() scope.ScopeID {
 func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 	scopeID := b.currentScope()
 	locID := hashLoc(b.file, span, name)
-	declID := hashDecl(b.file, name, scope.NSValue, scopeID)
+	// Module-level (file-scope) decls hash with canonicalPath so
+	// `from pkg.mod import foo` in other.py binds to the same
+	// DeclID as `def foo` in pkg/mod.py.
+	hashPath := b.file
+	if scopeID == scope.ScopeID(1) && b.canonicalPath != "" {
+		hashPath = b.canonicalPath
+	}
+	declID := hashDecl(hashPath, name, scope.NSValue, scopeID)
 
 	// FullSpan covers [def/class keyword → end of suite]. Scope-owning
 	// decls get FullSpan.EndByte patched when the indent-based scope

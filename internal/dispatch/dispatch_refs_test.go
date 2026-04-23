@@ -1300,3 +1300,69 @@ int use_b(void) { return helper(); }
 		t.Errorf("b.c caller MUST remain `helper`; got:\n%s", bData)
 	}
 }
+
+
+func TestRename_TSImportRewritten(t *testing.T) {
+	// ES-module import + call. Renaming `compute` in lib.ts should
+	// rewrite the import ident in app.ts and the call site.
+	db, dir := setupRefsRepo(t, map[string]string{
+		"src/lib.ts": `export function compute(x: number): number { return x * 2; }
+`,
+		"src/app.ts": `import { compute } from "./lib";
+
+export function run(): number { return compute(5); }
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"src/lib.ts:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	libData, _ := os.ReadFile(filepath.Join(dir, "src", "lib.ts"))
+	if !strings.Contains(string(libData), "export function calculate") {
+		t.Errorf("lib.ts def not renamed; got:\n%s", libData)
+	}
+	appData, _ := os.ReadFile(filepath.Join(dir, "src", "app.ts"))
+	body := string(appData)
+	if !strings.Contains(body, "import { calculate } from \"./lib\"") {
+		t.Errorf("app.ts import not rewritten; got:\n%s", body)
+	}
+	if !strings.Contains(body, "return calculate(5)") {
+		t.Errorf("app.ts call not rewritten; got:\n%s", body)
+	}
+}
+
+func TestRename_PythonFromImportRewritten(t *testing.T) {
+	// `from pkg.lib import compute` plus a call. Rename propagates
+	// the def + the import ident + the call site.
+	db, dir := setupRefsRepo(t, map[string]string{
+		"pkg/__init__.py": "",
+		"pkg/lib.py": `def compute(x):
+    return x * 2
+`,
+		"pkg/app.py": `from pkg.lib import compute
+
+def run():
+    return compute(5)
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"pkg/lib.py:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	libData, _ := os.ReadFile(filepath.Join(dir, "pkg", "lib.py"))
+	if !strings.Contains(string(libData), "def calculate") {
+		t.Errorf("lib.py def not renamed; got:\n%s", libData)
+	}
+	appData, _ := os.ReadFile(filepath.Join(dir, "pkg", "app.py"))
+	body := string(appData)
+	if !strings.Contains(body, "from pkg.lib import calculate") {
+		t.Errorf("app.py import not rewritten; got:\n%s", body)
+	}
+	if !strings.Contains(body, "return calculate(5)") {
+		t.Errorf("app.py call not rewritten; got:\n%s", body)
+	}
+}

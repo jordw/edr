@@ -329,6 +329,28 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 			}
 			return out, true
 		}
+	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".d.ts":
+		// Namespace path takes over ONLY when it actually resolves
+		// cross-file matches. CommonJS `require(...)` destructuring
+		// and bare `module.exports` patterns aren't modeled, so for
+		// those the empty namespace result must fall through to the
+		// generic ref-filtering path below.
+		if crossSpans, ok := tsCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
+			for f, spans := range crossSpans {
+				out[f] = append(out[f], spans...)
+			}
+			return out, true
+		}
+	case ".py", ".pyi":
+		// Same fall-through rule as TS/JS: let the generic path
+		// handle cases the namespace resolver doesn't cover
+		// (bare `import X`, star imports, etc.).
+		if crossSpans, ok := pythonCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
+			for f, spans := range crossSpans {
+				out[f] = append(out[f], spans...)
+			}
+			return out, true
+		}
 	}
 
 	// Candidate files: symbol-index narrowed by import graph.
