@@ -1232,3 +1232,71 @@ pub fn run() { spawn(); }
 		t.Errorf("task.rs call site not rewritten; got:\n%s", body)
 	}
 }
+
+
+func TestRename_CHeaderProtoAndCallerRewritten(t *testing.T) {
+	// Rename a function in foo.c → expect prototype in foo.h and
+	// caller reference in main.c (which #includes foo.h) to be
+	// rewritten in lockstep.
+	db, dir := setupRefsRepo(t, map[string]string{
+		"foo.h": `int compute(int x);
+`,
+		"foo.c": `int compute(int x) { return x * 2; }
+`,
+		"main.c": `#include "foo.h"
+
+int run(void) { return compute(5); }
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"foo.c:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	hData, _ := os.ReadFile(filepath.Join(dir, "foo.h"))
+	if !strings.Contains(string(hData), "int calculate(int x);") {
+		t.Errorf("foo.h prototype not rewritten; got:\n%s", hData)
+	}
+	cData, _ := os.ReadFile(filepath.Join(dir, "foo.c"))
+	if !strings.Contains(string(cData), "int calculate(int x)") {
+		t.Errorf("foo.c definition not rewritten; got:\n%s", cData)
+	}
+	mData, _ := os.ReadFile(filepath.Join(dir, "main.c"))
+	if !strings.Contains(string(mData), "return calculate(5)") {
+		t.Errorf("main.c caller not rewritten; got:\n%s", mData)
+	}
+}
+
+func TestRename_CStaticDoesNotCrossFiles(t *testing.T) {
+	// A static helper in a.c and an unrelated same-name static in
+	// b.c must NOT collide. Renaming a.c's `helper` leaves b.c alone.
+	db, dir := setupRefsRepo(t, map[string]string{
+		"a.c": `static int helper(void) { return 1; }
+int use_a(void) { return helper(); }
+`,
+		"b.c": `static int helper(void) { return 2; }
+int use_b(void) { return helper(); }
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"a.c:helper"},
+		map[string]any{"new_name": "worker", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	aData, _ := os.ReadFile(filepath.Join(dir, "a.c"))
+	if !strings.Contains(string(aData), "static int worker(void)") {
+		t.Errorf("a.c def not renamed; got:\n%s", aData)
+	}
+	if !strings.Contains(string(aData), "return worker()") {
+		t.Errorf("a.c caller not renamed; got:\n%s", aData)
+	}
+	bData, _ := os.ReadFile(filepath.Join(dir, "b.c"))
+	if !strings.Contains(string(bData), "static int helper(void)") {
+		t.Errorf("b.c static MUST remain `helper`; got:\n%s", bData)
+	}
+	if !strings.Contains(string(bData), "return helper()") {
+		t.Errorf("b.c caller MUST remain `helper`; got:\n%s", bData)
+	}
+}

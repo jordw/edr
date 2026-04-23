@@ -50,9 +50,23 @@ import (
 
 // Parse extracts a scope.Result from a C source buffer. Works for both
 // .c and .h files; the dispatcher routes both here.
+// Parse extracts a scope.Result from a C source buffer. File-scope
+// decls hash with the file path.
 func Parse(file string, src []byte) *scope.Result {
+	return ParseCanonical(file, "", src)
+}
+
+// ParseCanonical is Parse with an explicit canonical path used to
+// hash exported file-scope decls. When canonicalPath is non-empty,
+// every exported file-scope decl hashes with it instead of the file
+// path — so `int compute(int)` in foo.c and `int compute(int);` in
+// foo.h share a DeclID when both files map to the same canonical
+// path (convention: dir + basename-without-extension). Static decls
+// and nested-scope decls keep the file path.
+func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 	b := &builder{
 		file:             file,
+		canonicalPath:    canonicalPath,
 		res:              &scope.Result{File: file},
 		s:                lexkit.New(src),
 		pendingOwnerDecl: -1,
@@ -96,9 +110,10 @@ type lastIdent struct {
 }
 
 type builder struct {
-	file string
-	res  *scope.Result
-	s    lexkit.Scanner
+	file          string
+	canonicalPath string
+	res           *scope.Result
+	s             lexkit.Scanner
 
 	stack lexkit.ScopeStack[scopeEntry]
 
@@ -1161,7 +1176,15 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) in
 	} else if kind == scope.KindType {
 		ns = scope.NSType
 	}
-	declID := hashDecl(b.file, name, ns, scopeID)
+	// Exported file-scope decls share a DeclID across .c and .h
+	// siblings when both map to the same canonical path. Static
+	// decls and nested-scope decls keep the file-based hash.
+	hashPath := b.file
+	exportedAtFile := kind != scope.KindImport && scopeID == scope.ScopeID(1) && !b.sawStatic
+	if exportedAtFile && b.canonicalPath != "" {
+		hashPath = b.canonicalPath
+	}
+	declID := hashDecl(hashPath, name, ns, scopeID)
 
 	var fullStart uint32
 	if b.pendingFullStart > 0 && b.pendingFullStart-1 <= span.StartByte {
@@ -1210,7 +1233,15 @@ func (b *builder) emitDeclAtFileScope(name string, kind scope.DeclKind, span sco
 	} else if kind == scope.KindImport {
 		ns = scope.NSValue
 	}
-	declID := hashDecl(b.file, name, ns, fileScope)
+	// File-scope emits: macros + enum constants. These are exported
+	// unless declared static — use the canonical path when available
+	// so they join across .c/.h siblings.
+	hashPath := b.file
+	exportedAtFile := kind != scope.KindImport && !b.sawStatic
+	if exportedAtFile && b.canonicalPath != "" {
+		hashPath = b.canonicalPath
+	}
+	declID := hashDecl(hashPath, name, ns, fileScope)
 	var fullStart uint32
 	if b.pendingFullStart > 0 && b.pendingFullStart-1 <= span.StartByte {
 		fullStart = b.pendingFullStart - 1

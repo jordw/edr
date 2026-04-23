@@ -322,6 +322,13 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 			}
 			return out, true
 		}
+	case ".c", ".h":
+		if crossSpans, ok := cCrossFileSpans(ctx, db, sym); ok {
+			for f, spans := range crossSpans {
+				out[f] = append(out[f], spans...)
+			}
+			return out, true
+		}
 	}
 
 	// Candidate files: symbol-index narrowed by import graph.
