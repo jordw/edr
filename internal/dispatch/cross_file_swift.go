@@ -54,6 +54,12 @@ func swiftCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.S
 		candidates[sib] = true
 	}
 
+	isMethod := sym.Receiver != ""
+	acceptableTypes := map[string]bool{}
+	if sym.Receiver != "" {
+		acceptableTypes[sym.Receiver] = true
+	}
+
 	pop := namespace.SwiftPopulator(resolver)
 	for cand := range candidates {
 		candRes := resolver.Result(cand)
@@ -61,12 +67,20 @@ func swiftCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.S
 			continue
 		}
 		ns := namespace.Build(cand, candRes, resolver, pop)
-		if !ns.Matches(sym.Name, target.ID) {
+		// Methods don't live at file scope so their names aren't in
+		// the namespace. Admit every candidate when renaming a
+		// method and rely on per-ref disambiguation below.
+		if !isMethod && !ns.Matches(sym.Name, target.ID) {
 			continue
 		}
 		declByID := make(map[scope.DeclID]*scope.Decl, len(candRes.Decls))
 		for i := range candRes.Decls {
 			declByID[candRes.Decls[i].ID] = &candRes.Decls[i]
+		}
+		src := resolver.Source(cand)
+		var varTypes map[string]string
+		if isMethod {
+			varTypes = buildVarTypes(candRes, src)
 		}
 
 		// File-scope decls whose ID matches the target (the
@@ -96,12 +110,35 @@ func swiftCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.S
 					}
 				}
 			}
+			// Property-access handling. For method renames we accept
+			// `obj.method` when obj's type matches acceptableTypes,
+			// and expand the span back through the leading dot.
 			startByte := ref.Span.StartByte
-			src := resolver.Source(cand)
 			if ref.Binding.Reason == "property_access" && startByte > 0 && len(src) > 0 {
 				prev := src[startByte-1]
-				if prev == '.' || (startByte >= 2 && src[startByte-2] == '-' && prev == '>') || (startByte >= 2 && src[startByte-2] == ':' && prev == ':') {
+				isDot := prev == '.'
+				// Ruby / Swift don't use `->` or `::` for instance
+				// access; keep those as skip-conditions.
+				isOther := (startByte >= 2 && src[startByte-2] == '-' && prev == '>') ||
+					(startByte >= 2 && src[startByte-2] == ':' && prev == ':')
+				if isOther {
 					continue
+				}
+				if isDot {
+					if !isMethod {
+						continue
+					}
+					baseIdent := dotBaseIdentBefore(src, startByte)
+					if baseIdent == "" {
+						continue
+					}
+					// Accept (a) variable of an acceptable type, or
+					// (b) the base ident IS an acceptable type itself
+					// (class.classmethod / Module.method pattern).
+					if !acceptableTypes[varTypes[baseIdent]] && !acceptableTypes[baseIdent] {
+						continue
+					}
+					startByte--
 				}
 			}
 			out[cand] = append(out[cand], span{

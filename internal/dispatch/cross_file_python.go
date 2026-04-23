@@ -68,6 +68,12 @@ func pythonCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.
 		candidates[sib] = true
 	}
 
+	isMethod := sym.Receiver != ""
+	acceptableTypes := map[string]bool{}
+	if sym.Receiver != "" {
+		acceptableTypes[sym.Receiver] = true
+	}
+
 	pop := namespace.PythonPopulator(resolver)
 	for cand := range candidates {
 		candRes := resolver.Result(cand)
@@ -75,12 +81,20 @@ func pythonCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.
 			continue
 		}
 		ns := namespace.Build(cand, candRes, resolver, pop)
-		if !ns.Matches(sym.Name, target.ID) {
+		// Methods don't live at file scope so their names aren't in
+		// the namespace. Admit every candidate when renaming a
+		// method and rely on per-ref disambiguation below.
+		if !isMethod && !ns.Matches(sym.Name, target.ID) {
 			continue
 		}
 		declByID := make(map[scope.DeclID]*scope.Decl, len(candRes.Decls))
 		for i := range candRes.Decls {
 			declByID[candRes.Decls[i].ID] = &candRes.Decls[i]
+		}
+		src := resolver.Source(cand)
+		var varTypes map[string]string
+		if isMethod {
+			varTypes = buildVarTypes(candRes, src)
 		}
 
 		// Rewrite matching `from X import Y` idents.
@@ -127,12 +141,23 @@ func pythonCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.
 					}
 				}
 			}
-			// Skip property-access refs (`obj.name`) — no receiver
-			// inference means we can't confirm the target.
+			// Property-access handling. For method renames we accept
+			// `obj.method` when obj's declared type is in
+			// acceptableTypes OR the base ident IS an acceptable
+			// type itself (Class.classmethod / Module.method).
 			startByte := ref.Span.StartByte
-			src := resolver.Source(cand)
 			if ref.Binding.Reason == "property_access" && startByte > 0 && len(src) > 0 && src[startByte-1] == '.' {
-				continue
+				if !isMethod {
+					continue
+				}
+				baseIdent := pyBaseIdentBefore(src, startByte)
+				if baseIdent == "" {
+					continue
+				}
+				if !acceptableTypes[varTypes[baseIdent]] && !acceptableTypes[baseIdent] {
+					continue
+				}
+				startByte--
 			}
 			out[cand] = append(out[cand], span{
 				start: startByte,
@@ -153,4 +178,30 @@ func pyImportPartsFromSignatureDispatch(sig string) (string, string) {
 		return sig, ""
 	}
 	return sig[:i], sig[i+1:]
+}
+
+
+// pyBaseIdentBefore returns the identifier immediately before `.` at
+// refStart, or "" if the preceding char isn't `.` or no identifier
+// precedes.
+func pyBaseIdentBefore(src []byte, refStart uint32) string {
+	if int(refStart) <= 0 || int(refStart) > len(src) {
+		return ""
+	}
+	i := int(refStart) - 1
+	if src[i] != '.' {
+		return ""
+	}
+	end := i
+	i--
+	for i >= 0 {
+		c := src[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '_' {
+			i--
+			continue
+		}
+		break
+	}
+	return string(src[i+1 : end])
 }

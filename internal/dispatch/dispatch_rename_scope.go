@@ -107,6 +107,18 @@ func scopeAwareSameFileSpans(sym *index.SymbolInfo) ([]span, bool) {
 		}
 	}
 	if target == nil {
+		// sym.File doesn't contain a decl matching sym.Name — this
+		// happens for out-of-line definitions in C/C++ (the method
+		// decl lives in a sibling header). Return (empty, true) so
+		// the cross-file branch still runs and can find the real
+		// decl in the header via its own sibling search.
+		ext := strings.ToLower(filepath.Ext(sym.File))
+		isCppish := ext == ".cpp" || ext == ".cxx" || ext == ".cc" || ext == ".c++" ||
+			ext == ".hpp" || ext == ".hxx" || ext == ".hh" || ext == ".h++" ||
+			ext == ".c" || ext == ".h"
+		if isCppish {
+			return nil, true
+		}
 		return nil, false
 	}
 

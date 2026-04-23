@@ -380,7 +380,7 @@ func buildVarTypes(r *scope.Result, src []byte) map[string]string {
 		return out
 	}
 	for _, d := range r.Decls {
-		if d.Kind != scope.KindVar && d.Kind != scope.KindParam && d.Kind != scope.KindField {
+		if d.Kind != scope.KindVar && d.Kind != scope.KindParam && d.Kind != scope.KindField && d.Kind != scope.KindLet && d.Kind != scope.KindConst {
 			continue
 		}
 		// Direction A (Java-ish): `Type name` — ref ends immediately
