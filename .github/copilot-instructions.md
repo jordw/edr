@@ -21,13 +21,17 @@ After changing agent instructions (`internal/setup/instructions/*.md`): rebuild,
 CLI args → cmd/ (Cobra) → cmdspec (flag validation) → dispatch (routing) → internal/* (logic) → output (rendering) → session (post-processing)
 ```
 
-**cmd/**: Cobra command wiring. `commands.go` has standalone commands, `batch.go`/`batch_cmd.go` handle batch mode (`-r`, `-s`, `-e`, `-w`).
+**cmd/**: Cobra command wiring. `commands.go` has standalone commands, `batch.go`/`batch_cmd.go` handle batch mode (`-f`, `-o`, `-s`, `-e`, `-w`).
 
 **internal/cmdspec/**: Canonical command registry. Every command, flag, category, and alias lives here. CLI flags, dispatch routing, and session behavior all derive from this registry.
 
 **internal/dispatch/**: Command logic. `Dispatch()` routes command names to handlers (`runReadUnified`, `runSmartEdit`, `runSearchUnified`, etc.). This is where args are parsed, symbols are resolved, and results are constructed.
 
-**internal/index/**: Tree-sitter parsing, on-demand symbol store, signature extraction. `store.go` defines the `SymbolStore` interface. `ondemand.go` implements it by parsing files on demand (default). `languages.go:GetLangConfig` maps file extensions to grammar + parse rules. `signatures.go` extracts one-line signatures per language. `parser.go` defines `SymbolInfo`. Import resolution in `resolve.go`.
+**internal/index/**: Pure-Go, lexer-based symbol parsing; on-demand symbol store; signature extraction. `store.go` defines the `SymbolStore` interface. `ondemand.go` implements it by parsing files on demand and consulting the optional trigram/symbol index when available. `langs.go` maps file extensions to parser IDs. `parse_*.go` files implement language parsers. `symbol.go` defines `SymbolInfo`. Import extraction and resolution support cross-file search/refactor heuristics.
+
+**internal/idx/**: Optional persistent trigram, symbol, import, and reference indexes. `edr index` builds them; normal commands use them opportunistically and stat-check dirty files so reads still see current content.
+
+**internal/scope/**: Scope and binding builders used for rename safety and `refs-to`. Mutating scope-aware operations are admitted per language in dispatch, with name-match fallback where the scope builder is not mature enough.
 
 **internal/edit/**: Span-based edits with `Transaction` (TOCTOU guard: revalidates file hash before writing). `diff.go` produces unified diffs.
 
@@ -35,9 +39,9 @@ CLI args → cmd/ (Cobra) → cmdspec (flag validation) → dispatch (routing) �
 
 **internal/output/**: `plain.go` renders the transport format: JSON header (first line) → raw body → `---` between batch ops → optional `{"verify":...}` trailer. Every command has a `plain*` renderer function.
 
-**internal/session/**: File-backed sessions (`.edr/sessions/<id>.json`). Delta reads (hash-based), body dedup, op log, assumption tracking, build state, checkpoint/restore. `PostProcess()` handles response optimization.
+**internal/session/**: File-backed sessions under the per-repo edr data directory. Delta reads (hash-based), body dedup, op log, assumption tracking, build state, checkpoint/restore. `PostProcess()` handles response optimization.
 
-**internal/setup/**: `edr setup` installer. Injects agent instructions into global configs (~/.claude, .cursorrules, etc.). Instructions are in `instructions/*.md`, token-capped at 600.
+**internal/setup/**: `edr setup` installer. Injects agent instructions into global configs (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.cursor/rules/edr.mdc`). Instructions are in `instructions/*.md`, token-capped by spec tests.
 
 ## Adding a new command
 
@@ -53,11 +57,11 @@ Touch these files (tests will fail if you miss one):
 
 ## Adding a language
 
-1. Vendor grammar C source in `internal/grammars/<lang>/` with Go binding wrapper
-2. Add `LangConfig` entry in `internal/index/languages.go:GetLangConfig`
-3. Add signature extractor in `internal/index/signatures.go`
-4. Add import extractor in `internal/index/imports.go` (for semantic refs) or it falls back to text-based
-5. Add test case in `internal/index/languages_test.go:TestAllLanguagesParse`
+1. Add the extension mapping in `internal/index/langs.go`
+2. Add a lexer-based parser in `internal/index/parse_<lang>.go`
+3. Add adapters in `internal/index/handwritten_adapt.go` for symbols and imports
+4. Add a scope builder in `internal/scope/<lang>/` only if rename or `refs-to` needs binding-aware behavior
+5. Add or update parser, language, spec, and rename/ref tests before admitting the language for mutating scope-aware operations
 
 ## Testing
 
@@ -77,9 +81,9 @@ go test ./bench/ -run TestCorrectness -v  # correctness tests
 ## Setup (for new machines)
 
 ```bash
-./setup.sh /path/to/target/repo    # installs Go/gcc if needed, builds, indexes
+./setup.sh /path/to/target/repo    # installs Go if needed, builds
 # Or manually:
-go build -o edr .                  # requires Go + C compiler for tree-sitter
+go build -o edr .                  # requires Go 1.24+
 go install
-edr setup /path/to/target/repo     # inject instructions + index
+edr setup /path/to/target/repo     # inject agent instructions
 ```

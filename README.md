@@ -181,13 +181,13 @@ Full flag reference: `edr --help` or `edr <command> --help`.
 
 ## Languages
 
-edr reads and edits any text file. Symbol-aware features (symbol reads, `--signatures`, `map`) require a supported language:
+edr reads and edits any text file. Symbol-aware features (symbol reads, `--signatures`, `orient`) require a supported language:
 
-**Symbol parsing:** Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, Ruby
+**Symbol parsing:** Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, C#, Kotlin, Swift, Ruby, PHP, Scala, Lua, Zig
 
 ## Limitations
 
-- **Structural navigation, not full code analysis.** edr finds functions, classes, and references by pattern and import graph — not by type-checking. This means it works instantly, on broken code, with zero config — but rename/extract operate on names, not types. It may miss unusual syntax (e.g. deeply nested anonymous functions).
+- **Structural navigation, not full code analysis.** edr finds functions, classes, and references with lexer-based parsers, import graphs, and scope heuristics — not by type-checking. The main semantic promise is rename safety: where a language's scope builder is admitted for writes, rename avoids shadowed or unrelated same-name identifiers. Unsupported or immature languages fall back to name-based matching and report that mode so diffs can be reviewed.
 - **macOS and Linux only.** Windows is not planned.
 - **Pure Go.** No CGO, no C compiler needed. Single ~6MB binary.
 

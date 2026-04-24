@@ -17,7 +17,7 @@ I will acknowledge receipt within 48 hours and aim to provide a fix or mitigatio
 
 edr runs locally and does not make network requests. Security concerns are most likely to involve:
 - Arbitrary file read/write outside the target repository
-- Code execution via crafted file names or symbol names (tree-sitter input)
+- Parser or index crashes via crafted source files, file names, or symbol names
 - Path traversal in command arguments
 
 ## Supported Versions
