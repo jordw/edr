@@ -76,11 +76,49 @@ func jvmCrossFileSpans(
 	// For method targets, also locate the enclosing class decl.
 	// Its canonical DeclID lets us disambiguate Class.method
 	// property accesses across files.
+	//
+	// Kotlin companion-object methods have sym.Receiver="Companion"
+	// but callers write `Lib.method()`, not `Lib.Companion.method()`.
+	// Walk the symbol-index parent chain: if the receiver is
+	// "Companion", replace it with the enclosing class name so
+	// acceptableTypes matches what callers actually type.
+	effectiveReceiver := sym.Receiver
+	if effectiveReceiver == "Companion" {
+		if syms, err := db.GetSymbolsByFile(ctx, sym.File); err == nil {
+			// Locate sym among the file's symbols (same name + byte
+			// containment), then resolve its grandparent via the
+			// ParentIndex chain.
+			for i := range syms {
+				s := &syms[i]
+				if s.Name != sym.Name || s.Type != "method" {
+					continue
+				}
+				if !(s.StartByte == sym.StartByte && s.EndByte == sym.EndByte) {
+					continue
+				}
+				if s.ParentIndex < 0 || s.ParentIndex >= len(syms) {
+					break
+				}
+				companion := syms[s.ParentIndex]
+				if companion.Name != "Companion" {
+					break
+				}
+				if companion.ParentIndex < 0 || companion.ParentIndex >= len(syms) {
+					break
+				}
+				grand := syms[companion.ParentIndex]
+				if grand.Name != "" {
+					effectiveReceiver = grand.Name
+				}
+				break
+			}
+		}
+	}
 	var targetClass *scope.Decl
-	if sym.Receiver != "" {
+	if effectiveReceiver != "" {
 		for i := range targetRes.Decls {
 			d := &targetRes.Decls[i]
-			if d.Name == sym.Receiver && d.Scope == scope.ScopeID(1) {
+			if d.Name == effectiveReceiver && d.Scope == scope.ScopeID(1) {
 				targetClass = d
 				break
 			}
@@ -125,7 +163,7 @@ func jvmCrossFileSpans(
 		// Match precondition: either the target itself is in this
 		// files namespace (class/enum/etc.), OR the enclosing class
 		// is (method/field rename via Class.method).
-		classMatch := targetClass != nil && ns.Matches(sym.Receiver, targetClass.ID)
+		classMatch := targetClass != nil && ns.Matches(effectiveReceiver, targetClass.ID)
 		nameMatch := ns.Matches(sym.Name, target.ID)
 		if !classMatch && !nameMatch {
 			continue
