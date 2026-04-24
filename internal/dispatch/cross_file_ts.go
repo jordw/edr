@@ -55,6 +55,15 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 		return out, true
 	}
 
+	// Hierarchy propagation: when renaming a method, emit rewrite
+	// spans for same-named methods in classes/interfaces that the
+	// target's enclosing class extends or implements (and vice
+	// versa — subclasses overriding the target). Keeps the type-
+	// check consistent across the inheritance graph.
+	if sym.Receiver != "" {
+		tsEmitHierarchySpans(out, resolver, sym, target)
+	}
+
 	candidates := map[string]bool{}
 	if refs, err := db.FindSemanticReferences(ctx, sym.Name, sym.File); err == nil {
 		for _, r := range refs {
@@ -145,6 +154,13 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 	acceptableTypes := map[string]bool{}
 	if sym.Receiver != "" {
 		acceptableTypes[sym.Receiver] = true
+		// Hierarchy-aware: also accept call sites whose receiver
+		// is typed as a supertype/subtype of sym.Receiver so
+		// e.g. `const g: IGreeter = new Hi(); g.greet()` rewrites
+		// when renaming Hi.greet.
+		for _, t := range tsRelatedTypes(resolver.Source(sym.File), sym.Receiver) {
+			acceptableTypes[t] = true
+		}
 	}
 
 	pop := namespace.TSPopulator(resolver)
@@ -415,4 +431,130 @@ func resolveTSBarrelSourceFile(r *namespace.TSResolver, file, name string) strin
 // for use from the dispatch package.
 func findReExportsWithSpans(src []byte) []namespace.TSReExportSpan {
 	return namespace.FindTSReExportsWithSpans(src)
+}
+
+
+// tsEmitHierarchySpans finds same-named methods in classes/
+// interfaces reachable from sym's enclosing type via extends/
+// implements, emits def-spans for each match into `out`.
+//
+// Scope: same-file for now. Cross-file hierarchy can be chased
+// through import graphs in a later pass.
+func tsEmitHierarchySpans(out map[string][]span, resolver *namespace.TSResolver, sym *index.SymbolInfo, target *scope.Decl) {
+	src := resolver.Source(sym.File)
+	if len(src) == 0 {
+		return
+	}
+	hierarchy := namespace.TSFindClassHierarchy(src)
+	if len(hierarchy) == 0 {
+		return
+	}
+	// Find the target's enclosing class/interface by containment.
+	var enclosing *namespace.TSClassHierarchy
+	for i := range hierarchy {
+		h := &hierarchy[i]
+		if h.BodyStart <= target.Span.StartByte && target.Span.EndByte <= h.BodyEnd {
+			enclosing = h
+			break
+		}
+	}
+	if enclosing == nil {
+		return
+	}
+	// Build set of "related" class/interface names:
+	//   1. The enclosing's supers (types it extends/implements).
+	//   2. Any class that extends/implements the enclosing.
+	related := map[string]bool{}
+	for _, s := range enclosing.Supers {
+		related[s] = true
+	}
+	for _, h := range hierarchy {
+		for _, s := range h.Supers {
+			if s == enclosing.Name {
+				related[h.Name] = true
+				break
+			}
+		}
+	}
+	if len(related) == 0 {
+		return
+	}
+	// For each related class/interface, find a method decl with
+	// matching name inside its body span and emit a span.
+	targetRes := resolver.Result(sym.File)
+	if targetRes == nil {
+		return
+	}
+	for _, h := range hierarchy {
+		if !related[h.Name] || h.Name == enclosing.Name {
+			continue
+		}
+		for i := range targetRes.Decls {
+			d := &targetRes.Decls[i]
+			if d.Name != sym.Name {
+				continue
+			}
+			if d.Kind != scope.KindMethod {
+				continue
+			}
+			if d.Span.StartByte < h.BodyStart || d.Span.EndByte > h.BodyEnd {
+				continue
+			}
+			if d.ID == target.ID {
+				continue
+			}
+			out[sym.File] = append(out[sym.File], span{
+				start: d.Span.StartByte,
+				end:   d.Span.EndByte,
+				isDef: true,
+			})
+		}
+	}
+}
+
+// tsRelatedTypes returns the transitive set of class/interface
+// names reachable from className via extends/implements edges in
+// src. Used to widen acceptableTypes so a rename on Foo.method
+// accepts call sites where the receiver is typed as a super of
+// Foo or a sub of Foo.
+func tsRelatedTypes(src []byte, className string) []string {
+	hierarchy := namespace.TSFindClassHierarchy(src)
+	byName := map[string]namespace.TSClassHierarchy{}
+	for _, h := range hierarchy {
+		byName[h.Name] = h
+	}
+	related := map[string]bool{}
+	var walkUp func(name string)
+	walkUp = func(name string) {
+		h, ok := byName[name]
+		if !ok {
+			return
+		}
+		for _, s := range h.Supers {
+			if related[s] {
+				continue
+			}
+			related[s] = true
+			walkUp(s)
+		}
+	}
+	walkUp(className)
+	var walkDown func(name string)
+	walkDown = func(name string) {
+		for _, h := range hierarchy {
+			for _, s := range h.Supers {
+				if s == name && !related[h.Name] {
+					related[h.Name] = true
+					walkDown(h.Name)
+					break
+				}
+			}
+		}
+	}
+	walkDown(className)
+	out := make([]string, 0, len(related))
+	for k := range related {
+		out = append(out, k)
+	}
+	return out
 }

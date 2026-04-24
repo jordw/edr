@@ -76,6 +76,9 @@ TUPLES=(
   # TS: `export default function X` — renaming the function
   # updates its definition; import sites use their own local name.
   "ts:default-export|edr|scripts/eval/fixtures/ts-default/src/lib.ts:compute|calculate|cd scripts/eval/fixtures/ts-default && tsc"
+  # TS: rename a method on an interface; implementer + subclass
+  # overrides must rewrite in lockstep.
+  "ts:hierarchy|edr|scripts/eval/fixtures/ts-hierarchy/src/greeter.ts:greet|salute|cd scripts/eval/fixtures/ts-hierarchy && tsc"
   # Kotlin: instance method on a class called via obj.value().
   "kt:class-method|edr|scripts/eval/fixtures/kotlin-method/Counter.kt:value|magnitude|cd scripts/eval/fixtures/kotlin-method && kotlinc *.kt -include-runtime -d /tmp/kt_method.jar"
   # Kotlin: companion-object method called as Lib.compute.
