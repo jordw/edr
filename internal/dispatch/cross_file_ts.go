@@ -63,6 +63,68 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 			}
 		}
 	}
+	// Barrel expansion: for each primary candidate, walk its
+	// KindImport decls. Any import whose module resolves to a
+	// barrel that re-exports sym.Name from sym.File also needs
+	// rewriting — the barrel file itself isn't in the index's
+	// ref set because `export { X } from '…'` doesn't show up as
+	// a ref to X in the symbol index's view. Add those barrel
+	// files to the candidate set.
+	{
+		frontier := make([]string, 0, len(candidates))
+		for c := range candidates {
+			frontier = append(frontier, c)
+		}
+		visited := map[string]bool{}
+		for len(frontier) > 0 {
+			next := frontier[0]
+			frontier = frontier[1:]
+			if visited[next] {
+				continue
+			}
+			visited[next] = true
+			nextRes := resolver.Result(next)
+			if nextRes == nil {
+				continue
+			}
+			src := resolver.Source(next)
+			for _, re := range findReExportsWithSpans(src) {
+				for _, f := range resolver.FilesForImport(re.ModPath, next) {
+					if f == sym.File || resolveTSBarrelSourceFile(resolver, f, re.OrigName) == sym.File {
+						if !candidates[f] && f != sym.File {
+							candidates[f] = true
+						}
+						// Also the barrel file itself.
+						if !candidates[next] && next != sym.File {
+							candidates[next] = true
+						}
+					}
+					if !visited[f] && f != sym.File {
+						frontier = append(frontier, f)
+					}
+				}
+			}
+			for _, d := range nextRes.Decls {
+				if d.Kind != scope.KindImport {
+					continue
+				}
+				modPath, origName := tsImportPartsFromSignature(d.Signature)
+				if modPath == "" || origName == "" {
+					continue
+				}
+				for _, f := range resolver.FilesForImport(modPath, next) {
+					if f == sym.File || resolveTSBarrelSourceFile(resolver, f, origName) == sym.File {
+						if !candidates[f] && f != sym.File {
+							candidates[f] = true
+						}
+					}
+					if !visited[f] && f != sym.File {
+						frontier = append(frontier, f)
+					}
+				}
+			}
+		}
+	}
 
 	isMethod := sym.Receiver != ""
 	acceptableTypes := map[string]bool{}
@@ -77,27 +139,11 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 			continue
 		}
 		ns := namespace.Build(cand, candRes, resolver, pop)
-		// Admit candidate if: (a) renaming a method (receiver-based
-		// matching happens per ref), OR (b) the namespace contains
-		// target.ID under ANY name — including aliased imports
-		// where the local name differs from sym.Name.
-		if !isMethod {
-			matched := false
-			for _, entries := range ns.Entries {
-				for _, e := range entries {
-					if e.DeclID == target.ID {
-						matched = true
-						break
-					}
-				}
-				if matched {
-					break
-				}
-			}
-			if !matched {
-				continue
-			}
-		}
+		_ = ns
+		// Candidate set was already narrowed (FindSemanticReferences +
+		// barrel expansion), so we admit everything here and rely
+		// on the per-decl / per-ref / per-re-export filtering below
+		// to decide what gets a span.
 		declByID := make(map[scope.DeclID]*scope.Decl, len(candRes.Decls))
 		for i := range candRes.Decls {
 			declByID[candRes.Decls[i].ID] = &candRes.Decls[i]
@@ -106,6 +152,27 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 		var varTypes map[string]string
 		if isMethod {
 			varTypes = buildVarTypes(candRes, src)
+		}
+
+		// Scan re-export clauses for barrel files:
+		//   export { X } from "./y"
+		//   export { X as Y } from "./y"
+		// When './y' (chased through further barrels) ends at
+		// sym.File and X == sym.Name, rewrite the X position.
+		for _, re := range findReExportsWithSpans(src) {
+			if re.OrigName != sym.Name {
+				continue
+			}
+			for _, f := range resolver.FilesForImport(re.ModPath, cand) {
+				if f == sym.File || resolveTSBarrelSourceFile(resolver, f, re.OrigName) == sym.File {
+					out[cand] = append(out[cand], span{
+						start: re.OrigNameStart,
+						end:   re.OrigNameEnd,
+						isDef: true,
+					})
+					break
+				}
+			}
 		}
 
 		// Rewrite import decls whose signature resolves to our
@@ -127,6 +194,14 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 			hit := false
 			for _, f := range files {
 				if f == sym.File {
+					hit = true
+					break
+				}
+				// Chase barrel re-exports to find the TRUE source
+				// file for origName starting from f. If it ends at
+				// sym.File, this import pulls our target through
+				// the barrel.
+				if resolveTSBarrelSourceFile(resolver, f, origName) == sym.File {
 					hit = true
 					break
 				}
@@ -269,4 +344,19 @@ func findTSOrigNameSpan(src []byte, fullStart, localStart uint32, origName strin
 		}
 	}
 	return 0, 0, false
+}
+
+
+// resolveTSBarrelSourceFile chases `export { name } from '…'` chains
+// starting from file and returns the path of the file that actually
+// declares name, or "" when the chain can't be resolved.
+func resolveTSBarrelSourceFile(r *namespace.TSResolver, file, name string) string {
+	hit := namespace.ResolveTSBarrelForDispatch(r, file, name)
+	return hit
+}
+
+// findReExportsWithSpans wraps namespace.FindTSReExportsWithSpans
+// for use from the dispatch package.
+func findReExportsWithSpans(src []byte) []namespace.TSReExportSpan {
+	return namespace.FindTSReExportsWithSpans(src)
 }

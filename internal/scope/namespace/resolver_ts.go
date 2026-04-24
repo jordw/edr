@@ -29,10 +29,11 @@ import (
 //   - node_modules imports.
 //   - CommonJS `require(...)`.
 type TSResolver struct {
-	repoRoot   string
-	parseMu    sync.Mutex
-	parseCache map[string]*scope.Result
-	srcCache   map[string][]byte
+	repoRoot    string
+	parseMu     sync.Mutex
+	parseCache  map[string]*scope.Result
+	srcCache    map[string][]byte
+	tsconfigs   *tsConfigPaths
 }
 
 func NewTSResolver(repoRoot string) *TSResolver {
@@ -40,6 +41,7 @@ func NewTSResolver(repoRoot string) *TSResolver {
 		repoRoot:   repoRoot,
 		parseCache: make(map[string]*scope.Result),
 		srcCache:   make(map[string][]byte),
+		tsconfigs:  newTSConfigPaths(),
 	}
 }
 
@@ -111,7 +113,18 @@ func (r *TSResolver) FilesForImport(importSpec, importingFile string) []string {
 	if importSpec == "" {
 		return nil
 	}
+	// Non-relative specs: try tsconfig.json paths mapping first.
+	// If paths resolve to actual files, return those; otherwise
+	// the spec is a bare package name (node_modules) and we skip.
 	if !strings.HasPrefix(importSpec, "./") && !strings.HasPrefix(importSpec, "../") {
+		cfg := r.tsconfigs.ConfigForFile(importingFile)
+		if cfg != nil {
+			for _, raw := range cfg.Resolve(importSpec) {
+				if resolved := r.resolveTSCandidate(raw); resolved != "" {
+					return []string{resolved}
+				}
+			}
+		}
 		return nil
 	}
 	base := filepath.Dir(importingFile)
@@ -146,4 +159,32 @@ func (r *TSResolver) FilesForImport(importSpec, importingFile string) []string {
 // through an import statement, which the populator handles.
 func (r *TSResolver) SamePackageFiles(importingFile string) []string {
 	return nil
+}
+
+
+// resolveTSCandidate tries the usual TS/JS extension-and-index
+// fallbacks against a raw path (e.g. "/repo/src/components/Foo"),
+// returning the first file that exists or "" when none do.
+func (r *TSResolver) resolveTSCandidate(rawPath string) string {
+	for _, ext := range tsFileExtensions {
+		if strings.HasSuffix(rawPath, ext) {
+			if fi, err := os.Stat(rawPath); err == nil && !fi.IsDir() {
+				return rawPath
+			}
+			return ""
+		}
+	}
+	for _, ext := range tsFileExtensions {
+		cand := rawPath + ext
+		if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
+			return cand
+		}
+	}
+	for _, ext := range tsFileExtensions {
+		cand := filepath.Join(rawPath, "index"+ext)
+		if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
+			return cand
+		}
+	}
+	return ""
 }

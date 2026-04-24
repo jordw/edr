@@ -66,6 +66,10 @@ TUPLES=(
   "ts:shadow-param|edr|scripts/eval/fixtures/ts-shadow/src/lib.ts:compute|calculate|cd scripts/eval/fixtures/ts-shadow && tsc"
   # TS: same function name exported from two unrelated modules.
   "ts:ambiguous-name|edr|scripts/eval/fixtures/ts-ambig/src/lib/a.ts:compute|calculate|cd scripts/eval/fixtures/ts-ambig && tsc"
+  # TS: tsconfig `paths` aliases (@/foo, @components/foo).
+  "ts:tsconfig-paths|edr|scripts/eval/fixtures/ts-paths/src/components/counter.ts:compute|calculate|cd scripts/eval/fixtures/ts-paths && tsc"
+  # TS: barrel re-exports — `export { X } from './bar'` chains.
+  "ts:barrel-reexport|edr|scripts/eval/fixtures/ts-barrel/src/lib.ts:compute|calculate|cd scripts/eval/fixtures/ts-barrel && tsc"
   # Kotlin: instance method on a class called via obj.value().
   "kt:class-method|edr|scripts/eval/fixtures/kotlin-method/Counter.kt:value|magnitude|cd scripts/eval/fixtures/kotlin-method && kotlinc *.kt -include-runtime -d /tmp/kt_method.jar"
   # Kotlin: companion-object method called as Lib.compute.

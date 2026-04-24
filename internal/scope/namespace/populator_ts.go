@@ -39,29 +39,21 @@ func TSPopulator(r *TSResolver) Populator {
 			}
 			files := r.FilesForImport(modPath, ns.File)
 			for _, f := range files {
-				impRes := r.Result(f)
-				if impRes == nil {
+				// Chase `export { X } from '…'` barrel re-exports
+				// to find the true declaration. A direct decl in f
+				// is covered by resolveTSBarrel's first pass.
+				visited := map[string]bool{}
+				hit := resolveTSBarrel(r, f, origName, visited, 0)
+				if hit == nil {
 					continue
 				}
-				for i := range impRes.Decls {
-					id := &impRes.Decls[i]
-					if id.Name != origName {
-						continue
-					}
-					if id.Kind == scope.KindImport {
-						continue
-					}
-					if id.Scope != scope.ScopeID(1) {
-						continue
-					}
-					// Surface under the LOCAL name (d.Name), which
-					// may differ from origName due to `as` aliasing.
-					ns.Entries[d.Name] = append(ns.Entries[d.Name], Entry{
-						DeclID: id.ID,
-						Source: SourceImported,
-						File:   f,
-					})
-				}
+				// Surface under the LOCAL name (d.Name), which may
+				// differ from origName due to `as` aliasing.
+				ns.Entries[d.Name] = append(ns.Entries[d.Name], Entry{
+					DeclID: hit.decl.ID,
+					Source: SourceImported,
+					File:   hit.file,
+				})
 			}
 		}
 	}
