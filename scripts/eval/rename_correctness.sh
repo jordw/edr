@@ -130,6 +130,10 @@ TUPLES=(
   # Swift: protocol extension default method. Tests hierarchy-like
   # propagation of method renames.
   "swift:protocol-default|edr|scripts/eval/fixtures/swift-protocol/Greeter.swift:greet|salute|cd scripts/eval/fixtures/swift-protocol && swiftc Greeter.swift App.swift main.swift -o /tmp/swift_protocol"
+  # Swift: protocol + class conformance + subclass override.
+  # Rename on Hi.greet should propagate to IGreeter.greet and
+  # Loud.greet, and to call sites through either typed receiver.
+  "swift:hierarchy|edr|scripts/eval/fixtures/swift-hierarchy/Greeter.swift:greet|salute|cd scripts/eval/fixtures/swift-hierarchy && swiftc Greeter.swift App.swift main.swift -o /tmp/swift_hier"
 )
 
 check_tool() { command -v "$1" >/dev/null 2>&1; }

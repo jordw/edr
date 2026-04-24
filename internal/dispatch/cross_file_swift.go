@@ -77,6 +77,34 @@ func swiftCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.S
 	acceptableTypes := map[string]bool{}
 	if sym.Receiver != "" {
 		acceptableTypes[sym.Receiver] = true
+		// Hierarchy-aware: accept call sites through a
+		// supertype/subtype-typed receiver.
+		owners := swiftBuildScopeOwners(targetRes, resolver.Source(sym.File))
+		supMap := map[string][]string{}
+		subMap := map[string][]string{}
+		for _, o := range owners {
+			supMap[o.owner] = append(supMap[o.owner], o.supers...)
+			for _, s := range o.supers {
+				subMap[s] = append(subMap[s], o.owner)
+			}
+		}
+		stack := []string{sym.Receiver}
+		for len(stack) > 0 {
+			n := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			for _, sup := range supMap[n] {
+				if !acceptableTypes[sup] {
+					acceptableTypes[sup] = true
+					stack = append(stack, sup)
+				}
+			}
+			for _, sub := range subMap[n] {
+				if !acceptableTypes[sub] {
+					acceptableTypes[sub] = true
+					stack = append(stack, sub)
+				}
+			}
+		}
 	}
 
 	pop := namespace.SwiftPopulator(resolver)
@@ -181,71 +209,172 @@ func swift_ext_matches(file string, exts []string) bool {
 }
 
 
-// swiftSiblingMethodDecls returns method decls in res whose name
-// matches methodName AND whose enclosing scope is owned by a type
-// named ownerName — either the body of a protocol/class/struct
-// named ownerName, or an `extension ownerName { … }` block
-// identified by a preceding REF to ownerName.
-func swiftSiblingMethodDecls(res *scope.Result, src []byte, methodName, ownerName string) []*scope.Decl {
+// swiftScopeOwner describes one class/interface/struct/extension
+// scope: the owner name (its own for class/interface, the target
+// for `extension X`), and the list of super types declared via
+// `: Foo, Bar` after the owner name.
+type swiftScopeOwner struct {
+	scopeID scope.ScopeID
+	owner   string
+	supers  []string
+}
+
+// swiftBuildScopeOwners returns one entry per class/interface scope
+// in res. Each entry has the owner name and the superclass/protocol
+// list parsed from refs preceding the scope's `{`.
+func swiftBuildScopeOwners(res *scope.Result, src []byte) []swiftScopeOwner {
 	if res == nil {
 		return nil
 	}
-	// Determine which scopes are owned by ownerName.
-	ownedScopes := map[scope.ScopeID]bool{}
+	var out []swiftScopeOwner
 	for si := range res.Scopes {
 		s := &res.Scopes[si]
 		if s.Kind != scope.ScopeInterface && s.Kind != scope.ScopeClass {
 			continue
 		}
-		// Case 1: owned by a decl whose FullSpan contains this scope
-		// and whose Name == ownerName.
+		// Owner detection:
+		//  Case A: the class/interface decl whose FullSpan contains
+		//  this scope. Its Name is the owner.
+		//  Case B: an `extension X` block. The last ref to an ident
+		//  immediately before the scope's `{` (through optional `:`,
+		//  `,`, and whitespace) is part of the super list; for the
+		//  owner we look for an "extension" keyword token in src
+		//  prior to the refs, falling back to the last ref name.
+		var owner string
 		for i := range res.Decls {
 			d := &res.Decls[i]
-			if d.Name != ownerName {
-				continue
-			}
 			if d.Kind != scope.KindInterface && d.Kind != scope.KindClass {
 				continue
 			}
 			if d.FullSpan.StartByte <= s.Span.StartByte && s.Span.EndByte <= d.FullSpan.EndByte {
-				ownedScopes[s.ID] = true
-				break
+				if d.Span.EndByte <= s.Span.StartByte {
+					owner = d.Name
+					break
+				}
 			}
 		}
-		if ownedScopes[s.ID] {
-			continue
-		}
-		// Case 2: the scope is an `extension X` block. Look for the
-		// nearest ref to ownerName immediately before s.Span.StartByte.
-		// Allow only whitespace / identifier-keyword bytes between
-		// the ref end and the scope start (the opening `{`).
-		for i := range res.Refs {
-			ref := &res.Refs[i]
-			if ref.Name != ownerName {
-				continue
-			}
-			if ref.Span.EndByte >= s.Span.StartByte {
-				continue
-			}
-			// Gap must be whitespace; tolerating `:` (conformance
-			// list in `struct Foo: Bar {}`) is NOT desired for
-			// extensions, but ordinary `extension X {` has only
-			// whitespace between the Greeter ref and the `{`.
-			if s.Span.StartByte > 0 && len(src) > 0 {
-				gap := src[ref.Span.EndByte:s.Span.StartByte]
-				allowed := true
-				for _, c := range gap {
-					if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+		// Parse supers: walk refs between owner-decl end (or scope
+		// start if owner unknown) and scope.Span.StartByte, each
+		// separated by `:` or `,` + whitespace.
+		var supers []string
+		if len(src) > 0 {
+			end := int(s.Span.StartByte)
+			start := 0
+			if owner != "" {
+				for i := range res.Decls {
+					d := &res.Decls[i]
+					if d.Name != owner {
 						continue
 					}
-					allowed = false
-					break
-				}
-				if allowed {
-					ownedScopes[s.ID] = true
-					break
+					if d.Kind != scope.KindInterface && d.Kind != scope.KindClass {
+						continue
+					}
+					if d.FullSpan.StartByte <= s.Span.StartByte && s.Span.EndByte <= d.FullSpan.EndByte {
+						start = int(d.Span.EndByte)
+						break
+					}
 				}
 			}
+			if start < end {
+				// Find refs in the window [start, end).
+				for i := range res.Refs {
+					ref := &res.Refs[i]
+					if int(ref.Span.StartByte) < start || int(ref.Span.EndByte) > end {
+						continue
+					}
+					supers = append(supers, ref.Name)
+				}
+			}
+		}
+		// Extension detection: no owner-decl contained the scope.
+		// Look for a lone `extension X ... {` pattern — the first
+		// ident after the `extension` keyword is both owner and
+		// not a super.
+		if owner == "" {
+			// Scan back from scope.Span.StartByte for "extension".
+			s2 := string(src)
+			i := int(s.Span.StartByte) - 1
+			limit := i - 200
+			if limit < 0 {
+				limit = 0
+			}
+			for i >= limit {
+				if i+9 <= len(s2) && s2[i:i+9] == "extension" {
+					// The next ident after i+9 is the target type.
+					j := i + 9
+					for j < len(s2) && (s2[j] == ' ' || s2[j] == '\t') {
+						j++
+					}
+					start := j
+					for j < len(s2) && ((s2[j] >= 'a' && s2[j] <= 'z') || (s2[j] >= 'A' && s2[j] <= 'Z') || (s2[j] >= '0' && s2[j] <= '9') || s2[j] == '_') {
+						j++
+					}
+					if j > start {
+						owner = s2[start:j]
+						// Exclude owner from supers (it's the target).
+						filtered := supers[:0]
+						for _, sup := range supers {
+							if sup != owner {
+								filtered = append(filtered, sup)
+							}
+						}
+						supers = filtered
+					}
+					break
+				}
+				i--
+			}
+		}
+		if owner != "" {
+			out = append(out, swiftScopeOwner{scopeID: s.ID, owner: owner, supers: supers})
+		}
+	}
+	return out
+}
+
+// swiftSiblingMethodDecls returns method decls in res whose name
+// matches methodName AND whose enclosing scope is owned by a type
+// transitively related to ownerName (via extends/conforms in
+// either direction).
+func swiftSiblingMethodDecls(res *scope.Result, src []byte, methodName, ownerName string) []*scope.Decl {
+	if res == nil {
+		return nil
+	}
+	owners := swiftBuildScopeOwners(res, src)
+	// Build hierarchy maps.
+	nameToScopes := map[string][]scope.ScopeID{}
+	nameToSupers := map[string][]string{}
+	subtypesByName := map[string][]string{}
+	for _, o := range owners {
+		nameToScopes[o.owner] = append(nameToScopes[o.owner], o.scopeID)
+		nameToSupers[o.owner] = append(nameToSupers[o.owner], o.supers...)
+		for _, sup := range o.supers {
+			subtypesByName[sup] = append(subtypesByName[sup], o.owner)
+		}
+	}
+	// Transitive walk — up and down from ownerName.
+	related := map[string]bool{ownerName: true}
+	stack := []string{ownerName}
+	for len(stack) > 0 {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		for _, sup := range nameToSupers[n] {
+			if !related[sup] {
+				related[sup] = true
+				stack = append(stack, sup)
+			}
+		}
+		for _, sub := range subtypesByName[n] {
+			if !related[sub] {
+				related[sub] = true
+				stack = append(stack, sub)
+			}
+		}
+	}
+	ownedScopes := map[scope.ScopeID]bool{}
+	for name := range related {
+		for _, sid := range nameToScopes[name] {
+			ownedScopes[sid] = true
 		}
 	}
 	// Collect matching methods.
