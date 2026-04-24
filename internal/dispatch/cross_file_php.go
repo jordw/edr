@@ -78,6 +78,11 @@ func phpCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 		var varTypes map[string]string
 		if isMethod {
 			varTypes = buildVarTypes(candRes, src)
+			for k, v := range varTypes {
+				if len(k) > 0 && k[0] == '$' {
+					varTypes[k[1:]] = v
+				}
+			}
 		}
 
 		// File-scope decls whose ID matches the target (the
@@ -108,32 +113,40 @@ func phpCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 				}
 			}
 			startByte := ref.Span.StartByte
+			isArrowOrScope := false
 			if ref.Binding.Reason == "property_access" && startByte > 0 && len(src) > 0 {
 				prev := src[startByte-1]
+				isArrow := startByte >= 2 && src[startByte-2] == '-' && prev == '>'
+				isScope := startByte >= 2 && src[startByte-2] == ':' && prev == ':'
 				isDot := prev == '.'
-				isOther := (startByte >= 2 && src[startByte-2] == '-' && prev == '>') ||
-					(startByte >= 2 && src[startByte-2] == ':' && prev == ':')
-				if isOther {
+				if !isArrow && !isScope && !isDot {
 					continue
 				}
-				if isDot {
-					if !isMethod {
-						continue
-					}
-					baseIdent := dotBaseIdentBefore(src, startByte)
-					if baseIdent == "" {
-						continue
-					}
-					if !acceptableTypes[varTypes[baseIdent]] && !acceptableTypes[baseIdent] {
-						continue
-					}
+				if !isMethod {
+					continue
+				}
+				baseIdent := phpBaseIdentBefore(src, startByte, isArrow, isScope)
+				if baseIdent == "" {
+					continue
+				}
+				if !acceptableTypes[varTypes[baseIdent]] && !acceptableTypes[baseIdent] {
+					continue
+				}
+				if isArrow || isScope {
+					// Keep span = just the method ident and mark
+					// isDef=true. The rename pipeline uses the bare
+					// defRe=\`\bname\b\` for isDef spans, which
+					// rewrites just the method name inside the
+					// region — no `.` / `->` / `::` munging.
+					isArrowOrScope = true
+				} else if isDot {
 					startByte--
 				}
 			}
 			out[cand] = append(out[cand], span{
 				start: startByte,
 				end:   ref.Span.EndByte,
-				isDef: false,
+				isDef: isArrowOrScope,
 			})
 		}
 	}
@@ -148,4 +161,32 @@ func php_ext_matches(file string, exts []string) bool {
 		}
 	}
 	return false
+}
+
+
+// phpBaseIdentBefore returns the identifier before `->` / `::` / `.`
+// at refStart, stripping any leading `$` sigil so a PHP variable
+// like `$obj` maps to just `obj` for varTypes lookup.
+func phpBaseIdentBefore(src []byte, refStart uint32, isArrow, isScope bool) string {
+	if int(refStart) <= 0 || int(refStart) > len(src) {
+		return ""
+	}
+	end := int(refStart) - 1 // at `.`, `>`, or second `:`
+	if isArrow || isScope {
+		end-- // skip to the first char of the 2-char operator
+	}
+	i := end - 1
+	for i >= 0 {
+		c := src[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '_' {
+			i--
+			continue
+		}
+		break
+	}
+	name := string(src[i+1 : end])
+	// PHP: variables are written `$name`; the scanner above stops at
+	// `$` (not an ident byte), so name already excludes the sigil.
+	return name
 }

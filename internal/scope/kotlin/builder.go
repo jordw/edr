@@ -1550,13 +1550,11 @@ func (b *builder) resolveRefs() {
 		name  string
 		ns    scope.Namespace
 	}
-	byKey := make(map[key]*scope.Decl, len(b.res.Decls))
+	byKey := make(map[key][]*scope.Decl, len(b.res.Decls))
 	for i := range b.res.Decls {
 		d := &b.res.Decls[i]
 		k := key{scope: d.Scope, name: d.Name, ns: d.Namespace}
-		if _, ok := byKey[k]; !ok {
-			byKey[k] = d
-		}
+		byKey[k] = append(byKey[k], d)
 	}
 	classField := make(map[key]*scope.Decl, len(b.res.Decls))
 	for i := range b.res.Decls {
@@ -1571,6 +1569,33 @@ func (b *builder) resolveRefs() {
 	scopeByID := make(map[scope.ScopeID]scope.Scope, len(b.res.Scopes))
 	for _, s := range b.res.Scopes {
 		scopeByID[s.ID] = s
+	}
+	// lookupLexical returns the decl whose Span.EndByte is the
+	// latest that still precedes refStart. Matches Kotlin's
+	// block-scope rule: a local var only becomes visible at the
+	// point of declaration, so a ref before the local must bind to
+	// an enclosing scope's decl. At file scope we allow forward
+	// references (calling a top-level fun defined later in the
+	// file).
+	lookupLexical := func(k key, refStart uint32, scopeIsFile bool) *scope.Decl {
+		var best *scope.Decl
+		var bestEnd uint32
+		for _, d := range byKey[k] {
+			if d.Span.EndByte > refStart {
+				continue
+			}
+			if best == nil || d.Span.EndByte > bestEnd {
+				best = d
+				bestEnd = d.Span.EndByte
+			}
+		}
+		if best != nil {
+			return best
+		}
+		if scopeIsFile && len(byKey[k]) > 0 {
+			return byKey[k][0]
+		}
+		return nil
 	}
 	nearestClass := make(map[scope.ScopeID]scope.ScopeID, len(b.res.Scopes))
 	for _, s := range b.res.Scopes {
@@ -1598,7 +1623,8 @@ func (b *builder) resolveRefs() {
 		cur := r.Scope
 		resolved := false
 		for {
-			if d, ok := byKey[key{scope: cur, name: r.Name, ns: r.Namespace}]; ok {
+			curIsFile := scopeByID[cur].Kind == scope.ScopeFile
+			if d := lookupLexical(key{scope: cur, name: r.Name, ns: r.Namespace}, r.Span.StartByte, curIsFile); d != nil {
 				r.Binding = scope.RefBinding{
 					Kind:   scope.BindResolved,
 					Decl:   d.ID,
@@ -1612,7 +1638,7 @@ func (b *builder) resolveRefs() {
 				break
 			}
 			if p == 0 && cur != 0 {
-				if d, ok := byKey[key{scope: 0, name: r.Name, ns: r.Namespace}]; ok {
+				if d := lookupLexical(key{scope: 0, name: r.Name, ns: r.Namespace}, r.Span.StartByte, true); d != nil {
 					r.Binding = scope.RefBinding{
 						Kind:   scope.BindResolved,
 						Decl:   d.ID,

@@ -64,6 +64,12 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 		}
 	}
 
+	isMethod := sym.Receiver != ""
+	acceptableTypes := map[string]bool{}
+	if sym.Receiver != "" {
+		acceptableTypes[sym.Receiver] = true
+	}
+
 	pop := namespace.TSPopulator(resolver)
 	for cand := range candidates {
 		candRes := resolver.Result(cand)
@@ -71,19 +77,46 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 			continue
 		}
 		ns := namespace.Build(cand, candRes, resolver, pop)
-		if !ns.Matches(sym.Name, target.ID) {
-			continue
+		// Admit candidate if: (a) renaming a method (receiver-based
+		// matching happens per ref), OR (b) the namespace contains
+		// target.ID under ANY name — including aliased imports
+		// where the local name differs from sym.Name.
+		if !isMethod {
+			matched := false
+			for _, entries := range ns.Entries {
+				for _, e := range entries {
+					if e.DeclID == target.ID {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
 		}
 		declByID := make(map[scope.DeclID]*scope.Decl, len(candRes.Decls))
 		for i := range candRes.Decls {
 			declByID[candRes.Decls[i].ID] = &candRes.Decls[i]
 		}
+		src := resolver.Source(cand)
+		var varTypes map[string]string
+		if isMethod {
+			varTypes = buildVarTypes(candRes, src)
+		}
 
 		// Rewrite import decls whose signature resolves to our
 		// target file + item. `import { foo } from './lib'` →
-		// KindImport decl Name=foo Signature="./lib\0foo".
+		// KindImport decl Name=foo Signature="./lib\0foo". For
+		// aliased imports `import { orig as local }`, the local
+		// name is d.Name and the original is the second half of
+		// the signature; when origName != d.Name, we must also
+		// rewrite the origName position in the source.
 		for _, d := range candRes.Decls {
-			if d.Kind != scope.KindImport || d.Name != sym.Name {
+			if d.Kind != scope.KindImport {
 				continue
 			}
 			modPath, origName := tsImportPartsFromSignature(d.Signature)
@@ -101,11 +134,42 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 			if !hit {
 				continue
 			}
-			out[cand] = append(out[cand], span{
-				start: d.Span.StartByte,
-				end:   d.Span.EndByte,
-				isDef: false,
-			})
+			if d.Name == sym.Name {
+				// Non-aliased: local name IS the target.
+				out[cand] = append(out[cand], span{
+					start: d.Span.StartByte,
+					end:   d.Span.EndByte,
+					isDef: false,
+				})
+			} else {
+				// Aliased: scan backward to the start of the line
+				// (or at most 500 bytes) for the origName token
+				// between `{` and ` as `.
+				lineStart := uint32(0)
+				if d.Span.StartByte > 0 {
+					lo := int(d.Span.StartByte) - 1
+					limit := int(d.Span.StartByte) - 500
+					if limit < 0 {
+						limit = 0
+					}
+					for lo >= limit && src[lo] != '\n' {
+						lo--
+					}
+					if lo < 0 {
+						lo = 0
+					} else {
+						lo++ // skip the newline itself
+					}
+					lineStart = uint32(lo)
+				}
+				if s, e, ok := findTSOrigNameSpan(src, lineStart, d.Span.StartByte, origName); ok {
+					out[cand] = append(out[cand], span{
+						start: s,
+						end:   e,
+						isDef: true,
+					})
+				}
+			}
 		}
 
 		for _, ref := range candRes.Refs {
@@ -125,12 +189,24 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 					}
 				}
 			}
-			// Skip property-access refs. Without receiver-type
-			// inference, `obj.foo` may or may not be our target.
+			// Property-access handling. For method renames we accept
+			// `obj.method` when obj's declared type is in
+			// acceptableTypes OR base ident IS an acceptable type
+			// (Class.staticMethod). Expand span through the dot so
+			// downstream `\.name\b` regex matches.
 			startByte := ref.Span.StartByte
-			src := resolver.Source(cand)
 			if ref.Binding.Reason == "property_access" && startByte > 0 && len(src) > 0 && src[startByte-1] == '.' {
-				continue
+				if !isMethod {
+					continue
+				}
+				baseIdent := dotBaseIdentBefore(src, startByte)
+				if baseIdent == "" {
+					continue
+				}
+				if !acceptableTypes[varTypes[baseIdent]] && !acceptableTypes[baseIdent] {
+					continue
+				}
+				startByte--
 			}
 			out[cand] = append(out[cand], span{
 				start: startByte,
@@ -160,4 +236,37 @@ func isTSLikeFile(file string) bool {
 		return true
 	}
 	return strings.HasSuffix(file, ".d.ts")
+}
+
+
+// findTSOrigNameSpan scans src[fullStart:localStart] for origName,
+// returning its byte range. Used to rewrite the original-name
+// portion of aliased imports like `import { orig as local }`.
+func findTSOrigNameSpan(src []byte, fullStart, localStart uint32, origName string) (uint32, uint32, bool) {
+	if int(localStart) > len(src) || fullStart >= localStart {
+		return 0, 0, false
+	}
+	region := src[fullStart:localStart]
+	needle := []byte(origName)
+	for i := 0; i+len(needle) <= len(region); i++ {
+		// Word-boundary check.
+		if i > 0 {
+			prev := region[i-1]
+			if (prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z') ||
+				(prev >= '0' && prev <= '9') || prev == '_' || prev == '$' {
+				continue
+			}
+		}
+		if i+len(needle) < len(region) {
+			next := region[i+len(needle)]
+			if (next >= 'a' && next <= 'z') || (next >= 'A' && next <= 'Z') ||
+				(next >= '0' && next <= '9') || next == '_' || next == '$' {
+				continue
+			}
+		}
+		if string(region[i:i+len(needle)]) == origName {
+			return fullStart + uint32(i), fullStart + uint32(i+len(needle)), true
+		}
+	}
+	return 0, 0, false
 }
