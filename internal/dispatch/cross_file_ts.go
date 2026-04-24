@@ -63,6 +63,21 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 			}
 		}
 	}
+	// For CJS modules we also rewrite `module.exports = { name }`
+	// property-shorthand references in sym.File itself, because
+	// the TS scope builder parses the inside of `{ name }` as a
+	// namespace decl rather than a ref — the same-file pass
+	// doesn't catch it. Scan sym.File directly.
+	{
+		targetSrc := resolver.Source(sym.File)
+		for _, sp := range namespace.TSModuleExportsShorthand(targetSrc, sym.Name) {
+			out[sym.File] = append(out[sym.File], span{
+				start: sp.OrigNameStart,
+				end:   sp.OrigNameEnd,
+				isDef: true,
+			})
+		}
+	}
 	// Barrel expansion: for each primary candidate, walk its
 	// KindImport decls. Any import whose module resolves to a
 	// barrel that re-exports sym.Name from sym.File also needs
@@ -154,6 +169,25 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 			varTypes = buildVarTypes(candRes, src)
 		}
 
+		// CJS: `const { X } = require("./mod")` destructuring.
+		// Emit a span for the X position so the local binding gets
+		// renamed alongside refs to it.
+		for _, b := range namespace.TSFindCJSBindings(src) {
+			if b.OrigName != sym.Name {
+				continue
+			}
+			for _, f := range resolver.FilesForImport(b.ModPath, cand) {
+				if f == sym.File || resolveTSBarrelSourceFile(resolver, f, b.OrigName) == sym.File {
+					out[cand] = append(out[cand], span{
+						start: b.OrigNameStart,
+						end:   b.OrigNameEnd,
+						isDef: true,
+					})
+					break
+				}
+			}
+		}
+
 		// Scan re-export clauses for barrel files:
 		//   export { X } from "./y"
 		//   export { X as Y } from "./y"
@@ -187,7 +221,29 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 				continue
 			}
 			modPath, origName := tsImportPartsFromSignature(d.Signature)
-			if modPath == "" || origName != sym.Name {
+			if modPath == "" {
+				continue
+			}
+			// Allow origName=="default" when sym is the default
+			// export of the module it imports from. The default
+			// import conveys no specific name at the call site —
+			// the consumer picks the local name — but if they
+			// happened to pick the same name as the function,
+			// rename propagates.
+			if origName == "default" && origName != sym.Name {
+				files := resolver.FilesForImport(modPath, cand)
+				for _, f := range files {
+					if f != sym.File {
+						continue
+					}
+					defName := namespace.TSFileDefaultExportName(resolver.Source(f))
+					if defName == sym.Name {
+						origName = sym.Name
+					}
+					break
+				}
+			}
+			if origName != sym.Name {
 				continue
 			}
 			files := resolver.FilesForImport(modPath, cand)

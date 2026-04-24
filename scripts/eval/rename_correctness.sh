@@ -70,6 +70,12 @@ TUPLES=(
   "ts:tsconfig-paths|edr|scripts/eval/fixtures/ts-paths/src/components/counter.ts:compute|calculate|cd scripts/eval/fixtures/ts-paths && tsc"
   # TS: barrel re-exports — `export { X } from './bar'` chains.
   "ts:barrel-reexport|edr|scripts/eval/fixtures/ts-barrel/src/lib.ts:compute|calculate|cd scripts/eval/fixtures/ts-barrel && tsc"
+  # JS: CommonJS `const { X } = require('./lib')` destructure +
+  # `module.exports = { X }`. Running with node catches broken refs.
+  "ts:cjs-require|edr|scripts/eval/fixtures/ts-cjs/lib.js:compute|calculate|cd scripts/eval/fixtures/ts-cjs && node app.js"
+  # TS: `export default function X` — renaming the function
+  # updates its definition; import sites use their own local name.
+  "ts:default-export|edr|scripts/eval/fixtures/ts-default/src/lib.ts:compute|calculate|cd scripts/eval/fixtures/ts-default && tsc"
   # Kotlin: instance method on a class called via obj.value().
   "kt:class-method|edr|scripts/eval/fixtures/kotlin-method/Counter.kt:value|magnitude|cd scripts/eval/fixtures/kotlin-method && kotlinc *.kt -include-runtime -d /tmp/kt_method.jar"
   # Kotlin: companion-object method called as Lib.compute.
