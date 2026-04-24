@@ -60,6 +60,30 @@ TUPLES=(
   # C#: static class method across two files in the same namespace.
   # `dotnet build` type-checks the whole project.
   "cs:compute-free|edr|scripts/eval/fixtures/csharp-demo/Lib.cs:Compute|Calculate|cd scripts/eval/fixtures/csharp-demo && dotnet build --nologo"
+  # TS: class method called via obj.method().
+  "ts:class-method|edr|scripts/eval/fixtures/ts-method/src/counter.ts:value|magnitude|cd scripts/eval/fixtures/ts-method && tsc"
+  # TS: imported function name clashes with a param in another fn.
+  "ts:shadow-param|edr|scripts/eval/fixtures/ts-shadow/src/lib.ts:compute|calculate|cd scripts/eval/fixtures/ts-shadow && tsc"
+  # TS: same function name exported from two unrelated modules.
+  "ts:ambiguous-name|edr|scripts/eval/fixtures/ts-ambig/src/lib/a.ts:compute|calculate|cd scripts/eval/fixtures/ts-ambig && tsc"
+  # Kotlin: instance method on a class called via obj.value().
+  "kt:class-method|edr|scripts/eval/fixtures/kotlin-method/Counter.kt:value|magnitude|cd scripts/eval/fixtures/kotlin-method && kotlinc *.kt -include-runtime -d /tmp/kt_method.jar"
+  # Kotlin: companion-object method called as Lib.compute.
+  "kt:companion|edr|scripts/eval/fixtures/kotlin-companion/Lib.kt:compute|calculate|cd scripts/eval/fixtures/kotlin-companion && kotlinc *.kt -include-runtime -d /tmp/kt_comp.jar"
+  # Kotlin: top-level compute + local `compute` shadow.
+  "kt:shadow-local|edr|scripts/eval/fixtures/kotlin-shadow/Lib.kt:compute|calculate|cd scripts/eval/fixtures/kotlin-shadow && kotlinc *.kt -include-runtime -d /tmp/kt_shadow.jar"
+  # PHP: instance method on a class called via $obj->method().
+  "php:class-method|edr|scripts/eval/fixtures/php-method/Counter.php:value|magnitude|cd scripts/eval/fixtures/php-method && php app.php"
+  # PHP: static method called via Class::method().
+  "php:static-method|edr|scripts/eval/fixtures/php-static/Lib.php:compute|calculate|cd scripts/eval/fixtures/php-static && php app.php"
+  # PHP: two unrelated classes with same static-method name.
+  "php:ambiguous-name|edr|scripts/eval/fixtures/php-ambig/A.php:compute|calculate|cd scripts/eval/fixtures/php-ambig && php app.php"
+  # C#: instance method on a class called via obj.Method().
+  "cs:class-method|edr|scripts/eval/fixtures/csharp-method/Counter.cs:Value|Magnitude|cd scripts/eval/fixtures/csharp-method && dotnet build --nologo"
+  # C#: static call site + a local variable with the same name.
+  "cs:shadow-local|edr|scripts/eval/fixtures/csharp-shadow/Lib.cs:Compute|Calculate|cd scripts/eval/fixtures/csharp-shadow && dotnet build --nologo"
+  # C#: two unrelated static classes with same method name.
+  "cs:ambiguous-name|edr|scripts/eval/fixtures/csharp-ambig/A.cs:Compute|Calculate|cd scripts/eval/fixtures/csharp-ambig && dotnet build --nologo"
   # C: same-name static in a.c and b.c — rename one, verify the other
   # stays intact (linker would complain about duplicate externs
   # otherwise; statics are TU-local so independent).
