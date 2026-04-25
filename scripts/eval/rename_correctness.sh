@@ -97,6 +97,8 @@ TUPLES=(
   "cs:shadow-local|edr|scripts/eval/fixtures/csharp-shadow/Lib.cs:Compute|Calculate|cd scripts/eval/fixtures/csharp-shadow && dotnet build --nologo"
   # C#: two unrelated static classes with same method name.
   "cs:ambiguous-name|edr|scripts/eval/fixtures/csharp-ambig/A.cs:Compute|Calculate|cd scripts/eval/fixtures/csharp-ambig && dotnet build --nologo"
+  # C#: interface + class + virtual override hierarchy.
+  "cs:hierarchy|edr|scripts/eval/fixtures/csharp-hierarchy/Greeter.cs:Greet|Salute|cd scripts/eval/fixtures/csharp-hierarchy && dotnet build --nologo"
   # C: same-name static in a.c and b.c — rename one, verify the other
   # stays intact (linker would complain about duplicate externs
   # otherwise; statics are TU-local so independent).

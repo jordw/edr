@@ -42,6 +42,10 @@ func csharpCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.
 		return out, true
 	}
 
+	if sym.Receiver != "" {
+		csEmitHierarchySpans(out, resolver, sym, target)
+	}
+
 	candidates := map[string]bool{}
 	if refs, err := db.FindSemanticReferences(ctx, sym.Name, sym.File); err == nil {
 		for _, r := range refs {
@@ -58,6 +62,9 @@ func csharpCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.
 	acceptableTypes := map[string]bool{}
 	if sym.Receiver != "" {
 		acceptableTypes[sym.Receiver] = true
+		for _, t := range namespace.CSRelatedTypes(resolver.Source(sym.File), sym.Receiver) {
+			acceptableTypes[t] = true
+		}
 	}
 
 	pop := namespace.CSharpPopulator(resolver)
@@ -148,4 +155,63 @@ func csharp_ext_matches(file string, exts []string) bool {
 		}
 	}
 	return false
+}
+
+
+func csEmitHierarchySpans(out map[string][]span, resolver *namespace.CSharpResolver, sym *index.SymbolInfo, target *scope.Decl) {
+	src := resolver.Source(sym.File)
+	if len(src) == 0 {
+		return
+	}
+	hier := namespace.CSFindClassHierarchy(src)
+	if len(hier) == 0 {
+		return
+	}
+	var enclosing *namespace.CSClassHierarchy
+	for i := range hier {
+		h := &hier[i]
+		if h.BodyStart <= target.Span.StartByte && target.Span.EndByte <= h.BodyEnd {
+			enclosing = h
+			break
+		}
+	}
+	if enclosing == nil {
+		return
+	}
+	related := map[string]bool{}
+	for _, t := range namespace.CSRelatedTypes(src, enclosing.Name) {
+		related[t] = true
+	}
+	if len(related) == 0 {
+		return
+	}
+	targetRes := resolver.Result(sym.File)
+	if targetRes == nil {
+		return
+	}
+	for _, h := range hier {
+		if !related[h.Name] || h.Name == enclosing.Name {
+			continue
+		}
+		for i := range targetRes.Decls {
+			d := &targetRes.Decls[i]
+			if d.Name != sym.Name {
+				continue
+			}
+			if d.Kind != scope.KindMethod && d.Kind != scope.KindFunction {
+				continue
+			}
+			if d.Span.StartByte < h.BodyStart || d.Span.EndByte > h.BodyEnd {
+				continue
+			}
+			if d.ID == target.ID {
+				continue
+			}
+			out[sym.File] = append(out[sym.File], span{
+				start: d.Span.StartByte,
+				end:   d.Span.EndByte,
+				isDef: true,
+			})
+		}
+	}
 }
