@@ -118,6 +118,15 @@ TUPLES=(
   "cpp:static-isolation|edr|scripts/eval/fixtures/cpp-static/a.cpp:helper|worker|cd scripts/eval/fixtures/cpp-static && g++ -std=c++17 -Wall -Werror -o /tmp/cpp_static a.cpp b.cpp"
   # C++: virtual base + override hierarchy.
   "cpp:hierarchy|edr|scripts/eval/fixtures/cpp-hierarchy/src/Greeter.hpp:greet|salute|cd scripts/eval/fixtures/cpp-hierarchy && g++ -std=c++17 -Wall -Werror -o /tmp/cpp_hier src/*.cpp"
+  # C++: free function in a namespace, called as utils::compute(...).
+  "cpp:namespace|edr|scripts/eval/fixtures/cpp-namespace/src/lib.hpp:compute|calculate|cd scripts/eval/fixtures/cpp-namespace && g++ -std=c++17 -Wall -Werror -o /tmp/cpp_ns src/*.cpp"
+  # C++: multi-inheritance — Widget : public Drawable, public Loggable.
+  # Rename Drawable::draw — Widget's override + d->draw() rewrite;
+  # Loggable::log_msg and l->log_msg() must stay intact.
+  "cpp:multi-inheritance|edr|scripts/eval/fixtures/cpp-multi/src/Shapes.hpp:draw|render|cd scripts/eval/fixtures/cpp-multi && g++ -std=c++17 -Wall -Werror -o /tmp/cpp_multi src/*.cpp"
+  # C++: method on a template class — Stack<T>::push. Rename should
+  # rewrite the in-class def and every s.push(...) call site.
+  "cpp:template-class|edr|scripts/eval/fixtures/cpp-template/src/Stack.hpp:push|append|cd scripts/eval/fixtures/cpp-template && g++ -std=c++17 -Wall -Werror -o /tmp/cpp_tmpl src/*.cpp"
   # Python: method on class called via obj.method(). Exercises the
   # (currently missing) receiver disambiguation — expected to FAIL.
   "py:class-method|edr|scripts/eval/fixtures/python-method/pkg/counter.py:value|magnitude|cd scripts/eval/fixtures/python-method && python3 -m pkg"
