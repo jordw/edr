@@ -66,7 +66,7 @@ func PatchDirtyFiles(root, edrDir string, dirty []string, extractSymbols SymbolE
 		d.Header.NumSymbols = uint32(len(syms))
 		d.Header.NumNameKeys = uint32(len(namePosts))
 	}
-	atomicio.WriteFile(filepath.Join(edrDir, MainFile), d.Marshal())
+	atomicio.WriteFile(filepath.Join(edrDir, TrigramFile), d.Marshal())
 	InvalidateSymbolCache()
 	// Auxiliary indices are invalidated by any patch. None of them
 	// survive a remap in place:

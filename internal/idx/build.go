@@ -400,7 +400,7 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 		NamePosts:    namePosts,
 		NamePostings: namePostData,
 	}
-	if err := atomicio.WriteFile(filepath.Join(edrDir, MainFile), d.Marshal()); err != nil {
+	if err := atomicio.WriteFile(filepath.Join(edrDir, TrigramFile), d.Marshal()); err != nil {
 		return fmt.Errorf("writing index: %w", err)
 	}
 

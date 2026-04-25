@@ -30,7 +30,7 @@ func TestReporter_WithIndex(t *testing.T) {
 
 	writeFile(t, dir, "a.go", "package a\nfunc test() {}")
 	d := BuildFull(dir, []string{filepath.Join(dir, "a.go")}, 0)
-	if err := os.WriteFile(filepath.Join(edrDir, MainFile), d.Marshal(), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(edrDir, TrigramFile), d.Marshal(), 0o600); err != nil {
 		t.Fatalf("write index: %v", err)
 	}
 

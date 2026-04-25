@@ -171,7 +171,7 @@ func TestBuildAndQuery(t *testing.T) {
 	}
 	d := BuildFull(dir, paths, 0)
 	data := d.Marshal()
-	os.WriteFile(filepath.Join(edrDir, MainFile), data, 0600)
+	os.WriteFile(filepath.Join(edrDir, TrigramFile), data, 0600)
 
 	// Query for "hello" — should match hello.go and bar.go
 	tris := QueryTrigrams("hello")
@@ -228,7 +228,7 @@ func TestBuildFullFromWalk(t *testing.T) {
 	}
 
 	// Main index should exist
-	if _, err := os.Stat(filepath.Join(edrDir, MainFile)); err != nil {
+	if _, err := os.Stat(filepath.Join(edrDir, TrigramFile)); err != nil {
 		t.Error("main index not created")
 	}
 
@@ -256,7 +256,7 @@ func TestGetStatus(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "a.go", "package a\nfunc test() {}")
 	d := BuildFull(dir, []string{filepath.Join(dir, "a.go")}, 0)
-	os.WriteFile(filepath.Join(edrDir, MainFile), d.Marshal(), 0600)
+	os.WriteFile(filepath.Join(edrDir, TrigramFile), d.Marshal(), 0600)
 
 	s = GetStatus(dir, edrDir)
 	if !s.Exists {

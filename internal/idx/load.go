@@ -47,7 +47,7 @@ func ReadHeaderBytes(data []byte) (*Header, error) {
 }
 
 func loadIndex(edrDir string) *Snapshot {
-	data, err := os.ReadFile(filepath.Join(edrDir, MainFile))
+	data, err := os.ReadFile(filepath.Join(edrDir, TrigramFile))
 	if err != nil {
 		return nil
 	}
@@ -61,7 +61,7 @@ func loadIndex(edrDir string) *Snapshot {
 // loadIndexTrigrams loads only file table + trigrams + postings, skipping
 // symbol parsing. ~2x faster than loadIndex on large repos.
 func loadIndexTrigrams(edrDir string) *Snapshot {
-	data, err := os.ReadFile(filepath.Join(edrDir, MainFile))
+	data, err := os.ReadFile(filepath.Join(edrDir, TrigramFile))
 	if err != nil {
 		return nil
 	}

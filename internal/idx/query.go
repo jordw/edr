@@ -15,7 +15,7 @@ func Query(edrDir string, queryTrigrams []Trigram) ([]string, bool) {
 		return nil, false
 	}
 
-	f, err := os.Open(filepath.Join(edrDir, MainFile))
+	f, err := os.Open(filepath.Join(edrDir, TrigramFile))
 	if err != nil {
 		return nil, false
 	}

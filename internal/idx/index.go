@@ -21,8 +21,8 @@ import (
 	"github.com/jordw/edr/internal/staleness"
 )
 
-// MainFile is the index filename within the edr repo directory.
-const MainFile = "trigram.idx"
+// TrigramFile is the index filename within the edr repo directory.
+const TrigramFile = "trigram.idx"
 
 // DirtyFile is the on-disk name of the dirty marker.
 // Kept as a public constant for callers that reference it directly.
@@ -78,7 +78,7 @@ type Status struct {
 // GetStatus returns the current index status.
 func GetStatus(repoRoot, edrDir string) Status {
 	s := Status{}
-	mainPath := filepath.Join(edrDir, MainFile)
+	mainPath := filepath.Join(edrDir, TrigramFile)
 	info, err := os.Stat(mainPath)
 	if err != nil {
 		s.Stale = true

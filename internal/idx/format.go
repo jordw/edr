@@ -16,7 +16,7 @@ var magic = [8]byte{'E', 'D', 'R', 'T', 'R', 'I', 0, 0}
 // ReadHeader reads only the fixed-size header from the index file,
 // avoiding the cost of loading and parsing the full file table and postings.
 func ReadHeader(edrDir string) (*Header, error) {
-	f, err := os.Open(filepath.Join(edrDir, MainFile))
+	f, err := os.Open(filepath.Join(edrDir, TrigramFile))
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +242,7 @@ func (d *Snapshot) Marshal() []byte {
 // from the index file, skipping the bulk trigram data. This is much cheaper
 // than loading the full index for symbol-only queries.
 func LoadSymbolIndex(edrDir string) (files []FileEntry, symbols []SymbolEntry, namePosts []NamePostEntry, namePostings []byte, err error) {
-	path := filepath.Join(edrDir, MainFile)
+	path := filepath.Join(edrDir, TrigramFile)
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -382,7 +382,7 @@ func LoadSymbolIndex(edrDir string) (files []FileEntry, symbols []SymbolEntry, n
 // LoadFileTable reads only the header and file table from the index file.
 // This avoids loading the full index (trigrams, postings, symbols) into memory.
 func LoadFileTable(edrDir string) ([]FileEntry, error) {
-	path := filepath.Join(edrDir, MainFile)
+	path := filepath.Join(edrDir, TrigramFile)
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err

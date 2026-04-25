@@ -119,7 +119,7 @@ func dedupStrings(in []string) []string {
 // stampMtime updates the git mtime in the index header without rebuilding.
 // This is a 68-byte read + write — effectively free.
 func stampMtime(root, edrDir string) {
-	path := filepath.Join(edrDir, MainFile)
+	path := filepath.Join(edrDir, TrigramFile)
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return

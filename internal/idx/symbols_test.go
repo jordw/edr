@@ -51,7 +51,7 @@ func TestSymbolIndexRoundTrip(t *testing.T) {
 
 	// Write to temp dir
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, MainFile), data, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, TrigramFile), data, 0600); err != nil {
 		t.Fatal(err)
 	}
 

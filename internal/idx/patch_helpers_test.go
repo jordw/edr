@@ -311,7 +311,7 @@ func seedIndex(t *testing.T, edrDir string, files []FileEntry, symbols []SymbolE
 		NamePosts:    namePosts,
 		NamePostings: namePostings,
 	}
-	if err := os.WriteFile(filepath.Join(edrDir, MainFile), d.Marshal(), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(edrDir, TrigramFile), d.Marshal(), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

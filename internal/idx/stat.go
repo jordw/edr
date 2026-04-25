@@ -31,7 +31,7 @@ func (c *Changes) Empty() bool {
 func StatChanges(root, edrDir string) *Changes {
 	// Mmap the index and walk the file table in-place — avoids reading
 	// 5MB into heap and allocating 93K FileEntry structs.
-	f, err := os.Open(filepath.Join(edrDir, MainFile))
+	f, err := os.Open(filepath.Join(edrDir, TrigramFile))
 	if err != nil {
 		return nil
 	}
