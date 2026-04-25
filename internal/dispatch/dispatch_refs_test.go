@@ -1714,3 +1714,93 @@ func TestRename_CppHeaderProtoRewritten(t *testing.T) {
 		t.Errorf("main.cpp caller not renamed; got:\n%s", mData)
 	}
 }
+
+// TestRename_GoSiblingImplementerPropagation guards hard-blocker 3:
+// when renaming YAMLReader.Read (a method on a type that satisfies a
+// SAME-PACKAGE interface Reader), every other type in the package
+// that ALSO satisfies Reader must rewrite its method in lockstep.
+// Without this, the interface decl + the rename target are updated
+// but the sibling implementer's method name no longer matches the
+// interface — silent compile break. Mirrors the kubernetes
+// yaml.Reader / YAMLReader / LineReader shape from dogfood.
+func TestRename_GoSiblingImplementerPropagation(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"go.mod": "module example.com/yaml\n",
+		"a.go": `package yaml
+
+type Reader interface {
+	Read() ([]byte, error)
+}
+
+type YAMLReader struct{}
+
+func (r *YAMLReader) Read() ([]byte, error) { return nil, nil }
+
+type LineReader struct{}
+
+func (r *LineReader) Read() ([]byte, error) { return nil, nil }
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"a.go:Read"},
+		map[string]any{"new_name": "ReadX", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "a.go"))
+	body := string(got)
+	for _, want := range []string{
+		"ReadX() ([]byte, error)",                          // Reader interface decl
+		"func (r *YAMLReader) ReadX() ([]byte, error)",     // sym.Receiver
+		"func (r *LineReader) ReadX() ([]byte, error)",     // sibling implementer
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q after rename; got:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "Read()") && !strings.Contains(body, "ReadX()") {
+		t.Errorf("rename did not apply; body:\n%s", body)
+	}
+}
+
+// TestRename_GoSiblingImplementerArityFilter guards the false-positive
+// fix that came with hard-blocker 3: a sibling type whose same-named
+// method has a DIFFERENT arity does NOT satisfy the same interface and
+// must NOT be propagated. From the kubernetes shape: YAMLDecoder.Read
+// takes 1 param (it's an io.Reader, not a yaml.Reader); renaming
+// yaml.Reader.Read should leave YAMLDecoder.Read untouched.
+func TestRename_GoSiblingImplementerArityFilter(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"go.mod": "module example.com/yaml\n",
+		"a.go": `package yaml
+
+type Reader interface {
+	Read() ([]byte, error)
+}
+
+type YAMLReader struct{}
+
+func (r *YAMLReader) Read() ([]byte, error) { return nil, nil }
+
+// YAMLDecoder satisfies io.Reader (different signature than yaml.Reader).
+type YAMLDecoder struct{}
+
+func (d *YAMLDecoder) Read(data []byte) (n int, err error) { return 0, nil }
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"a.go:Read"},
+		map[string]any{"new_name": "ReadX", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "a.go"))
+	body := string(got)
+	if !strings.Contains(body, "func (r *YAMLReader) ReadX() ([]byte, error)") {
+		t.Errorf("YAMLReader.Read not renamed; got:\n%s", body)
+	}
+	// YAMLDecoder.Read has a different arity — must NOT be renamed.
+	if !strings.Contains(body, "func (d *YAMLDecoder) Read(data []byte)") {
+		t.Errorf("YAMLDecoder.Read was incorrectly renamed despite arity mismatch; got:\n%s", body)
+	}
+}

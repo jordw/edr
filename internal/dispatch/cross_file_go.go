@@ -1,6 +1,7 @@
 package dispatch
 
 import (
+	"bytes"
 	"context"
 	"strings"
 
@@ -107,10 +108,23 @@ func goCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 		acceptableTypes[sym.Receiver] = true
 	}
 	var ifaceHits []goIfaceHit
+	var siblingImpls []goSiblingImpl
 	if isMethod {
 		ifaceHits = goSatisfiedInterfaces(ctx, db, sym, resolver)
 		for _, h := range ifaceHits {
 			acceptableTypes[h.name] = true
+		}
+		// Sibling implementer propagation: when sym.Receiver
+		// satisfies interface I in this package, ANY other type T
+		// that also satisfies I shares the same method name with
+		// the interface. Renaming sym.Receiver.Name + I.Name without
+		// renaming T.Name leaves T no longer matching I — compile
+		// breaks. Find every such T and emit its method span.
+		// Also add T to acceptableTypes so callers using T-typed
+		// vars get rewritten alongside.
+		siblingImpls = goSiblingImplementers(ctx, db, sym, resolver, ifaceHits)
+		for _, s := range siblingImpls {
+			acceptableTypes[s.receiver] = true
 		}
 	}
 
@@ -208,6 +222,25 @@ func goCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 		})
 	}
 
+	// Emit identifier spans for each sibling implementer's method
+	// named sym.Name. The symbol-index span covers the FULL method
+	// (signature + body); narrow it to just the identifier so the
+	// apply layer doesn't overwrite the body.
+	for _, s := range siblingImpls {
+		src := resolver.Source(s.file)
+		if len(src) == 0 {
+			continue
+		}
+		nameSpan, ok := goMethodNameSpan(src, s.span.StartByte, s.span.EndByte, sym.Name)
+		if !ok {
+			continue
+		}
+		out[s.file] = append(out[s.file], span{
+			start: nameSpan.StartByte,
+			end:   nameSpan.EndByte,
+		})
+	}
+
 	return out, true
 }
 
@@ -272,6 +305,13 @@ type goIfaceHit struct {
 	name       string
 	file       string
 	methodSpan scope.Span
+	// methods is the interface's full method set. Used by the caller
+	// to find OTHER same-package types that also satisfy this
+	// interface so their method spans get rewritten in lockstep —
+	// otherwise the rename leaves the interface decl + the rename
+	// target updated but breaks compile for sibling implementers
+	// whose method name no longer matches the interface.
+	methods []string
 }
 
 // goSatisfiedInterfaces finds same-package interfaces that sym.Receiver
@@ -360,15 +400,295 @@ func goSatisfiedInterfaces(
 				continue
 			}
 			if methodSpan, ok := ifaceMethods[sym.Name]; ok {
+				names := make([]string, 0, len(ifaceMethods))
+				for n := range ifaceMethods {
+					names = append(names, n)
+				}
 				hits = append(hits, goIfaceHit{
 					name:       owner.Name,
 					file:       f,
 					methodSpan: methodSpan,
+					methods:    names,
 				})
 			}
 		}
 	}
 	return hits
+}
+
+// goSiblingImpl describes another type in the same package that
+// also satisfies one of the rename target's matched interfaces.
+// Renaming the target's method without renaming the sibling's method
+// would break compile: the interface decl gets the new name, but the
+// sibling type's same-named method no longer matches it.
+type goSiblingImpl struct {
+	receiver string
+	file     string
+	span     scope.Span
+}
+
+// goSiblingImplementers walks same-package files for OTHER types
+// (receivers) whose method set is a superset of any matched
+// interface's method set, and returns the span of each such type's
+// method named sym.Name. Excludes sym.Receiver itself — that's the
+// rename target, already handled by the caller's main span emission.
+func goSiblingImplementers(
+	ctx context.Context,
+	db index.SymbolStore,
+	sym *index.SymbolInfo,
+	resolver *namespace.GoResolver,
+	ifaces []goIfaceHit,
+) []goSiblingImpl {
+	if len(ifaces) == 0 {
+		return nil
+	}
+	files := append([]string{sym.File}, resolver.SamePackageFiles(sym.File)...)
+	// Build receiver -> (methodName -> SymbolInfo of that method).
+	type recvBucket struct {
+		methods map[string]index.SymbolInfo
+	}
+	receivers := map[string]*recvBucket{}
+	for _, f := range files {
+		syms, err := db.GetSymbolsByFile(ctx, f)
+		if err != nil {
+			continue
+		}
+		for i := range syms {
+			s := syms[i]
+			if s.Type != "method" || s.Receiver == "" {
+				continue
+			}
+			b := receivers[s.Receiver]
+			if b == nil {
+				b = &recvBucket{methods: map[string]index.SymbolInfo{}}
+				receivers[s.Receiver] = b
+			}
+			b.methods[s.Name] = s
+		}
+	}
+
+	seen := map[string]bool{} // receiver name → emitted, to dedupe across ifaces
+	var out []goSiblingImpl
+	for _, iface := range ifaces {
+		// Compute the interface method's arity once. The methodSpan
+		// is the identifier; goMethodArity reads the bytes after the
+		// identifier to count params/returns. Sibling implementers
+		// must match this arity to actually satisfy the interface —
+		// without this check, any same-name method (e.g. an io.Reader
+		// `Read([]byte) (int, error)` colocated with a custom
+		// `Read() ([]byte, error)`) would be falsely propagated.
+		ifaceSrc := resolver.Source(iface.file)
+		ifaceParams, ifaceReturns, ifaceArityOK := goMethodArity(ifaceSrc, iface.methodSpan.EndByte)
+		if !ifaceArityOK {
+			continue
+		}
+		for recvName, b := range receivers {
+			if recvName == sym.Receiver {
+				continue
+			}
+			if seen[recvName] {
+				continue
+			}
+			// Receiver must implement every method in this interface
+			// (by name only — signature shape is checked below for
+			// sym.Name; full conformance for the other methods is
+			// approximated by name presence).
+			complete := true
+			for _, m := range iface.methods {
+				if _, ok := b.methods[m]; !ok {
+					complete = false
+					break
+				}
+			}
+			if !complete {
+				continue
+			}
+			tgtMethod := b.methods[sym.Name]
+			// Arity gate: signature shape of THIS implementer's
+			// sym.Name method must match the interface's. Find the
+			// method-name identifier inside the full method span and
+			// compare arities.
+			tgtSrc := resolver.Source(tgtMethod.File)
+			nameSpan, ok := goMethodNameSpan(tgtSrc, tgtMethod.StartByte, tgtMethod.EndByte, sym.Name)
+			if !ok {
+				continue
+			}
+			tgtParams, tgtReturns, tgtArityOK := goMethodArity(tgtSrc, nameSpan.EndByte)
+			if !tgtArityOK {
+				continue
+			}
+			if tgtParams != ifaceParams || tgtReturns != ifaceReturns {
+				continue
+			}
+			seen[recvName] = true
+			out = append(out, goSiblingImpl{
+				receiver: recvName,
+				file:     tgtMethod.File,
+				span:     scope.Span{StartByte: tgtMethod.StartByte, EndByte: tgtMethod.EndByte},
+			})
+		}
+	}
+	return out
+}
+
+// goMethodArity returns the (paramCount, returnCount) of a Go method
+// or interface-method signature whose identifier starts at identEnd.
+// identEnd is the byte position immediately after the method name (so
+// the signature begins with `(` for params).
+//
+// Used to filter sibling-interface candidates: two methods with the
+// same name but different arities don't satisfy the same interface.
+// Counts top-level commas with paren-depth tracking — ignores commas
+// inside generic type lists, struct embeddings, etc.
+//
+// Returns ok=false when the bytes don't match the expected
+// `(...) ...` shape (malformed source, end-of-file, etc.).
+func goMethodArity(src []byte, identEnd uint32) (params, returns int, ok bool) {
+	if int(identEnd) >= len(src) {
+		return 0, 0, false
+	}
+	i := int(identEnd)
+	// Skip whitespace.
+	for i < len(src) && (src[i] == ' ' || src[i] == '\t') {
+		i++
+	}
+	if i >= len(src) || src[i] != '(' {
+		return 0, 0, false
+	}
+	// Count params inside the matching parens.
+	pCount, pEnd, ok := goCountTopLevelArgs(src, i)
+	if !ok {
+		return 0, 0, false
+	}
+
+	// After params: skip whitespace, then look at return shape.
+	j := pEnd + 1 // past matching ')'
+	for j < len(src) && (src[j] == ' ' || src[j] == '\t') {
+		j++
+	}
+	if j >= len(src) {
+		return pCount, 0, true
+	}
+	switch src[j] {
+	case '\n', '{', ';', '}':
+		// No return value (void or interface-method line ends).
+		return pCount, 0, true
+	case '(':
+		// Multi-return: `(T1, T2, T3)`.
+		rCount, _, ok := goCountTopLevelArgs(src, j)
+		if !ok {
+			return pCount, 0, false
+		}
+		return pCount, rCount, true
+	}
+	// Single return value: any non-paren type until end of line / `{`.
+	return pCount, 1, true
+}
+
+// goCountTopLevelArgs assumes src[start] is '(' and counts the number
+// of top-level comma-separated entries inside the matching parens.
+// Returns count, byte index of the matching ')', and ok.
+//
+// "Top-level" means at paren-depth 1; commas inside nested parens,
+// brackets, or braces don't count. Empty list returns 0.
+func goCountTopLevelArgs(src []byte, start int) (count, closeIdx int, ok bool) {
+	if start >= len(src) || src[start] != '(' {
+		return 0, 0, false
+	}
+	depth := 1
+	commas := 0
+	hasContent := false
+	i := start + 1
+	for i < len(src) && depth > 0 {
+		switch src[i] {
+		case '(', '[', '{':
+			depth++
+			hasContent = true
+		case ')':
+			depth--
+			if depth == 0 {
+				break
+			}
+		case ']', '}':
+			depth--
+		case ',':
+			if depth == 1 {
+				commas++
+			}
+		case ' ', '\t', '\n', '\r':
+			// whitespace doesn't count as content
+		default:
+			hasContent = true
+		}
+		if depth == 0 {
+			break
+		}
+		i++
+	}
+	if depth != 0 {
+		return 0, 0, false
+	}
+	if !hasContent {
+		return 0, i, true
+	}
+	return commas + 1, i, true
+}
+
+// goMethodNameSpan returns the byte span of the method-name identifier
+// inside a `func (recv) Name(...)` declaration. The caller hands it
+// the FULL method span (signature + body) from the symbol index;
+// this function narrows it to just the `Name` identifier. Returns
+// ok=false if the bytes don't match the expected shape (e.g. the
+// symbol-index span was off, or `name` doesn't appear at the method-
+// name position).
+func goMethodNameSpan(src []byte, methodStart, methodEnd uint32, name string) (scope.Span, bool) {
+	if int(methodEnd) > len(src) || methodStart >= methodEnd {
+		return scope.Span{}, false
+	}
+	body := src[methodStart:methodEnd]
+	// Find the receiver's opening `(` — first `(` in the method body.
+	open := bytes.IndexByte(body, '(')
+	if open < 0 {
+		return scope.Span{}, false
+	}
+	// Walk past the matching close paren (handle nested parens in
+	// receiver type like `func (m map[int]struct{ a int }) ...`).
+	depth := 1
+	j := open + 1
+	for j < len(body) && depth > 0 {
+		switch body[j] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		}
+		j++
+	}
+	if depth != 0 {
+		return scope.Span{}, false
+	}
+	// Skip whitespace.
+	for j < len(body) && (body[j] == ' ' || body[j] == '\t') {
+		j++
+	}
+	// Match the identifier with word boundaries.
+	if j+len(name) > len(body) {
+		return scope.Span{}, false
+	}
+	if string(body[j:j+len(name)]) != name {
+		return scope.Span{}, false
+	}
+	if j+len(name) < len(body) {
+		c := body[j+len(name)]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '_' {
+			return scope.Span{}, false
+		}
+	}
+	return scope.Span{
+		StartByte: methodStart + uint32(j),
+		EndByte:   methodStart + uint32(j) + uint32(len(name)),
+	}, true
 }
 
 // goBuildVarTypes maps each local var/param/field decl to the last
