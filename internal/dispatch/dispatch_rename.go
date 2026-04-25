@@ -54,6 +54,29 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 		}, nil
 	}
 
+	// Stdlib interface conformance gate (Go): renaming a method that
+	// satisfies a stdlib interface (io.Reader.Read, fmt.Stringer.String,
+	// etc.) silently breaks compile because the interface declaration
+	// can't be edited. Refuse with a structured result naming the
+	// interface so the agent gets a programmatic signal, not a free-text
+	// error string. Cross-file mode only — same-file rename of a method
+	// declaration on a single type still affects callers, so the same
+	// gate applies regardless of the cross-file flag.
+	if pkg, iface := goConflictingStdlibIface(ctx, db, sym); iface != "" {
+		fq := iface
+		if pkg != "" {
+			fq = pkg + "." + iface
+		}
+		warn := fmt.Sprintf("rename refused: %s.%s satisfies stdlib interface %s; renaming would break interface conformance (the stdlib decl cannot be rewritten). Either rename the interface usage at call sites or pick a different name.",
+			sym.Receiver, oldName, fq)
+		return &output.RenameResult{
+			OldName:  oldName,
+			NewName:  newName,
+			Status:   "refused",
+			Warnings: []string{warn},
+		}, nil
+	}
+
 	// File → byte ranges to replace. Each span covers exactly the
 	// identifier bytes; the apply loop overwrites them with newName
 	// and gates --comments=skip via positionInComment.
