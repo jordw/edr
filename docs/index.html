@@ -338,6 +338,8 @@ edr <span class="flag">-e</span> src/scheduler.py <span class="flag">--old</span
       <tr><td>orient [path]</td><td>Structural overview of a directory or project</td></tr>
       <tr><td>focus file[:Symbol]</td><td>Read file or symbol with context</td></tr>
       <tr><td>edit file</td><td>Edit, write, create files. <code>--verify</code> to check build.</td></tr>
+      <tr><td>rename file:Symbol</td><td>Rename a symbol across references (scope-aware where supported)</td></tr>
+      <tr><td>refs-to file:Symbol</td><td>List references to a symbol (impact analysis before rename)</td></tr>
       <tr><td>status</td><td>Session state, build state</td></tr>
       <tr><td>undo</td><td>Revert last edit/write (auto-checkpointed)</td></tr>
       <tr><td>files "pattern"</td><td>Find files containing text (trigram-accelerated)</td></tr>
@@ -376,7 +378,8 @@ edr <span class="flag">-e</span> f.go <span class="flag">--content</span> "..." 
   <p style="color: var(--fg); font-size: 0.9rem; margin-bottom: 0.25rem;"><strong>Symbol parsing</strong></p>
   <ul class="lang-list">
     <li>Go</li><li>Python</li><li>JavaScript</li><li>TypeScript</li><li>Rust</li>
-    <li>Java</li><li>C</li><li>C++</li><li>Ruby</li>
+    <li>Java</li><li>Kotlin</li><li>Swift</li><li>C</li><li>C++</li><li>C#</li>
+    <li>Ruby</li><li>PHP</li><li>Scala</li><li>Lua</li><li>Zig</li>
   </ul>
 </section>
 

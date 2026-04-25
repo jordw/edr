@@ -45,6 +45,7 @@ edr edit --where Symbol --old "x" --new "y"        # auto-resolve file
 edr rename file.go:OldName --to NewName            # same-file rename (def + same-file callers)
 edr rename file.go:OldName --to NewName --dry-run  # preview without applying
 edr rename file.go:OldName --to NewName --cross-file # update callers across all files
+edr rename file.go:Method --to New --cross-file --verify # build-check after; the only signal for interface conformance breaks
 
 ## References — `edr refs-to`
 
