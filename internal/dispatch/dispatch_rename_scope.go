@@ -27,7 +27,7 @@ func scopeSupported(path string) bool {
 		return false
 	}
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".go", ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".py", ".pyi", ".java", ".kt", ".kts", ".rs",
+	case ".go", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".py", ".pyi", ".java", ".kt", ".kts", ".rs",
 		".c", ".h",
 		".cpp", ".cxx", ".cc", ".c++", ".hpp", ".hxx", ".hh", ".h++",
 		".rb",

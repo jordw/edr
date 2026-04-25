@@ -2756,6 +2756,26 @@ func TestSpec_RenameCrossFile(t *testing.T) {
 	}
 }
 
+func TestSpec_RenameVerify(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"go.mod":  "module example.com/test\n\ngo 1.21\n",
+		"main.go": "package main\n\nfunc Hello() {}\n\nfunc main() { Hello() }\n",
+	})
+
+	result, _, _, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"rename", "main.go:Hello", "--to", "Greet", "--verify")
+	if exit != 0 {
+		t.Fatalf("exit %d", exit)
+	}
+	if result.Verify == nil {
+		t.Fatal("expected verify line after rename --verify")
+	}
+	v := result.Verify["verify"].(string)
+	if v != "passed" && v != "failed" {
+		t.Errorf("verify = %q, want passed or failed", v)
+	}
+}
+
 func TestSpec_RenameMissingTo(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{
 		"main.go": "package main\n\nfunc Hello() {}\n",
@@ -2921,6 +2941,24 @@ func TestSpec_RenameModeScope(t *testing.T) {
 	}
 	if warnings, ok := h["warnings"]; ok {
 		t.Errorf("unexpected warnings on scope path: %v", warnings)
+	}
+}
+
+func TestSpec_RenameModeScopeMJS(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"lib.mjs": "export function compute(x) {\n  return x * 2\n}\n\ncompute(1)\n",
+	})
+	result, stdout, stderr, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
+		"rename", "lib.mjs:compute", "--to", "calculate", "--dry-run")
+	if exit != 0 {
+		t.Fatalf("exit %d, stderr: %s, stdout: %s", exit, stderr, stdout)
+	}
+	h := result.Ops[0].Header
+	if h["mode"] != "scope" {
+		t.Errorf("mode = %v, want scope", h["mode"])
+	}
+	if warnings, ok := h["warnings"]; ok {
+		t.Errorf("unexpected warnings on .mjs scope path: %v", warnings)
 	}
 }
 

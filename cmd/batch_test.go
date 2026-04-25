@@ -688,6 +688,64 @@ func TestDoParams_Renames(t *testing.T) {
 	}
 }
 
+func TestHandleDo_RenameDispatchesNewNameFlag(t *testing.T) {
+	tmp := t.TempDir()
+	err := os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc Hello() {}\n\nfunc main() { Hello() }\n"), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	db := index.NewOnDemand(tmp)
+	defer db.Close()
+	sess := session.New()
+
+	raw := json.RawMessage(`{"renames": [{"old_name": "main.go:Hello", "new_name": "Greet"}]}`)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+	if strings.Contains(result, "--to <new_name> is required") {
+		t.Fatalf("batch rename did not pass new_name flag: %s", result)
+	}
+	data, err := os.ReadFile(filepath.Join(tmp, "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	if strings.Contains(body, "Hello") || !strings.Contains(body, "Greet") {
+		t.Fatalf("rename did not update file; body:\n%s", body)
+	}
+}
+
+func TestHandleDo_RenameHonorsTopLevelDryRun(t *testing.T) {
+	tmp := t.TempDir()
+	err := os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc Hello() {}\n\nfunc main() { Hello() }\n"), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	db := index.NewOnDemand(tmp)
+	defer db.Close()
+	sess := session.New()
+
+	raw := json.RawMessage(`{"dry_run": true, "renames": [{"old_name": "main.go:Hello", "new_name": "Greet"}]}`)
+	result, err := testHandleDo(context.Background(), db, sess, raw)
+	if err != nil {
+		t.Fatalf("handleDo: %v", err)
+	}
+	if !strings.Contains(result, `"status":"dry_run"`) {
+		t.Fatalf("expected dry_run rename result, got: %s", result)
+	}
+	data, err := os.ReadFile(filepath.Join(tmp, "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	if !strings.Contains(body, "Hello") || strings.Contains(body, "Greet") {
+		t.Fatalf("dry-run rename mutated file; body:\n%s", body)
+	}
+}
+
 func TestDoParams_Edits_DryRunPromotion(t *testing.T) {
 	// Per-edit dry_run should be parsed into the DryRun field.
 	raw := `{"edits": [{"file": "f.go", "old_text": "old", "new_text": "new", "dry_run": true}]}`

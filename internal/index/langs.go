@@ -31,6 +31,8 @@ var langByExt = map[string]*langConfig{
 	".pyi":   {id: "python", container: ContainerIndent},
 	".js":    {id: "javascript", container: ContainerBrace, containerClose: "}"},
 	".jsx":   {id: "javascript", container: ContainerBrace, containerClose: "}"},
+	".mjs":   {id: "javascript", container: ContainerBrace, containerClose: "}"},
+	".cjs":   {id: "javascript", container: ContainerBrace, containerClose: "}"},
 	".ts":    {id: "typescript", container: ContainerBrace, containerClose: "}"},
 	".tsx":   {id: "typescript", container: ContainerBrace, containerClose: "}"},
 	".mts":   {id: "typescript", container: ContainerBrace, containerClose: "}"},
@@ -99,7 +101,7 @@ func Parse(path string, src []byte) []SymbolInfo {
 	switch ext {
 	case ".rb":
 		return rubyToSymbolInfo(path, src, ParseRuby(src))
-	case ".js", ".jsx", ".ts", ".tsx", ".mts", ".cts":
+	case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts":
 		return tsToSymbolInfo(path, src, ParseTS(src))
 	case ".go":
 		return goToSymbolInfo(path, src, ParseGo(src))

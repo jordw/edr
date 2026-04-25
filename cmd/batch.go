@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"strings"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/jordw/edr/internal/cmdspec"
 	"github.com/jordw/edr/internal/dispatch"
@@ -44,7 +44,7 @@ type doAssert struct {
 	SymbolAbsent string `json:"symbol_absent,omitempty"` // file:Symbol or bare Symbol must NOT exist
 	TextPresent  string `json:"text_present,omitempty"`  // text must be present in file (requires File)
 	TextAbsent   string `json:"text_absent,omitempty"`   // text must NOT be present in file (requires File)
-	File         string `json:"file,omitempty"`           // file context for text assertions
+	File         string `json:"file,omitempty"`          // file context for text assertions
 }
 
 // doParams holds the parsed params for batch operations.
@@ -164,13 +164,13 @@ type doWrite struct {
 }
 
 type doRename struct {
-	OldName string   `json:"old_name"`
-	NewName string   `json:"new_name"`
-	DryRun  *bool    `json:"dry_run,omitempty"`
-	Word    *bool    `json:"word,omitempty"`
-	Include []string `json:"include,omitempty"`
-	Exclude []string `json:"exclude,omitempty"`
-	Budget  *int     `json:"budget,omitempty"`
+	OldName   string `json:"old_name"`
+	NewName   string `json:"new_name"`
+	DryRun    *bool  `json:"dry_run,omitempty"`
+	CrossFile *bool  `json:"cross_file,omitempty"`
+	Force     *bool  `json:"force,omitempty"`
+	Verify    *bool  `json:"verify,omitempty"`
+	Comments  string `json:"comments,omitempty"`
 }
 
 // Batch known-key sets — derived from the canonical registry in cmdspec.
@@ -739,6 +739,12 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 					targetSet[w.File] = true
 				}
 			}
+			for _, r := range p.Renames {
+				if target := renameTargetFile(r.OldName); target != "" && !targetSet[target] {
+					dirtyFiles = append(dirtyFiles, target)
+					targetSet[target] = true
+				}
+			}
 			sessDir := filepath.Join(db.EdrDir(), "sessions")
 			if _, err := sess.CreateAutoCheckpoint(sessDir, db.Root(), "batch", dirtyFiles); err != nil {
 				fmt.Fprintf(os.Stderr, "edr: checkpoint failed: %v\n", err)
@@ -756,6 +762,11 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 				for _, w := range p.Writes {
 					if w.File != "" {
 						touched = append(touched, w.File)
+					}
+				}
+				for _, r := range p.Renames {
+					if target := renameTargetFile(r.OldName); target != "" {
+						touched = append(touched, target)
 					}
 				}
 				if len(touched) > 0 {
@@ -789,24 +800,35 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 		for i, r := range p.Renames {
 			opID := fmt.Sprintf("n%d", i)
 			sess.InvalidateForEdit("rename", []string{r.OldName, r.NewName})
-			renameFlags := map[string]any{}
-			if r.DryRun != nil && *r.DryRun {
+			renameFlags := map[string]any{"new_name": r.NewName}
+			if isDryRun || (r.DryRun != nil && *r.DryRun) {
 				renameFlags["dry_run"] = true
 			}
-			if r.Word != nil && *r.Word {
-				renameFlags["word"] = true
+			if r.CrossFile != nil && *r.CrossFile {
+				renameFlags["cross_file"] = true
 			}
-			if len(r.Include) > 0 {
-				renameFlags["include"] = r.Include
+			if r.Force != nil && *r.Force {
+				renameFlags["force"] = true
 			}
-			if len(r.Exclude) > 0 {
-				renameFlags["exclude"] = r.Exclude
+			if r.Comments != "" {
+				renameFlags["comments"] = r.Comments
 			}
-			result, err := dispatch.Dispatch(ctx, db, "rename", []string{r.OldName, r.NewName}, renameFlags)
+			result, err := dispatch.Dispatch(ctx, db, "rename", []string{r.OldName}, renameFlags)
 			if err != nil {
 				env.AddFailedOpWithCode(opID, "rename", classifyError(err), err.Error())
 			} else {
+				if rr, ok := result.(*output.RenameResult); ok && len(rr.OldContents) > 0 && sess != nil {
+					patchCheckpointWithOldContents(db.EdrDir(), db.Root(), rr.OldContents)
+				}
 				env.AddOp(opID, "rename", result)
+				if r.Verify != nil && *r.Verify {
+					status, _ := resultStatus(result)
+					if status == "applied" {
+						runPostMutationVerify(ctx, db, sess, env, db.EdrDir(), db.Root(), renameVerifyFiles(result, []string{r.OldName}), "rename applied then reverted: verify failed")
+					} else if status == "dry_run" {
+						env.SetVerify(map[string]any{"status": "skipped", "reason": "dry run"})
+					}
+				}
 			}
 		}
 	}
@@ -1214,6 +1236,13 @@ func addMultiResultOps(env *output.Envelope, sess *session.Session, cmds []dispa
 		env.AddOp(opID, cmdName, result)
 		recordOp(sess, cmdName, cArgs, flags, result, true)
 	}
+}
+
+func renameTargetFile(target string) string {
+	if idx := strings.Index(target, ":"); idx > 0 {
+		return target[:idx]
+	}
+	return target
 }
 
 // suggestField finds the closest known field name by Levenshtein distance.

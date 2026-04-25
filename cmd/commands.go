@@ -150,6 +150,23 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 
 		env.AddOp(opID, cmdName, result)
 	}
+
+	if cmdName == "rename" {
+		dryRun, _ := flags["dry_run"].(bool)
+		doVerify, _ := flags["verify"].(bool)
+		status, _ := resultStatus(result)
+		if !dryRun && doVerify && status == "applied" {
+			verifyFiles := renameVerifyFiles(result, args)
+			runPostMutationVerify(context.Background(), db, sess, env, edrDir, root, verifyFiles, "rename applied then reverted: verify failed")
+		} else if dryRun && doVerify {
+			env.SetVerify(map[string]any{"status": "skipped", "reason": "dry run"})
+		}
+		if vm, ok := env.Verify.(map[string]any); ok {
+			if vs, ok := vm["status"].(string); ok && vs != "skipped" {
+				sess.RecordVerify(vs)
+			}
+		}
+	}
 	env.ComputeOK()
 
 	// Record op in session log
@@ -160,6 +177,61 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 		return silentError{code: 1}
 	}
 	return nil
+}
+
+func renameVerifyFiles(result any, args []string) []string {
+	if r, ok := result.(*output.RenameResult); ok && len(r.FilesChanged) > 0 {
+		return r.FilesChanged
+	}
+	if len(args) == 0 {
+		return nil
+	}
+	target := args[0]
+	if idx := strings.Index(target, ":"); idx > 0 {
+		target = target[:idx]
+	}
+	return []string{target}
+}
+
+func runPostMutationVerify(ctx context.Context, db index.SymbolStore, sess *session.Session, env *output.Envelope, edrDir, root string, files []string, revertedMsg string) {
+	verifyFlags := map[string]any{}
+	if len(files) > 0 {
+		verifyFlags["files"] = files
+	}
+	verifyResult, verifyErr := dispatch.Dispatch(ctx, db, "verify", []string{}, verifyFlags)
+	if verifyErr != nil {
+		env.SetVerify(map[string]any{"status": "failed", "error": verifyErr.Error()})
+	} else {
+		env.SetVerify(verifyResult)
+	}
+
+	verifyStatus := ""
+	if vm, ok := env.Verify.(map[string]any); ok {
+		verifyStatus, _ = vm["status"].(string)
+	}
+	if verifyStatus != "failed" || sess == nil {
+		return
+	}
+
+	sessDir := filepath.Join(edrDir, "sessions")
+	cpID := session.LatestAutoCheckpoint(sessDir)
+	if cpID == "" {
+		return
+	}
+	dirtyFiles := sess.GetDirtyFiles()
+	if _, _, _, restoreErr := sess.RestoreCheckpoint(sessDir, root, cpID, false, dirtyFiles); restoreErr != nil {
+		return
+	}
+	session.DropCheckpoint(sessDir, cpID)
+	if vm, ok := env.Verify.(map[string]any); ok {
+		vm["auto_undone"] = true
+	}
+	if len(env.Ops) > 0 {
+		lastOp := env.Ops[len(env.Ops)-1]
+		lastOp["status"] = "reverted"
+		lastOp["msg"] = revertedMsg
+		delete(lastOp, "read_back")
+	}
 }
 
 func normalizeExpandArgs(args []string, flags map[string]any) []string {

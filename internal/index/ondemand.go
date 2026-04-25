@@ -25,7 +25,7 @@ type OnDemand struct {
 
 	mu        sync.RWMutex
 	cache     map[string]*cachedFile // abs path -> parsed result
-	fileCount int                     // cached file count from Stats, -1 = unset
+	fileCount int                    // cached file count from Stats, -1 = unset
 }
 
 type cachedFile struct {
@@ -50,7 +50,7 @@ func NewOnDemand(root string) *OnDemand {
 	}
 }
 
-func (o *OnDemand) Root() string  { return o.root }
+func (o *OnDemand) Root() string   { return o.root }
 func (o *OnDemand) EdrDir() string { return o.edrDir }
 func (o *OnDemand) Close() error   { return nil }
 
@@ -94,7 +94,7 @@ func (o *OnDemand) parseFile(absPath string) (*cachedFile, error) {
 		r := ParseRuby(src)
 		syms = rubyToSymbolInfo(absPath, src, r)
 		imports = rubyImportsToInfo(absPath, r)
-	case ".js", ".jsx", ".ts", ".tsx", ".mts", ".cts":
+	case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts":
 		r := ParseTS(src)
 		syms = tsToSymbolInfo(absPath, src, r)
 		imports = tsImportsToInfo(absPath, r)
@@ -235,7 +235,6 @@ func symSpan(s *SymbolInfo) int64 {
 	return int64(s.EndLine) - int64(s.StartLine)
 }
 
-
 // isDefinitionType returns true for symbol types that represent definitions
 // (struct, class, enum, type, interface) vs implementations (impl, method, function).
 func isDefinitionType(typ string) bool {
@@ -245,7 +244,6 @@ func isDefinitionType(typ string) bool {
 	}
 	return false
 }
-
 
 func (o *OnDemand) GetSymbolsByFile(ctx context.Context, file string) ([]SymbolInfo, error) {
 	cf, err := o.parseFile(o.absPath(file))
@@ -415,7 +413,7 @@ func (o *OnDemand) ResolveSymbol(ctx context.Context, name string) (*SymbolInfo,
 				File:      absPath,
 				StartLine: e.StartLine, EndLine: e.EndLine,
 				StartByte: e.StartByte, EndByte: e.EndByte,
-				IndexID:   e.IndexID,
+				IndexID: e.IndexID,
 			})
 		}
 		if len(candidates) == 1 {
@@ -1091,16 +1089,24 @@ func (o *OnDemand) symbolNotFoundError(_ context.Context, name, file string) err
 
 // levenshtein computes edit distance between two strings.
 func levenshtein(a, b string) int {
-	if len(a) == 0 { return len(b) }
-	if len(b) == 0 { return len(a) }
+	if len(a) == 0 {
+		return len(b)
+	}
+	if len(b) == 0 {
+		return len(a)
+	}
 	prev := make([]int, len(b)+1)
-	for j := range prev { prev[j] = j }
+	for j := range prev {
+		prev[j] = j
+	}
 	for i := 1; i <= len(a); i++ {
 		curr := make([]int, len(b)+1)
 		curr[0] = i
 		for j := 1; j <= len(b); j++ {
 			cost := 1
-			if a[i-1] == b[j-1] { cost = 0 }
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
 			curr[j] = min(curr[j-1]+1, min(prev[j]+1, prev[j-1]+cost))
 		}
 		prev = curr

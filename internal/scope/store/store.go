@@ -279,7 +279,7 @@ type Index struct {
 func Parse(relPath string, src []byte) *scope.Result {
 	ext := strings.ToLower(filepath.Ext(relPath))
 	switch ext {
-	case ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts":
+	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts":
 		return ts.Parse(relPath, src)
 	case ".go":
 		return golang.Parse(relPath, src)

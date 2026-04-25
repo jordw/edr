@@ -688,7 +688,7 @@ func looksLikeFilePath(arg string) bool {
 	}
 	// Common source/config file extensions
 	switch strings.ToLower(ext) {
-	case ".go", ".py", ".js", ".jsx", ".ts", ".tsx", ".c", ".h", ".rs", ".java",
+	case ".go", ".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".c", ".h", ".rs", ".java",
 		".rb", ".yaml", ".yml", ".json", ".toml", ".md", ".txt", ".css", ".html",
 		".xml", ".sh", ".bash", ".zsh", ".sql", ".proto", ".graphql", ".vue",
 		".svelte", ".swift", ".kt", ".scala", ".php", ".lua", ".zig", ".cs",
