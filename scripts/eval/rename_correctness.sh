@@ -91,6 +91,8 @@ TUPLES=(
   "php:static-method|edr|scripts/eval/fixtures/php-static/Lib.php:compute|calculate|cd scripts/eval/fixtures/php-static && php app.php"
   # PHP: two unrelated classes with same static-method name.
   "php:ambiguous-name|edr|scripts/eval/fixtures/php-ambig/A.php:compute|calculate|cd scripts/eval/fixtures/php-ambig && php app.php"
+  # PHP: interface + class + override hierarchy.
+  "php:hierarchy|edr|scripts/eval/fixtures/php-hierarchy/Greeter.php:greet|salute|cd scripts/eval/fixtures/php-hierarchy && php app.php"
   # C#: instance method on a class called via obj.Method().
   "cs:class-method|edr|scripts/eval/fixtures/csharp-method/Counter.cs:Value|Magnitude|cd scripts/eval/fixtures/csharp-method && dotnet build --nologo"
   # C#: static call site + a local variable with the same name.
@@ -130,6 +132,8 @@ TUPLES=(
   "rb:class-method|edr|scripts/eval/fixtures/ruby-method/counter.rb:value|magnitude|cd scripts/eval/fixtures/ruby-method && ruby app.rb"
   # Ruby: module method invoked as Module.method.
   "rb:module-method|edr|scripts/eval/fixtures/ruby-module/mathx.rb:compute|calculate|cd scripts/eval/fixtures/ruby-module && ruby app.rb"
+  # Ruby: module mixin + class chain.
+  "rb:hierarchy|edr|scripts/eval/fixtures/ruby-hierarchy/greeter.rb:greet|salute|cd scripts/eval/fixtures/ruby-hierarchy && ruby app.rb"
   # Swift: struct method. Like class-method, tests receiver handling.
   "swift:struct-method|edr|scripts/eval/fixtures/swift-method/Counter.swift:value|magnitude|cd scripts/eval/fixtures/swift-method && swiftc Counter.swift App.swift main.swift -o /tmp/swift_method"
   # Swift: protocol extension default method. Tests hierarchy-like

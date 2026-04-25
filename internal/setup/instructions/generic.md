@@ -46,15 +46,9 @@ edr rename file.go:OldName --to NewName            # same-file rename (def + sam
 edr rename file.go:OldName --to NewName --dry-run  # preview without applying
 edr rename file.go:OldName --to NewName --cross-file # update callers across all files
 
-## Change signature — `edr changesig`
+## References — `edr refs-to`
 
-edr changesig file.go:Func --add "ctx context.Context" --at 0 --callarg "ctx"
-edr changesig file.go:Func --remove 1
-
-## Extract — `edr extract`
-
-edr extract file.go:Func --name NewFunc --lines 10-20              # extract into new function
-edr extract file.go:Func --name NewFunc --lines 10-20 --call "NewFunc(x)"  # custom call
+edr refs-to file.go:Func                         # inspect references before rename
 
 ## Cross-file move
 

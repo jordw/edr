@@ -11,15 +11,10 @@ import (
 	scopestore "github.com/jordw/edr/internal/scope/store"
 )
 
-// scopeSupported gates which languages use the scope-aware helpers
-// for MUTATING commands (rename, changesig, extract). refs-to and the
-// scope index itself handle more languages via scopestore.Parse, but
-// mutations need the scope builder's binding resolution to be robust
-// enough to not miss cross-file refs. Today that is only the mature
-// three; the newer Java/Rust/Ruby/C/C++ builders serve refs-to well
-// but leave enough false negatives that mutations should continue to
-// use the regex + symbol-index fallback. Widen this gate per-language
-// as each builder matures.
+// scopeSupported gates which languages use scope-aware rename. refs-to and
+// the scope index itself handle more languages via scopestore.Parse, but
+// mutating rename needs binding resolution to be robust enough to avoid
+// over-rewrites. Widen this gate per-language as each builder matures.
 func scopeSupported(path string) bool {
 	// Eval hook: forces the scope-aware or regex path for every language,
 	// used by scripts/eval/rename_fp.sh to measure per-language over-rewrite
@@ -149,81 +144,6 @@ func scopeAwareSameFileSpans(sym *index.SymbolInfo) ([]span, bool) {
 	return out, true
 }
 
-// scopeAwareRefSpansByFile returns binding-correct reference byte
-// ranges grouped by file, excluding the target's declaration. It is
-// the changesig-flavored counterpart of scopeAwareCrossFileSpans —
-// changesig handles the definition edit separately, so it only needs
-// refs. When crossFile is false, returns same-file refs only.
-func scopeAwareRefSpansByFile(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo, crossFile bool) (map[string][]sigSpan, bool) {
-	var raw map[string][]span
-	if crossFile {
-		m, ok := scopeAwareCrossFileSpans(ctx, db, sym)
-		if !ok {
-			return nil, false
-		}
-		raw = m
-	} else {
-		spans, ok := scopeAwareSameFileSpans(sym)
-		if !ok {
-			return nil, false
-		}
-		raw = map[string][]span{sym.File: spans}
-	}
-	out := make(map[string][]sigSpan, len(raw))
-	for file, spans := range raw {
-		src, err := os.ReadFile(file)
-		for _, s := range spans {
-			if s.isDef {
-				continue // changesig handles the def edit itself
-			}
-			end := s.end
-			if err == nil {
-				end = widenToCallParen(src, s.end)
-			}
-			out[file] = append(out[file], sigSpan{start: s.start, end: end})
-		}
-	}
-	return out, true
-}
-
-// widenToCallParen extends an identifier-span end to include the `(`
-// that follows (allowing for whitespace and TS-style `<T>` generic
-// params). Needed because changesig's regex `\bname\s*\(` must find
-// the opening paren inside the span to identify a call site. Returns
-// end unchanged if no call follows within a reasonable window.
-func widenToCallParen(src []byte, end uint32) uint32 {
-	const maxLookahead = 200
-	limit := int(end) + maxLookahead
-	if limit > len(src) {
-		limit = len(src)
-	}
-	i := int(end)
-	for i < limit && (src[i] == ' ' || src[i] == '\t' || src[i] == '\n' || src[i] == '\r') {
-		i++
-	}
-	// Optional TS generic type arguments: skip balanced <...>.
-	if i < limit && src[i] == '<' {
-		depth := 1
-		i++
-		for i < limit && depth > 0 {
-			switch src[i] {
-			case '<':
-				depth++
-			case '>':
-				depth--
-			}
-			i++
-		}
-		for i < limit && (src[i] == ' ' || src[i] == '\t') {
-			i++
-		}
-	}
-	if i < limit && src[i] == '(' {
-		return uint32(i + 1)
-	}
-	return end
-}
-
 // filterCallersByScope drops SymbolInfo entries whose file/range
 // does not actually contain a binding-correct reference to sym. It
 // catches false positives returned by the caller search: a function
@@ -285,6 +205,17 @@ func filterCallersByScope(callers []index.SymbolInfo, sym *index.SymbolInfo) []i
 		}
 	}
 	return filtered
+}
+
+// isCFamily reports whether ext is a C-family extension whose declaration and
+// definition may be split across header/source files.
+func isCFamily(ext string) bool {
+	switch ext {
+	case ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hxx", ".hh":
+		return true
+	default:
+		return false
+	}
 }
 
 // scopeAwareCrossFileSpans computes rename spans across the repo by

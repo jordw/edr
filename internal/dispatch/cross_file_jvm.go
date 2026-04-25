@@ -458,13 +458,31 @@ func findTypeBeforeDecl(r *scope.Result, src []byte, declStart uint32) string {
 		if ref.Span.EndByte <= bestEnd {
 			continue
 		}
-		if !onlyWhitespace(src[ref.Span.EndByte:declStart]) {
+		// Direction A is the `Type name` pattern (Java-style),
+		// where Type and name are on the SAME LINE. A newline in
+		// the gap means we've crossed a statement boundary and
+		// the previous ref isn't this decl's type. Allow only
+		// horizontal whitespace + the leading `*` or `&` that
+		// shows up in C++ pointer/reference decls.
+		if !sameLineHWhitespace(src[ref.Span.EndByte:declStart]) {
 			continue
 		}
 		bestEnd = ref.Span.EndByte
 		bestName = ref.Name
 	}
 	return bestName
+}
+
+// sameLineHWhitespace reports whether b contains only space, tab,
+// `*`, or `&` characters — i.e., no newlines.
+func sameLineHWhitespace(b []byte) bool {
+	for _, c := range b {
+		if c == ' ' || c == '\t' || c == '*' || c == '&' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // findTypeAfterDecl returns the name of the ref whose start is

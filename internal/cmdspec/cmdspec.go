@@ -164,33 +164,6 @@ var Registry = []*Spec{
 			{Name: "comments", Type: FlagString, Default: "rewrite", Desc: "How to handle matches inside comments: 'rewrite' (default) or 'skip'"},
 		},
 	},
-	{
-		Name: "extract", Desc: "Extract lines from a function into a new function.",
-		Category: CatWrite, MinArgs: 1, MaxArgs: 2, FileScoped: true,
-		DiffEdit: true,
-		Flags: []FlagSpec{
-			{Name: "name", Type: FlagString, Default: "", Desc: "Name for the extracted function (required)"},
-			{Name: "lines", Type: FlagString, Default: "", Desc: "Line range to extract (e.g. 10-20)"},
-			{Name: "call", Type: FlagString, Default: "", Desc: "Replacement call expression (default: name())"},
-			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
-			{Name: "verify", Type: FlagBool, Default: false, Desc: "Run build verification after extract"},
-		},
-	},
-	{
-		Name: "changesig", Desc: "Add or remove a parameter from a function and update all call sites.",
-		Category: CatWrite, MinArgs: 1, MaxArgs: 2, FileScoped: true,
-		DiffEdit: true,
-		Flags: []FlagSpec{
-			{Name: "add", Type: FlagString, Default: "", Desc: "Parameter declaration to add (e.g. \"ctx context.Context\")"},
-			{Name: "at", Type: FlagInt, Default: -1, Desc: "Position to insert/remove (0-indexed; -1 = end)"},
-			{Name: "callarg", Type: FlagString, Default: "", Desc: "Argument value to insert at call sites"},
-			{Name: "remove", Type: FlagInt, Default: -1, Desc: "Position of parameter to remove (0-indexed)"},
-			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
-			{Name: "verify", Type: FlagBool, Default: false, Desc: "Run build verification after change"},
-			{Name: "cross_file", Type: FlagBool, Default: false, Desc: "Update call sites across all files, not just the defining file"},
-			{Name: "force", Type: FlagBool, Default: false, Desc: "With --cross-file, proceed even if the name is ambiguous (defined by multiple symbols)"},
-		},
-	},
 	// --- Internal commands (dispatch-only, no CLI surface) ---
 	{
 		Name: "search", Desc: "Internal: symbol and text search, used by batch -s.",

@@ -27,8 +27,6 @@ func init() {
 	rootCmd.AddCommand(focusCmd)
 	rootCmd.AddCommand(editCmd)
 	rootCmd.AddCommand(renameCmd)
-	rootCmd.AddCommand(extractCmd)
-	rootCmd.AddCommand(changesigCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(undoCmd)
 	rootCmd.AddCommand(setupCmd)
@@ -436,24 +434,6 @@ var renameCmd = &cobra.Command{
 
 func init() { cmdspec.RegisterFlags(renameCmd.Flags(), "rename") }
 
-var extractCmd = &cobra.Command{
-	Use:   "extract <file:symbol> --name <func_name> --lines <start-end>",
-	Short: ToolDesc["extract"],
-	Args:  cobra.RangeArgs(1, 2),
-	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "extract", args) },
-}
-
-func init() { cmdspec.RegisterFlags(extractCmd.Flags(), "extract") }
-
-var changesigCmd = &cobra.Command{
-	Use:   "changesig <file:symbol> --add \"param type\" --callarg \"value\"",
-	Short: ToolDesc["changesig"],
-	Args:  cobra.RangeArgs(1, 2),
-	RunE:  func(cmd *cobra.Command, args []string) error { return dispatchCmd(cmd, "changesig", args) },
-}
-
-func init() { cmdspec.RegisterFlags(changesigCmd.Flags(), "changesig") }
-
 var statusCmd = &cobra.Command{
 	Use:     "status",
 	Aliases: []string{"context"},
@@ -621,9 +601,8 @@ var undoCmd = &cobra.Command{
 		result["remaining"] = autoCount
 		// Files modified after the checkpoint that weren't snapshotted.
 		// Do NOT delete them — they may be pre-existing files that a
-		// multi-file command (rename, changesig) modified. Only files
-		// with nil content in the checkpoint (truly new files) are
-		// deleted by RestoreCheckpoint itself.
+		// multi-file rename modified. Only files with nil content in the
+		// checkpoint (truly new files) are deleted by RestoreCheckpoint itself.
 		if len(notRemoved) > 0 {
 			result["unrestored"] = notRemoved
 		}
@@ -980,9 +959,9 @@ func recordOp(sess *session.Session, cmdName string, args []string, flags map[st
 	action, kind := classifyOp(cmdName, flags, result, ok)
 	sess.RecordOp(cmdName, file, symbol, action, kind, ok)
 
-	// Multi-file commands (rename, changesig) modify files beyond the primary
+	// Multi-file rename can modify files beyond the primary
 	// target. Record extra ops so GetDirtyFiles includes them in checkpoints.
-	if ok && (cmdName == "rename" || cmdName == "changesig") {
+	if ok && cmdName == "rename" {
 		extraFiles := multiFileEdits(cmdName, result, file)
 		for _, f := range extraFiles {
 			sess.RecordOp(cmdName, f, "", action, kind, true)
@@ -1051,22 +1030,6 @@ func multiFileEdits(cmdName string, result any, primaryFile string) []string {
 				}
 			}
 			return extra
-		}
-	case "changesig":
-		if m, ok := result.(map[string]any); ok {
-			if diff, ok := m["diff"].(string); ok {
-				// Parse file names from unified diff headers (--- a/file)
-				var extra []string
-				for _, line := range strings.Split(diff, "\n") {
-					if strings.HasPrefix(line, "--- a/") {
-						f := line[6:]
-						if f != primaryFile {
-							extra = append(extra, f)
-						}
-					}
-				}
-				return extra
-			}
 		}
 	}
 	return nil

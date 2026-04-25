@@ -88,20 +88,6 @@
       "old_name": "HandlerFunc",
       "new_name": "TaskHandlerFunc"
     },
-    "extract_function": {
-      "type": "extract",
-      "file": "main.go",
-      "symbol": "Start",
-      "name": "startWorkers",
-      "lines": "96-98"
-    },
-    "changesig_add": {
-      "type": "changesig",
-      "file": "internal/worker.go",
-      "symbol": "NewWorker",
-      "add": "logger Logger",
-      "callarg": "nil"
-    },
     "move_symbol": {
       "type": "move",
       "file": "main.go",

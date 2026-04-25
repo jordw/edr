@@ -185,19 +185,6 @@ us = edr.usages(g)
 check(isinstance(us, list), f"usages() should return list, got {type(us)}")
 check("main.go" not in us, f"usages() should exclude defining file: {us}")
 
-# --- changesig() dry-run carries diff ---
-res = edr.changesig("main.go:Greet", add="x int", at=1, callarg="0", dry_run=True)
-check(res.status == "dry_run", f"changesig status={res.status}")
-check(res.diff and "---" in res.diff and "+++" in res.diff, f"changesig diff missing: {res.diff!r}")
-check("x int" in res.diff, f"changesig diff lacks new param: {res.diff!r}")
-
-# --- extract() dry-run carries diff ---
-# Threads "name" through --call because the extracted line references
-# the Greet parameter; scope-aware extract correctly refuses to pull
-# out code that uses an outer local without explicit threading.
-res = edr.extract("main.go:Greet", name="GreetInner", lines="4-4", call="GreetInner(name)", dry_run=True)
-check(res.diff, f"extract diff missing: {res!r}")
-
 # --- status() returns a dict ---
 st = edr.status()
 check(isinstance(st, dict), f"status={type(st)}")

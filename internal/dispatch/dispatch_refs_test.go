@@ -337,70 +337,6 @@ func Shadowed() int {
 	}
 }
 
-// TestChangeSig_GoSamePackageCrossFile verifies changesig --cross-file
-// rewrites a sibling same-package caller's call args.
-func TestChangeSig_GoSamePackageCrossFile(t *testing.T) {
-	db, dir := setupRefsRepo(t, map[string]string{
-		"go.mod": "module example.com/foo\n",
-		"a.go": `package foo
-
-func Compute(x int) int { return x * 2 }
-`,
-		"b.go": `package foo
-
-func Caller() int { return Compute(5) }
-`,
-	})
-	_, err := dispatch.Dispatch(context.Background(), db, "changesig",
-		[]string{"a.go:Compute"},
-		map[string]any{"add": "extra int", "callarg": "0", "cross_file": true})
-	if err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-	bData, _ := os.ReadFile(filepath.Join(dir, "b.go"))
-	body := string(bData)
-	if !strings.Contains(body, "Compute(5, 0)") {
-		t.Errorf("cross-file call not rewritten with new arg; got:\n%s", body)
-	}
-}
-
-// TestChangeSig_GoSamePackageShadowSafe verifies changesig does NOT
-// touch a shadowed local in a caller file — even when the shadow and
-// the real call are in the same file.
-func TestChangeSig_GoSamePackageShadowSafe(t *testing.T) {
-	db, dir := setupRefsRepo(t, map[string]string{
-		"go.mod": "module example.com/foo\n",
-		"a.go": `package foo
-
-func Compute(x int) int { return x * 2 }
-`,
-		"b.go": `package foo
-
-func Caller() int { return Compute(5) }
-
-func Shadowed() int {
-	Compute := 42
-	_ = Compute
-	return 0
-}
-`,
-	})
-	_, err := dispatch.Dispatch(context.Background(), db, "changesig",
-		[]string{"a.go:Compute"},
-		map[string]any{"add": "extra int", "callarg": "0", "cross_file": true})
-	if err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-	bData, _ := os.ReadFile(filepath.Join(dir, "b.go"))
-	body := string(bData)
-	if !strings.Contains(body, "Compute(5, 0)") {
-		t.Errorf("cross-file call not rewritten; got:\n%s", body)
-	}
-	if !strings.Contains(body, "Compute := 42") {
-		t.Errorf("shadowed local MUST remain as `Compute := 42`; got:\n%s", body)
-	}
-}
-
 // TestRefsTo_JavaCrossFile: a class defined in lib.java is referenced
 // via `new Helper()` in caller.java. The caller's ref is unresolved at
 // the builder level (no import-path resolution), and cross-file walking
@@ -724,42 +660,6 @@ public class Caller {
 // GoSamePackageShadowSafe — changesig must not rewrite call-site-like
 // tokens that bind to a shadowed local, only genuine call sites of
 // the target method.
-func TestChangeSig_JavaShadowSafe(t *testing.T) {
-	db, dir := setupRefsRepo(t, map[string]string{
-		"Lib.java": `package foo;
-
-public class Lib {
-    public static int compute(int x) { return x * 2; }
-}
-`,
-		"Caller.java": `package foo;
-
-public class Caller {
-    public int callIt() { return Lib.compute(5); }
-
-    public int shadowed() {
-        int compute = 42;
-        return compute + 1;
-    }
-}
-`,
-	})
-	_, err := dispatch.Dispatch(context.Background(), db, "changesig",
-		[]string{"Lib.java:compute"},
-		map[string]any{"add": "int extra", "callarg": "0", "cross_file": true})
-	if err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-	cData, _ := os.ReadFile(filepath.Join(dir, "Caller.java"))
-	body := string(cData)
-	if !strings.Contains(body, "Lib.compute(5, 0)") {
-		t.Errorf("cross-file call not rewritten; got:\n%s", body)
-	}
-	if !strings.Contains(body, "int compute = 42") {
-		t.Errorf("shadowed local MUST remain as `int compute = 42`; got:\n%s", body)
-	}
-}
-
 // TestRename_KotlinShadowNotRewritten: cross-file Kotlin rename must
 // rewrite the class-qualified call and leave same-named locals alone.
 // Same safety contract as TestRename_JavaShadowNotRewritten.
@@ -837,74 +737,6 @@ fn shadowed() -> i32 {
 	}
 }
 
-// TestChangeSig_RustShadowSafe: same guarantee, changesig flavor.
-func TestChangeSig_RustShadowSafe(t *testing.T) {
-	db, dir := setupRefsRepo(t, map[string]string{
-		"lib.rs": `pub fn compute(x: i32) -> i32 { x * 2 }
-`,
-		"main.rs": `mod lib;
-
-fn run() -> i32 { lib::compute(5) }
-
-fn shadowed() -> i32 {
-    let compute = 42;
-    compute + 1
-}
-`,
-	})
-	_, err := dispatch.Dispatch(context.Background(), db, "changesig",
-		[]string{"lib.rs:compute"},
-		map[string]any{"add": "scale: f64", "callarg": "1.0", "cross_file": true})
-	if err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-	mData, _ := os.ReadFile(filepath.Join(dir, "main.rs"))
-	body := string(mData)
-	if !strings.Contains(body, "lib::compute(5, 1.0)") {
-		t.Errorf("cross-file call not rewritten; got:\n%s", body)
-	}
-	if !strings.Contains(body, "let compute = 42") {
-		t.Errorf("shadowed local MUST remain as `let compute = 42`; got:\n%s", body)
-	}
-}
-
-// TestChangeSig_KotlinShadowSafe: same guarantee, changesig flavor.
-func TestChangeSig_KotlinShadowSafe(t *testing.T) {
-	db, dir := setupRefsRepo(t, map[string]string{
-		"Lib.kt": `package foo
-
-object Lib {
-    fun compute(x: Int): Int = x * 2
-}
-`,
-		"Caller.kt": `package foo
-
-class Caller {
-    fun callIt(): Int = Lib.compute(5)
-
-    fun shadowed(): Int {
-        val compute = 42
-        return compute + 1
-    }
-}
-`,
-	})
-	_, err := dispatch.Dispatch(context.Background(), db, "changesig",
-		[]string{"Lib.kt:compute"},
-		map[string]any{"add": "extra: Int", "callarg": "0", "cross_file": true})
-	if err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-	cData, _ := os.ReadFile(filepath.Join(dir, "Caller.kt"))
-	body := string(cData)
-	if !strings.Contains(body, "Lib.compute(5, 0)") {
-		t.Errorf("cross-file call not rewritten; got:\n%s", body)
-	}
-	if !strings.Contains(body, "val compute = 42") {
-		t.Errorf("shadowed local MUST remain as `val compute = 42`; got:\n%s", body)
-	}
-}
-
 // TestRename_CShadowNotRewritten: cross-file C rename rewrites the
 // call in a sibling .c file AND the declaration in the matching .h
 // file, but leaves a same-named local variable alone.
@@ -949,41 +781,6 @@ int shadowed() {
 	}
 	if !strings.Contains(body, "return compute + 1") {
 		t.Errorf("use of shadowed local MUST remain as `compute + 1`; got:\n%s", body)
-	}
-}
-
-// TestChangeSig_CShadowSafe: same guarantee, changesig flavor.
-func TestChangeSig_CShadowSafe(t *testing.T) {
-	db, dir := setupRefsRepo(t, map[string]string{
-		"foo.h": `int compute(int x);
-`,
-		"foo.c": `#include "foo.h"
-
-int compute(int x) { return x * 2; }
-`,
-		"caller.c": `#include "foo.h"
-
-int run() { return compute(5); }
-
-int shadowed() {
-    int compute = 42;
-    return compute + 1;
-}
-`,
-	})
-	_, err := dispatch.Dispatch(context.Background(), db, "changesig",
-		[]string{"foo.c:compute"},
-		map[string]any{"add": "int extra", "callarg": "0", "cross_file": true})
-	if err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-	cData, _ := os.ReadFile(filepath.Join(dir, "caller.c"))
-	body := string(cData)
-	if !strings.Contains(body, "compute(5, 0)") {
-		t.Errorf("cross-file call not rewritten; got:\n%s", body)
-	}
-	if !strings.Contains(body, "int compute = 42") {
-		t.Errorf("shadowed local MUST remain as `int compute = 42`; got:\n%s", body)
 	}
 }
 

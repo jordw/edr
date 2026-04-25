@@ -10,9 +10,8 @@ Instead of raw files and grep output, edr returns structured code context:
 - **`focus file:Symbol`** — reads a symbol, not the whole file. Includes relevant surrounding context.
 - **`focus SymbolName`** — resolves likely matches and opens the best candidate.
 - **`edit --old X --new Y --verify`** — diff, updated context, and verification feedback.
-- **`rename file:Symbol --to NewName`** — cross-file semantic rename via import graph.
-- **`changesig file:Func --add "ctx Context" --callarg "ctx"`** — add/remove params, update all call sites.
-- **`extract file:Func --name NewFunc --lines 10-20`** — extract lines into a new function.
+- **`rename file:Symbol --to NewName`** — semantic rename with scope-aware safety where supported.
+- **`refs-to file:Symbol`** — inspect references before changing code.
 - **`edit file:Func --move-after other.go:Target`** — move a symbol across files atomically.
 - **`edr --orient cmd/ --focus file:Sym --edit ...`** — survey, inspect, and mutate in one call when needed.
 - Repeated reads are deduplicated so agents do less work.
@@ -126,8 +125,7 @@ Without edr, agents grep to find code, read line ranges, guess what's relevant, 
 | `focus SymbolName` | Ranked resolution, auto-opens best match |
 | `edit --old X --new Y --verify` | Diff + updated context + verification feedback |
 | `rename file:Sym --to New` | Cross-file rename with diffs and occurrence count |
-| `changesig file:Func --add P` | Updated definition + all call sites + diff |
-| `extract file:Func --lines N-M` | New function + call replacement + diff |
+| `refs-to file:Sym` | References for impact analysis |
 | `edit file:Sym --move-after B.go:Tgt` | Atomic two-file move with diffs |
 | Re-read unchanged file | Deduplicated (zero output, zero waste) |
 
@@ -147,9 +145,8 @@ Under the hood:
 | `orient [path]` | Structural overview of a directory or project (replaces `map`) |
 | `focus file[:Symbol]` | Read file or symbol with context (replaces `read`) |
 | `edit file` | Edit, write, create files. `--verify` to check build. |
-| `rename file:Symbol` | Rename a symbol across all references (import-graph-aware) |
-| `changesig file:Symbol` | Add or remove a parameter and update all call sites |
-| `extract file:Symbol` | Extract lines from a function into a new function |
+| `rename file:Symbol` | Rename a symbol across references with scope-aware safety where supported |
+| `refs-to file:Symbol` | List references to a symbol |
 | `status` | Repo root, index coverage, undo, build state, warnings |
 | `undo` | Revert last edit/write (auto-checkpointed) |
 | `files "pattern"` | Find files containing text (trigram-accelerated) |

@@ -1211,7 +1211,8 @@ func TestCorrectnessRenameBasic(t *testing.T) {
 		Files       []string `json:"files_changed"`
 	}
 	dispatchResult(t, ctx, db, "rename", []string{"lib.go:Compute"}, map[string]any{
-		"new_name": "Calculate",
+		"new_name":   "Calculate",
+		"cross_file": true,
 	}, &result)
 
 	if result.Status != "applied" {
@@ -1304,88 +1305,6 @@ func TestCorrectnessRenameThenRead(t *testing.T) {
 	}
 }
 
-// --- Correctness: Extract ---
-
-func TestCorrectnessExtractBasic(t *testing.T) {
-	db, tmp := setupSemanticRepo(t)
-	ctx := context.Background()
-
-	var result struct {
-		File   string `json:"file"`
-		Status string `json:"status"`
-	}
-	// Extract lines 4-5 (sum and product) from Compute.
-	dispatchResult(t, ctx, db, "extract", []string{"lib.go:Compute"}, map[string]any{
-		"name":  "computePartials",
-		"lines": "4-5",
-	}, &result)
-
-	if result.Status != "applied" {
-		t.Fatalf("status = %q, want applied", result.Status)
-	}
-
-	data, _ := os.ReadFile(filepath.Join(tmp, "lib.go"))
-	content := string(data)
-	if !strings.Contains(content, "func computePartials()") {
-		t.Error("extracted function not found")
-	}
-	if !strings.Contains(content, "computePartials()") {
-		t.Error("call to extracted function not found")
-	}
-}
-
-func TestCorrectnessExtractWithCall(t *testing.T) {
-	db, tmp := setupSemanticRepo(t)
-	ctx := context.Background()
-
-	dispatchResult(t, ctx, db, "extract", []string{"lib.go:Compute"}, map[string]any{
-		"name":  "computePartials",
-		"lines": "4-5",
-		"call":  "sum, product := computePartials(x, y)",
-	}, nil)
-
-	data, _ := os.ReadFile(filepath.Join(tmp, "lib.go"))
-	if !strings.Contains(string(data), "sum, product := computePartials(x, y)") {
-		t.Error("custom call expression not applied")
-	}
-}
-
-func TestCorrectnessExtractDryRun(t *testing.T) {
-	db, tmp := setupSemanticRepo(t)
-	ctx := context.Background()
-
-	var result struct {
-		Status string `json:"status"`
-	}
-	dispatchResult(t, ctx, db, "extract", []string{"lib.go:Compute"}, map[string]any{
-		"name":    "computePartials",
-		"lines":   "4-5",
-		"dry_run": true,
-	}, &result)
-
-	if result.Status != "dry_run" {
-		t.Fatalf("status = %q, want dry_run", result.Status)
-	}
-
-	data, _ := os.ReadFile(filepath.Join(tmp, "lib.go"))
-	if strings.Contains(string(data), "computePartials") {
-		t.Error("dry-run should not modify files")
-	}
-}
-
-func TestCorrectnessExtractOutOfRange(t *testing.T) {
-	db, _ := setupSemanticRepo(t)
-	ctx := context.Background()
-
-	errMsg := dispatchError(t, ctx, db, "extract", []string{"lib.go:Compute"}, map[string]any{
-		"name":  "bad",
-		"lines": "1-2",
-	})
-	if !strings.Contains(errMsg, "outside symbol") {
-		t.Errorf("expected outside-symbol error, got: %s", errMsg)
-	}
-}
-
 // --- Correctness: Cross-file move ---
 
 func TestCorrectnessMoveAcrossFiles(t *testing.T) {
@@ -1467,120 +1386,5 @@ func TestCorrectnessMoveThenRead(t *testing.T) {
 	errMsg := dispatchError(t, ctx, db, "read", []string{"lib.go:Helper"}, nil)
 	if !strings.Contains(errMsg, "not found") {
 		t.Errorf("expected not-found for old location, got: %s", errMsg)
-	}
-}
-
-// --- Correctness: ChangeSig ---
-
-func TestCorrectnessChangeSigAdd(t *testing.T) {
-	db, tmp := setupSemanticRepo(t)
-	ctx := context.Background()
-
-	var result struct {
-		File   string `json:"file"`
-		Status string `json:"status"`
-	}
-	dispatchResult(t, ctx, db, "changesig", []string{"lib.go:Compute"}, map[string]any{
-		"add":     "ctx context.Context",
-		"at":      0,
-		"callarg": "ctx",
-	}, &result)
-
-	if result.Status != "applied" {
-		t.Fatalf("status = %q, want applied", result.Status)
-	}
-
-	// Verify definition.
-	libData, _ := os.ReadFile(filepath.Join(tmp, "lib.go"))
-	if !strings.Contains(string(libData), "func Compute(ctx context.Context, x, y int)") {
-		t.Errorf("definition not updated:\n%s", string(libData))
-	}
-
-	// Verify call sites in other files.
-	mainData, _ := os.ReadFile(filepath.Join(tmp, "main.go"))
-	if !strings.Contains(string(mainData), "Compute(ctx, 3, 4)") {
-		t.Errorf("main.go call site not updated:\n%s", string(mainData))
-	}
-
-	utilData, _ := os.ReadFile(filepath.Join(tmp, "util.go"))
-	if !strings.Contains(string(utilData), "Compute(ctx, 1, 2)") {
-		t.Errorf("util.go first call site not updated:\n%s", string(utilData))
-	}
-}
-
-func TestCorrectnessChangeSigRemove(t *testing.T) {
-	// Use a separate repo with individually-typed params (not Go's "x, y int" combined syntax).
-	tmp := t.TempDir()
-	os.WriteFile(filepath.Join(tmp, "lib.go"), []byte("package main\n\nfunc Process(x int, y string, z bool) error {\n\treturn nil\n}\n"), 0644)
-	os.WriteFile(filepath.Join(tmp, "main.go"), []byte("package main\n\nfunc main() {\n\tProcess(1, \"a\", true)\n}\n"), 0644)
-	db := index.NewOnDemand(tmp)
-	defer db.Close()
-	ctx := context.Background()
-
-	var result struct {
-		Status string `json:"status"`
-	}
-	// Remove the second parameter (y string, index 1).
-	dispatchResult(t, ctx, db, "changesig", []string{"lib.go:Process"}, map[string]any{
-		"remove": 1,
-	}, &result)
-
-	if result.Status != "applied" {
-		t.Fatalf("status = %q, want applied", result.Status)
-	}
-
-	libData, _ := os.ReadFile(filepath.Join(tmp, "lib.go"))
-	if !strings.Contains(string(libData), "func Process(x int, z bool)") {
-		t.Errorf("definition not updated:\n%s", string(libData))
-	}
-
-	mainData, _ := os.ReadFile(filepath.Join(tmp, "main.go"))
-	if !strings.Contains(string(mainData), "Process(1, true)") {
-		t.Errorf("call site not updated:\n%s", string(mainData))
-	}
-}
-
-func TestCorrectnessChangeSigDryRun(t *testing.T) {
-	db, tmp := setupSemanticRepo(t)
-	ctx := context.Background()
-
-	var result struct {
-		Status string `json:"status"`
-	}
-	dispatchResult(t, ctx, db, "changesig", []string{"lib.go:Compute"}, map[string]any{
-		"add":     "ctx context.Context",
-		"at":      0,
-		"callarg": "ctx",
-		"dry_run": true,
-	}, &result)
-
-	if result.Status != "dry_run" {
-		t.Fatalf("status = %q, want dry_run", result.Status)
-	}
-
-	libData, _ := os.ReadFile(filepath.Join(tmp, "lib.go"))
-	if strings.Contains(string(libData), "ctx") {
-		t.Error("dry-run should not modify files")
-	}
-}
-
-func TestCorrectnessChangeSigThenRead(t *testing.T) {
-	db, _ := setupSemanticRepo(t)
-	ctx := context.Background()
-
-	// Add a parameter, then read the symbol to verify updated signature.
-	dispatchResult(t, ctx, db, "changesig", []string{"lib.go:Compute"}, map[string]any{
-		"add":     "ctx context.Context",
-		"at":      0,
-		"callarg": "ctx",
-	}, nil)
-
-	var readResult struct {
-		Content string `json:"content"`
-		Symbol  string `json:"symbol"`
-	}
-	dispatchResult(t, ctx, db, "read", []string{"lib.go:Compute"}, nil, &readResult)
-	if !strings.Contains(readResult.Content, "ctx context.Context") {
-		t.Errorf("after changesig, read should show new param:\n%s", readResult.Content)
 	}
 }

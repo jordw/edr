@@ -104,7 +104,7 @@ class Symbol:
 
 @dataclass
 class EditResult:
-    """Result of an edit/rename/changesig/extract/write operation."""
+    """Result of an edit/rename/write operation."""
 
     file: str
     status: str  # "applied", "dry_run", "noop", "reverted"
@@ -373,67 +373,6 @@ def rename(target: str, to: str, *, dry_run: bool = False, root: str | None = No
     )
 
 
-# ---------------------------------------------------------------- changesig
-
-
-def changesig(
-    target: str,
-    *,
-    add: str | None = None,
-    remove: int | None = None,
-    at: int | None = None,
-    callarg: str | None = None,
-    dry_run: bool = False,
-    root: str | None = None,
-) -> EditResult:
-    args = ["changesig", target]
-    if add is not None:
-        args += ["--add", add]
-    if remove is not None:
-        args += ["--remove", str(remove)]
-    if at is not None:
-        args += ["--at", str(at)]
-    if callarg is not None:
-        args += ["--callarg", callarg]
-    if dry_run:
-        args.append("--dry-run")
-    result = _run(args, root=root)
-    return EditResult(
-        file=result.get("file", target.split(":", 1)[0]),
-        status=result.get("status", "unknown"),
-        diff=result.get("diff") or result.get("_body"),
-        hash=result.get("hash"),
-        message=result.get("message") or result.get("msg"),
-    )
-
-
-# ---------------------------------------------------------------- extract
-
-
-def extract(
-    target: str,
-    *,
-    name: str,
-    lines: str,
-    call: str | None = None,
-    dry_run: bool = False,
-    root: str | None = None,
-) -> EditResult:
-    args = ["extract", target, "--name", name, "--lines", lines]
-    if call is not None:
-        args += ["--call", call]
-    if dry_run:
-        args.append("--dry-run")
-    result = _run(args, root=root)
-    return EditResult(
-        file=result.get("file", target.split(":", 1)[0]),
-        status=result.get("status", "unknown"),
-        diff=result.get("diff") or result.get("_body"),
-        hash=result.get("hash"),
-        message=result.get("message"),
-    )
-
-
 # ---------------------------------------------------------------- files / search
 
 
@@ -605,7 +544,7 @@ def usages(symbol: Symbol, *, root: str | None = None) -> list[str]:
 class Transaction:
     """Handle for an open transaction. Use via ``edr.transaction()``.
 
-    Ops called while the transaction is open (edit, rename, changesig, etc.)
+    Ops called while the transaction is open (edit, rename, etc.)
     apply normally to disk, but their pre-mutation file content is staged into
     a checkpoint. ``diff`` shows the consolidated change; ``commit()`` releases
     the anchor; ``rollback()`` restores every touched file.

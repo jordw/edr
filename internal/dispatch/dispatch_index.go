@@ -128,8 +128,8 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 	idx.InvalidateSymbolCache()
 
 	// Scope index build: per-file scope.Result data for supported
-	// languages (Go, TS/JS/TSX/JSX, Python). Used by refs-to and future
-	// rename/changesig consumers. Separate from the trigram+symbol index
+	// languages (Go, TS/JS/TSX/JSX, Python). Used by refs-to and rename.
+	// Separate from the trigram+symbol index
 	// so its format can evolve independently.
 	scopeFiles, scopeErr := scopestore.Build(root, edrDir, walk.RepoFiles)
 
@@ -160,7 +160,7 @@ func runIndex(_ context.Context, db index.SymbolStore, root string, _ []string, 
 		rg := idx.ReadRefGraph(edrDir)
 		if rg != nil {
 			result["ref_names"] = len(rg.ForwardNames)
-				result["ref_inv_entries"] = len(rg.InvEntries)
+			result["ref_inv_entries"] = len(rg.InvEntries)
 		}
 	}
 	return result, nil

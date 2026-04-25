@@ -80,7 +80,7 @@ func printPlain(e *Envelope) {
 			plainRead(w, op)
 		case "search":
 			plainSearch(w, op)
-		case "edit", "write", "extract", "changesig":
+		case "edit", "write":
 			plainEdit(w, op, multi)
 		case "rename":
 			plainRename(w, op)
