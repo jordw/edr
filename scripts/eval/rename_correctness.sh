@@ -120,6 +120,9 @@ TUPLES=(
   "py:ambiguous-name|edr|scripts/eval/fixtures/python-ambig/pkg/lib.py:compute|calculate|cd scripts/eval/fixtures/python-ambig && python3 -m pkg"
   # Python: relative sibling import — `from .lib import compute`.
   "py:sibling-import|edr|scripts/eval/fixtures/python-sibling/pkg/lib.py:compute|calculate|cd scripts/eval/fixtures/python-sibling && python3 -m pkg"
+  # Python: ABC + class hierarchy + subclass override.
+  # Rename on Hi.greet propagates to IGreeter, Loud, plus call sites.
+  "py:hierarchy|edr|scripts/eval/fixtures/python-hierarchy/pkg/greeter.py:greet|salute|cd scripts/eval/fixtures/python-hierarchy && python3 -m pkg"
   # Ruby: instance method on a class called via obj.method. Exercises
   # receiver disambiguation — expected to FAIL.
   "rb:class-method|edr|scripts/eval/fixtures/ruby-method/counter.rb:value|magnitude|cd scripts/eval/fixtures/ruby-method && ruby app.rb"

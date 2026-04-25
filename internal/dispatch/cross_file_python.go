@@ -56,6 +56,14 @@ func pythonCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.
 		return out, true
 	}
 
+	// Hierarchy propagation: emit rewrite spans for same-named
+	// methods in classes related to sym.Receiver via Python's
+	// `class Foo(Bar, Mixin):` inheritance graph (same-file
+	// only for v1).
+	if sym.Receiver != "" {
+		pyEmitHierarchySpans(out, resolver, sym, target)
+	}
+
 	candidates := map[string]bool{}
 	if refs, err := db.FindSemanticReferences(ctx, sym.Name, sym.File); err == nil {
 		for _, r := range refs {
@@ -72,6 +80,9 @@ func pythonCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.
 	acceptableTypes := map[string]bool{}
 	if sym.Receiver != "" {
 		acceptableTypes[sym.Receiver] = true
+		for _, t := range namespace.PyRelatedTypes(resolver.Source(sym.File), sym.Receiver) {
+			acceptableTypes[t] = true
+		}
 	}
 
 	pop := namespace.PythonPopulator(resolver)
@@ -204,4 +215,69 @@ func pyBaseIdentBefore(src []byte, refStart uint32) string {
 		break
 	}
 	return string(src[i+1 : end])
+}
+
+
+// pyEmitHierarchySpans finds same-named methods in classes related
+// to sym.Receiver via the inheritance graph in sym.File and emits
+// isDef spans into out[sym.File].
+func pyEmitHierarchySpans(out map[string][]span, resolver *namespace.PythonResolver, sym *index.SymbolInfo, target *scope.Decl) {
+	src := resolver.Source(sym.File)
+	if len(src) == 0 {
+		return
+	}
+	hier := namespace.PyFindClassHierarchy(src)
+	if len(hier) == 0 {
+		return
+	}
+	// Find target's enclosing class by body-span containment.
+	var enclosing *namespace.PyClassHierarchy
+	for i := range hier {
+		h := &hier[i]
+		if h.BodyStart <= target.Span.StartByte && target.Span.EndByte <= h.BodyEnd {
+			enclosing = h
+			break
+		}
+	}
+	if enclosing == nil {
+		return
+	}
+	related := map[string]bool{}
+	for _, t := range namespace.PyRelatedTypes(src, enclosing.Name) {
+		related[t] = true
+	}
+	if len(related) == 0 {
+		return
+	}
+	targetRes := resolver.Result(sym.File)
+	if targetRes == nil {
+		return
+	}
+	for _, h := range hier {
+		if !related[h.Name] || h.Name == enclosing.Name {
+			continue
+		}
+		for i := range targetRes.Decls {
+			d := &targetRes.Decls[i]
+			if d.Name != sym.Name {
+				continue
+			}
+			// Python builder emits class methods as KindFunction
+			// (no separate method kind for nested defs).
+			if d.Kind != scope.KindMethod && d.Kind != scope.KindFunction {
+				continue
+			}
+			if d.Span.StartByte < h.BodyStart || d.Span.EndByte > h.BodyEnd {
+				continue
+			}
+			if d.ID == target.ID {
+				continue
+			}
+			out[sym.File] = append(out[sym.File], span{
+				start: d.Span.StartByte,
+				end:   d.Span.EndByte,
+				isDef: true,
+			})
+		}
+	}
 }
