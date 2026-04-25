@@ -1010,11 +1010,8 @@ function shadowed() {
 
 func TestRename_GoCrossTypeFP(t *testing.T) {
 	// FP guard: A.compute and B.compute are unrelated methods; renaming
-	// A.compute MUST NOT touch B.compute or its call site.
-	// Note: same-package call-site rewriting for method renames in Go is
-	// a known under-rewrite gap — the receiver-type inference doesn't
-	// thread through `a := A{}` for sibling-file calls. The FP contract
-	// (don't rewrite B) is the safety-critical assertion here.
+	// A.compute MUST rewrite a.compute() call sites and MUST NOT touch
+	// B.compute or its call sites.
 	db, dir := setupRefsRepo(t, map[string]string{
 		"go.mod":  "module test\ngo 1.21\n",
 		"a.go":    "package main\n\ntype A struct{}\n\nfunc (a A) compute() int { return 1 }\n",
@@ -1033,6 +1030,9 @@ func TestRename_GoCrossTypeFP(t *testing.T) {
 		t.Errorf("B.compute MUST remain; got:\n%s", mustRead(t, dir, "b.go"))
 	}
 	body := string(mustRead(t, dir, "main.go"))
+	if !strings.Contains(body, "a.calculate()") {
+		t.Errorf("a.compute() call should be renamed to a.calculate(); got:\n%s", body)
+	}
 	if !strings.Contains(body, "b.compute()") {
 		t.Errorf("b.compute() call MUST remain; got:\n%s", body)
 	}

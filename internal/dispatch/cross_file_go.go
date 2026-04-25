@@ -84,6 +84,16 @@ func goCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 	for _, sib := range resolver.SamePackageFiles(sym.File) {
 		candidates[sib] = true
 	}
+	// For method renames we also include sym.File itself so the
+	// property-access ref loop disambiguates `h.method()` call sites
+	// that the same-file scope pass missed (those refs come through
+	// as BindAmbiguous because Go's structural typing means scope
+	// can't statically resolve `h` to the receiver's concrete type).
+	// varTypes pairs `h *UpgradeAwareHandler` with its type, then
+	// the ref filter accepts the call.
+	if sym.Receiver != "" {
+		candidates[sym.File] = true
+	}
 
 	// For method renames we also need to rewrite call sites through
 	// interface-typed variables. acceptableTypes is the set of type
@@ -375,9 +385,112 @@ func goBuildVarTypes(r *scope.Result, src []byte) map[string]string {
 		}
 		if name := goFindTypeAfterDecl(r, src, d.Span.EndByte); name != "" {
 			out[d.Name] = name
+			continue
+		}
+		// Ref-based lookup misses method receivers (`func (h *T)
+		// ...`) because the Go scope builder emits T as a function
+		// Decl, not a Ref. Fall back to a textual scan: skip ws/`*`
+		// after the param ident, then capture the next identifier.
+		if name := goScanTypeIdent(src, d.Span.EndByte); name != "" {
+			out[d.Name] = name
+			continue
+		}
+		// Short-var declarations like `a := A{}` or `a := &A{}`
+		// have the type on the RHS. Skip past `:=` and an optional
+		// `&`, then capture the next identifier if it's followed by
+		// `{` or `(` (struct literal or function call returning T).
+		if name := goScanShortVarType(src, d.Span.EndByte); name != "" {
+			out[d.Name] = name
 		}
 	}
 	return out
+}
+
+// goScanShortVarType handles `name := A{}` / `name := &A{}` /
+// `name := new(A)` patterns and returns the type identifier A, or ""
+// if the RHS doesn't match a recognized constructor.
+func goScanShortVarType(src []byte, pos uint32) string {
+	i := int(pos)
+	// Skip ws + `:=` (or `=` for plain var).
+	for i < len(src) && (src[i] == ' ' || src[i] == '\t') {
+		i++
+	}
+	if i >= len(src) {
+		return ""
+	}
+	if i+1 < len(src) && src[i] == ':' && src[i+1] == '=' {
+		i += 2
+	} else if src[i] == '=' {
+		i++
+	} else {
+		return ""
+	}
+	for i < len(src) && (src[i] == ' ' || src[i] == '\t') {
+		i++
+	}
+	// `&` for &T{}, or `new(` for new(T).
+	if i < len(src) && src[i] == '&' {
+		i++
+	} else if i+4 < len(src) && string(src[i:i+4]) == "new(" {
+		i += 4
+	}
+	for i < len(src) && (src[i] == ' ' || src[i] == '\t') {
+		i++
+	}
+	start := i
+	for i < len(src) {
+		c := src[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '_' {
+			i++
+			continue
+		}
+		break
+	}
+	if i == start {
+		return ""
+	}
+	end := i
+	for i < len(src) && (src[i] == ' ' || src[i] == '\t') {
+		i++
+	}
+	if i >= len(src) {
+		return ""
+	}
+	switch src[i] {
+	case '{', '(', ')':
+		return string(src[start:end])
+	}
+	return ""
+}
+
+// goScanTypeIdent walks forward from pos through whitespace and `*`,
+// then captures the next identifier (Go ident bytes). Used to recover
+// receiver types that the scope builder doesn't emit as refs.
+func goScanTypeIdent(src []byte, pos uint32) string {
+	i := int(pos)
+	for i < len(src) {
+		c := src[i]
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '*' {
+			i++
+			continue
+		}
+		break
+	}
+	start := i
+	for i < len(src) {
+		c := src[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '_' {
+			i++
+			continue
+		}
+		break
+	}
+	if i == start {
+		return ""
+	}
+	return string(src[start:i])
 }
 
 // goFindTypeAfterDecl returns the tail identifier of the type
