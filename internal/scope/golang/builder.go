@@ -668,6 +668,21 @@ func (b *builder) handleOpenBrace() {
 		return
 	}
 
+	// Nested anonymous composite literal: inside `[]T{ {Name:...}, {Name:...} }`
+	// or `map[K]V{k1: {Name:...}, k2: {Name:...}}`, the inner `{`s have
+	// no preceding ident or bracket because the element type is elided.
+	// Without this branch the inner `{` opens a bare-block scope and the
+	// matching `}` then decrements compositeLitDepth instead of closing
+	// the bogus scope — leaving subsequent siblings at depth 0, so their
+	// composite-literal field keys (`Name:`) get emitted as Refs and
+	// match cross-package renames. Function literals + control flow are
+	// already intercepted above, so any `{` reaching this point inside
+	// an existing composite must itself be a composite.
+	if b.compositeLitDepth > 0 {
+		b.compositeLitDepth++
+		return
+	}
+
 	// Default: bare block at statement position.
 	b.openScope(scope.ScopeBlock, uint32(b.s.Pos-1))
 }

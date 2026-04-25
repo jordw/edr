@@ -392,6 +392,43 @@ func make() entry {
 	}
 }
 
+// TestParse_NestedAnonymousCompositeLiteral guards a parser bug where
+// the second (and later) sibling inside a slice/map of struct literals
+// (`[]T{ {Name:...}, {Name:...} }`) had its field-key emitted as a
+// Ref. Root cause: the inner `{` falls through to the bare-block
+// branch when prev is `,` or `{`; the matching `}` then decremented
+// compositeLitDepth instead of closing that bogus scope, leaving
+// subsequent sibling literals at depth 0 and their `Name:` keys
+// incorrectly emitted as cross-package-rename targets.
+func TestParse_NestedAnonymousCompositeLiteral(t *testing.T) {
+	src := []byte(`package p
+
+type tableEntry struct {
+	Name string
+}
+
+func cases() {
+	_ = []tableEntry{
+		{
+			Name: "case1",
+		},
+		{
+			Name: "case2",
+		},
+		{
+			Name: "case3",
+		},
+	}
+}
+`)
+	r := Parse("a.go", src)
+	for _, ref := range r.Refs {
+		if ref.Name == "Name" {
+			t.Errorf("composite-literal key `Name:` emitted as Ref at byte %d (should be skipped)", ref.Span.StartByte)
+		}
+	}
+}
+
 
 // TestParse_ImportSignature_Basic: `import "fmt"` emits a KindImport decl
 // named "fmt" (last path segment) with Signature = "fmt\x00*". The
