@@ -55,6 +55,8 @@ edr rename file.go:Method --to New --cross-file --verify # build-check after; th
 
 edr refs-to file.go:Func                         # inspect references before rename
 
+After batches of edits or `git checkout`, run `edr index` before refs-to/rename — the header flags `stale_index: true` if you forget, but the count is already wrong by then.
+
 ## Cross-file move
 
 edr edit file.go:Func --move-after other.go:Target  # move to another file
