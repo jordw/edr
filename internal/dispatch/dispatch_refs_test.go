@@ -951,6 +951,54 @@ func shadowed() -> Int {
 	}
 }
 
+// TestRename_PHPShadowNotRewritten: cross-file PHP rename rewrites the
+// free function def + cross-file call site but leaves a same-named
+// local `$compute` alone. The php scope builder distinguishes function
+// refs (`compute`) from variable refs (`$compute`) by the leading `$`,
+// so binding correctness is structurally easy; this test guards
+// against regex-fallback over-rewrite of `$compute` (where `\bcompute\b`
+// matches inside the variable token).
+func TestRename_PHPShadowNotRewritten(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"lib.php": `<?php
+
+function compute($x) {
+    return $x * 2;
+}
+`,
+		"app.php": `<?php
+
+require_once "lib.php";
+
+function run() {
+    return compute(5);
+}
+
+function shadowed() {
+    $compute = 42;
+    return $compute + 1;
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"lib.php:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	aData, _ := os.ReadFile(filepath.Join(dir, "app.php"))
+	body := string(aData)
+	if !strings.Contains(body, "return calculate(5)") {
+		t.Errorf("cross-file call not rewritten; got:\n%s", body)
+	}
+	if !strings.Contains(body, "$compute = 42") {
+		t.Errorf("shadowed local MUST remain as `$compute = 42`; got:\n%s", body)
+	}
+	if !strings.Contains(body, "return $compute + 1") {
+		t.Errorf("use of shadowed local MUST remain as `$compute + 1`; got:\n%s", body)
+	}
+}
+
 // ----------------------------------------------------------------------
 // Kotlin oracle-equivalent tests
 //

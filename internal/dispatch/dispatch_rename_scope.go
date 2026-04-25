@@ -32,7 +32,8 @@ func scopeSupported(path string) bool {
 		".cpp", ".cxx", ".cc", ".c++", ".hpp", ".hxx", ".hh", ".h++",
 		".rb",
 		".cs",
-		".swift":
+		".swift",
+		".php", ".phtml":
 		return true
 	}
 	return false
