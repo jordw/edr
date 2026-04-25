@@ -250,6 +250,11 @@ func (b *builder) run() {
 				b.inParamList = true
 				b.paramDepth = 1
 				b.paramSectionNeedsName = true
+				// Clear declContext so receiver-type idents (e.g. T in
+				// 'func (r *T) Foo()') fall through to emitRef instead of
+				// being emitted as a phantom function decl. The closing
+				// ')' restores declContext = KindMethod for the method name.
+				b.declContext = ""
 			} else if b.paramListPending {
 				b.paramListPending = false
 				b.typeParamsPending = false // type params would come before, not after

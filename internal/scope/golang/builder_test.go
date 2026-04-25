@@ -171,6 +171,26 @@ func (c *Counter) Inc() {
 	if cDecl == nil || cDecl.Kind != scope.KindParam {
 		t.Errorf("receiver c missing or wrong kind; decls=%v", declNames(r))
 	}
+	// The receiver type T in 'func (c *T) Inc()' must be emitted as a
+	// ref so cross-file rename rewrites the receiver alongside other
+	// uses of T. Counter appears once as a struct decl and once as a
+	// receiver-type ref — the second appearance must not be a phantom
+	// function decl.
+	if refs := refsNamed(r, "Counter"); len(refs) != 1 {
+		t.Errorf("want 1 ref to Counter (the receiver type), got %d; refs=%+v", len(refs), r.Refs)
+	}
+	counterDecls := 0
+	for _, d := range r.Decls {
+		if d.Name == "Counter" {
+			counterDecls++
+			if d.Kind == scope.KindFunction {
+				t.Errorf("phantom function decl named Counter — receiver type leaked declContext")
+			}
+		}
+	}
+	if counterDecls != 1 {
+		t.Errorf("want exactly 1 decl named Counter (the type), got %d", counterDecls)
+	}
 }
 
 
