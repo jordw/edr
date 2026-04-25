@@ -16,15 +16,55 @@ EDR_BIN="${EDR_BIN:-edr}"
 # Tuples: "label|repo|symbol". Pick symbols with realistic common names
 # so we stress the cross-class false-positive surface.
 TUPLES=(
-  "go:kubernetes|kubernetes|staging/src/k8s.io/client-go/kubernetes/clientset.go:NewForConfig"
-  "rust:tokio-ambiguous|tokio|tokio/src/task/spawn.rs:spawn"
-  "rust:tokio-unique|tokio|tokio/src/runtime/blocking/pool.rs:BlockingPool"
-  "java:spring|spring-framework|spring-core/src/main/java/org/springframework/core/io/ClassPathResource.java:getFilename"
-  "kotlin:kotlin|kotlin|compiler/multiplatform-parsing/common/src/org/jetbrains/kotlin/kmp/lexer/KtTokens.kt:KtTokens"
-  "python:pytorch|pytorch|torch/nn/modules/linear.py:forward"
-  "ts:vscode|vscode|src/vs/platform/encryption/common/encryptionService.ts:isKwallet"
-  "c:linux-common|linux|kernel/sched/core.c:sched_tick"
-  "c:linux-unique|linux|arch/x86/kernel/tsc.c:tsc_read_refs"
+  # Go (kubernetes)
+  "go:k8s-NewForConfig|kubernetes|staging/src/k8s.io/client-go/kubernetes/clientset.go:NewForConfig"
+
+  # Rust (tokio)
+  "rust:tokio-spawn|tokio|tokio/src/task/spawn.rs:spawn"
+  "rust:tokio-BlockingPool|tokio|tokio/src/runtime/blocking/pool.rs:BlockingPool"
+  "rust:tokio-Handle|tokio|tokio/src/runtime/handle.rs:Handle"
+
+  # Java (spring)
+  "java:spring-getFilename|spring-framework|spring-core/src/main/java/org/springframework/core/io/ClassPathResource.java:getFilename"
+  "java:spring-getInputStream|spring-framework|spring-core/src/main/java/org/springframework/core/io/ClassPathResource.java:getInputStream"
+
+  # Kotlin (kotlin)
+  "kotlin:KtTokens|kotlin|compiler/multiplatform-parsing/common/src/org/jetbrains/kotlin/kmp/lexer/KtTokens.kt:KtTokens"
+  # IntArrayList:toString omitted — symbol-index walk on the full
+  # kotlin monorepo for a name as common as toString hangs > 10 min.
+  # Coverage of overloaded common names belongs in a smaller corpus
+  # repo, not the full kotlin tree.
+
+  # Python (pytorch)
+  "python:pytorch-forward|pytorch|torch/nn/modules/linear.py:forward"
+  "python:pytorch-batchnorm-forward|pytorch|torch/nn/modules/batchnorm.py:forward"
+
+  # TS/JS (vscode)
+  "ts:vscode-isKwallet|vscode|src/vs/platform/encryption/common/encryptionService.ts:isKwallet"
+  "ts:vscode-dispose|vscode|src/vs/base/common/lifecycle.ts:dispose"
+
+  # C (linux)
+  "c:linux-sched_tick|linux|kernel/sched/core.c:sched_tick"
+  "c:linux-tsc_read_refs|linux|arch/x86/kernel/tsc.c:tsc_read_refs"
+
+  # C++ (pytorch ATen) — newly admitted Tier 1
+  "cpp:pytorch-Dropout-multiply|pytorch|aten/src/ATen/native/Dropout.cpp:multiply"
+  "cpp:pytorch-Dropout-dropout|pytorch|aten/src/ATen/native/Dropout.cpp:dropout"
+  "cpp:pytorch-make_feature_noise|pytorch|aten/src/ATen/native/Dropout.cpp:make_feature_noise"
+
+  # Ruby (rails) — newly admitted
+  "ruby:rails-save|rails|activerecord/lib/active_record/persistence.rb:save"
+  "ruby:rails-find|rails|activerecord/lib/active_record/associations/collection_proxy.rb:find"
+
+  # C# (roslyn) — newly admitted
+  "cs:roslyn-MethodKind|roslyn|src/Compilers/Core/Portable/Symbols/MethodKind.cs:MethodKind"
+
+  # Swift (vapor) — newly admitted
+  "swift:vapor-BootCommand-run|vapor|Sources/Vapor/Commands/BootCommand.swift:run"
+  "swift:vapor-RoutesCommand-run|vapor|Sources/Vapor/Commands/RoutesCommand.swift:run"
+
+  # PHP (laravel types) — newly admitted
+  "php:laravel-Model-newCollection|laravel|types/Database/Eloquent/Model.php:newCollection"
 )
 
 printf "%-22s %-8s %-8s %8s %8s %+8s %s\n" "lang:repo" "scope" "regex" "n_scope" "n_regex" "delta" "target"

@@ -1000,6 +1000,298 @@ function shadowed() {
 }
 
 // ----------------------------------------------------------------------
+// Cross-class same-name FP guards
+//
+// Each test sets up two unrelated types/classes that both happen to
+// have a method named `compute`. Renaming one's method must NOT touch
+// the other — the most common cross-file false positive shape that
+// regex fallback would otherwise rewrite both of.
+// ----------------------------------------------------------------------
+
+func TestRename_GoCrossTypeFP(t *testing.T) {
+	// FP guard: A.compute and B.compute are unrelated methods; renaming
+	// A.compute MUST NOT touch B.compute or its call site.
+	// Note: same-package call-site rewriting for method renames in Go is
+	// a known under-rewrite gap — the receiver-type inference doesn't
+	// thread through `a := A{}` for sibling-file calls. The FP contract
+	// (don't rewrite B) is the safety-critical assertion here.
+	db, dir := setupRefsRepo(t, map[string]string{
+		"go.mod":  "module test\ngo 1.21\n",
+		"a.go":    "package main\n\ntype A struct{}\n\nfunc (a A) compute() int { return 1 }\n",
+		"b.go":    "package main\n\ntype B struct{}\n\nfunc (b B) compute() int { return 2 }\n",
+		"main.go": "package main\n\nfunc main() {\n\ta := A{}\n\tb := B{}\n\t_ = a.compute()\n\t_ = b.compute()\n}\n",
+	})
+	if _, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"a.go:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if !strings.Contains(string(mustRead(t, dir, "a.go")), "func (a A) calculate()") {
+		t.Errorf("A.compute should be renamed; got:\n%s", mustRead(t, dir, "a.go"))
+	}
+	if !strings.Contains(string(mustRead(t, dir, "b.go")), "func (b B) compute()") {
+		t.Errorf("B.compute MUST remain; got:\n%s", mustRead(t, dir, "b.go"))
+	}
+	body := string(mustRead(t, dir, "main.go"))
+	if !strings.Contains(body, "b.compute()") {
+		t.Errorf("b.compute() call MUST remain; got:\n%s", body)
+	}
+}
+
+func TestRename_TSCrossClassFP(t *testing.T) {
+	// FP guard: B.compute MUST NOT be touched.
+	// Like the Go test, call-site rewriting for `a.compute()` in a
+	// sibling file is a known under-rewrite gap — varTypes inference
+	// doesn't thread through. The cross-class FP contract is the
+	// safety-critical assertion.
+	db, dir := setupRefsRepo(t, map[string]string{
+		"a.ts":    "export class A { compute(): number { return 1; } }\n",
+		"b.ts":    "export class B { compute(): number { return 2; } }\n",
+		"main.ts": "import { A } from './a';\nimport { B } from './b';\nconst a = new A();\nconst b = new B();\nconsole.log(a.compute(), b.compute());\n",
+	})
+	if _, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"a.ts:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if !strings.Contains(string(mustRead(t, dir, "a.ts")), "calculate()") {
+		t.Errorf("A.compute should be renamed; got:\n%s", mustRead(t, dir, "a.ts"))
+	}
+	if !strings.Contains(string(mustRead(t, dir, "b.ts")), "compute()") {
+		t.Errorf("B.compute MUST remain; got:\n%s", mustRead(t, dir, "b.ts"))
+	}
+	body := string(mustRead(t, dir, "main.ts"))
+	if !strings.Contains(body, "b.compute()") {
+		t.Errorf("b.compute() call MUST remain; got:\n%s", body)
+	}
+}
+
+func TestRename_PythonCrossClassFP(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"a.py":    "class A:\n    def compute(self):\n        return 1\n",
+		"b.py":    "class B:\n    def compute(self):\n        return 2\n",
+		"main.py": "from a import A\nfrom b import B\na = A()\nb = B()\nprint(a.compute(), b.compute())\n",
+	})
+	if _, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"a.py:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if !strings.Contains(string(mustRead(t, dir, "a.py")), "def calculate(self)") {
+		t.Errorf("A.compute should be renamed; got:\n%s", mustRead(t, dir, "a.py"))
+	}
+	if !strings.Contains(string(mustRead(t, dir, "b.py")), "def compute(self)") {
+		t.Errorf("B.compute MUST remain; got:\n%s", mustRead(t, dir, "b.py"))
+	}
+	body := string(mustRead(t, dir, "main.py"))
+	if !strings.Contains(body, "a.calculate()") || !strings.Contains(body, "b.compute()") {
+		t.Errorf("expected a.calculate() + b.compute() preserved; got:\n%s", body)
+	}
+}
+
+func TestRename_JavaCrossClassFP(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"A.java":    "package app;\npublic class A { public int compute() { return 1; } }\n",
+		"B.java":    "package app;\npublic class B { public int compute() { return 2; } }\n",
+		"Main.java": "package app;\npublic class Main {\n    public static void main(String[] args) {\n        A a = new A();\n        B b = new B();\n        System.out.println(a.compute() + b.compute());\n    }\n}\n",
+	})
+	if _, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"A.java:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if !strings.Contains(string(mustRead(t, dir, "A.java")), "int calculate()") {
+		t.Errorf("A.compute should be renamed; got:\n%s", mustRead(t, dir, "A.java"))
+	}
+	if !strings.Contains(string(mustRead(t, dir, "B.java")), "int compute()") {
+		t.Errorf("B.compute MUST remain; got:\n%s", mustRead(t, dir, "B.java"))
+	}
+	body := string(mustRead(t, dir, "Main.java"))
+	if !strings.Contains(body, "a.calculate()") || !strings.Contains(body, "b.compute()") {
+		t.Errorf("expected a.calculate() + b.compute() preserved; got:\n%s", body)
+	}
+}
+
+func TestRename_KotlinCrossClassFP(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"A.kt":    "package app\n\nclass A { fun compute(): Int = 1 }\n",
+		"B.kt":    "package app\n\nclass B { fun compute(): Int = 2 }\n",
+		"Main.kt": "package app\n\nfun main() {\n    val a = A()\n    val b = B()\n    println(a.compute() + b.compute())\n}\n",
+	})
+	if _, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"A.kt:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if !strings.Contains(string(mustRead(t, dir, "A.kt")), "fun calculate()") {
+		t.Errorf("A.compute should be renamed; got:\n%s", mustRead(t, dir, "A.kt"))
+	}
+	if !strings.Contains(string(mustRead(t, dir, "B.kt")), "fun compute()") {
+		t.Errorf("B.compute MUST remain; got:\n%s", mustRead(t, dir, "B.kt"))
+	}
+	body := string(mustRead(t, dir, "Main.kt"))
+	if !strings.Contains(body, "a.calculate()") || !strings.Contains(body, "b.compute()") {
+		t.Errorf("expected a.calculate() + b.compute() preserved; got:\n%s", body)
+	}
+}
+
+func TestRename_RustCrossImplFP(t *testing.T) {
+	// Cargo.toml is required for the Rust namespace path to engage —
+	// without it the safety valve fires and the rename falls back to
+	// regex (mode:name-match) which over-rewrites both impls. With a
+	// crate root present, the canonical-DeclID path keeps them apart.
+	db, dir := setupRefsRepo(t, map[string]string{
+		"Cargo.toml": "[package]\nname = \"test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+		"src/lib.rs": "mod a;\nmod b;\n",
+		"src/a.rs":   "pub struct A;\nimpl A { pub fn compute(&self) -> i32 { 1 } }\n",
+		"src/b.rs":   "pub struct B;\nimpl B { pub fn compute(&self) -> i32 { 2 } }\n",
+	})
+	if _, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"src/a.rs:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if !strings.Contains(string(mustRead(t, dir, "src/a.rs")), "fn calculate(&self)") {
+		t.Errorf("A.compute should be renamed; got:\n%s", mustRead(t, dir, "src/a.rs"))
+	}
+	if !strings.Contains(string(mustRead(t, dir, "src/b.rs")), "fn compute(&self)") {
+		t.Errorf("B.compute MUST remain; got:\n%s", mustRead(t, dir, "src/b.rs"))
+	}
+}
+
+func TestRename_CppCrossClassFP(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"a.hpp": "#ifndef A_HPP\n#define A_HPP\nclass A { public: int compute() const; };\n#endif\n",
+		"a.cpp": "#include \"a.hpp\"\nint A::compute() const { return 1; }\n",
+		"b.hpp": "#ifndef B_HPP\n#define B_HPP\nclass B { public: int compute() const; };\n#endif\n",
+		"b.cpp": "#include \"b.hpp\"\nint B::compute() const { return 2; }\n",
+		"main.cpp": "#include \"a.hpp\"\n#include \"b.hpp\"\nint main() {\n    A a; B b;\n    return a.compute() + b.compute();\n}\n",
+	})
+	if _, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"a.hpp:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if !strings.Contains(string(mustRead(t, dir, "a.hpp")), "int calculate()") {
+		t.Errorf("A.compute decl should be renamed; got:\n%s", mustRead(t, dir, "a.hpp"))
+	}
+	if !strings.Contains(string(mustRead(t, dir, "a.cpp")), "A::calculate()") {
+		t.Errorf("A.compute def should be renamed; got:\n%s", mustRead(t, dir, "a.cpp"))
+	}
+	if !strings.Contains(string(mustRead(t, dir, "b.hpp")), "int compute()") {
+		t.Errorf("B.compute decl MUST remain; got:\n%s", mustRead(t, dir, "b.hpp"))
+	}
+	if !strings.Contains(string(mustRead(t, dir, "b.cpp")), "B::compute()") {
+		t.Errorf("B.compute def MUST remain; got:\n%s", mustRead(t, dir, "b.cpp"))
+	}
+	body := string(mustRead(t, dir, "main.cpp"))
+	if !strings.Contains(body, "a.calculate()") || !strings.Contains(body, "b.compute()") {
+		t.Errorf("expected a.calculate() + b.compute() preserved; got:\n%s", body)
+	}
+}
+
+func TestRename_RubyCrossClassFP(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"a.rb":   "class A\n  def compute\n    1\n  end\nend\n",
+		"b.rb":   "class B\n  def compute\n    2\n  end\nend\n",
+		"app.rb": "require_relative 'a'\nrequire_relative 'b'\na = A.new\nb = B.new\nputs a.compute + b.compute\n",
+	})
+	if _, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"a.rb:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if !strings.Contains(string(mustRead(t, dir, "a.rb")), "def calculate") {
+		t.Errorf("A#compute should be renamed; got:\n%s", mustRead(t, dir, "a.rb"))
+	}
+	if !strings.Contains(string(mustRead(t, dir, "b.rb")), "def compute") {
+		t.Errorf("B#compute MUST remain; got:\n%s", mustRead(t, dir, "b.rb"))
+	}
+	body := string(mustRead(t, dir, "app.rb"))
+	if !strings.Contains(body, "a.calculate") || !strings.Contains(body, "b.compute") {
+		t.Errorf("expected a.calculate + b.compute preserved; got:\n%s", body)
+	}
+}
+
+func TestRename_CSharpCrossClassFP(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"A.cs":    "namespace App;\npublic class A { public int Compute() { return 1; } }\n",
+		"B.cs":    "namespace App;\npublic class B { public int Compute() { return 2; } }\n",
+		"Main.cs": "namespace App;\npublic static class Main {\n    public static int Run() {\n        A a = new A();\n        B b = new B();\n        return a.Compute() + b.Compute();\n    }\n}\n",
+	})
+	if _, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"A.cs:Compute"},
+		map[string]any{"new_name": "Calculate", "cross_file": true}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if !strings.Contains(string(mustRead(t, dir, "A.cs")), "int Calculate()") {
+		t.Errorf("A.Compute should be renamed; got:\n%s", mustRead(t, dir, "A.cs"))
+	}
+	if !strings.Contains(string(mustRead(t, dir, "B.cs")), "int Compute()") {
+		t.Errorf("B.Compute MUST remain; got:\n%s", mustRead(t, dir, "B.cs"))
+	}
+	body := string(mustRead(t, dir, "Main.cs"))
+	if !strings.Contains(body, "a.Calculate()") || !strings.Contains(body, "b.Compute()") {
+		t.Errorf("expected a.Calculate() + b.Compute() preserved; got:\n%s", body)
+	}
+}
+
+func TestRename_SwiftCrossClassFP(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"A.swift":    "public class A { public func compute() -> Int { return 1 } }\n",
+		"B.swift":    "public class B { public func compute() -> Int { return 2 } }\n",
+		"Main.swift": "public func run() -> Int {\n    let a = A()\n    let b = B()\n    return a.compute() + b.compute()\n}\n",
+	})
+	if _, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"A.swift:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if !strings.Contains(string(mustRead(t, dir, "A.swift")), "func calculate()") {
+		t.Errorf("A.compute should be renamed; got:\n%s", mustRead(t, dir, "A.swift"))
+	}
+	if !strings.Contains(string(mustRead(t, dir, "B.swift")), "func compute()") {
+		t.Errorf("B.compute MUST remain; got:\n%s", mustRead(t, dir, "B.swift"))
+	}
+	body := string(mustRead(t, dir, "Main.swift"))
+	if !strings.Contains(body, "a.calculate()") || !strings.Contains(body, "b.compute()") {
+		t.Errorf("expected a.calculate() + b.compute() preserved; got:\n%s", body)
+	}
+}
+
+func TestRename_PHPCrossClassFP(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"A.php":   "<?php\nclass A { public function compute() { return 1; } }\n",
+		"B.php":   "<?php\nclass B { public function compute() { return 2; } }\n",
+		"app.php": "<?php\nrequire_once 'A.php';\nrequire_once 'B.php';\n$a = new A();\n$b = new B();\necho $a->compute() + $b->compute();\n",
+	})
+	if _, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"A.php:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if !strings.Contains(string(mustRead(t, dir, "A.php")), "function calculate()") {
+		t.Errorf("A::compute should be renamed; got:\n%s", mustRead(t, dir, "A.php"))
+	}
+	if !strings.Contains(string(mustRead(t, dir, "B.php")), "function compute()") {
+		t.Errorf("B::compute MUST remain; got:\n%s", mustRead(t, dir, "B.php"))
+	}
+	body := string(mustRead(t, dir, "app.php"))
+	if !strings.Contains(body, "$a->calculate()") || !strings.Contains(body, "$b->compute()") {
+		t.Errorf("expected $a->calculate() + $b->compute() preserved; got:\n%s", body)
+	}
+}
+
+func mustRead(t *testing.T, dir, name string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	return data
+}
+
+// ----------------------------------------------------------------------
 // Kotlin oracle-equivalent tests
 //
 // kotlinc is not available in our dev environment. These tests parallel

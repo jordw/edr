@@ -231,7 +231,14 @@ func cppCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 					}
 				}
 			}
-			if ref.Binding.Reason == "property_access" && ref.Span.StartByte > 0 && len(src) > 0 {
+			// Disambiguate qualified accesses: `x.foo()`, `x->foo()`,
+			// and out-of-line `Type::foo` defs all need to filter
+			// by receiver type. The cpp scope builder reports
+			// `.`/`->` as reason=property_access and `::` as
+			// reason=scope_qualified_access — both go through this
+			// branch.
+			isQualified := ref.Binding.Reason == "property_access" || ref.Binding.Reason == "scope_qualified_access"
+			if isMethod && isQualified && ref.Span.StartByte > 0 && len(src) > 0 {
 				prev := src[ref.Span.StartByte-1]
 				isDot := prev == '.'
 				isArrow := ref.Span.StartByte >= 2 && src[ref.Span.StartByte-2] == '-' && prev == '>'
@@ -241,13 +248,13 @@ func cppCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 				// itself is the acceptable receiver. Span stays
 				// identifier-only.
 				accept := false
-				if isMethod && (isDot || isArrow) {
+				if isDot || isArrow {
 					baseIdent := cppBaseIdentBefore(src, ref.Span.StartByte, isArrow)
 					if baseIdent != "" && acceptableTypes[varTypes[baseIdent]] {
 						accept = true
 					}
 				}
-				if isMethod && isScope {
+				if isScope {
 					baseIdent := cppBaseIdentBefore(src, ref.Span.StartByte, false)
 					if acceptableTypes[baseIdent] {
 						accept = true
