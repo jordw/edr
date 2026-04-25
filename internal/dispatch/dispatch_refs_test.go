@@ -916,6 +916,41 @@ public static class Caller {
 	}
 }
 
+// TestRename_SwiftShadowNotRewritten: cross-file Swift rename rewrites
+// the free function def + cross-file call site but leaves a same-
+// named `let` local alone. The swift scope builder emits `let`/`var`
+// decls for local bindings and binds same-name refs to the local.
+func TestRename_SwiftShadowNotRewritten(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"Lib.swift": `func compute(_ x: Int) -> Int { return x * 2 }
+`,
+		"App.swift": `func run() -> Int { return compute(5) }
+
+func shadowed() -> Int {
+    let compute = 42
+    return compute + 1
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"Lib.swift:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	aData, _ := os.ReadFile(filepath.Join(dir, "App.swift"))
+	body := string(aData)
+	if !strings.Contains(body, "return calculate(5)") {
+		t.Errorf("cross-file call not rewritten; got:\n%s", body)
+	}
+	if !strings.Contains(body, "let compute = 42") {
+		t.Errorf("shadowed local MUST remain as `let compute = 42`; got:\n%s", body)
+	}
+	if !strings.Contains(body, "return compute + 1") {
+		t.Errorf("use of shadowed local MUST remain as `compute + 1`; got:\n%s", body)
+	}
+}
+
 // ----------------------------------------------------------------------
 // Kotlin oracle-equivalent tests
 //

@@ -2924,14 +2924,14 @@ func TestSpec_RenameModeScope(t *testing.T) {
 	}
 }
 
-// TestSpec_RenameModeNameMatch verifies that an unadmitted language (Swift)
+// TestSpec_RenameModeNameMatch verifies that an unadmitted language (PHP)
 // reports mode:name-match and attaches a fallback warning naming the extension.
 func TestSpec_RenameModeNameMatch(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{
-		"Lib.swift": "func compute(_ x: Int) -> Int { x * 2 }\n",
+		"lib.php": "<?php\nfunction compute($x) { return $x * 2; }\n",
 	})
 	result, stdout, stderr, exit := specRun(t, binary, dir, []string{"EDR_SESSION=" + nextSession()},
-		"rename", "Lib.swift:compute", "--to", "calculate")
+		"rename", "lib.php:compute", "--to", "calculate")
 	if exit != 0 {
 		t.Fatalf("exit %d, stderr: %s, stdout: %s", exit, stderr, stdout)
 	}
@@ -2944,8 +2944,8 @@ func TestSpec_RenameModeNameMatch(t *testing.T) {
 		t.Fatalf("expected fallback warning on name-match path; got %v", h["warnings"])
 	}
 	msg, _ := warnings[0].(string)
-	if !strings.Contains(msg, ".swift") {
-		t.Errorf("warning should name the extension .swift; got %q", msg)
+	if !strings.Contains(msg, ".php") {
+		t.Errorf("warning should name the extension .php; got %q", msg)
 	}
 }
 
