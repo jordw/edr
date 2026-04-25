@@ -298,6 +298,119 @@ func Caller() int { return Compute(5) }
 	}
 }
 
+// TestRename_FlagsUnrewrittenCodeMentions verifies that when the
+// rename leaves word-bounded mentions of OldName in code (e.g. inside a
+// string literal that the resolver correctly didn't pick up), the result
+// reports code_mentions > code_occurrences and emits a warning. This
+// catches the receiver-bug class: the resolver missing real refs.
+func TestRename_FlagsUnrewrittenCodeMentions(t *testing.T) {
+	db, _ := setupRefsRepo(t, map[string]string{
+		"go.mod": "module example.com/foo\n",
+		"a.go": `package foo
+
+func Foo(x int) int { return x * 2 }
+
+func Use() int {
+	s := "Foo bar" // string literal — not a ref; should NOT be rewritten
+	_ = s
+	return Foo(1)
+}
+`,
+	})
+	res, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"a.go:Foo"},
+		map[string]any{"new_name": "Bar"})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	rr, ok := res.(*output.RenameResult)
+	if !ok {
+		t.Fatalf("unexpected result type %T", res)
+	}
+	if rr.CodeOccurrences != 2 {
+		t.Errorf("CodeOccurrences: want 2 (decl + call), got %d", rr.CodeOccurrences)
+	}
+	if rr.CodeMentions <= rr.CodeOccurrences {
+		t.Errorf("CodeMentions (%d) should exceed CodeOccurrences (%d) due to string-literal Foo", rr.CodeMentions, rr.CodeOccurrences)
+	}
+	hasWarn := false
+	for _, w := range rr.Warnings {
+		if strings.Contains(w, "unrewritten") {
+			hasWarn = true
+			break
+		}
+	}
+	if !hasWarn {
+		t.Errorf("want warning mentioning 'unrewritten'; got %v", rr.Warnings)
+	}
+}
+
+// TestRename_UpdateCommentsRewritesProseMentions verifies the
+// --update-comments flag picks up word-bounded mentions of the renamed
+// symbol in arbitrary comments (not just the leading doc), and that
+// without the flag those mentions are preserved untouched.
+func TestRename_UpdateCommentsRewritesProseMentions(t *testing.T) {
+	src := `package uc
+
+// Counter holds a count.
+type Counter struct{ n int }
+
+// Inc increments the Counter — methods on a Counter are documented here.
+func (c *Counter) Inc() { c.n++ }
+
+func use() {
+	// build a Counter and increment it.
+	c := &Counter{}
+	c.Inc()
+}
+`
+	t.Run("without_flag_leaves_inline_comments", func(t *testing.T) {
+		db, dir := setupRefsRepo(t, map[string]string{
+			"go.mod": "module example.com/uc\n",
+			"a.go":   src,
+		})
+		_, err := dispatch.Dispatch(context.Background(), db, "rename",
+			[]string{"a.go:Counter"},
+			map[string]any{"new_name": "Tally"})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		body, _ := os.ReadFile(filepath.Join(dir, "a.go"))
+		s := string(body)
+		// Method-doc and inline mentions must remain "Counter" without the flag.
+		if !strings.Contains(s, "methods on a Counter are documented") {
+			t.Errorf("inline-doc mention should be preserved without flag; got:\n%s", s)
+		}
+		if !strings.Contains(s, "// build a Counter and increment it.") {
+			t.Errorf("inline comment should be preserved without flag; got:\n%s", s)
+		}
+	})
+
+	t.Run("with_flag_rewrites_prose", func(t *testing.T) {
+		db, dir := setupRefsRepo(t, map[string]string{
+			"go.mod": "module example.com/uc\n",
+			"a.go":   src,
+		})
+		_, err := dispatch.Dispatch(context.Background(), db, "rename",
+			[]string{"a.go:Counter"},
+			map[string]any{"new_name": "Tally", "update_comments": true})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		body, _ := os.ReadFile(filepath.Join(dir, "a.go"))
+		s := string(body)
+		if strings.Contains(s, "Counter") {
+			t.Errorf("--update-comments should rewrite all word-bounded mentions; got:\n%s", s)
+		}
+		if !strings.Contains(s, "methods on a Tally are documented") {
+			t.Errorf("inline-doc mention should be rewritten; got:\n%s", s)
+		}
+		if !strings.Contains(s, "// build a Tally and increment it.") {
+			t.Errorf("inline comment should be rewritten; got:\n%s", s)
+		}
+	})
+}
+
 // TestRename_GoSamePackageShadowNotRewritten verifies rename does NOT
 // rewrite a shadowed local `Compute := 42` in the same caller file.
 func TestRename_GoSamePackageShadowNotRewritten(t *testing.T) {

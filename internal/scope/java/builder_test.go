@@ -175,6 +175,32 @@ func TestParse_ThisAndSuperField(t *testing.T) {
 	}
 }
 
+// TestParse_ExtendsGenericArgs verifies that generic *arguments* in the
+// supertype list (class C extends Base<Item>) are emitted as REFS, not
+// as phantom type-param decls on C. Pre-fix the parser left
+// genericParamsExpected=true after the class name and the '<' inside
+// 'Base<Item>' consumed it as if it were a type-param list, so 'Item'
+// became a KindType decl on C — wrong, and rename/refs-to undercount.
+func TestParse_ExtendsGenericArgs(t *testing.T) {
+	src := []byte(`public class Counter extends Base<Item> implements Sized { }
+`)
+	r := Parse("Counter.java", src)
+	for _, d := range r.Decls {
+		if (d.Name == "Item" || d.Name == "Base" || d.Name == "Sized") && d.Kind == scope.KindType {
+			t.Errorf("phantom type decl %q (kind=%s) — should be a ref", d.Name, d.Kind)
+		}
+	}
+	hasItemRef := false
+	for _, ref := range r.Refs {
+		if ref.Name == "Item" {
+			hasItemRef = true
+		}
+	}
+	if !hasItemRef {
+		t.Errorf("want Item as ref; refs=%+v", r.Refs)
+	}
+}
+
 func TestParse_GenericTypeParams(t *testing.T) {
 	src := []byte(`class Box<T> {
     T value;

@@ -417,6 +417,12 @@ func plainRename(w *os.File, op Op) {
 	if v := anyInt(op["code_occurrences"]); v > 0 {
 		h["code"] = v
 	}
+	if v := anyInt(op["code_mentions"]); v > 0 {
+		applied := anyInt(op["code_occurrences"])
+		if v > applied {
+			h["code_mentions"] = v
+		}
+	}
 	if v := anyInt(op["comment_occurrences"]); v > 0 {
 		h["in_comments"] = v
 		if mode, _ := op["comment_mode"].(string); mode == "skip" {
@@ -906,6 +912,12 @@ func plainRefsTo(w *os.File, op Op) {
 	// ambiguous counts so readers see scope precision at a glance.
 	if b, ok := op["binding"].(map[string]any); ok && len(b) > 0 {
 		h["binding"] = b
+	}
+	if v, ok := op["stale_index"].(bool); ok && v {
+		h["stale_index"] = true
+	}
+	if ws, ok := op["warnings"].([]any); ok && len(ws) > 0 {
+		h["warnings"] = ws
 	}
 	hTrunc(h, op)
 	writeHeader(w, h)

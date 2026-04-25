@@ -82,6 +82,12 @@ type RenameResult struct {
 	// whether the comment edits are intended.
 	CodeOccurrences    int            `json:"code_occurrences,omitempty"`
 	CommentOccurrences int            `json:"comment_occurrences,omitempty"`
+	// CodeMentions is the word-bounded text count of OldName in code regions
+	// of the touched files. When CodeMentions > CodeOccurrences, some
+	// mentions in code were not rewritten — check for missed refs (most
+	// commonly a parser bug) before trusting the result. Shadowed locals and
+	// string-literal lookalikes also bump this, so it is signal not proof.
+	CodeMentions       int            `json:"code_mentions,omitempty"`
 	CommentMode        string         `json:"comment_mode,omitempty"` // "rewrite" (default) or "skip"
 	Status       string             `json:"status"` // "applied", "dry_run", "noop"
 	Noop         bool               `json:"noop,omitempty"` // deprecated: use Status

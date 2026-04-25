@@ -103,7 +103,7 @@ func runSmartEditInner(ctx context.Context, db index.SymbolStore, root string, a
 		}
 		currentHash, _ := edit.FileHash(file)
 		if currentHash != expectHash {
-			return nil, fmt.Errorf("hash mismatch on %s: expected %s, got %s (file was modified)", output.Rel(file), expectHash, currentHash)
+			return nil, fmt.Errorf("hash mismatch on %s: expected %s, got %s (file was modified externally — run 'edr focus %s' to refresh session state, then retry)", output.Rel(file), expectHash, currentHash, output.Rel(file))
 		}
 	}
 
@@ -757,7 +757,7 @@ func smartEditMatch(ctx context.Context, db index.SymbolStore, file, matchText, 
 		if expectHash := flagString(flags, "expect_hash", ""); expectHash != "" {
 			currentHash := edit.HashBytes(data)
 			if currentHash != expectHash {
-				return nil, fmt.Errorf("hash mismatch on %s: expected %s, got %s (file was modified)", output.Rel(file), expectHash, currentHash)
+				return nil, fmt.Errorf("hash mismatch on %s: expected %s, got %s (file was modified externally — run 'edr focus %s' to refresh session state, then retry)", output.Rel(file), expectHash, currentHash, output.Rel(file))
 			}
 		}
 		return map[string]any{

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jordw/edr/internal/idx"
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/scope"
@@ -233,6 +234,13 @@ func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []stri
 	}
 	if len(binding) > 0 {
 		payload["binding"] = binding
+	}
+	// Stale-index warning: refs-to may undercount cross-file refs when
+	// the trigram + symbol index hasn't been ticked since recent edits.
+	// Surface it so callers don't trust an incomplete count silently.
+	if idx.IsStale(root, db.EdrDir()) {
+		payload["stale_index"] = true
+		payload["warnings"] = []any{"index is stale — cross-file refs may be undercounted; run 'edr index' to refresh"}
 	}
 	return payload, nil
 }

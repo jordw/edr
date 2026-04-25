@@ -162,6 +162,7 @@ var Registry = []*Spec{
 			{Name: "cross_file", Type: FlagBool, Default: false, Desc: "Rename across all files, not just the defining file"},
 			{Name: "force", Type: FlagBool, Default: false, Desc: "With --cross-file, proceed even if the name is ambiguous (defined by multiple symbols)"},
 			{Name: "comments", Type: FlagString, Default: "rewrite", Desc: "How to handle matches inside comments: 'rewrite' (default) or 'skip'"},
+			{Name: "update_comments", Type: FlagBool, Default: false, Desc: "Also rewrite word-bounded mentions of the old name in comments anywhere in touched files (opt-in; --comments=skip overrides)"},
 		},
 	},
 	// --- Internal commands (dispatch-only, no CLI surface) ---

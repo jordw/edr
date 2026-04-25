@@ -38,6 +38,7 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 	default:
 		return nil, fmt.Errorf("rename: --comments must be 'rewrite' or 'skip' (got %q)", commentMode)
 	}
+	updateComments := flagBool(flags, "update_comments", false)
 
 	// Resolve the symbol to rename.
 	sym, err := resolveSymbolArgs(ctx, db, root, args)
@@ -137,6 +138,7 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 	var edits []fileEdit
 	totalCodeEdits := 0
 	totalCommentMatches := 0
+	totalCodeMentions := 0 // word-bounded oldName mentions in code regions of touched files; sanity check vs totalCodeEdits to flag misses (e.g. receiver-bug class)
 
 	for _, file := range files {
 		data, err := os.ReadFile(file)
@@ -148,11 +150,21 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 			continue
 		}
 
+		fileExt := commentSyntaxFor(file)
+		totalCodeMentions += countNameInCode(data, oldName, fileExt)
+
+		// --update-comments: scan touched files for word-bounded oldName
+		// mentions in comments and add them to the rewrite set. The resolver
+		// only returns the declaration's leading doc comment via
+		// expandToDocComment; arbitrary doc/inline mentions of the type
+		// elsewhere are missed without this opt-in pass.
+		if updateComments && commentMode != "skip" {
+			fileSpans[file] = append(fileSpans[file], findCommentMentions(data, oldName, fileExt)...)
+		}
+
 		spans := dedupSpans(fileSpans[file])
 		// Sort spans by start offset for a single forward pass.
 		sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
-
-		fileExt := commentSyntaxFor(file)
 
 		// Span-based substitution: each span identifies the exact
 		// bytes to overwrite with newName. Comment classification is
@@ -257,12 +269,22 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 		Occurrences:        totalOccurrences,
 		CodeOccurrences:    totalCodeEdits,
 		CommentOccurrences: totalCommentMatches,
+		CodeMentions:       totalCodeMentions,
 		CommentMode:        commentMode,
+	}
+	if totalCodeMentions > totalCodeEdits {
+		result.Warnings = append(result.Warnings, fmt.Sprintf(
+			"%d code mention(s) of %q remain unrewritten — possible missed refs (or shadowed locals / string-literal lookalikes); inspect diff before committing",
+			totalCodeMentions-totalCodeEdits, oldName))
 	}
 	if mode == "name-match" {
 		result.Warnings = append(result.Warnings, fmt.Sprintf(
 			"rename used name-based matching: scope builder for %s is not yet admitted for writes; verify diffs for cross-class false positives before committing",
 			filepath.Ext(sym.File)))
+	}
+	if idx.IsStale(root, db.EdrDir()) {
+		result.Warnings = append(result.Warnings,
+			"index is stale — cross-file refs may be undercounted; run 'edr index' to refresh, then re-run rename")
 	}
 
 	result.OldContents = make(map[string][]byte, len(edits))
@@ -486,4 +508,62 @@ func dedupSpans(in []span) []span {
 func isIdentByte(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
 		(c >= '0' && c <= '9') || c == '_'
+}
+
+// findCommentMentions returns spans for word-bounded occurrences of name
+// inside comment regions of data (per syn). Used by --update-comments to
+// rewrite doc/comment mentions of the renamed symbol that the symbol-graph
+// resolver does not return as refs (it only expands the *declaration's*
+// leading doc comment, not arbitrary mentions in unrelated comments).
+func findCommentMentions(data []byte, name string, syn commentSyntax) []span {
+	if name == "" {
+		return nil
+	}
+	nb := []byte(name)
+	var out []span
+	i := 0
+	for i+len(nb) <= len(data) {
+		idx := bytes.Index(data[i:], nb)
+		if idx < 0 {
+			break
+		}
+		abs := i + idx
+		absEnd := abs + len(nb)
+		leftOK := abs == 0 || !isIdentByte(data[abs-1])
+		rightOK := absEnd >= len(data) || !isIdentByte(data[absEnd])
+		if leftOK && rightOK && positionInComment(data, abs, syn) {
+			out = append(out, span{uint32(abs), uint32(absEnd)})
+		}
+		i = abs + 1
+	}
+	return out
+}
+
+// countNameInCode counts word-bounded occurrences of name in data that are
+// NOT inside a comment (per syn). Used as a sanity check against the resolver:
+// if the resolver finds fewer code spans than this returns, some references
+// were missed (or are intentionally skipped — shadowed locals, look-alikes
+// in string literals — so this is signal not proof).
+func countNameInCode(data []byte, name string, syn commentSyntax) int {
+	if name == "" {
+		return 0
+	}
+	nb := []byte(name)
+	count := 0
+	i := 0
+	for i+len(nb) <= len(data) {
+		idx := bytes.Index(data[i:], nb)
+		if idx < 0 {
+			break
+		}
+		abs := i + idx
+		absEnd := abs + len(nb)
+		leftOK := abs == 0 || !isIdentByte(data[abs-1])
+		rightOK := absEnd >= len(data) || !isIdentByte(data[absEnd])
+		if leftOK && rightOK && !positionInComment(data, abs, syn) {
+			count++
+		}
+		i = abs + 1
+	}
+	return count
 }

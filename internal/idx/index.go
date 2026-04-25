@@ -50,6 +50,21 @@ func IsComplete(repoRoot, edrDir string) bool {
 	return h.GitMtime != 0 && gitIndexMtime(repoRoot) == h.GitMtime
 }
 
+// IsStale reports whether an index file exists AND is out of date —
+// distinct from "no index at all". Callers that want to warn about
+// undercounted refs should gate on this rather than !IsComplete, which
+// is true for fresh test repos where no index has ever been built.
+func IsStale(repoRoot, edrDir string) bool {
+	h, err := ReadHeader(edrDir)
+	if err != nil || h.GitMtime == 0 {
+		return false
+	}
+	if staleness.OpenTracker(edrDir, DirtyTrackerName).IsDirty() {
+		return true
+	}
+	return gitIndexMtime(repoRoot) != h.GitMtime
+}
+
 // Status holds index stats for edr index --status.
 type Status struct {
 	Exists    bool

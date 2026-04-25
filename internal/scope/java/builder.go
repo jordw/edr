@@ -667,6 +667,13 @@ func (b *builder) handleIdent(word []byte) {
 		if b.pendingClassDeclIdx >= 0 {
 			b.inSuperTypes = true
 			b.superTypeNeedsName = true
+			// Clear pending type-PARAM flag: any '<' after a supertype
+			// name opens a type-ARGUMENT list, not the host class's own
+			// type params (which would have come immediately after the
+			// class name and already been consumed). Without this, the
+			// 'X' in 'class C extends Base<X>' is captured as a phantom
+			// type-param decl on C.
+			b.genericParamsExpected = false
 		}
 		b.prevByte = 'k'
 		return
