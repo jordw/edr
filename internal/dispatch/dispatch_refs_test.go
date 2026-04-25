@@ -874,6 +874,48 @@ end
 	}
 }
 
+// TestRename_CSharpShadowNotRewritten: cross-file C# rename rewrites
+// the static method def + Lib.Compute() call site but leaves a same-
+// named local variable alone. The csharp scope builder emits `var`
+// decls for local declarations and binds same-name refs to the local.
+func TestRename_CSharpShadowNotRewritten(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"Lib.cs": `namespace App;
+
+public static class Lib {
+    public static int Compute(int x) { return x * 2; }
+}
+`,
+		"Caller.cs": `namespace App;
+
+public static class Caller {
+    public static int Run() { return Lib.Compute(5); }
+    public static int Shadowed() {
+        int Compute = 42;
+        return Compute + 1;
+    }
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"Lib.cs:Compute"},
+		map[string]any{"new_name": "Calculate", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	cData, _ := os.ReadFile(filepath.Join(dir, "Caller.cs"))
+	body := string(cData)
+	if !strings.Contains(body, "Lib.Calculate(5)") {
+		t.Errorf("cross-file call not rewritten; got:\n%s", body)
+	}
+	if !strings.Contains(body, "int Compute = 42") {
+		t.Errorf("shadowed local MUST remain as `int Compute = 42`; got:\n%s", body)
+	}
+	if !strings.Contains(body, "return Compute + 1") {
+		t.Errorf("use of shadowed local MUST remain as `Compute + 1`; got:\n%s", body)
+	}
+}
+
 // ----------------------------------------------------------------------
 // Kotlin oracle-equivalent tests
 //
