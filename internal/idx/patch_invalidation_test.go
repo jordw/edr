@@ -30,7 +30,7 @@ func seedMinimalIndex(t *testing.T, edrDir string) {
 	if err := os.MkdirAll(edrDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	d := &IndexData{
+	d := &Snapshot{
 		Header: Header{NumFiles: 0, NumTrigrams: 0},
 	}
 	if err := os.WriteFile(filepath.Join(edrDir, MainFile), d.Marshal(), 0o600); err != nil {

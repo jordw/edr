@@ -88,7 +88,7 @@ type TrigramEntry struct {
 	Offset uint64 // offset into posting data
 }
 
-// IndexData is the fully decoded in-memory representation.
+// Snapshot is the fully decoded in-memory representation of the on-disk index.
 // SymbolKind encodes symbol type as a byte for compact storage.
 type SymbolKind uint8
 
@@ -147,7 +147,7 @@ type NamePostEntry struct {
 	Offset   uint64 // offset into NamePostings
 }
 
-type IndexData struct {
+type Snapshot struct {
 	Header       Header
 	Files        []FileEntry
 	Trigrams     []TrigramEntry
@@ -157,8 +157,8 @@ type IndexData struct {
 	NamePostings []byte // raw posting data (symbol IDs per name hash)
 }
 
-// Marshal serializes an IndexData to binary format.
-func (d *IndexData) Marshal() []byte {
+// Marshal serializes a Snapshot to binary format.
+func (d *Snapshot) Marshal() []byte {
 	var buf bytes.Buffer
 
 	// Header
@@ -433,8 +433,8 @@ func LoadFileTable(edrDir string) ([]FileEntry, error) {
 	return files, nil
 }
 
-// Unmarshal decodes binary data into an IndexData.
-func Unmarshal(data []byte) (*IndexData, error) {
+// Unmarshal decodes binary data into a Snapshot.
+func Unmarshal(data []byte) (*Snapshot, error) {
 	if len(data) < v2HeaderSize {
 		return nil, fmt.Errorf("trigram index too small: %d bytes", len(data))
 	}
@@ -442,7 +442,7 @@ func Unmarshal(data []byte) (*IndexData, error) {
 		return nil, fmt.Errorf("invalid trigram index magic")
 	}
 
-	d := &IndexData{}
+	d := &Snapshot{}
 	d.Header.Version = binary.LittleEndian.Uint32(data[8:12])
 	if d.Header.Version != 2 && d.Header.Version != currentVersion {
 		return nil, fmt.Errorf("unsupported trigram index version: %d", d.Header.Version)
@@ -518,14 +518,14 @@ func Unmarshal(data []byte) (*IndexData, error) {
 // UnmarshalTrigrams parses only the file table, postings, and trigram table —
 // skipping the symbol table and name postings. This is ~10x faster than full
 // Unmarshal on large repos (e.g. 200MB index → skips 60MB of symbol parsing).
-func UnmarshalTrigrams(data []byte) (*IndexData, error) {
+func UnmarshalTrigrams(data []byte) (*Snapshot, error) {
 	if len(data) < v2HeaderSize {
 		return nil, fmt.Errorf("trigram index too small: %d bytes", len(data))
 	}
 	if !bytes.Equal(data[:8], magic[:]) {
 		return nil, fmt.Errorf("invalid trigram index magic")
 	}
-	d := &IndexData{}
+	d := &Snapshot{}
 	d.Header.Version = binary.LittleEndian.Uint32(data[8:12])
 	if d.Header.Version != 2 && d.Header.Version != currentVersion {
 		return nil, fmt.Errorf("unsupported trigram index version: %d", d.Header.Version)
@@ -586,7 +586,7 @@ func UnmarshalTrigrams(data []byte) (*IndexData, error) {
 	return d, nil
 }
 
-func unmarshalSymbols(d *IndexData, data []byte) (*IndexData, error) {
+func unmarshalSymbols(d *Snapshot, data []byte) (*Snapshot, error) {
 	// Parse symbol table (v3)
 	if d.Header.Version >= 3 && d.Header.NumSymbols > 0 && d.Header.SymbolOff > 0 {
 		spos := d.Header.SymbolOff

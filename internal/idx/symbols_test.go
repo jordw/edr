@@ -7,12 +7,12 @@ import (
 	"testing"
 )
 
-// buildSymbolIndexData constructs a fully-populated IndexData with the three
+// buildSnapshot constructs a fully-populated Snapshot with the three
 // symbol-index fields QuerySymbolsBy* use. Used by the in-memory query tests
 // below so we don't have to round-trip through disk.
-func buildSymbolIndexData(files []FileEntry, symbols []SymbolEntry) *IndexData {
+func buildSnapshot(files []FileEntry, symbols []SymbolEntry) *Snapshot {
 	namePostings, namePosts := BuildNamePostings(symbols)
-	return &IndexData{
+	return &Snapshot{
 		Header: Header{
 			NumFiles:    uint32(len(files)),
 			NumSymbols:  uint32(len(symbols)),
@@ -27,7 +27,7 @@ func buildSymbolIndexData(files []FileEntry, symbols []SymbolEntry) *IndexData {
 
 func TestSymbolIndexRoundTrip(t *testing.T) {
 	// Build a minimal index with symbols
-	d := &IndexData{
+	d := &Snapshot{
 		Header: Header{
 			NumFiles: 1, NumTrigrams: 0, GitMtime: 12345,
 		},
@@ -103,7 +103,7 @@ func TestSymbolIndexRoundTrip(t *testing.T) {
 // whole point — callers that already have the hash shouldn't pay for the
 // string compare.
 func TestQuerySymbolsByHash_FindsMatchesByPrecomputedHash(t *testing.T) {
-	d := buildSymbolIndexData(
+	d := buildSnapshot(
 		[]FileEntry{{Path: "a.go", Size: 100}},
 		[]SymbolEntry{
 			{FileID: 0, Name: "Foo", Kind: KindFunction, StartLine: 1, EndLine: 2, StartByte: 0, EndByte: 10},
@@ -131,7 +131,7 @@ func TestQuerySymbolsByHash_FindsMatchesByPrecomputedHash(t *testing.T) {
 // TestQuerySymbolsByHash_EmptyIndexReturnsNil covers the fast-path for an
 // index with no symbol data.
 func TestQuerySymbolsByHash_EmptyIndexReturnsNil(t *testing.T) {
-	d := &IndexData{}
+	d := &Snapshot{}
 	if got := QuerySymbolsByHash(d, NameHash("anything")); got != nil {
 		t.Errorf("empty index should return nil, got %+v", got)
 	}
@@ -146,7 +146,7 @@ func TestQuerySymbolsWithIDs_PairsSymbolWithIndexPosition(t *testing.T) {
 		{FileID: 0, Name: "Beta", Kind: KindFunction, StartLine: 2, EndByte: 20},
 		{FileID: 0, Name: "Alpha", Kind: KindFunction, StartLine: 3, EndByte: 30},
 	}
-	d := buildSymbolIndexData(
+	d := buildSnapshot(
 		[]FileEntry{{Path: "a.go", Size: 100}},
 		syms,
 	)
@@ -173,14 +173,14 @@ func TestQuerySymbolsWithIDs_PairsSymbolWithIndexPosition(t *testing.T) {
 }
 
 func TestQuerySymbolsWithIDs_MissingNameAndEmptyIndex(t *testing.T) {
-	d := buildSymbolIndexData(
+	d := buildSnapshot(
 		[]FileEntry{{Path: "a.go"}},
 		[]SymbolEntry{{FileID: 0, Name: "Only"}},
 	)
 	if got := QuerySymbolsWithIDs(d, "Nope"); got != nil {
 		t.Errorf("missing name should return nil, got %+v", got)
 	}
-	empty := &IndexData{}
+	empty := &Snapshot{}
 	if got := QuerySymbolsWithIDs(empty, "Only"); got != nil {
 		t.Errorf("empty index should return nil, got %+v", got)
 	}
@@ -188,19 +188,19 @@ func TestQuerySymbolsWithIDs_MissingNameAndEmptyIndex(t *testing.T) {
 
 // TestAllIndexedSymbols_ReturnsUnderlyingSlice documents the passthrough
 // contract — the function is a trivial accessor for callers who want the
-// whole symbol table without reaching into IndexData directly.
+// whole symbol table without reaching into Snapshot directly.
 func TestAllIndexedSymbols_ReturnsUnderlyingSlice(t *testing.T) {
 	syms := []SymbolEntry{
 		{Name: "A", Kind: KindFunction},
 		{Name: "B", Kind: KindStruct},
 	}
-	d := &IndexData{Symbols: syms}
+	d := &Snapshot{Symbols: syms}
 	got := AllIndexedSymbols(d)
 	if len(got) != 2 || got[0].Name != "A" || got[1].Name != "B" {
 		t.Errorf("AllIndexedSymbols = %+v, want [A B]", got)
 	}
 	// nil Symbols stays nil.
-	if got := AllIndexedSymbols(&IndexData{}); got != nil {
+	if got := AllIndexedSymbols(&Snapshot{}); got != nil {
 		t.Errorf("empty index should pass through nil, got %+v", got)
 	}
 }

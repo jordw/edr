@@ -104,7 +104,7 @@ func TestRebuildTrigramMap_FiltersDeletedAndDirty(t *testing.T) {
 	raw[triA] = []uint32{0, 1, 2}
 	raw[triX] = []uint32{1}
 	postings, entries := BuildPostings(raw)
-	old := &IndexData{
+	old := &Snapshot{
 		Files:    oldFiles,
 		Trigrams: entries,
 		Postings: postings,
@@ -193,7 +193,7 @@ func TestRebuildTrigramMap_UnchangedFilesGetRemappedIDs(t *testing.T) {
 	triFoo := Trigram{'f', 'o', 'o'}
 	raw := map[Trigram][]uint32{triFoo: {0, 2}}
 	postings, entries := BuildPostings(raw)
-	old := &IndexData{
+	old := &Snapshot{
 		Files: []FileEntry{
 			{Path: "a.go"},
 			{Path: "b.go"},
@@ -291,7 +291,7 @@ func TestCollectPatches_BinaryFileIsSilentlySkipped(t *testing.T) {
 }
 
 // rebuildSymbolTable exercise via a real on-disk index. seedIndex writes
-// a minimal IndexData that loadIndex() can read back — the helper lets
+// a minimal Snapshot that loadIndex() can read back — the helper lets
 // tests construct arbitrary (files, symbols) pairs without running the
 // full Build path.
 func seedIndex(t *testing.T, edrDir string, files []FileEntry, symbols []SymbolEntry) {
@@ -300,7 +300,7 @@ func seedIndex(t *testing.T, edrDir string, files []FileEntry, symbols []SymbolE
 		t.Fatal(err)
 	}
 	namePostings, namePosts := BuildNamePostings(symbols)
-	d := &IndexData{
+	d := &Snapshot{
 		Header: Header{
 			NumFiles:    uint32(len(files)),
 			NumSymbols:  uint32(len(symbols)),
@@ -318,7 +318,7 @@ func seedIndex(t *testing.T, edrDir string, files []FileEntry, symbols []SymbolE
 
 func TestRebuildSymbolTable_ReturnsNilWhenOldHasNoSymbols(t *testing.T) {
 	edrDir := t.TempDir()
-	old := &IndexData{Header: Header{NumSymbols: 0}}
+	old := &Snapshot{Header: Header{NumSymbols: 0}}
 	syms, namePosts, namePostings := rebuildSymbolTable(edrDir, old, nil, nil, nil, nil)
 	if syms != nil || namePosts != nil || namePostings != nil {
 		t.Errorf("want all-nil for zero-symbol old index, got syms=%v posts=%v postings=%v",
@@ -344,7 +344,7 @@ func TestRebuildSymbolTable_RemapsAfterDeletion(t *testing.T) {
 	deletedSet := map[string]bool{"b.go": true}
 	newFiles, _, newByPath := rebuildFileTable(files, deletedSet, nil)
 
-	old := &IndexData{Header: Header{NumSymbols: 3}, Files: files}
+	old := &Snapshot{Header: Header{NumSymbols: 3}, Files: files}
 	syms, _, _ := rebuildSymbolTable(edrDir, old, newFiles, deletedSet, nil, newByPath)
 
 	if len(syms) != 2 {
@@ -375,7 +375,7 @@ func TestRebuildSymbolTable_NilExtractorDropsDirtyWithoutReplacement(t *testing.
 	patches := []patchEntry{{entry: FileEntry{Path: "a.go"}, syms: nil}}
 	newFiles, _, newByPath := rebuildFileTable(files, nil, patches)
 
-	old := &IndexData{Header: Header{NumSymbols: 1}, Files: files}
+	old := &Snapshot{Header: Header{NumSymbols: 1}, Files: files}
 	syms, _, _ := rebuildSymbolTable(edrDir, old, newFiles, dirtySet, patches, newByPath)
 
 	if len(syms) != 0 {
@@ -404,7 +404,7 @@ func TestRebuildSymbolTable_ExtractorMergesFreshWithRemapped(t *testing.T) {
 	}
 	newFiles, _, newByPath := rebuildFileTable(files, nil, patches)
 
-	old := &IndexData{Header: Header{NumSymbols: 2}, Files: files}
+	old := &Snapshot{Header: Header{NumSymbols: 2}, Files: files}
 	syms, _, _ := rebuildSymbolTable(edrDir, old, newFiles, dirtySet, patches, newByPath)
 
 	byName := map[string]uint32{}

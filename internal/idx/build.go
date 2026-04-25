@@ -35,8 +35,8 @@ type ImportRecord struct {
 type ImportResolveFn func(allFiles []string, imports []ImportRecord, allSymbols []SymbolEntry, symFiles []FileEntry) [][2]string
 
 // BuildFull builds a complete trigram index from the given absolute paths.
-func BuildFull(root string, paths []string, gitMtime int64) *IndexData {
-	d := &IndexData{}
+func BuildFull(root string, paths []string, gitMtime int64) *Snapshot {
+	d := &Snapshot{}
 	d.Header.GitMtime = gitMtime
 
 	type indexedFile struct {
@@ -385,7 +385,7 @@ func BuildFullFromWalkWithImports(root, edrDir string, walkFn func(root string, 
 	if len(allSymbols) > 0 {
 		namePostData, namePosts = BuildNamePostings(allSymbols)
 	}
-	d := &IndexData{
+	d := &Snapshot{
 		Header: Header{
 			NumFiles:    uint32(len(files)),
 			NumTrigrams: uint32(len(entries)),

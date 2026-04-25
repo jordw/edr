@@ -49,7 +49,7 @@ func PatchDirtyFiles(root, edrDir string, dirty []string, extractSymbols SymbolE
 	files, oldIDToNewID, newByPath := rebuildFileTable(old.Files, deletedSet, patches)
 	triMap := rebuildTrigramMap(old, dirtySet, oldIDToNewID, patches, newByPath)
 	postings, entries := BuildPostings(triMap)
-	d := &IndexData{
+	d := &Snapshot{
 		Header: Header{
 			NumFiles:    uint32(len(files)),
 			NumTrigrams: uint32(len(entries)),
@@ -157,7 +157,7 @@ func rebuildFileTable(oldFiles []FileEntry, deletedSet map[string]bool, patches 
 // refer to unchanged surviving files (remapped to new IDs) and
 // dropping IDs for deleted or modified files. Fresh trigrams from
 // patches are appended with their new file IDs.
-func rebuildTrigramMap(old *IndexData, dirtySet map[string]bool, oldIDToNewID map[uint32]uint32, patches []patchEntry, newByPath map[string]uint32) map[Trigram][]uint32 {
+func rebuildTrigramMap(old *Snapshot, dirtySet map[string]bool, oldIDToNewID map[uint32]uint32, patches []patchEntry, newByPath map[string]uint32) map[Trigram][]uint32 {
 	triMap := make(map[Trigram][]uint32)
 	for _, te := range old.Trigrams {
 		ids := DecodePosting(old.Postings, te.Offset, te.Count)
@@ -198,7 +198,7 @@ func rebuildTrigramMap(old *IndexData, dirtySet map[string]bool, oldIDToNewID ma
 // Returns (nil, nil, nil) when the old index had no symbols — ticks
 // are coverage-preserving, never coverage-initiating. Starting a
 // symbol table from a patch is the full-index path's job.
-func rebuildSymbolTable(edrDir string, old *IndexData, files []FileEntry, dirtySet map[string]bool, patches []patchEntry, newByPath map[string]uint32) ([]SymbolEntry, []NamePostEntry, []byte) {
+func rebuildSymbolTable(edrDir string, old *Snapshot, files []FileEntry, dirtySet map[string]bool, patches []patchEntry, newByPath map[string]uint32) ([]SymbolEntry, []NamePostEntry, []byte) {
 	if old.Header.NumSymbols == 0 {
 		return nil, nil, nil
 	}

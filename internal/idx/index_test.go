@@ -63,7 +63,7 @@ func TestFormatRoundTrip(t *testing.T) {
 	}
 	postings, entries := BuildPostings(triMap)
 
-	d := &IndexData{
+	d := &Snapshot{
 		Header: Header{
 			NumFiles:    6,
 			NumTrigrams: uint32(len(entries)),

@@ -72,7 +72,7 @@ type SymbolWithID struct {
 
 // QuerySymbolsWithIDs is like QuerySymbolsByName but also returns each symbol's
 // index position for popularity score lookups.
-func QuerySymbolsWithIDs(d *IndexData, name string) []SymbolWithID {
+func QuerySymbolsWithIDs(d *Snapshot, name string) []SymbolWithID {
 	if len(d.NamePosts) == 0 {
 		return nil
 	}
@@ -104,7 +104,7 @@ func QuerySymbolsWithIDs(d *IndexData, name string) []SymbolWithID {
 	return nil
 }
 
-func QuerySymbolsByName(d *IndexData, name string) []SymbolEntry {
+func QuerySymbolsByName(d *Snapshot, name string) []SymbolEntry {
 	if len(d.NamePosts) == 0 {
 		return nil
 	}
@@ -142,7 +142,7 @@ func QuerySymbolsByName(d *IndexData, name string) []SymbolEntry {
 // QuerySymbolsByHash returns symbols matching a pre-computed name hash.
 // Unlike QuerySymbolsByName, this cannot verify exact name match (hash collision guard),
 // so results may include hash collisions. Callers should verify names if needed.
-func QuerySymbolsByHash(d *IndexData, h uint64) []SymbolEntry {
+func QuerySymbolsByHash(d *Snapshot, h uint64) []SymbolEntry {
 	if len(d.NamePosts) == 0 {
 		return nil
 	}
@@ -170,7 +170,7 @@ func QuerySymbolsByHash(d *IndexData, h uint64) []SymbolEntry {
 }
 
 // AllIndexedSymbols returns all symbols from a loaded index.
-func AllIndexedSymbols(d *IndexData) []SymbolEntry {
+func AllIndexedSymbols(d *Snapshot) []SymbolEntry {
 	return d.Symbols
 }
 
@@ -190,7 +190,7 @@ var (
 	symIdxMu    sync.Mutex
 	symIdxDir   string
 	symIdxFiles []FileEntry
-	symIdxData  *IndexData // only Symbols, NamePosts, NamePostings populated
+	symIdxData  *Snapshot // only Symbols, NamePosts, NamePostings populated
 )
 
 // InvalidateSymbolCache clears the cached symbol index, forcing a reload
@@ -203,7 +203,7 @@ func InvalidateSymbolCache() {
 	symIdxMu.Unlock()
 }
 
-func loadSymbolIndexCached(edrDir string) (*IndexData, []FileEntry) {
+func loadSymbolIndexCached(edrDir string) (*Snapshot, []FileEntry) {
 	symIdxMu.Lock()
 	defer symIdxMu.Unlock()
 	if symIdxData != nil && symIdxDir == edrDir {
@@ -226,7 +226,7 @@ func loadSymbolIndexCached(edrDir string) (*IndexData, []FileEntry) {
 
 	symIdxDir = edrDir
 	symIdxFiles = files
-	symIdxData = &IndexData{
+	symIdxData = &Snapshot{
 		Symbols:      symbols,
 		NamePosts:    namePosts,
 		NamePostings: namePostings,
