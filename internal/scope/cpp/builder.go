@@ -937,6 +937,43 @@ func (b *builder) currentScopeKind() scope.ScopeKind {
 	return ""
 }
 
+// namespaceQualifier returns the dotted namespace path (e.g.
+// "utils::inner") if every enclosing scope above file-scope is a
+// namespace, otherwise "". Used by emitDecl to canonicalize IDs of
+// decls that live directly inside namespaces — without this, the same
+// `int utils::compute(int)` in lib.hpp and lib.cpp would hash to
+// different DeclIDs because their namespace ScopeID is per-file.
+func (b *builder) namespaceQualifier() string {
+	entries := b.stack.Entries()
+	if len(entries) <= 1 {
+		// No enclosing namespaces above the file scope.
+		return ""
+	}
+	var parts []string
+	for i := range entries {
+		e := &entries[i]
+		if i == 0 && e.Data.kind == scope.ScopeFile {
+			continue
+		}
+		if e.Data.kind != scope.ScopeNamespace {
+			return ""
+		}
+		owner := e.Data.ownerDeclIdx
+		if owner < 0 || owner >= len(b.res.Decls) {
+			return ""
+		}
+		parts = append(parts, b.res.Decls[owner].Name)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	out := parts[0]
+	for i := 1; i < len(parts); i++ {
+		out += "::" + parts[i]
+	}
+	return out
+}
+
 func (b *builder) peekNonWSByte() byte {
 	p := b.s.Pos
 	for p < len(b.s.Src) {
@@ -967,12 +1004,24 @@ func (b *builder) emitDecl(name string, kind scope.DeclKind, span scope.Span) {
 	locID := hashLoc(b.file, span, name)
 	// File-scope decls hash with canonicalPath when set, so
 	// cross-file references through imports/includes bind to
-	// matching DeclIDs. Nested-scope decls keep the file path.
+	// matching DeclIDs. Decls directly inside one or more
+	// namespaces are also canonicalized: the namespace qualifier
+	// (e.g. "utils::inner") gets folded into hashPath and scopeID
+	// is collapsed to file-scope so `int utils::compute(int)` in
+	// lib.hpp and lib.cpp share a DeclID. Other nested-scope decls
+	// (class/function/block locals) keep the file path + local
+	// scopeID for shadow correctness.
 	hashPath := b.file
-	if scopeID == scope.ScopeID(1) && b.canonicalPath != "" {
-		hashPath = b.canonicalPath
+	hashScope := scopeID
+	if b.canonicalPath != "" {
+		if scopeID == scope.ScopeID(1) {
+			hashPath = b.canonicalPath
+		} else if qual := b.namespaceQualifier(); qual != "" {
+			hashPath = b.canonicalPath + "::" + qual
+			hashScope = scope.ScopeID(1)
+		}
 	}
-	declID := hashDecl(hashPath, name, ns, scopeID)
+	declID := hashDecl(hashPath, name, ns, hashScope)
 
 	var fullStart uint32
 	if b.pendingFullStart > 0 && b.pendingFullStart-1 <= span.StartByte {

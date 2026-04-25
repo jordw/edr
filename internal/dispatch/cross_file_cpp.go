@@ -144,6 +144,14 @@ func cppCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 			}
 		}
 	}
+	// Namespace-qualifier of the target. Non-empty for free
+	// functions / vars declared inside `namespace utils { ... }`;
+	// empty for top-level decls and methods. Drives the namespace-
+	// aware matching below: candidates that import the target file
+	// are admitted (skipping the namespace-name precondition), and
+	// `utils::compute()` call sites are recognized via their
+	// scope_qualified_access ref.
+	targetNs := cppNamespaceOf(targetRes, target)
 
 	pop := namespace.CppPopulator(resolver)
 	for cand := range candidates {
@@ -155,7 +163,11 @@ func cppCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 		// Methods don't live at file scope so their names aren't in
 		// the namespace. Admit every candidate when renaming a
 		// method and rely on per-ref disambiguation below.
-		if !isMethod && !ns.Matches(sym.Name, target.ID) {
+		// Namespace functions also bypass the file-scope check —
+		// the target lives at `utils::compute`, not at the
+		// candidate's top level, so ns.Matches would never fire.
+		// Per-ref scope_qualified_access matching does the work.
+		if !isMethod && targetNs == "" && !ns.Matches(sym.Name, target.ID) {
 			continue
 		}
 		declByID := make(map[scope.DeclID]*scope.Decl, len(candRes.Decls))
@@ -245,6 +257,17 @@ func cppCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 					continue
 				}
 			}
+			// Namespace function call: `utils::compute()` reaches us
+			// as reason=scope_qualified_access. Accept when the
+			// qualifier matches the target's enclosing namespace.
+			if !isMethod && targetNs != "" && ref.Binding.Reason == "scope_qualified_access" &&
+				ref.Span.StartByte >= 2 && len(src) > 0 &&
+				src[ref.Span.StartByte-1] == ':' && src[ref.Span.StartByte-2] == ':' {
+				qualifier := cppBaseIdentBefore(src, ref.Span.StartByte, false)
+				if qualifier != targetNs {
+					continue
+				}
+			}
 			out[cand] = append(out[cand], span{
 				start: ref.Span.StartByte,
 				end:   ref.Span.EndByte,
@@ -252,6 +275,45 @@ func cppCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 		}
 	}
 	return out, true
+}
+
+// cppNamespaceOf returns the immediate enclosing namespace name for a
+// decl, or "" if the decl is at file scope or inside a non-namespace
+// scope (class, function). For `namespace utils { int compute(); }`
+// the function's enclosing scope is `utils`, so this returns "utils".
+// Multiple levels of nesting collapse to the innermost name —
+// callers only need it to match the qualifier in `qualifier::name`
+// scope-qualified refs at call sites.
+func cppNamespaceOf(r *scope.Result, target *scope.Decl) string {
+	if r == nil || target == nil || target.Scope == 0 {
+		return ""
+	}
+	sid := int(target.Scope) - 1
+	if sid < 0 || sid >= len(r.Scopes) {
+		return ""
+	}
+	s := &r.Scopes[sid]
+	if s.Kind != scope.ScopeNamespace {
+		return ""
+	}
+	// Find the namespace decl whose FullSpan contains this scope's
+	// span — that decl is the namespace this scope belongs to.
+	var best *scope.Decl
+	for i := range r.Decls {
+		d := &r.Decls[i]
+		if d.Kind != scope.KindNamespace {
+			continue
+		}
+		if d.FullSpan.StartByte <= s.Span.StartByte && s.Span.StartByte <= d.FullSpan.EndByte {
+			if best == nil || d.FullSpan.StartByte > best.FullSpan.StartByte {
+				best = d
+			}
+		}
+	}
+	if best == nil {
+		return ""
+	}
+	return best.Name
 }
 
 // cppBaseIdentBefore returns the identifier immediately before a
