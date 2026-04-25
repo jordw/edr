@@ -832,6 +832,48 @@ int shadowed() {
 	}
 }
 
+// TestRename_RubyShadowNotRewritten: cross-file Ruby rename rewrites
+// the call in app.rb but leaves a same-named local variable alone.
+// The ruby scope builder emits `var` decls for `name = expr` blocks
+// and binds same-name refs to the local; this test guards the shadow
+// contract and gates the Ruby promotion in scopeSupported.
+func TestRename_RubyShadowNotRewritten(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"lib.rb": `def compute(x)
+  x * 2
+end
+`,
+		"app.rb": `require_relative "./lib"
+
+def run
+  compute(5)
+end
+
+def shadowed
+  compute = 42
+  compute + 1
+end
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"lib.rb:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	appData, _ := os.ReadFile(filepath.Join(dir, "app.rb"))
+	body := string(appData)
+	if !strings.Contains(body, "calculate(5)") {
+		t.Errorf("cross-file call not rewritten; got:\n%s", body)
+	}
+	if !strings.Contains(body, "compute = 42") {
+		t.Errorf("shadowed local MUST remain as `compute = 42`; got:\n%s", body)
+	}
+	if !strings.Contains(body, "compute + 1") {
+		t.Errorf("use of shadowed local MUST remain as `compute + 1`; got:\n%s", body)
+	}
+}
+
 // ----------------------------------------------------------------------
 // Kotlin oracle-equivalent tests
 //
