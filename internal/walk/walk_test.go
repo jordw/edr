@@ -43,12 +43,40 @@ func TestRepoFiles_GitIgnoreAndAlwaysIgnored(t *testing.T) {
 	mkfile(t, root, "tmp/inside.txt", []byte("also nope"))
 	// Always-ignored directories.
 	mkfile(t, root, ".git/config", []byte("x"))
+	mkfile(t, root, ".edr/session.json", []byte("x"))
 	mkfile(t, root, ".claude/note.md", []byte("x"))
 	// Nested subtree.
 	mkfile(t, root, "pkg/a.txt", []byte("a"))
 
 	got := collect(t, root)
 	want := []string{".gitignore", "kept.txt", "pkg/a.txt"}
+	if !equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestRepoFiles_SkipsNestedGitWorktrees(t *testing.T) {
+	root := t.TempDir()
+	mkfile(t, root, "src/a.go", []byte("package a"))
+	mkfile(t, root, "worktrees/agent/.git", []byte("gitdir: ../../.git/worktrees/agent\n"))
+	mkfile(t, root, "worktrees/agent/src/b.go", []byte("package b"))
+	mkfile(t, root, "vendor/repo/.git/config", []byte("x"))
+	mkfile(t, root, "vendor/repo/src/c.go", []byte("package c"))
+
+	got := collect(t, root)
+	want := []string{"src/a.go"}
+	if !equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestRepoFiles_AllowsRootGitFile(t *testing.T) {
+	root := t.TempDir()
+	mkfile(t, root, ".git", []byte("gitdir: ../.git/worktrees/root\n"))
+	mkfile(t, root, "src/a.go", []byte("package a"))
+
+	got := collect(t, root)
+	want := []string{"src/a.go"}
 	if !equal(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}

@@ -9,12 +9,13 @@ package walk
 
 import (
 	"io/fs"
+	"os"
 	"path/filepath"
 )
 
-// alwaysIgnore contains directories that are always skipped regardless of .gitignore.
+// alwaysIgnore contains repo metadata names that are always skipped regardless of .gitignore.
 var alwaysIgnore = []string{
-	".git", ".claude",
+	".git", ".edr", ".claude",
 }
 
 // DefaultIgnore is the fallback ignore list used when no .gitignore exists.
@@ -37,6 +38,9 @@ func DirFiles(root, dir string, fn func(path string) error) error {
 			if shouldIgnoreDir(d.Name(), path, root, gitignore) {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		if shouldIgnoreFile(d.Name()) {
 			return nil
 		}
 		if gitignore != nil {
@@ -69,6 +73,9 @@ func RepoFiles(root string, fn func(path string) error) error {
 			}
 			return nil
 		}
+		if shouldIgnoreFile(d.Name()) {
+			return nil
+		}
 		if gitignore != nil {
 			rel, _ := filepath.Rel(root, path)
 			if gitignore.IsIgnored(rel, false) {
@@ -86,9 +93,18 @@ func RepoFiles(root string, fn func(path string) error) error {
 // shouldIgnoreDir returns true if a directory should be skipped.
 // Uses .gitignore when available, falls back to DefaultIgnore.
 func shouldIgnoreDir(name, path, root string, gitignore *GitIgnoreMatcher) bool {
-	// Always skip .git and .claude.
+	// Always skip edr/git internals and agent worktree containers.
 	for _, ign := range alwaysIgnore {
 		if name == ign {
+			return true
+		}
+	}
+	// Nested git repositories/worktrees have their own root, index, session,
+	// and checkpoint state. Do not index them as ordinary child directories
+	// of the parent repo. The root itself is allowed to have a .git file
+	// because linked worktrees use that shape.
+	if filepath.Clean(path) != filepath.Clean(root) {
+		if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 			return true
 		}
 	}
@@ -103,6 +119,15 @@ func shouldIgnoreDir(name, path, root string, gitignore *GitIgnoreMatcher) bool 
 			if name == ign {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func shouldIgnoreFile(name string) bool {
+	for _, ign := range alwaysIgnore {
+		if name == ign {
+			return true
 		}
 	}
 	return false
