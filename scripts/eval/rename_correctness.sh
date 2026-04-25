@@ -116,6 +116,8 @@ TUPLES=(
   # C++: same-name static in a.cpp and b.cpp — rename one, verify
   # the other stays intact.
   "cpp:static-isolation|edr|scripts/eval/fixtures/cpp-static/a.cpp:helper|worker|cd scripts/eval/fixtures/cpp-static && g++ -std=c++17 -Wall -Werror -o /tmp/cpp_static a.cpp b.cpp"
+  # C++: virtual base + override hierarchy.
+  "cpp:hierarchy|edr|scripts/eval/fixtures/cpp-hierarchy/src/Greeter.hpp:greet|salute|cd scripts/eval/fixtures/cpp-hierarchy && g++ -std=c++17 -Wall -Werror -o /tmp/cpp_hier src/*.cpp"
   # Python: method on class called via obj.method(). Exercises the
   # (currently missing) receiver disambiguation — expected to FAIL.
   "py:class-method|edr|scripts/eval/fixtures/python-method/pkg/counter.py:value|magnitude|cd scripts/eval/fixtures/python-method && python3 -m pkg"
