@@ -23,6 +23,13 @@ type JavaResolver struct {
 	parseCache map[string]*scope.Result // absolute path → parsed
 	srcCache   map[string][]byte        // absolute path → source bytes
 	pkgCache   map[string]string        // absolute path → package clause
+
+	// pkgFilesOnce builds pkgFilesIndex on first findPackageFiles call.
+	// See KotlinResolver for rationale: avoids re-walking the entire
+	// repo on every import lookup, which dominates large-monorepo
+	// rename runs (200+ candidates × 10+ imports each).
+	pkgFilesOnce  sync.Once
+	pkgFilesIndex map[string][]string
 }
 
 func NewJavaResolver(repoRoot string) *JavaResolver {
@@ -141,8 +148,18 @@ func (r *JavaResolver) FilesForImport(importSpec, importingFile string) []string
 // match — if the project layout follows convention, exactly one
 // directory matches.
 func (r *JavaResolver) findPackageFiles(pkg string) []string {
+	r.pkgFilesOnce.Do(r.buildPkgFilesIndex)
 	pkgDir := strings.ReplaceAll(pkg, ".", string(filepath.Separator))
-	var hits []string
+	return r.pkgFilesIndex[pkgDir]
+}
+
+// buildPkgFilesIndex walks the repo once and indexes every .java file
+// under every suffix of its containing directory's path relative to
+// the repo root. See KotlinResolver.buildPkgFilesIndex for the
+// rationale.
+func (r *JavaResolver) buildPkgFilesIndex() {
+	idx := make(map[string][]string)
+	sep := string(filepath.Separator)
 	filepath.Walk(r.repoRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
@@ -159,13 +176,18 @@ func (r *JavaResolver) findPackageFiles(pkg string) []string {
 			return nil
 		}
 		dir := filepath.Dir(path)
-		if strings.HasSuffix(dir, string(filepath.Separator)+pkgDir) ||
-			dir == filepath.Join(r.repoRoot, pkgDir) {
-			hits = append(hits, path)
+		rel, err := filepath.Rel(r.repoRoot, dir)
+		if err != nil || rel == "." {
+			return nil
+		}
+		parts := strings.Split(rel, sep)
+		for i := 0; i < len(parts); i++ {
+			key := strings.Join(parts[i:], sep)
+			idx[key] = append(idx[key], path)
 		}
 		return nil
 	})
-	return hits
+	r.pkgFilesIndex = idx
 }
 
 // SamePackageFiles returns the .java files in importingFiles

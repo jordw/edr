@@ -21,6 +21,17 @@ type KotlinResolver struct {
 	parseCache map[string]*scope.Result
 	srcCache   map[string][]byte
 	pkgCache   map[string]string
+
+	// pkgFilesOnce builds pkgFilesIndex on first findPackageFiles call.
+	// pkgFilesIndex maps every directory suffix (e.g. "org/foo/bar")
+	// to the .kt files inside any directory whose path ends with that
+	// suffix. A single repo walk populates the index; subsequent
+	// findPackageFiles calls are O(1) hashmap lookups instead of a
+	// full filepath.Walk per call. Critical when a rename has many
+	// candidate files each importing many packages — without this,
+	// every import lookup re-walks the repo.
+	pkgFilesOnce  sync.Once
+	pkgFilesIndex map[string][]string
 }
 
 func NewKotlinResolver(repoRoot string) *KotlinResolver {
@@ -123,8 +134,21 @@ func (r *KotlinResolver) FilesForImport(importSpec, importingFile string) []stri
 }
 
 func (r *KotlinResolver) findPackageFiles(pkg string) []string {
+	r.pkgFilesOnce.Do(r.buildPkgFilesIndex)
 	pkgDir := strings.ReplaceAll(pkg, ".", string(filepath.Separator))
-	var hits []string
+	return r.pkgFilesIndex[pkgDir]
+}
+
+// buildPkgFilesIndex walks the repo once and indexes every .kt/.kts
+// file under every suffix of its containing directory's path relative
+// to the repo root. A query for package "org.foo.bar" then becomes a
+// single map lookup. Suffix-indexing preserves the original semantics:
+// a file in /any/path/org/foo/bar/ is in package org.foo.bar regardless
+// of source root layout (compiler/src vs ide/src), and both contribute
+// to the same key.
+func (r *KotlinResolver) buildPkgFilesIndex() {
+	idx := make(map[string][]string)
+	sep := string(filepath.Separator)
 	filepath.Walk(r.repoRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
@@ -142,13 +166,19 @@ func (r *KotlinResolver) findPackageFiles(pkg string) []string {
 			return nil
 		}
 		dir := filepath.Dir(path)
-		if strings.HasSuffix(dir, string(filepath.Separator)+pkgDir) ||
-			dir == filepath.Join(r.repoRoot, pkgDir) {
-			hits = append(hits, path)
+		rel, err := filepath.Rel(r.repoRoot, dir)
+		if err != nil || rel == "." {
+			return nil
+		}
+		parts := strings.Split(rel, sep)
+		// Index every suffix: parts[i:] joined.
+		for i := 0; i < len(parts); i++ {
+			key := strings.Join(parts[i:], sep)
+			idx[key] = append(idx[key], path)
 		}
 		return nil
 	})
-	return hits
+	r.pkgFilesIndex = idx
 }
 
 func (r *KotlinResolver) SamePackageFiles(importingFile string) []string {
