@@ -26,7 +26,7 @@ func lcsLines(old, new []string) []lcsMatch {
 		return nil
 	}
 	if m*n > 1000000 {
-		return lcsSimple(old, new)
+		return lcsGreedy(old, new)
 	}
 
 	dp := make([][]int, m+1)
@@ -64,7 +64,7 @@ func lcsLines(old, new []string) []lcsMatch {
 	return result
 }
 
-func lcsSimple(old, new []string) []lcsMatch {
+func lcsGreedy(old, new []string) []lcsMatch {
 	var result []lcsMatch
 	m, n := len(old), len(new)
 
