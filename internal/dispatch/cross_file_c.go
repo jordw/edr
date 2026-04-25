@@ -102,7 +102,6 @@ func cCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symbo
 			out[cand] = append(out[cand], span{
 				start: d.Span.StartByte,
 				end:   d.Span.EndByte,
-				isDef: true,
 			})
 		}
 
@@ -125,18 +124,16 @@ func cCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symbo
 			// not function calls on our target. Skip property-access
 			// refs — C has no methods and a member access named the
 			// same as a global function is an unrelated field.
-			startByte := ref.Span.StartByte
 			src := resolver.Source(cand)
-			if ref.Binding.Reason == "property_access" && startByte > 0 && len(src) > 0 {
-				prev := src[startByte-1]
-				if prev == '.' || (startByte >= 2 && src[startByte-2] == '-' && prev == '>') {
+			if ref.Binding.Reason == "property_access" && ref.Span.StartByte > 0 && len(src) > 0 {
+				prev := src[ref.Span.StartByte-1]
+				if prev == '.' || (ref.Span.StartByte >= 2 && src[ref.Span.StartByte-2] == '-' && prev == '>') {
 					continue
 				}
 			}
 			out[cand] = append(out[cand], span{
-				start: startByte,
+				start: ref.Span.StartByte,
 				end:   ref.Span.EndByte,
-				isDef: false,
 			})
 		}
 	}

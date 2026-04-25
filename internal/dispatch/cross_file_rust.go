@@ -123,7 +123,6 @@ func rustCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sy
 			out[cand] = append(out[cand], span{
 				start: d.Span.StartByte,
 				end:   d.Span.EndByte,
-				isDef: false,
 			})
 		}
 		for _, ref := range candRes.Refs {
@@ -163,7 +162,6 @@ func rustCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sy
 			out[cand] = append(out[cand], span{
 				start: startByte,
 				end:   ref.Span.EndByte,
-				isDef: false,
 			})
 		}
 	}

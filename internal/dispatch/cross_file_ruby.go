@@ -102,7 +102,6 @@ func rubyCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sy
 			out[cand] = append(out[cand], span{
 				start: d.Span.StartByte,
 				end:   d.Span.EndByte,
-				isDef: true,
 			})
 		}
 
@@ -118,16 +117,13 @@ func rubyCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sy
 				}
 			}
 			// Property-access handling. For method renames we accept
-			// `obj.method` when obj's type matches acceptableTypes,
-			// and expand the span back through the leading dot.
-			startByte := ref.Span.StartByte
-			if ref.Binding.Reason == "property_access" && startByte > 0 && len(src) > 0 {
-				prev := src[startByte-1]
+			// `obj.method` when obj's type matches acceptableTypes.
+			// Span stays identifier-only.
+			if ref.Binding.Reason == "property_access" && ref.Span.StartByte > 0 && len(src) > 0 {
+				prev := src[ref.Span.StartByte-1]
 				isDot := prev == '.'
-				// Ruby / Swift don't use `->` or `::` for instance
-				// access; keep those as skip-conditions.
-				isOther := (startByte >= 2 && src[startByte-2] == '-' && prev == '>') ||
-					(startByte >= 2 && src[startByte-2] == ':' && prev == ':')
+				isOther := (ref.Span.StartByte >= 2 && src[ref.Span.StartByte-2] == '-' && prev == '>') ||
+					(ref.Span.StartByte >= 2 && src[ref.Span.StartByte-2] == ':' && prev == ':')
 				if isOther {
 					continue
 				}
@@ -135,23 +131,18 @@ func rubyCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sy
 					if !isMethod {
 						continue
 					}
-					baseIdent := dotBaseIdentBefore(src, startByte)
+					baseIdent := dotBaseIdentBefore(src, ref.Span.StartByte)
 					if baseIdent == "" {
 						continue
 					}
-					// Accept (a) variable of an acceptable type, or
-					// (b) the base ident IS an acceptable type itself
-					// (class.classmethod / Module.method pattern).
 					if !acceptableTypes[varTypes[baseIdent]] && !acceptableTypes[baseIdent] {
 						continue
 					}
-					startByte--
 				}
 			}
 			out[cand] = append(out[cand], span{
-				start: startByte,
+				start: ref.Span.StartByte,
 				end:   ref.Span.EndByte,
-				isDef: false,
 			})
 		}
 	}
@@ -221,7 +212,6 @@ func rbEmitHierarchySpans(out map[string][]span, resolver *namespace.RubyResolve
 			out[sym.File] = append(out[sym.File], span{
 				start: d.Span.StartByte,
 				end:   d.Span.EndByte,
-				isDef: true,
 			})
 		}
 	}

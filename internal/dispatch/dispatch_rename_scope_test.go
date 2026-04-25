@@ -74,7 +74,7 @@ func TestScopeAwareSameFileSpans_Shadowing(t *testing.T) {
 	t.Logf("offsets: def=%d local=%d ret=%d use=%d", fooIdx, localFoo, retFoo, useFoo)
 	t.Logf("got %d spans:", len(spans))
 	for _, s := range spans {
-		t.Logf("  [%d..%d] isDef=%v : %q", s.start, s.end, s.isDef, string(src[s.start:s.end]))
+		t.Logf("  [%d..%d] : %q", s.start, s.end, string(src[s.start:s.end]))
 	}
 
 	for _, s := range spans {

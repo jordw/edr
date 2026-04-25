@@ -83,7 +83,6 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 			out[sym.File] = append(out[sym.File], span{
 				start: sp.OrigNameStart,
 				end:   sp.OrigNameEnd,
-				isDef: true,
 			})
 		}
 	}
@@ -197,7 +196,6 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 					out[cand] = append(out[cand], span{
 						start: b.OrigNameStart,
 						end:   b.OrigNameEnd,
-						isDef: true,
 					})
 					break
 				}
@@ -218,7 +216,6 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 					out[cand] = append(out[cand], span{
 						start: re.OrigNameStart,
 						end:   re.OrigNameEnd,
-						isDef: true,
 					})
 					break
 				}
@@ -286,7 +283,6 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 				out[cand] = append(out[cand], span{
 					start: d.Span.StartByte,
 					end:   d.Span.EndByte,
-					isDef: false,
 				})
 			} else {
 				// Aliased: scan backward to the start of the line
@@ -313,7 +309,6 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 					out[cand] = append(out[cand], span{
 						start: s,
 						end:   e,
-						isDef: true,
 					})
 				}
 			}
@@ -339,26 +334,22 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 			// Property-access handling. For method renames we accept
 			// `obj.method` when obj's declared type is in
 			// acceptableTypes OR base ident IS an acceptable type
-			// (Class.staticMethod). Expand span through the dot so
-			// downstream `\.name\b` regex matches.
-			startByte := ref.Span.StartByte
-			if ref.Binding.Reason == "property_access" && startByte > 0 && len(src) > 0 && src[startByte-1] == '.' {
+			// (Class.staticMethod). Span stays identifier-only.
+			if ref.Binding.Reason == "property_access" && ref.Span.StartByte > 0 && len(src) > 0 && src[ref.Span.StartByte-1] == '.' {
 				if !isMethod {
 					continue
 				}
-				baseIdent := dotBaseIdentBefore(src, startByte)
+				baseIdent := dotBaseIdentBefore(src, ref.Span.StartByte)
 				if baseIdent == "" {
 					continue
 				}
 				if !acceptableTypes[varTypes[baseIdent]] && !acceptableTypes[baseIdent] {
 					continue
 				}
-				startByte--
 			}
 			out[cand] = append(out[cand], span{
-				start: startByte,
+				start: ref.Span.StartByte,
 				end:   ref.Span.EndByte,
-				isDef: false,
 			})
 		}
 	}
@@ -506,7 +497,6 @@ func tsEmitHierarchySpans(out map[string][]span, resolver *namespace.TSResolver,
 			out[sym.File] = append(out[sym.File], span{
 				start: d.Span.StartByte,
 				end:   d.Span.EndByte,
-				isDef: true,
 			})
 		}
 	}

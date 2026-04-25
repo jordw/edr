@@ -102,6 +102,10 @@ func cppCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 		return out, true
 	}
 
+	if derivedReceiver != "" {
+		cppEmitHierarchySpans(out, resolver, sym, target, derivedReceiver)
+	}
+
 	candidates := map[string]bool{}
 	if refs, err := db.FindSemanticReferences(ctx, sym.Name, sym.File); err == nil {
 		for _, r := range refs {
@@ -127,6 +131,18 @@ func cppCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 	acceptableTypes := map[string]bool{}
 	if derivedReceiver != "" {
 		acceptableTypes[derivedReceiver] = true
+		// Hierarchy: sym.File for the class decl is usually the
+		// header (.hpp). Walk both sym.File and any same-basename
+		// sibling for the inheritance graph.
+		hierSrc := resolver.Source(sym.File)
+		for _, t := range namespace.CppRelatedTypes(hierSrc, derivedReceiver) {
+			acceptableTypes[t] = true
+		}
+		for _, sib := range resolver.SamePackageFiles(sym.File) {
+			for _, t := range namespace.CppRelatedTypes(resolver.Source(sib), derivedReceiver) {
+				acceptableTypes[t] = true
+			}
+		}
 	}
 
 	pop := namespace.CppPopulator(resolver)
@@ -158,6 +174,11 @@ func cppCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 			// indicate a different construct).
 			cppPairRefsIntoVarTypes(candRes, src, varTypes)
 		}
+		// Shadow guard: collect `Type name` patterns inside function
+		// bodies. The C++ builder doesn't emit local var decls, so
+		// without this gate a global rename would also rewrite a
+		// same-name local variable's decl + uses.
+		shadows := cppCollectLocalShadows(candRes, src)
 
 		// File-scope decls whose ID matches the target (the
 		// canonical-path merge brings prototypes / siblings here).
@@ -171,12 +192,24 @@ func cppCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 			out[cand] = append(out[cand], span{
 				start: d.Span.StartByte,
 				end:   d.Span.EndByte,
-				isDef: true,
 			})
 		}
 
 		for _, ref := range candRes.Refs {
 			if ref.Name != sym.Name {
+				continue
+			}
+			// Local-shadow skip: ref name matches and ref falls inside
+			// a function whose body declares a local of the same name.
+			shadowed := false
+			for _, sh := range shadows {
+				if sh.name == ref.Name &&
+					sh.funcStart <= ref.Span.StartByte && ref.Span.EndByte <= sh.funcEnd {
+					shadowed = true
+					break
+				}
+			}
+			if shadowed {
 				continue
 			}
 			if ref.Binding.Kind == scope.BindResolved && ref.Binding.Decl != 0 {
@@ -186,26 +219,24 @@ func cppCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 					}
 				}
 			}
-			startByte := ref.Span.StartByte
-			if ref.Binding.Reason == "property_access" && startByte > 0 && len(src) > 0 {
-				prev := src[startByte-1]
+			if ref.Binding.Reason == "property_access" && ref.Span.StartByte > 0 && len(src) > 0 {
+				prev := src[ref.Span.StartByte-1]
 				isDot := prev == '.'
-				isArrow := startByte >= 2 && src[startByte-2] == '-' && prev == '>'
-				isScope := startByte >= 2 && src[startByte-2] == ':' && prev == ':'
-				// For method renames: accept x.foo() / x->foo() when
-				// x's declared type is in acceptableTypes. Skip
-				// `Type::member` scope-qualified access unless
-				// Type itself is the acceptable receiver (handled
-				// below).
+				isArrow := ref.Span.StartByte >= 2 && src[ref.Span.StartByte-2] == '-' && prev == '>'
+				isScope := ref.Span.StartByte >= 2 && src[ref.Span.StartByte-2] == ':' && prev == ':'
+				// Accept x.foo() / x->foo() when x's declared type is
+				// in acceptableTypes; accept Type::member when Type
+				// itself is the acceptable receiver. Span stays
+				// identifier-only.
 				accept := false
 				if isMethod && (isDot || isArrow) {
-					baseIdent := cppBaseIdentBefore(src, startByte, isArrow)
+					baseIdent := cppBaseIdentBefore(src, ref.Span.StartByte, isArrow)
 					if baseIdent != "" && acceptableTypes[varTypes[baseIdent]] {
 						accept = true
 					}
 				}
 				if isMethod && isScope {
-					baseIdent := cppBaseIdentBefore(src, startByte, false)
+					baseIdent := cppBaseIdentBefore(src, ref.Span.StartByte, false)
 					if acceptableTypes[baseIdent] {
 						accept = true
 					}
@@ -213,20 +244,10 @@ func cppCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 				if !accept {
 					continue
 				}
-				// Expand the span back through the separator so the
-				// call-site regex `\.name` (or equivalent) matches.
-				if isDot {
-					startByte--
-				} else if isArrow {
-					startByte -= 2
-				} else if isScope {
-					startByte -= 2
-				}
 			}
 			out[cand] = append(out[cand], span{
-				start: startByte,
+				start: ref.Span.StartByte,
 				end:   ref.Span.EndByte,
-				isDef: false,
 			})
 		}
 	}
@@ -346,14 +367,50 @@ func cppPairRefsIntoVarTypes(r *scope.Result, src []byte, varTypes map[string]st
 		}
 		// Gap between refs must be whitespace + optional `*` or `&`
 		// (pointer/reference decls like `Counter* p` or `Counter &r`).
+		// Balanced `<...>` is also tolerated so smart-pointer decls
+		// like `std::unique_ptr<IGreeter> g` still pair, and we
+		// remember the innermost ident inside the angle brackets
+		// (`IGreeter`) — that's the more useful "effective type"
+		// for inheritance checks than the outer wrapper.
 		gap := src[typeRef.Span.EndByte:nameRef.Span.StartByte]
 		allowed := true
-		for _, c := range gap {
-			if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '*' || c == '&' {
-				continue
+		innerType := ""
+		for i := 0; i < len(gap); {
+			c := gap[i]
+			switch {
+			case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '*' || c == '&':
+				i++
+			case c == '<':
+				depth := 1
+				i++
+				identStart := -1
+				identEnd := -1
+				for i < len(gap) && depth > 0 {
+					cc := gap[i]
+					switch {
+					case cc == '<':
+						depth++
+					case cc == '>':
+						depth--
+					case (cc >= 'a' && cc <= 'z') || (cc >= 'A' && cc <= 'Z') ||
+						(cc >= '0' && cc <= '9') || cc == '_':
+						if identStart < 0 {
+							identStart = i
+						}
+						identEnd = i + 1
+					default:
+						identStart = -1
+						identEnd = -1
+					}
+					i++
+				}
+				if identStart >= 0 && identEnd > identStart {
+					innerType = string(gap[identStart:identEnd])
+				}
+			default:
+				allowed = false
+				i = len(gap)
 			}
-			allowed = false
-			break
 		}
 		if !allowed {
 			continue
@@ -382,7 +439,181 @@ func cppPairRefsIntoVarTypes(r *scope.Result, src []byte, varTypes map[string]st
 		}
 		// Don't overwrite an existing entry.
 		if _, exists := varTypes[nameRef.Name]; !exists {
-			varTypes[nameRef.Name] = typeRef.Name
+			ty := typeRef.Name
+			if innerType != "" {
+				ty = innerType
+			}
+			varTypes[nameRef.Name] = ty
+		}
+	}
+}
+
+// cppShadow records a `Type name` local-decl pattern detected inside
+// a function body. The C++ scope builder doesn't emit local var
+// decls, so cross-file rename can't shadow-skip refs that bind to a
+// same-name local. This struct lets the dispatch handler recover the
+// shadow declaratively: if a ref's name matches and the ref falls
+// inside funcStart..funcEnd, treat it as a shadow.
+type cppShadow struct {
+	funcStart, funcEnd uint32
+	name               string
+}
+
+// cppCollectLocalShadows walks each function/method's FullSpan and
+// records `Type name` patterns inside the body — these are local
+// variable declarations the C++ builder doesn't emit. Returned shadows
+// gate same-name refs in the dispatch handler so they aren't rewritten
+// by a cross-file rename targeting an unrelated global of the same
+// name.
+//
+// Only emits shadows whose `Type` ref appears INSIDE a function body.
+// Pairs follow the same gap rules as cppPairRefsIntoVarTypes
+// (whitespace + `*`, `&`, balanced `<...>`).
+func cppCollectLocalShadows(r *scope.Result, src []byte) []cppShadow {
+	if r == nil || len(src) == 0 {
+		return nil
+	}
+	type fnSpan struct {
+		start, end uint32
+	}
+	var fns []fnSpan
+	for _, d := range r.Decls {
+		if d.Kind != scope.KindFunction && d.Kind != scope.KindMethod {
+			continue
+		}
+		if d.FullSpan.EndByte == 0 {
+			continue
+		}
+		fns = append(fns, fnSpan{d.FullSpan.StartByte, d.FullSpan.EndByte})
+	}
+	if len(fns) == 0 {
+		return nil
+	}
+	var out []cppShadow
+	for i := 0; i+1 < len(r.Refs); i++ {
+		typeRef := r.Refs[i]
+		nameRef := r.Refs[i+1]
+		if typeRef.Span.EndByte >= nameRef.Span.StartByte {
+			continue
+		}
+		// Both refs must lie inside the same function body. Find the
+		// smallest enclosing function span.
+		var fn *fnSpan
+		for k := range fns {
+			f := &fns[k]
+			if typeRef.Span.StartByte >= f.start && nameRef.Span.EndByte <= f.end {
+				if fn == nil || (f.end-f.start) < (fn.end-fn.start) {
+					fn = f
+				}
+			}
+		}
+		if fn == nil {
+			continue
+		}
+		gap := src[typeRef.Span.EndByte:nameRef.Span.StartByte]
+		ok := true
+		for j := 0; j < len(gap); j++ {
+			c := gap[j]
+			switch {
+			case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '*' || c == '&' || c == '>':
+			case c == '<':
+				depth := 1
+				j++
+				for j < len(gap) && depth > 0 {
+					switch gap[j] {
+					case '<':
+						depth++
+					case '>':
+						depth--
+					}
+					j++
+				}
+				j--
+			default:
+				ok = false
+			}
+			if !ok {
+				break
+			}
+		}
+		if !ok {
+			continue
+		}
+		// Trailing char after nameRef must be `;`, `=`, or `,` for a
+		// real local var decl (rules out function calls, blocks).
+		end := int(nameRef.Span.EndByte)
+		for end < len(src) && (src[end] == ' ' || src[end] == '\t') {
+			end++
+		}
+		if end >= len(src) {
+			continue
+		}
+		next := src[end]
+		if next != ';' && next != '=' && next != ',' {
+			continue
+		}
+		out = append(out, cppShadow{funcStart: fn.start, funcEnd: fn.end, name: nameRef.Name})
+	}
+	return out
+}
+
+// cppEmitHierarchySpans finds same-named methods in classes/
+// structs related to derivedReceiver via the inheritance graph
+// in either sym.File or its sibling .hpp/.cpp, and emits isDef
+// spans into out for each matching decl.
+//
+// C++ class declarations live in the header; out-of-line method
+// definitions live in the source (.cpp). The dispatch already
+// includes sym.File and sibling files in the candidate set, so
+// the per-candidate ref/decl walks pick up the .cpp side. This
+// helper handles the .hpp side: walk every class body in the
+// header, find method decls in related classes' bodies.
+func cppEmitHierarchySpans(out map[string][]span, resolver *namespace.CppResolver, sym *index.SymbolInfo, target *scope.Decl, receiver string) {
+	files := []string{sym.File}
+	files = append(files, resolver.SamePackageFiles(sym.File)...)
+	for _, file := range files {
+		src := resolver.Source(file)
+		if len(src) == 0 {
+			continue
+		}
+		hier := namespace.CppFindClassHierarchy(src)
+		if len(hier) == 0 {
+			continue
+		}
+		related := map[string]bool{}
+		for _, t := range namespace.CppRelatedTypes(src, receiver) {
+			related[t] = true
+		}
+		if len(related) == 0 {
+			continue
+		}
+		res := resolver.Result(file)
+		if res == nil {
+			continue
+		}
+		for _, h := range hier {
+			if !related[h.Name] || h.Name == receiver {
+				continue
+			}
+			for i := range res.Decls {
+				d := &res.Decls[i]
+				if d.Name != sym.Name {
+					continue
+				}
+				if d.Kind != scope.KindMethod && d.Kind != scope.KindFunction {
+					continue
+				}
+				if d.Span.StartByte < h.BodyStart || d.Span.EndByte > h.BodyEnd {
+					continue
+				}
+				if d.ID == target.ID {
+					continue
+				}
+				out[file] = append(out[file], span{
+					start: d.Span.StartByte,
+					end:   d.Span.EndByte,
+					})
+			}
 		}
 	}
 }

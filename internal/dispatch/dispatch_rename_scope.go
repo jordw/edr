@@ -27,7 +27,9 @@ func scopeSupported(path string) bool {
 		return false
 	}
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".go", ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".py", ".pyi", ".java", ".kt", ".kts", ".rs", ".c", ".h":
+	case ".go", ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".py", ".pyi", ".java", ".kt", ".kts", ".rs",
+		".c", ".h",
+		".cpp", ".cxx", ".cc", ".c++", ".hpp", ".hxx", ".hh", ".h++":
 		return true
 	}
 	return false
@@ -117,26 +119,26 @@ func scopeAwareSameFileSpans(sym *index.SymbolInfo) ([]span, bool) {
 		return nil, false
 	}
 
-	// Definition span: expand back to include the doc comment so that
-	// --comments=rewrite picks up the leading /// or // documentation
-	// block. End stays at the identifier so we do not rewrite mentions
-	// inside the function body that scope did not bind to us.
-	// Start from sym.StartByte (whole-symbol start) rather than
-	// target.Span.StartByte (identifier), because expandToDocComment
-	// looks for a newline immediately before its argument, and the
-	// identifier is typically preceded by a keyword (`void`, `fn`) on
-	// the same line, not by a newline.
+	// Identifier span for the declaration itself.
+	out := []span{{start: target.Span.StartByte, end: target.Span.EndByte}}
+
+	// Doc-comment sweep: pick up `oldName` mentions in the leading
+	// /// or // (or #) block so --comments=rewrite still rewrites
+	// them. The apply layer treats each match as a separate span and
+	// gates skip-mode via positionInComment.
 	defStart := expandToDocComment(sym.File, sym.StartByte)
-	out := []span{{start: defStart, end: target.Span.EndByte, isDef: true}}
+	if defStart < target.Span.StartByte {
+		out = append(out, findIdentOccurrences(src, defStart, target.Span.StartByte, sym.Name)...)
+	}
 
 	for _, ref := range result.Refs {
 		if ref.Binding.Decl == target.ID {
-			out = append(out, span{start: ref.Span.StartByte, end: ref.Span.EndByte, isDef: false})
+			out = append(out, span{start: ref.Span.StartByte, end: ref.Span.EndByte})
 			continue
 		}
 		for _, cand := range ref.Binding.Candidates {
 			if cand == target.ID {
-				out = append(out, span{start: ref.Span.StartByte, end: ref.Span.EndByte, isDef: false})
+				out = append(out, span{start: ref.Span.StartByte, end: ref.Span.EndByte})
 				break
 			}
 		}
@@ -429,7 +431,6 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 			out[r.File] = append(out[r.File], span{
 				start: ref.Span.StartByte,
 				end:   ref.Span.EndByte,
-				isDef: false,
 			})
 		}
 
@@ -462,7 +463,6 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 				out[r.File] = append(out[r.File], span{
 					start: d.Span.StartByte,
 					end:   d.Span.EndByte,
-					isDef: true,
 				})
 			}
 		}
@@ -490,7 +490,6 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 			out[idRef.file] = append(out[idRef.file], span{
 				start: idRef.startByte,
 				end:   idRef.endByte,
-				isDef: false,
 			})
 		}
 	}

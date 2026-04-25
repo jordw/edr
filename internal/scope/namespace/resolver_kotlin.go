@@ -3,7 +3,6 @@ package namespace
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 
@@ -180,13 +179,11 @@ func (r *KotlinResolver) SamePackageFiles(importingFile string) []string {
 	return out
 }
 
-// kotlinPackageRe matches Kotlins `package x.y` clause (no terminator).
-var kotlinPackageRe = regexp.MustCompile(`(?m)^\s*package\s+([a-zA-Z_][\w.]*)`)
-
+// kotlinPackageClause scans src for the file's `package x.y` clause
+// (no terminator) and returns the dotted name ("" if absent). Reuses
+// javaPackageClause's byte-walking scanner — Kotlin's only meaningful
+// difference is the optional `;` terminator, which the scanner
+// already stops at.
 func kotlinPackageClause(src []byte) string {
-	m := kotlinPackageRe.FindSubmatch(src)
-	if m == nil {
-		return ""
-	}
-	return string(m[1])
+	return javaPackageClause(src)
 }

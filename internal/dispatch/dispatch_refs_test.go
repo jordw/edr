@@ -784,6 +784,54 @@ int shadowed() {
 	}
 }
 
+// TestRename_CppShadowNotRewritten: cross-file C++ rename rewrites the
+// call in main.cpp AND the prototype in the matching .hpp file, but
+// leaves a same-named local variable alone. Mirrors the C version;
+// gates the C++ promotion in scopeSupported.
+func TestRename_CppShadowNotRewritten(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"foo.hpp": `#ifndef FOO_HPP
+#define FOO_HPP
+int compute(int x);
+#endif
+`,
+		"foo.cpp": `#include "foo.hpp"
+
+int compute(int x) { return x * 2; }
+`,
+		"main.cpp": `#include "foo.hpp"
+
+int run() { return compute(5); }
+
+int shadowed() {
+    int compute = 42;
+    return compute + 1;
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"foo.cpp:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	hData, _ := os.ReadFile(filepath.Join(dir, "foo.hpp"))
+	if !strings.Contains(string(hData), "int calculate(int x);") {
+		t.Errorf("header prototype not rewritten; got:\n%s", hData)
+	}
+	mData, _ := os.ReadFile(filepath.Join(dir, "main.cpp"))
+	body := string(mData)
+	if !strings.Contains(body, "return calculate(5)") {
+		t.Errorf("cross-file call not rewritten; got:\n%s", body)
+	}
+	if !strings.Contains(body, "int compute = 42") {
+		t.Errorf("shadowed local MUST remain as `int compute = 42`; got:\n%s", body)
+	}
+	if !strings.Contains(body, "return compute + 1") {
+		t.Errorf("use of shadowed local MUST remain as `compute + 1`; got:\n%s", body)
+	}
+}
+
 // ----------------------------------------------------------------------
 // Kotlin oracle-equivalent tests
 //

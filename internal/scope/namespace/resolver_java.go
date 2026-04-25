@@ -3,7 +3,6 @@ package namespace
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 
@@ -200,15 +199,70 @@ func (r *JavaResolver) SamePackageFiles(importingFile string) []string {
 	return out
 }
 
-// javaPackageRe matches the `package x.y.z;` clause anywhere near the
-// top of a Java file. The (?m) flag anchors ^ to line starts so
-// comments above the clause do not match.
-var javaPackageRe = regexp.MustCompile(`(?m)^\s*package\s+([a-zA-Z_][\w.]*)\s*;`)
-
+// javaPackageClause scans src for the file's `package x.y.z;` clause
+// and returns the dotted name ("" if absent). Walks bytes manually
+// rather than using a regex so it stays consistent with the lexer-
+// based scope builder; tolerates leading line comments, block
+// comments, and Javadoc.
 func javaPackageClause(src []byte) string {
-	m := javaPackageRe.FindSubmatch(src)
-	if m == nil {
-		return ""
+	i := 0
+	for i < len(src) {
+		c := src[i]
+		switch {
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+			i++
+		case c == '/' && i+1 < len(src) && src[i+1] == '/':
+			for i < len(src) && src[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < len(src) && src[i+1] == '*':
+			i += 2
+			for i+1 < len(src) && !(src[i] == '*' && src[i+1] == '/') {
+				i++
+			}
+			if i+1 < len(src) {
+				i += 2
+			}
+		case c == '@':
+			// Annotation on the package clause (rare). Skip the ident
+			// and any `(...)` argument list.
+			i++
+			for i < len(src) && isJavaPkgIdentByte(src[i]) {
+				i++
+			}
+			if i < len(src) && src[i] == '(' {
+				depth := 1
+				i++
+				for i < len(src) && depth > 0 {
+					switch src[i] {
+					case '(':
+						depth++
+					case ')':
+						depth--
+					}
+					i++
+				}
+			}
+		default:
+			if c == 'p' && i+7 <= len(src) && string(src[i:i+7]) == "package" &&
+				(i+7 == len(src) || !isJavaPkgIdentByte(src[i+7])) {
+				j := i + 7
+				for j < len(src) && (src[j] == ' ' || src[j] == '\t') {
+					j++
+				}
+				start := j
+				for j < len(src) && (isJavaPkgIdentByte(src[j]) || src[j] == '.') {
+					j++
+				}
+				return string(src[start:j])
+			}
+			return ""
+		}
 	}
-	return string(m[1])
+	return ""
+}
+
+func isJavaPkgIdentByte(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9') || c == '_'
 }

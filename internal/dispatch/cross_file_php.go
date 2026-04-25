@@ -104,7 +104,6 @@ func phpCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 			out[cand] = append(out[cand], span{
 				start: d.Span.StartByte,
 				end:   d.Span.EndByte,
-				isDef: true,
 			})
 		}
 
@@ -119,12 +118,10 @@ func phpCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 					}
 				}
 			}
-			startByte := ref.Span.StartByte
-			isArrowOrScope := false
-			if ref.Binding.Reason == "property_access" && startByte > 0 && len(src) > 0 {
-				prev := src[startByte-1]
-				isArrow := startByte >= 2 && src[startByte-2] == '-' && prev == '>'
-				isScope := startByte >= 2 && src[startByte-2] == ':' && prev == ':'
+			if ref.Binding.Reason == "property_access" && ref.Span.StartByte > 0 && len(src) > 0 {
+				prev := src[ref.Span.StartByte-1]
+				isArrow := ref.Span.StartByte >= 2 && src[ref.Span.StartByte-2] == '-' && prev == '>'
+				isScope := ref.Span.StartByte >= 2 && src[ref.Span.StartByte-2] == ':' && prev == ':'
 				isDot := prev == '.'
 				if !isArrow && !isScope && !isDot {
 					continue
@@ -132,28 +129,17 @@ func phpCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 				if !isMethod {
 					continue
 				}
-				baseIdent := phpBaseIdentBefore(src, startByte, isArrow, isScope)
+				baseIdent := phpBaseIdentBefore(src, ref.Span.StartByte, isArrow, isScope)
 				if baseIdent == "" {
 					continue
 				}
 				if !acceptableTypes[varTypes[baseIdent]] && !acceptableTypes[baseIdent] {
 					continue
 				}
-				if isArrow || isScope {
-					// Keep span = just the method ident and mark
-					// isDef=true. The rename pipeline uses the bare
-					// defRe=\`\bname\b\` for isDef spans, which
-					// rewrites just the method name inside the
-					// region — no `.` / `->` / `::` munging.
-					isArrowOrScope = true
-				} else if isDot {
-					startByte--
-				}
 			}
 			out[cand] = append(out[cand], span{
-				start: startByte,
+				start: ref.Span.StartByte,
 				end:   ref.Span.EndByte,
-				isDef: isArrowOrScope,
 			})
 		}
 	}
@@ -251,7 +237,6 @@ func phpEmitHierarchySpans(out map[string][]span, resolver *namespace.PHPResolve
 			out[sym.File] = append(out[sym.File], span{
 				start: d.Span.StartByte,
 				end:   d.Span.EndByte,
-				isDef: true,
 			})
 		}
 	}

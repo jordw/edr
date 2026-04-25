@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 
 	"github.com/jordw/edr/internal/edit"
@@ -17,12 +16,12 @@ import (
 )
 
 // span identifies a byte range in a file that rename should rewrite.
-// isDef distinguishes the declaration site (regex = bare name, rewrite
-// without dot prefix) from a call site (for methods, regex requires
-// a dot prefix).
+// Bytes [start, end) are overwritten with the new name; dispatch
+// handlers and the scope-aware resolver are responsible for emitting
+// only identifier-tight ranges, with no leading separator (`.`, `->`,
+// `::`) or trailing punctuation.
 type span struct {
 	start, end uint32
-	isDef      bool
 }
 
 func runRename(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
@@ -55,32 +54,9 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 		}, nil
 	}
 
-	// Build regex patterns for the old name.
-	// For methods (non-empty Receiver), use a dot-prefixed pattern at call sites
-	// to match .spawn( but not mod spawn or ::spawn.
-	isMethod := sym.Receiver != ""
-	quotedName := regexp.QuoteMeta(oldName)
-
-	defPattern := `\b` + quotedName + `\b`
-	defRe, err := regexp.Compile(defPattern)
-	if err != nil {
-		return nil, fmt.Errorf("rename: invalid symbol name for regex: %w", err)
-	}
-
-	// Call-site regex: for methods, require a dot prefix.
-	var callRe *regexp.Regexp
-	if isMethod {
-		callRe, err = regexp.Compile(`\.` + quotedName + `\b`)
-		if err != nil {
-			return nil, fmt.Errorf("rename: invalid symbol name for regex: %w", err)
-		}
-	} else {
-		callRe = defRe
-	}
-
-	// Build a map of file → symbol byte ranges to replace within.
-	// Definition span uses defRe (matches bare name in declaration).
-	// Reference spans use callRe (matches .name for methods).
+	// File → byte ranges to replace. Each span covers exactly the
+	// identifier bytes; the apply loop overwrites them with newName
+	// and gates --comments=skip via positionInComment.
 	fileSpans := map[string][]span{}
 
 	// Scope-aware path: resolve rename targets via binding analysis so
@@ -116,10 +92,30 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 			return nil, fmt.Errorf("rename: finding references: %w", err)
 		}
 
+		// The legacy path has no scope binding, so it scans the
+		// symbol-index range — and each ref's range — for word-
+		// bounded mentions of oldName. Some symbol-index langs
+		// report ref ranges wider than the bare ident (e.g. a whole
+		// call expression), so the textual scan narrows them down
+		// before substitution.
 		defStart := expandToDocComment(sym.File, sym.StartByte)
-		fileSpans[sym.File] = append(fileSpans[sym.File], span{defStart, sym.EndByte, true})
+		if data, derr := os.ReadFile(sym.File); derr == nil {
+			fileSpans[sym.File] = append(fileSpans[sym.File],
+				findIdentOccurrences(data, defStart, sym.EndByte, oldName)...)
+		}
+		refData := map[string][]byte{}
 		for _, ref := range refs {
-			fileSpans[ref.File] = append(fileSpans[ref.File], span{ref.StartByte, ref.EndByte, false})
+			data, ok := refData[ref.File]
+			if !ok {
+				if d, derr := os.ReadFile(ref.File); derr == nil {
+					data = d
+					refData[ref.File] = d
+				}
+			}
+			if data != nil {
+				fileSpans[ref.File] = append(fileSpans[ref.File],
+					findIdentOccurrences(data, ref.StartByte, ref.EndByte, oldName)...)
+			}
 		}
 	}
 
@@ -152,16 +148,15 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 			continue
 		}
 
-		spans := fileSpans[file]
+		spans := dedupSpans(fileSpans[file])
 		// Sort spans by start offset for a single forward pass.
 		sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
 
 		fileExt := commentSyntaxFor(file)
 
-		// Build new file content: copy unchanged regions verbatim,
-		// apply replacement only within span ranges. Match-by-match (rather
-		// than ReplaceAll) so we can classify each match as code vs comment
-		// and honor --comments=skip.
+		// Span-based substitution: each span identifies the exact
+		// bytes to overwrite with newName. Comment classification is
+		// per-span (positionInComment of start byte).
 		var buf bytes.Buffer
 		pos := 0
 		codeCount := 0
@@ -182,36 +177,18 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 			}
 			buf.Write(data[pos:start])
 
-			re := callRe
-			repl := []byte("." + newName)
-			if s.isDef {
-				re = defRe
-				repl = []byte(newName)
-			} else if !isMethod {
-				repl = []byte(newName)
-			}
-			region := data[start:end]
-			matches := re.FindAllIndex(region, -1)
-			rpos := 0
-			for _, m := range matches {
-				absPos := start + m[0]
-				inComment := positionInComment(data, absPos, fileExt)
-				if inComment {
-					commentCount++
-					if commentMode == "skip" {
-						// Copy verbatim — don't rewrite this match.
-						buf.Write(region[rpos:m[1]])
-						rpos = m[1]
-						continue
-					}
-				} else {
-					codeCount++
+			inComment := positionInComment(data, start, fileExt)
+			if inComment {
+				commentCount++
+				if commentMode == "skip" {
+					buf.Write(data[start:end])
+					pos = end
+					continue
 				}
-				buf.Write(region[rpos:m[0]])
-				buf.Write(repl)
-				rpos = m[1]
+			} else {
+				codeCount++
 			}
-			buf.Write(region[rpos:])
+			buf.WriteString(newName)
 			pos = end
 		}
 		// Copy remainder after last span.
@@ -451,3 +428,62 @@ func expandToDocComment(file string, startByte uint32) uint32 {
 	return uint32(pos)
 }
 
+// findIdentOccurrences scans data[lo:hi] for word-bounded occurrences of
+// name and returns one span per match. Used to pick up oldName mentions in
+// a symbol's leading doc-comment block once the apply layer is span-based
+// (the legacy regex sweep handled this implicitly).
+func findIdentOccurrences(data []byte, lo, hi uint32, name string) []span {
+	if name == "" {
+		return nil
+	}
+	if hi > uint32(len(data)) {
+		hi = uint32(len(data))
+	}
+	if lo >= hi {
+		return nil
+	}
+	var out []span
+	nb := []byte(name)
+	i := int(lo)
+	end := int(hi)
+	for i+len(nb) <= end {
+		idx := bytes.Index(data[i:end], nb)
+		if idx < 0 {
+			break
+		}
+		abs := i + idx
+		absEnd := abs + len(nb)
+		leftOK := abs == 0 || !isIdentByte(data[abs-1])
+		rightOK := absEnd >= len(data) || !isIdentByte(data[absEnd])
+		if leftOK && rightOK {
+			out = append(out, span{uint32(abs), uint32(absEnd)})
+		}
+		i = abs + 1
+	}
+	return out
+}
+
+// dedupSpans drops exact duplicates (same start+end) and contained
+// duplicates so the apply pass doesn't double-count or skip emissions
+// from multiple handlers (e.g. same-file decl + hierarchy emit).
+func dedupSpans(in []span) []span {
+	if len(in) <= 1 {
+		return in
+	}
+	seen := make(map[uint64]bool, len(in))
+	out := make([]span, 0, len(in))
+	for _, s := range in {
+		k := uint64(s.start)<<32 | uint64(s.end)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+func isIdentByte(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9') || c == '_'
+}

@@ -131,7 +131,6 @@ func pythonCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.
 			out[cand] = append(out[cand], span{
 				start: d.Span.StartByte,
 				end:   d.Span.EndByte,
-				isDef: false,
 			})
 		}
 
@@ -155,25 +154,22 @@ func pythonCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.
 			// Property-access handling. For method renames we accept
 			// `obj.method` when obj's declared type is in
 			// acceptableTypes OR the base ident IS an acceptable
-			// type itself (Class.classmethod / Module.method).
-			startByte := ref.Span.StartByte
-			if ref.Binding.Reason == "property_access" && startByte > 0 && len(src) > 0 && src[startByte-1] == '.' {
+			// type itself. Span stays identifier-only.
+			if ref.Binding.Reason == "property_access" && ref.Span.StartByte > 0 && len(src) > 0 && src[ref.Span.StartByte-1] == '.' {
 				if !isMethod {
 					continue
 				}
-				baseIdent := pyBaseIdentBefore(src, startByte)
+				baseIdent := pyBaseIdentBefore(src, ref.Span.StartByte)
 				if baseIdent == "" {
 					continue
 				}
 				if !acceptableTypes[varTypes[baseIdent]] && !acceptableTypes[baseIdent] {
 					continue
 				}
-				startByte--
 			}
 			out[cand] = append(out[cand], span{
-				start: startByte,
+				start: ref.Span.StartByte,
 				end:   ref.Span.EndByte,
-				isDef: false,
 			})
 		}
 	}
@@ -276,7 +272,6 @@ func pyEmitHierarchySpans(out map[string][]span, resolver *namespace.PythonResol
 			out[sym.File] = append(out[sym.File], span{
 				start: d.Span.StartByte,
 				end:   d.Span.EndByte,
-				isDef: true,
 			})
 		}
 	}

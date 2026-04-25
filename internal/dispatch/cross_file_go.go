@@ -40,7 +40,6 @@ func goCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 		out[idRef.file] = append(out[idRef.file], span{
 			start: idRef.startByte,
 			end:   idRef.endByte,
-			isDef: false,
 		})
 	}
 
@@ -182,31 +181,20 @@ func goCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 					continue
 				}
 			}
-			// Expand the span back through a leading `.` for
-			// property-access refs. The rename pipeline's call-site
-			// regex is `\.method\b` when sym.Receiver is set; without
-			// the leading dot in the span, the regex would not match.
-			startByte := ref.Span.StartByte
-			if ref.Binding.Reason == "property_access" && startByte > 0 && len(src) > 0 && src[startByte-1] == '.' {
-				startByte--
-			}
 			out[cand] = append(out[cand], span{
-				start: startByte,
+				start: ref.Span.StartByte,
 				end:   ref.Span.EndByte,
-				isDef: false,
 			})
 		}
 	}
 
-	// Emit spans for each satisfied interface's declaration of
-	// sym.Name. isDef=true makes the rename engine use a bare-name
-	// regex at this location (the span covers the method identifier
-	// itself, not a property-access).
+	// Emit identifier spans for each satisfied interface's
+	// declaration of sym.Name. The span covers the method identifier
+	// itself; the apply layer rewrites it directly.
 	for _, h := range ifaceHits {
 		out[h.file] = append(out[h.file], span{
 			start: h.methodSpan.StartByte,
 			end:   h.methodSpan.EndByte,
-			isDef: true,
 		})
 	}
 

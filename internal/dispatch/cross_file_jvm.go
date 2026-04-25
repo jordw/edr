@@ -241,19 +241,9 @@ func jvmCrossFileSpans(
 					}
 				}
 			}
-			// Expand the span back through a leading `.` for
-			// property-access refs. The rename pipeline's call-site
-			// regex is `\.method\b` when sym.Receiver is set; without
-			// the leading dot in the span, the regex would not match
-			// inside the narrow identifier-only span.
-			startByte := ref.Span.StartByte
-			if ref.Binding.Reason == "property_access" && startByte > 0 && len(src) > 0 && src[startByte-1] == '.' {
-				startByte--
-			}
 			out[cand] = append(out[cand], span{
-				start: startByte,
+				start: ref.Span.StartByte,
 				end:   ref.Span.EndByte,
-				isDef: false,
 			})
 		}
 	}
@@ -367,14 +357,11 @@ func javaHierarchySpans(sym *index.SymbolInfo, r *namespace.JavaResolver) map[st
 								continue
 							}
 							seenSpan[key] = true
-							// isDef: true — the supertype''s method is
-							// a DECLARATION of the same logical symbol,
-							// not a call site. Gets the bare-name regex
-							// rather than the  call-site regex.
+							// Supertype's method declaration — emit
+							// the identifier span directly.
 							out[cand] = append(out[cand], span{
 								start: m.Span.StartByte,
 								end:   m.Span.EndByte,
-								isDef: true,
 							})
 						}
 					}
