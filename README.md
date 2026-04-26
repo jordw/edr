@@ -2,8 +2,6 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**edr gives coding agents code-aware file tools that front-load the context needed for the next step.**
-
 Without edr, agents grep to find code, read line ranges, guess what's relevant, edit, then re-read to check. Each step is a separate tool call returning raw text the agent has to filter. edr replaces that with code-aware primitives:
 
 | Operation | What the agent gets |
