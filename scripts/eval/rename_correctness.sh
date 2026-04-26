@@ -154,6 +154,12 @@ TUPLES=(
   # Rename on Hi.greet should propagate to IGreeter.greet and
   # Loud.greet, and to call sites through either typed receiver.
   "swift:hierarchy|edr|scripts/eval/fixtures/swift-hierarchy/Greeter.swift:greet|salute|cd scripts/eval/fixtures/swift-hierarchy && swiftc Greeter.swift App.swift main.swift -o /tmp/swift_hier"
+  # Lua: same-file `local function` + caller. Running with `lua app.lua`
+  # surfaces a missed caller as "attempt to call a nil value".
+  "lua:compute-free|edr|scripts/eval/fixtures/lua-demo/app.lua:compute|calculate|cd scripts/eval/fixtures/lua-demo && lua app.lua"
+  # Zig: same-file fn + caller. `zig run` typechecks and executes; a
+  # missed caller surfaces as a missing-symbol compile error.
+  "zig:compute-free|edr|scripts/eval/fixtures/zig-demo/app.zig:compute|calculate|cd scripts/eval/fixtures/zig-demo && zig run app.zig"
 )
 
 check_tool() { command -v "$1" >/dev/null 2>&1; }
@@ -218,7 +224,12 @@ for tuple in "${TUPLES[@]}"; do
     printf "%-22s %-6s %-8s %6s  %s\n" "$label" "-" "SKIP" "-" "worktree setup failed"
     skip=$((skip + 1)); continue
   fi
-  tool="${build_cmd%% *}"
+  # Pull the build tool from the last `&&` chunk if present — typical
+  # tuple shape is `cd <fixture> && <tool> <args>`. Falls back to the
+  # first word otherwise. Lets us skip cleanly when the toolchain
+  # (ruby/lua/zig/...) isn't installed instead of marking it FAIL.
+  last_chunk="${build_cmd##*&& }"
+  tool="${last_chunk%% *}"
   if ! check_tool "$tool"; then
     printf "%-22s %-6s %-8s %6s  %s\n" "$label" "-" "SKIP" "-" "tool $tool not installed"
     skip=$((skip + 1)); continue
