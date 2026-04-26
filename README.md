@@ -1,20 +1,25 @@
-# edr — semantic code editing for agents
+# edr — agent-native code editing tools
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **edr gives coding agents code-aware file tools that front-load the context needed for the next step.**
 
-Instead of raw files and grep output, edr returns structured code context:
+Instead of raw files and grep output, edr gives agents a small set of code-aware primitives organized by what they're trying to do:
 
-- **`orient`** — budgeted structural overview of the codebase in terms of symbols and files.
-- **`focus file:Symbol`** — reads a symbol, not the whole file. Includes relevant surrounding context.
-- **`focus SymbolName`** — resolves likely matches and opens the best candidate.
-- **`edit --old X --new Y --verify`** — diff, updated context, and verification feedback.
-- **`rename file:Symbol --to NewName --cross-file --verify`** — scope-aware rename across files; mode reports whether scope or name-match was used.
-- **`refs-to file:Symbol`** — inspect references before changing code.
-- **`edit file:Func --move-after other.go:Target`** — move a symbol across files atomically.
-- **`edr --orient cmd/ --focus file:Sym --edit ...`** — survey, inspect, and mutate in one call when needed.
-- Repeated reads are deduplicated so agents do less work.
+**Read — structured context, not raw bytes.**
+- `orient` — structural overview, budgeted by symbols and files.
+- `focus file:Symbol` (or just `SymbolName`) — symbol body plus its dependency signatures.
+- `refs-to file:Symbol` — references for impact analysis.
+- `files "pattern"` — trigram-accelerated text search.
+
+**Write — scope-aware mutations with safety nets.**
+- `edit --old X --new Y --verify` — diff, updated context, build verification.
+- `rename file:Symbol --to New --cross-file --verify` — scope-aware rename; the `mode` field flags `scope` vs `name-match` so you know what you got.
+
+**Workflow — designed for how agents actually call tools.**
+- Chain operations in one call (`edr -o ... -f ... -e ...`).
+- Repeated reads deduplicated, delta-only on changes.
+- Auto-checkpointed undo.
 
 Fully local, shell-friendly, no telemetry. Designed to replace generic file operations with agent-oriented ones.
 
