@@ -149,6 +149,29 @@ func scopeAwareSameFileSpans(sym *index.SymbolInfo) ([]span, bool) {
 			}
 		}
 	}
+
+	// Lua module-pattern (`function M.compute() end; M.compute()`) and
+	// Zig namespaced calls (`pub fn compute(); ... pkg.compute()`) both
+	// emit the call-site `compute` as a property_access ref whose
+	// Binding.Decl is 0 — so the match-by-Decl loop above silently
+	// drops it. Admit same-file property_access refs whose name
+	// matches the target when the target is a function/method. Other
+	// languages keep the strict by-Decl gate (Ruby/Java/C# already
+	// handle their property forms in language-specific cross-file
+	// branches with receiver-type filters).
+	ext := strings.ToLower(filepath.Ext(sym.File))
+	if (ext == ".lua" || ext == ".zig") &&
+		(target.Kind == scope.KindFunction || target.Kind == scope.KindMethod) {
+		for _, ref := range result.Refs {
+			if ref.Name != sym.Name {
+				continue
+			}
+			if ref.Binding.Reason != "property_access" {
+				continue
+			}
+			out = append(out, span{start: ref.Span.StartByte, end: ref.Span.EndByte})
+		}
+	}
 	return out, true
 }
 

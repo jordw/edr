@@ -157,9 +157,23 @@ TUPLES=(
   # Lua: same-file `local function` + caller. Running with `lua app.lua`
   # surfaces a missed caller as "attempt to call a nil value".
   "lua:compute-free|edr|scripts/eval/fixtures/lua-demo/app.lua:compute|calculate|cd scripts/eval/fixtures/lua-demo && lua app.lua"
+  # Lua: module-pattern table function `function M.compute()` called
+  # via `M.compute(...)`. Exercises the property-access rewrite path.
+  "lua:module-method|edr|scripts/eval/fixtures/lua-method/app.lua:compute|calculate|cd scripts/eval/fixtures/lua-method && lua app.lua"
+  # Lua: method syntax `function Counter:bump()` called as
+  # `Counter:bump(...)`. The `:` form desugars to a property access
+  # with implicit self.
+  "lua:method-self|edr|scripts/eval/fixtures/lua-method-self/app.lua:bump|advance|cd scripts/eval/fixtures/lua-method-self && lua app.lua"
+  # Lua: outer `local function compute` shadowed by an inner one in a
+  # do-block. The outer rename must skip the inner def + its caller.
+  "lua:shadow-local|edr|scripts/eval/fixtures/lua-shadow/app.lua:compute|calculate|cd scripts/eval/fixtures/lua-shadow && lua app.lua"
   # Zig: same-file fn + caller. `zig run` typechecks and executes; a
   # missed caller surfaces as a missing-symbol compile error.
   "zig:compute-free|edr|scripts/eval/fixtures/zig-demo/app.zig:compute|calculate|cd scripts/eval/fixtures/zig-demo && zig run app.zig"
+  # Zig: pub const decl + two refs.
+  "zig:pub-const|edr|scripts/eval/fixtures/zig-const/app.zig:MAX_RETRIES|MAX_ATTEMPTS|cd scripts/eval/fixtures/zig-const && zig run app.zig"
+  # Zig: enum-typed const decl + type-annotation refs.
+  "zig:enum-decl|edr|scripts/eval/fixtures/zig-enum/app.zig:Status|State|cd scripts/eval/fixtures/zig-enum && zig run app.zig"
 )
 
 check_tool() { command -v "$1" >/dev/null 2>&1; }
