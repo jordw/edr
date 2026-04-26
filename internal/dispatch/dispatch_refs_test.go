@@ -1991,6 +1991,104 @@ class MentorsController {
 	}
 }
 
+// TestRename_RubyInstanceMethodLooseReceiver: Session#editable? renamed
+// from app/controllers via @session.editable? and session.editable?.
+// Ruby has no static type info for ivars/locals, so the strict
+// receiver-type filter would skip these. Loose mode kicks in because
+// no other class defines editable?, so all obj.editable? sites are
+// rewritten. Also exercises the predicate (?) suffix.
+func TestRename_RubyInstanceMethodLooseReceiver(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"models/session.rb": `class Session
+  def editable?
+    locked == false
+  end
+end
+`,
+		"controllers/sessions_controller.rb": `class SessionsController
+  def edit
+    if @session.editable?
+      head :ok
+    end
+  end
+
+  def update
+    if session.editable?
+      head :ok
+    end
+  end
+end
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"models/session.rb:editable?"},
+		map[string]any{"new_name": "writable?", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	defData, _ := os.ReadFile(filepath.Join(dir, "models/session.rb"))
+	if !strings.Contains(string(defData), "def writable?") {
+		t.Errorf("def not renamed; got:\n%s", defData)
+	}
+	callerData, _ := os.ReadFile(filepath.Join(dir, "controllers/sessions_controller.rb"))
+	if strings.Contains(string(callerData), "editable?") {
+		t.Errorf("controller still references editable?; got:\n%s", callerData)
+	}
+	if !strings.Contains(string(callerData), "@session.writable?") ||
+		!strings.Contains(string(callerData), "session.writable?") {
+		t.Errorf("controller callers not rewritten; got:\n%s", callerData)
+	}
+}
+
+// TestRename_RubyMethodCollisionWarning: Session#amount_cents shares its
+// name with Payment#amount_cents. Loose receiver mode is unsafe — we'd
+// rewrite payment.amount_cents call sites against intent. Strict mode
+// holds, but a warning must surface so the user knows obj.amount_cents
+// sites were intentionally skipped pending manual review.
+func TestRename_RubyMethodCollisionWarning(t *testing.T) {
+	db, _ := setupRefsRepo(t, map[string]string{
+		"models/session.rb": `class Session
+  def amount_cents
+    50
+  end
+end
+`,
+		"models/payment.rb": `class Payment
+  def amount_cents
+    100
+  end
+end
+`,
+		"controllers/sessions_controller.rb": `class SessionsController
+  def show
+    [@session.amount_cents, payment.amount_cents]
+  end
+end
+`,
+	})
+	res, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"models/session.rb:amount_cents"},
+		map[string]any{"new_name": "total_cents", "cross_file": true, "dry_run": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	rr := res.(*output.RenameResult)
+	var found bool
+	for _, w := range rr.Warnings {
+		if strings.Contains(w, "Payment") && strings.Contains(w, "amount_cents") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected collision warning naming Payment; got warnings=%v", rr.Warnings)
+	}
+	// Strict mode: only the def is rewritten, no obj.method calls.
+	if rr.CodeOccurrences != 1 {
+		t.Errorf("expected 1 code occurrence (just the def), got %d", rr.CodeOccurrences)
+	}
+}
+
 // TestRename_RubyERBMentionWarning: a Ruby method rename succeeds in
 // .rb files, but the same name appears in an .erb template. Rename
 // can't rewrite ERB safely (receiver type can't be inferred from

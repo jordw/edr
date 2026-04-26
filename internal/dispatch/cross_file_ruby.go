@@ -2,8 +2,10 @@ package dispatch
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/jordw/edr/internal/index"
@@ -18,16 +20,16 @@ import (
 // cross-file matches are found, so the dispatch switch can defer
 // to the generic ref-filtering path for cases this resolver
 // doesn't model yet.
-func rubyCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo) (map[string][]span, bool) {
+func rubyCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo) (map[string][]span, []string, bool) {
 	if !strings.HasSuffix(strings.ToLower(sym.File), ".rb") {
-		return nil, false
+		return nil, nil, false
 	}
 	out := map[string][]span{}
 	resolver := namespace.NewRubyResolver(db.Root())
 	canonical := resolver.CanonicalPath(sym.File)
 	targetRes := resolver.Result(sym.File)
 	if canonical == "" || targetRes == nil {
-		return nil, false
+		return nil, nil, false
 	}
 
 	var target *scope.Decl
@@ -42,7 +44,7 @@ func rubyCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sy
 		}
 	}
 	if target == nil {
-		return out, true
+		return out, nil, true
 	}
 
 	if sym.Receiver != "" {
@@ -83,6 +85,23 @@ func rubyCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sy
 		for _, t := range namespace.RbRelatedTypes(resolver.Source(sym.File), sym.Receiver) {
 			acceptableTypes[t] = true
 		}
+	}
+
+	// Other-class detection: walk every candidate (and the def file) for
+	// method decls of the same name whose enclosing class is NOT in
+	// acceptableTypes. Drives two behaviors:
+	//   - looseReceiver=true (no other classes) — admit obj.method calls
+	//     even when the receiver type can't be inferred. Without this the
+	//     instance-method form `@var.method` is silently skipped because
+	//     Ruby has no static type info for ivars/locals.
+	//   - looseReceiver=false (collisions exist) — keep the strict
+	//     receiver-type filter and emit a warning naming the other classes.
+	//     The user has to verify obj.method rewrites manually.
+	otherClasses := rbDefiningOtherClasses(resolver, sym, candidates, acceptableTypes)
+	looseReceiver := isMethod && len(otherClasses) == 0
+	knownClassNames := map[string]bool{}
+	for _, c := range otherClasses {
+		knownClassNames[c] = true
 	}
 
 	pop := namespace.RubyPopulator(resolver)
@@ -153,8 +172,18 @@ func rubyCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sy
 					if baseIdent == "" {
 						continue
 					}
-					if !acceptableTypes[varTypes[baseIdent]] && !acceptableTypes[baseIdent] {
-						continue
+					if looseReceiver {
+						// No other class defines this method — admit obj.method
+						// regardless of receiver type, but still skip explicit
+						// class-qualified calls to a different class (e.g.,
+						// SomeOtherClass.method on a Session#method rename).
+						if knownClassNames[baseIdent] && !acceptableTypes[baseIdent] {
+							continue
+						}
+					} else {
+						if !acceptableTypes[varTypes[baseIdent]] && !acceptableTypes[baseIdent] {
+							continue
+						}
 					}
 				}
 			}
@@ -164,7 +193,61 @@ func rubyCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sy
 			})
 		}
 	}
-	return out, true
+
+	var warnings []string
+	if isMethod && len(otherClasses) > 0 {
+		sort.Strings(otherClasses)
+		warnings = append(warnings, fmt.Sprintf(
+			"method %q is also defined on class(es) [%s]; Ruby has no static type info for `obj.%s` call sites, so only calls where the receiver is provably %s (or related) were rewritten — review obj.%s call sites manually before committing",
+			sym.Name, strings.Join(otherClasses, ", "), sym.Name, sym.Receiver, sym.Name))
+	}
+	return out, warnings, true
+}
+
+// rbDefiningOtherClasses returns the names of classes (other than
+// sym.Receiver and its related hierarchy) that define a method named
+// sym.Name. Used to decide whether obj.method calls can be rewritten
+// loosely (no other class has this method, so any obj.method must
+// be a call to ours) or must be filtered strictly (multiple classes
+// define this method, so unresolved-receiver calls are ambiguous).
+func rbDefiningOtherClasses(resolver *namespace.RubyResolver, sym *index.SymbolInfo, candidates map[string]bool, acceptable map[string]bool) []string {
+	if sym.Receiver == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	visit := func(file string) {
+		res := resolver.Result(file)
+		src := resolver.Source(file)
+		if res == nil || len(src) == 0 {
+			return
+		}
+		hier := namespace.RbFindClassHierarchy(src)
+		for _, d := range res.Decls {
+			if d.Name != sym.Name {
+				continue
+			}
+			if d.Kind != scope.KindMethod && d.Kind != scope.KindFunction {
+				continue
+			}
+			for _, h := range hier {
+				if h.BodyStart <= d.Span.StartByte && d.Span.EndByte <= h.BodyEnd {
+					if !acceptable[h.Name] {
+						seen[h.Name] = true
+					}
+					break
+				}
+			}
+		}
+	}
+	visit(sym.File)
+	for f := range candidates {
+		visit(f)
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	return out
 }
 
 func ruby_ext_matches(file string, exts []string) bool {

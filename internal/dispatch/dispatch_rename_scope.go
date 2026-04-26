@@ -235,15 +235,15 @@ func isCFamily(ext string) bool {
 // Returns a map keyed by absolute file path. On unsupported language
 // or parse failure, returns (nil, false) so the caller can fall back
 // to regex.
-func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo) (map[string][]span, bool) {
+func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo) (map[string][]span, []string, bool) {
 	if !scopeSupported(sym.File) {
-		return nil, false
+		return nil, nil, false
 	}
 
 	// Origin file: reuse same-file resolution.
 	originSpans, ok := scopeAwareSameFileSpans(sym)
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
 	out := map[string][]span{sym.File: originSpans}
 
@@ -255,30 +255,30 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 	case ".go":
 		crossSpans, ok := goCrossFileSpans(ctx, db, sym)
 		if !ok {
-			return nil, false
+			return nil, nil, false
 		}
 		for f, spans := range crossSpans {
 			out[f] = append(out[f], spans...)
 		}
-		return out, true
+		return out, nil, true
 	case ".java":
 		crossSpans, ok := javaCrossFileSpans(ctx, db, sym)
 		if !ok {
-			return nil, false
+			return nil, nil, false
 		}
 		for f, spans := range crossSpans {
 			out[f] = append(out[f], spans...)
 		}
-		return out, true
+		return out, nil, true
 	case ".kt", ".kts":
 		crossSpans, ok := kotlinCrossFileSpans(ctx, db, sym)
 		if !ok {
-			return nil, false
+			return nil, nil, false
 		}
 		for f, spans := range crossSpans {
 			out[f] = append(out[f], spans...)
 		}
-		return out, true
+		return out, nil, true
 	case ".rs":
 		// Only use the namespace-driven Rust path when we can
 		// compute a canonical module path (Cargo.toml reachable).
@@ -289,14 +289,14 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 			for f, spans := range crossSpans {
 				out[f] = append(out[f], spans...)
 			}
-			return out, true
+			return out, nil, true
 		}
 	case ".c", ".h":
 		if crossSpans, ok := cCrossFileSpans(ctx, db, sym); ok {
 			for f, spans := range crossSpans {
 				out[f] = append(out[f], spans...)
 			}
-			return out, true
+			return out, nil, true
 		}
 	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".d.ts":
 		// Namespace path takes over ONLY when it actually resolves
@@ -308,7 +308,7 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 			for f, spans := range crossSpans {
 				out[f] = append(out[f], spans...)
 			}
-			return out, true
+			return out, nil, true
 		}
 	case ".py", ".pyi":
 		// Same fall-through rule as TS/JS: let the generic path
@@ -318,49 +318,58 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 			for f, spans := range crossSpans {
 				out[f] = append(out[f], spans...)
 			}
-			return out, true
+			return out, nil, true
 		}
 	case ".rb":
-		if crossSpans, ok := rubyCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
-			for f, spans := range crossSpans {
-				out[f] = append(out[f], spans...)
+		// Commit to Ruby's resolver when it produces a result OR when
+		// the rename target is a method. Methods always need our
+		// receiver-aware path; the legacy fallback below would
+		// silently rewrite same-name calls on unrelated classes. For
+		// top-level (non-method) renames with no cross-file matches,
+		// fall through so the legacy path can still handle imports
+		// the namespace resolver doesn't model.
+		if crossSpans, warns, ok := rubyCrossFileSpans(ctx, db, sym); ok {
+			if len(crossSpans) > 0 || sym.Receiver != "" {
+				for f, spans := range crossSpans {
+					out[f] = append(out[f], spans...)
+				}
+				return out, warns, true
 			}
-			return out, true
 		}
 	case ".cpp", ".cxx", ".cc", ".c++", ".hpp", ".hxx", ".hh", ".h++":
 		if crossSpans, ok := cppCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
 			for f, spans := range crossSpans {
 				out[f] = append(out[f], spans...)
 			}
-			return out, true
+			return out, nil, true
 		}
 	case ".cs":
 		if crossSpans, ok := csharpCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
 			for f, spans := range crossSpans {
 				out[f] = append(out[f], spans...)
 			}
-			return out, true
+			return out, nil, true
 		}
 	case ".swift":
 		if crossSpans, ok := swiftCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
 			for f, spans := range crossSpans {
 				out[f] = append(out[f], spans...)
 			}
-			return out, true
+			return out, nil, true
 		}
 	case ".php", ".phtml":
 		if crossSpans, ok := phpCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
 			for f, spans := range crossSpans {
 				out[f] = append(out[f], spans...)
 			}
-			return out, true
+			return out, nil, true
 		}
 	}
 
 	// Candidate files: symbol-index narrowed by import graph.
 	refs, err := db.FindSemanticReferences(ctx, sym.Name, sym.File)
 	if err != nil {
-		return out, true // origin still useful; cross-file narrowing failed
+		return out, nil, true // origin still useful; cross-file narrowing failed
 	}
 	seen := map[string]bool{sym.File: true}
 	for _, r := range refs {
@@ -488,7 +497,7 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 	if strings.EqualFold(filepath.Ext(sym.File), ".rs") {
 		refs, ok := rustSameCrateRefs(db.Root(), sym.File, sym.Name)
 		if !ok {
-			return nil, false
+			return nil, nil, false
 		}
 		for _, idRef := range refs {
 			out[idRef.file] = append(out[idRef.file], span{
@@ -498,5 +507,5 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 		}
 	}
 
-	return out, true
+	return out, nil, true
 }

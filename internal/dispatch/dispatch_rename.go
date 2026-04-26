@@ -69,9 +69,11 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 	// bind to a local same-name decl, i.e. shadows). Falls back to
 	// the regex+symbol-index path on any failure.
 	scopeDone := false
+	var scopeWarnings []string
 	if crossFile {
-		if spans, ok := scopeAwareCrossFileSpans(ctx, db, sym); ok {
+		if spans, warns, ok := scopeAwareCrossFileSpans(ctx, db, sym); ok {
 			fileSpans = spans
+			scopeWarnings = warns
 			scopeDone = true
 		}
 	} else {
@@ -278,6 +280,7 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 			"%d code mention(s) of %q remain unrewritten — possible missed refs (or shadowed locals / string-literal lookalikes); inspect diff before committing",
 			totalCodeMentions-totalCodeEdits, oldName))
 	}
+	result.Warnings = append(result.Warnings, scopeWarnings...)
 	if mode == "name-match" {
 		result.Warnings = append(result.Warnings, fmt.Sprintf(
 			"rename used name-based matching: scope builder for %s is not yet admitted for writes; verify diffs for cross-class false positives before committing",
