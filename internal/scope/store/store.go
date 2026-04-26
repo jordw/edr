@@ -357,7 +357,8 @@ func Build(root, edrDir string, walkFn func(string, func(string) error) error) (
 			".java", ".rs", ".rb",
 			".c", ".h",
 			".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh",
-			".cs", ".swift", ".kt", ".kts", ".php":
+			".cs", ".swift", ".kt", ".kts", ".php",
+			".lua", ".zig":
 		default:
 			return nil
 		}

@@ -361,6 +361,18 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 				return out, warns, true
 			}
 		}
+	case ".lua":
+		// Lua has no static type info or trackable imports; the
+		// resolver walks every .lua file unconditionally. Always
+		// commit to its result — the legacy fallback below is
+		// import-graph filtered and would miss `dofile`/`require`
+		// callers that the walk picks up.
+		if crossSpans, warns, ok := luaCrossFileSpans(ctx, db, sym); ok {
+			for f, spans := range crossSpans {
+				out[f] = append(out[f], spans...)
+			}
+			return out, warns, true
+		}
 	case ".cpp", ".cxx", ".cc", ".c++", ".hpp", ".hxx", ".hh", ".h++":
 		if crossSpans, ok := cppCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
 			for f, spans := range crossSpans {

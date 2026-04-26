@@ -167,6 +167,9 @@ TUPLES=(
   # Lua: outer `local function compute` shadowed by an inner one in a
   # do-block. The outer rename must skip the inner def + its caller.
   "lua:shadow-local|edr|scripts/eval/fixtures/lua-shadow/app.lua:compute|calculate|cd scripts/eval/fixtures/lua-shadow && lua app.lua"
+  # Lua: cross-file rename via `require`. Walk-based candidate
+  # selection (Lua `require` is runtime; no static import graph).
+  "lua:cross-file-require|edr|scripts/eval/fixtures/lua-require/lib.lua:compute|calculate|cd scripts/eval/fixtures/lua-require && lua app.lua"
   # Zig: same-file fn + caller. `zig run` typechecks and executes; a
   # missed caller surfaces as a missing-symbol compile error.
   "zig:compute-free|edr|scripts/eval/fixtures/zig-demo/app.zig:compute|calculate|cd scripts/eval/fixtures/zig-demo && zig run app.zig"

@@ -14,6 +14,7 @@ import (
 	scopec "github.com/jordw/edr/internal/scope/c"
 	scopecpp "github.com/jordw/edr/internal/scope/cpp"
 	"github.com/jordw/edr/internal/scope/csharp"
+	scopelua "github.com/jordw/edr/internal/scope/lua"
 	"github.com/jordw/edr/internal/scope/golang"
 	"github.com/jordw/edr/internal/scope/java"
 	"github.com/jordw/edr/internal/scope/kotlin"
@@ -24,6 +25,7 @@ import (
 	scopestore "github.com/jordw/edr/internal/scope/store"
 	"github.com/jordw/edr/internal/scope/swift"
 	"github.com/jordw/edr/internal/scope/ts"
+	scopezig "github.com/jordw/edr/internal/scope/zig"
 )
 
 // runRefsTo implements `edr refs-to file:Symbol`. Parses the file with
@@ -170,6 +172,10 @@ func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []stri
 			entries = append(entries, cCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
 		case ".cpp", ".cxx", ".cc", ".c++", ".hpp", ".hxx", ".hh", ".h++":
 			entries = append(entries, cppCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
+		case ".lua":
+			entries = append(entries, luaCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
+		case ".zig":
+			entries = append(entries, zigCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
 		case ".cs":
 			entries = append(entries, csharpCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
 		}
@@ -894,6 +900,29 @@ func cppCrossFileRefs(root, originFile, name string, idx *scopestore.Index) []re
 		map[string]bool{".cpp": true, ".cxx": true, ".cc": true, ".c++": true, ".hpp": true, ".hxx": true, ".hh": true, ".h++": true},
 		map[string]bool{".git": true, ".edr": true, "build": true, "dist": true, "out": true, "node_modules": true},
 		scopecpp.Parse)
+}
+
+// luaCrossFileRefs walks every .lua file under root for refs to name.
+// Lua does not statically track imports (`require` / `dofile` are
+// runtime calls), so the walk is unconditional — analogous to
+// rubyCrossFileRefs.
+func luaCrossFileRefs(root, originFile, name string, idx *scopestore.Index) []refEntry {
+	return genericCrossFileRefs(root, originFile, name, idx,
+		map[string]bool{".lua": true},
+		map[string]bool{".git": true, ".edr": true, "node_modules": true, ".luarocks": true},
+		scopelua.Parse)
+}
+
+// zigCrossFileRefs walks every .zig file under root. Zig does have
+// `@import("foo.zig")` but the import graph isn't modeled in the
+// trigram-driven FindSemanticReferences pipeline; walking all .zig
+// files matches what the user expects from refs-to and surfaces
+// the property-access call sites (`lib.fn`) the resolver emits.
+func zigCrossFileRefs(root, originFile, name string, idx *scopestore.Index) []refEntry {
+	return genericCrossFileRefs(root, originFile, name, idx,
+		map[string]bool{".zig": true},
+		map[string]bool{".git": true, ".edr": true, "zig-cache": true, "zig-out": true, ".zig-cache": true},
+		scopezig.Parse)
 }
 
 // csharpCrossFileRefs: same-project .cs files that reference `name`.
