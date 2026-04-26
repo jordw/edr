@@ -373,6 +373,15 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 			}
 			return out, warns, true
 		}
+	case ".zig":
+		// Zig has `@import("foo.zig")` but it's not in our import
+		// graph; walk every .zig file and emit name-matched refs.
+		if crossSpans, warns, ok := zigCrossFileSpans(ctx, db, sym); ok {
+			for f, spans := range crossSpans {
+				out[f] = append(out[f], spans...)
+			}
+			return out, warns, true
+		}
 	case ".cpp", ".cxx", ".cc", ".c++", ".hpp", ".hxx", ".hh", ".h++":
 		if crossSpans, ok := cppCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
 			for f, spans := range crossSpans {
