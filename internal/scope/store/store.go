@@ -54,12 +54,14 @@ import (
 	"github.com/jordw/edr/internal/scope/golang"
 	"github.com/jordw/edr/internal/scope/java"
 	"github.com/jordw/edr/internal/scope/kotlin"
+	"github.com/jordw/edr/internal/scope/lua"
 	"github.com/jordw/edr/internal/scope/php"
 	"github.com/jordw/edr/internal/scope/python"
 	"github.com/jordw/edr/internal/scope/ruby"
 	"github.com/jordw/edr/internal/scope/rust"
 	"github.com/jordw/edr/internal/scope/swift"
 	"github.com/jordw/edr/internal/scope/ts"
+	"github.com/jordw/edr/internal/scope/zig"
 	"github.com/jordw/edr/internal/staleness"
 )
 
@@ -303,6 +305,10 @@ func Parse(relPath string, src []byte) *scope.Result {
 		return kotlin.Parse(relPath, src)
 	case ".php":
 		return php.Parse(relPath, src)
+	case ".lua":
+		return lua.Parse(relPath, src)
+	case ".zig":
+		return zig.Parse(relPath, src)
 	}
 	return nil
 }
