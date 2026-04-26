@@ -155,6 +155,33 @@ func (s *Session) GetRecentOps(n int) []OpEntry {
 	return out
 }
 
+// EditsSinceRead returns the number of successful edits to file since the most
+// recent successful read of that file. If the file has not been read in the
+// op log window, returns the count of all successful edits to it.
+func (s *Session) EditsSinceRead(file string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lastRead := -1
+	for i := len(s.OpLog) - 1; i >= 0; i-- {
+		op := s.OpLog[i]
+		if op.File != file || !op.OK {
+			continue
+		}
+		if op.Cmd == "read" || op.Cmd == "focus" {
+			lastRead = i
+			break
+		}
+	}
+	count := 0
+	for i := lastRead + 1; i < len(s.OpLog); i++ {
+		op := s.OpLog[i]
+		if op.OK && op.File == file && op.Cmd == "edit" {
+			count++
+		}
+	}
+	return count
+}
+
 func (s *Session) GetFocus() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

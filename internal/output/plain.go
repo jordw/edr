@@ -70,6 +70,12 @@ func printPlain(e *Envelope) {
 			if code, ok := op["error_code"].(string); ok {
 				h["ec"] = code
 			}
+			// Surface rich diagnostic fields agents can act on.
+			for _, field := range []string{"hint", "near_match", "next_action", "edits_ago", "candidates", "symbol", "file"} {
+				if v, ok := op[field]; ok && v != nil && v != "" {
+					h[field] = v
+				}
+			}
 			writeHeader(w, h)
 			continue
 		}

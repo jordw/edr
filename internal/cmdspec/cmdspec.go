@@ -148,7 +148,8 @@ var Registry = []*Spec{
 			// Shared
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
 			{Name: "verify", Type: FlagBool, Default: false, Desc: "Run build verification after edit"},
-			{Name: "no_verify", Type: FlagBool, Default: false, Desc: "Deprecated: verify is now opt-in"},
+			{Name: "verify_command", Type: FlagString, Default: "", Desc: "Custom verify command (overrides auto-detect; e.g. \"go test ./...\")"},
+			{Name: "verify_level", Type: FlagString, Default: "", Desc: "Verify level: build (default) or test"},
 		},
 	},
 	{
@@ -159,6 +160,8 @@ var Registry = []*Spec{
 			{Name: "new_name", Alias: "to", Type: FlagString, Default: "", Desc: "New name for the symbol (required)"},
 			{Name: "dry_run", Type: FlagBool, Default: false, Desc: "Preview without applying"},
 			{Name: "verify", Type: FlagBool, Default: false, Desc: "Run build verification after rename"},
+			{Name: "verify_command", Type: FlagString, Default: "", Desc: "Custom verify command (overrides auto-detect; e.g. \"go test ./...\")"},
+			{Name: "verify_level", Type: FlagString, Default: "", Desc: "Verify level: build (default) or test"},
 			{Name: "cross_file", Type: FlagBool, Default: false, Desc: "Rename across all files, not just the defining file"},
 			{Name: "force", Type: FlagBool, Default: false, Desc: "With --cross-file, proceed even if the name is ambiguous (defined by multiple symbols)"},
 			{Name: "comments", Type: FlagString, Default: "rewrite", Desc: "How to handle matches inside comments: 'rewrite' (default) or 'skip'"},
@@ -402,9 +405,11 @@ func ReadBatchKeys() map[string]bool {
 	return m
 }
 
-// EditBatchKeys returns valid keys for doEdit batch objects.
+// EditBatchKeys returns valid batch-JSON keys for doEdit. Per-op verify overrides are excluded; batch verify lives at doParams.Verify.
 func EditBatchKeys() map[string]bool {
 	m := flagNames("edit")
+	delete(m, "verify_command")
+	delete(m, "verify_level")
 	m["file"] = true
 	m["symbol"] = true
 	return m

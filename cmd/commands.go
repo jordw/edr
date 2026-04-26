@@ -100,7 +100,7 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 
 	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
 	if err != nil {
-		addDispatchFailedOp(env, opID, cmdName, err)
+		addDispatchFailedOp(env, opID, cmdName, err, sess)
 		env.ComputeOK()
 		output.PrintEnvelope(env)
 		return silentError{code: 1}
@@ -157,7 +157,9 @@ func dispatchCmd(cmd *cobra.Command, cmdName string, args []string) error {
 		status, _ := resultStatus(result)
 		if !dryRun && doVerify && status == "applied" {
 			verifyFiles := renameVerifyFiles(result, args)
-			runPostMutationVerify(context.Background(), db, sess, env, edrDir, root, verifyFiles, "rename applied then reverted: verify failed")
+			verifyCmd, _ := flags["verify_command"].(string)
+			verifyLvl, _ := flags["verify_level"].(string)
+			runPostMutationVerify(context.Background(), db, sess, env, edrDir, root, verifyFiles, "rename applied then reverted: verify failed", verifyCmd, verifyLvl)
 		} else if dryRun && doVerify {
 			env.SetVerify(map[string]any{"status": "skipped", "reason": "dry run"})
 		}
@@ -193,10 +195,16 @@ func renameVerifyFiles(result any, args []string) []string {
 	return []string{target}
 }
 
-func runPostMutationVerify(ctx context.Context, db index.SymbolStore, sess *session.Session, env *output.Envelope, edrDir, root string, files []string, revertedMsg string) {
+func runPostMutationVerify(ctx context.Context, db index.SymbolStore, sess *session.Session, env *output.Envelope, edrDir, root string, files []string, revertedMsg string, verifyCommand, verifyLevel string) {
 	verifyFlags := map[string]any{}
 	if len(files) > 0 {
 		verifyFlags["files"] = files
+	}
+	if verifyCommand != "" {
+		verifyFlags["command"] = verifyCommand
+	}
+	if verifyLevel != "" {
+		verifyFlags["level"] = verifyLevel
 	}
 	verifyResult, verifyErr := dispatch.Dispatch(ctx, db, "verify", []string{}, verifyFlags)
 	if verifyErr != nil {
@@ -334,7 +342,7 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 
 	result, err := dispatch.Dispatch(context.Background(), db, cmdName, args, flags)
 	if err != nil {
-		addDispatchFailedOp(env, opID, cmdName, err)
+		addDispatchFailedOp(env, opID, cmdName, err, sess)
 		env.ComputeOK()
 		output.PrintEnvelope(env)
 		return silentError{code: 1}
@@ -367,6 +375,12 @@ func dispatchCmdWithStdin(cmd *cobra.Command, cmdName string, args []string, std
 				if f, ok := rm["file"].(string); ok {
 					verifyFlags["files"] = []string{f}
 				}
+			}
+			if vc, _ := flags["verify_command"].(string); vc != "" {
+				verifyFlags["command"] = vc
+			}
+			if vl, _ := flags["verify_level"].(string); vl != "" {
+				verifyFlags["level"] = vl
 			}
 			verifyResult, verifyErr := dispatch.Dispatch(context.Background(), db, "verify", []string{}, verifyFlags)
 			if verifyErr != nil {
@@ -919,10 +933,22 @@ func injectSessionHash(sess *session.Session, cmdName string, args []string, fla
 
 // addDispatchFailedOp creates a failed op on the envelope, matching batch behavior.
 // Per-op errors go on the op; only index-level errors go in envelope errors[].
-func addDispatchFailedOp(env *output.Envelope, opID, opType string, err error) {
+func addDispatchFailedOp(env *output.Envelope, opID, opType string, err error, sess *session.Session) {
 	// Surface structured not-found errors with diagnostic hints
 	var nfe *dispatch.NotFoundError
 	if errors.As(err, &nfe) {
+		// Attribute staleness to the agent's own prior edits when applicable.
+		if sess != nil && nfe.File != "" {
+			if n := sess.EditsSinceRead(nfe.File); n > 0 {
+				nfe.EditsAgo = n
+				stale := fmt.Sprintf("your view is stale: %d edit(s) to %s since last read — run `edr focus %s` first", n, nfe.File, nfe.File)
+				if nfe.Hint == "" {
+					nfe.Hint = stale
+				} else {
+					nfe.Hint = stale + "; " + nfe.Hint
+				}
+			}
+		}
 		env.AddFailedOpResult(opID, opType, "not_found", nfe)
 		return
 	}

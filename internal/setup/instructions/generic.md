@@ -35,9 +35,10 @@ edr focus file.go --skeleton            # collapsed blocks
 
 edr edit file.go --old "x" --new "y"              # find and replace
 edr edit file.go --old "x" --new "y" --in Func    # scoped to symbol
-edr edit file.go --old "x" --new "y" --all         # replace all matches
+edr edit file.go --old "x" --new "y" --all       # replace all matches (use --dry-run first)
 edr edit file.go --content "..." --mkdir           # create file
 edr edit file.go --old "x" --new "y" --verify     # edit + build check
+edr edit f.go --old "x" --new "y" --fuzzy        # whitespace-tolerant match
 edr edit --where Symbol --old "x" --new "y"        # auto-resolve file
 
 ## Rename — `edr rename`
@@ -60,25 +61,21 @@ edr edit file.go:Func --move-after other.go:Target  # move to another file
 ### Assertions (batch)
 edr --edit f.go --old "Foo" --new "Bar" --assert-symbol-exists f.go:Bar
 
-### Quoting for edits
-Use heredocs or @file refs for --old/--new to avoid quoting errors:
-`edr edit f.go --old "$(cat <<'EOF'
-old code
-EOF
-)" --new "$(cat <<'EOF'
-new code
-EOF
-)"`
+### Tricky content (multiline, $, backticks, quotes)
+Prefer `@file` over shell heredocs — works on any string flag (`--content`, `--old`, `--new`, etc.):
+`edr edit f.go --content @/tmp/payload.scss --mkdir   # SCSS with $vars, ERB with backticks, etc.`
 
-## Python — multi-op scripts
+## Python — for tricky escaping and scripted edits
 
-For loops, filters, or 5+ chained ops. Session state shared via PID.
+Use Python when shell escaping fights you (`$`, backticks, quotes) or for loops/multi-step transforms.
 
 python3 <<EOF
 import sys; sys.path.insert(0, "$(edr python-path)")
 import edr
-for s in edr.orient("internal/", grep="^run", type="function"):
-    if not edr.files(s.name): print("unused:", s.name)
+# Shell-escape-free; loops + conditionals welcome
+for s in edr.orient("internal/", grep="^helper", type="function"):
+    if not edr.files(s.name):
+        edr.edit(s.file, old=f"func {s.name}", new=f"func unused_{s.name}")
 EOF
 
 ## Other commands

@@ -1072,6 +1072,66 @@ func TestSpec_EditAll(t *testing.T) {
 	}
 }
 
+func TestSpec_EditFuzzyNearMatch(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc main() {\n\trecordingProcessor()\n}\n\nfunc recordingProcessor() {}\n",
+	})
+
+	// Typo in old_text — exact match fails, but bigram similarity should fire.
+	_, stdout, _, exit := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--old-text", "reocrdingProcessor", "--new-text", "playbackProcessor")
+	if exit != 1 {
+		t.Fatalf("expected exit 1, got %d", exit)
+	}
+	var header map[string]any
+	firstLine := strings.SplitN(stdout, "\n", 2)[0]
+	if err := json.Unmarshal([]byte(firstLine), &header); err != nil {
+		t.Fatalf("parse header: %v\nraw: %q", err, firstLine)
+	}
+	if ec, _ := header["ec"].(string); ec != "not_found" {
+		t.Errorf("ec = %q, want not_found", ec)
+	}
+	hint, _ := header["hint"].(string)
+	if !strings.Contains(hint, "near-match") {
+		t.Errorf("hint should mention near-match, got %q", hint)
+	}
+	nm, _ := header["near_match"].(map[string]any)
+	if nm == nil {
+		t.Fatalf("expected near_match field, got header: %v", header)
+	}
+	if kind, _ := nm["kind"].(string); kind != "fuzzy" {
+		t.Errorf("near_match.kind = %q, want fuzzy", kind)
+	}
+}
+
+func TestSpec_EditAmbiguousContainerHint(t *testing.T) {
+	binary, dir := specRepo(t, map[string]string{
+		"hello.go": "package main\n\nfunc Foo() {\n\tprintln(\"shared\")\n}\n\nfunc Bar() {\n\tprintln(\"shared\")\n}\n",
+	})
+
+	// Ambiguous match across two functions — error should name both containers.
+	_, stdout, _, exit := specRun(t, binary, dir, nil,
+		"edit", "hello.go", "--old-text", "println(\"shared\")", "--new-text", "println(\"x\")")
+	if exit != 1 {
+		t.Fatalf("expected exit 1, got %d", exit)
+	}
+	var header map[string]any
+	firstLine := strings.SplitN(stdout, "\n", 2)[0]
+	if err := json.Unmarshal([]byte(firstLine), &header); err != nil {
+		t.Fatalf("parse header: %v\nraw: %q", err, firstLine)
+	}
+	if ec, _ := header["ec"].(string); ec != "ambiguous_match" {
+		t.Errorf("ec = %q, want ambiguous_match", ec)
+	}
+	msg, _ := header["error"].(string)
+	if !strings.Contains(msg, "matches span symbols") {
+		t.Errorf("error should mention 'matches span symbols', got %q", msg)
+	}
+	if !strings.Contains(msg, "Foo") || !strings.Contains(msg, "Bar") {
+		t.Errorf("error should name both containing symbols Foo and Bar, got %q", msg)
+	}
+}
+
 func TestSpec_EditInSymbol(t *testing.T) {
 	binary, dir := specRepo(t, map[string]string{
 		"hello.go": "package main\n\nfunc main() {\n\tx := \"target\"\n\t_ = x\n}\n\nfunc other() {\n\ty := \"target\"\n\t_ = y\n}\n",

@@ -149,8 +149,7 @@ type doEdit struct {
 	After    *string `json:"after,omitempty"`
 	Append   *bool   `json:"append,omitempty"`
 	Mkdir    *bool   `json:"mkdir,omitempty"`
-	Verify   *bool   `json:"verify,omitempty"`
-	NoVerify *bool   `json:"no_verify,omitempty"`
+	Verify *bool `json:"verify,omitempty"`
 }
 
 type doWrite struct {
@@ -824,7 +823,7 @@ func handleDo(ctx context.Context, db index.SymbolStore, sess *session.Session, 
 				if r.Verify != nil && *r.Verify {
 					status, _ := resultStatus(result)
 					if status == "applied" {
-						runPostMutationVerify(ctx, db, sess, env, db.EdrDir(), db.Root(), renameVerifyFiles(result, []string{r.OldName}), "rename applied then reverted: verify failed")
+						runPostMutationVerify(ctx, db, sess, env, db.EdrDir(), db.Root(), renameVerifyFiles(result, []string{r.OldName}), "rename applied then reverted: verify failed", "", "")
 					} else if status == "dry_run" {
 						env.SetVerify(map[string]any{"status": "skipped", "reason": "dry run"})
 					}

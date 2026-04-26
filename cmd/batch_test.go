@@ -1051,7 +1051,7 @@ func TestDoStructsMatchCmdspec(t *testing.T) {
 		"insert_at": true, "fuzzy": true, "lines": true, "move_after": true, "read_back": true,
 		// Write/create flags (merged from write)
 		"content": true, "inside": true, "after": true, "append": true,
-		"mkdir": true, "verify": true, "no_verify": true,
+		"mkdir": true, "verify": true,
 	}
 	checkStructFieldsFiltered(t, "doEdit", doEditKnownKeys, editFields)
 
