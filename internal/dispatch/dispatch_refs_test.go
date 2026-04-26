@@ -1991,6 +1991,52 @@ class MentorsController {
 	}
 }
 
+// TestRename_RubyERBMentionWarning: a Ruby method rename succeeds in
+// .rb files, but the same name appears in an .erb template. Rename
+// can't rewrite ERB safely (receiver type can't be inferred from
+// `@var.method` without runtime info), so it must surface a warning
+// rather than silently leaving template callers stale.
+func TestRename_RubyERBMentionWarning(t *testing.T) {
+	db, _ := setupRefsRepo(t, map[string]string{
+		"models/mentor_invitation.rb": `class MentorInvitation
+  def self.invite(mentor)
+    'token'
+  end
+end
+`,
+		"controllers/mentors_controller.rb": `class MentorsController
+  def create
+    MentorInvitation.invite(@mentor)
+  end
+end
+`,
+		"app/views/admin/show.html.erb": `<h1>Welcome</h1>
+<p><%= MentorInvitation.invite(@mentor) %></p>
+<p><%= obj.invite %></p>
+`,
+	})
+	res, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"models/mentor_invitation.rb:invite"},
+		map[string]any{"new_name": "issue_token", "cross_file": true, "dry_run": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	rr, ok := res.(*output.RenameResult)
+	if !ok {
+		t.Fatalf("expected *output.RenameResult, got %T", res)
+	}
+	var found bool
+	for _, w := range rr.Warnings {
+		if strings.Contains(w, "show.html.erb") && strings.Contains(w, "template/companion") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected ERB-mention warning; got warnings=%v", rr.Warnings)
+	}
+}
+
 func TestRename_CppHeaderProtoRewritten(t *testing.T) {
 	db, dir := setupRefsRepo(t, map[string]string{
 		"foo.hpp": "int compute(int x);\n",

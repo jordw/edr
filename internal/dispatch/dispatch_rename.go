@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/jordw/edr/internal/edit"
 	"github.com/jordw/edr/internal/idx"
@@ -285,6 +286,34 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 	if idx.IsStale(root, db.EdrDir()) {
 		result.Warnings = append(result.Warnings,
 			"index is stale — cross-file refs may be undercounted; run 'edr index' to refresh, then re-run rename")
+	}
+
+	// Companion-file mentions: scan template / non-parsed files (ERB, HAML,
+	// Slim, Blade, etc.) tied to the source language for word-bounded
+	// occurrences of oldName. Rename does not rewrite these — receiver type
+	// can't be inferred without runtime info — but a silent miss here is
+	// the false-success failure mode (rename "succeeds" while view callers
+	// still reference the old name). Emit a warning so the user can audit.
+	if companionTotal, companionMentions := companionFileMentions(root, db.EdrDir(), sym.File, oldName, fileSpans); companionTotal > 0 {
+		sort.Slice(companionMentions, func(i, j int) bool {
+			return companionMentions[i].count > companionMentions[j].count
+		})
+		head := companionMentions
+		const sampleCap = 5
+		if len(head) > sampleCap {
+			head = head[:sampleCap]
+		}
+		var sample []string
+		for _, m := range head {
+			sample = append(sample, fmt.Sprintf("%s (%d)", m.file, m.count))
+		}
+		extra := ""
+		if len(companionMentions) > len(head) {
+			extra = fmt.Sprintf(" +%d more", len(companionMentions)-len(head))
+		}
+		result.Warnings = append(result.Warnings, fmt.Sprintf(
+			"%d mention(s) of %q in %d template/companion file(s) not rewritten by rename — review manually: %s%s",
+			companionTotal, oldName, len(companionMentions), strings.Join(sample, ", "), extra))
 	}
 
 	result.OldContents = make(map[string][]byte, len(edits))
@@ -566,4 +595,93 @@ func countNameInCode(data []byte, name string, syn commentSyntax) int {
 		i = abs + 1
 	}
 	return count
+}
+
+// companionExtsForLang returns the template / view / DSL extensions
+// associated with a source language. Rename does not parse these
+// (their syntax is heterogeneous — ERB embeds Ruby in HTML, jbuilder
+// is method-chained DSL, etc.), so we only scan them for word-bounded
+// mentions and warn — not rewrite.
+func companionExtsForLang(srcExt string) []string {
+	switch strings.ToLower(srcExt) {
+	case ".rb":
+		return []string{".erb", ".haml", ".slim", ".rabl", ".jbuilder", ".builder"}
+	case ".php":
+		return []string{".twig", ".vue"}
+	}
+	return nil
+}
+
+type companionMention struct {
+	file  string
+	count int
+}
+
+// companionFileMentions scans companion / template files (per
+// companionExtsForLang) for word-bounded mentions of oldName.
+// Files already targeted by the rename pass (in fileSpans) are
+// skipped — the existing code-mention warning covers those.
+//
+// Uses the trigram index when available (matches the access pattern
+// of `edr files`) and falls back to a filesystem walk. Returns the
+// total mention count and per-file breakdown for the warning.
+func companionFileMentions(root, edrDir, srcFile, oldName string, fileSpans map[string][]span) (int, []companionMention) {
+	exts := companionExtsForLang(filepath.Ext(srcFile))
+	if len(exts) == 0 || oldName == "" {
+		return 0, nil
+	}
+	extSet := make(map[string]bool, len(exts))
+	for _, e := range exts {
+		extSet[e] = true
+	}
+
+	var candidates []string
+	if h, _ := idx.ReadHeader(edrDir); h != nil && len(oldName) >= 3 {
+		tris := idx.QueryTrigrams(strings.ToLower(oldName))
+		if cands, ok := idx.Query(edrDir, tris); ok {
+			for _, rel := range cands {
+				if extSet[strings.ToLower(filepath.Ext(rel))] {
+					candidates = append(candidates, filepath.Join(root, rel))
+				}
+			}
+		}
+	}
+	if candidates == nil {
+		// Fallback walk — no usable index, or oldName too short for trigrams.
+		skipDirs := map[string]bool{".git": true, ".edr": true, "vendor": true, ".bundle": true, "node_modules": true, "tmp": true, "log": true, "coverage": true}
+		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if info.IsDir() {
+				if skipDirs[info.Name()] {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if extSet[strings.ToLower(filepath.Ext(path))] {
+				candidates = append(candidates, path)
+			}
+			return nil
+		})
+	}
+
+	total := 0
+	var mentions []companionMention
+	for _, abs := range candidates {
+		if _, alreadyEdited := fileSpans[abs]; alreadyEdited {
+			continue
+		}
+		data, err := os.ReadFile(abs)
+		if err != nil {
+			continue
+		}
+		spans := findIdentOccurrences(data, 0, uint32(len(data)), oldName)
+		if len(spans) == 0 {
+			continue
+		}
+		total += len(spans)
+		mentions = append(mentions, companionMention{file: output.Rel(abs), count: len(spans)})
+	}
+	return total, mentions
 }
