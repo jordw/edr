@@ -185,7 +185,7 @@ edr reads and edits any text file. Symbol-aware features (symbol reads, `--signa
 
 **Symbol parsing (16):** Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, C#, Kotlin, Swift, Ruby, PHP, Scala, Lua, Zig
 
-**Scope-aware rename (12):** Go, JavaScript/TypeScript, Python, Java, Kotlin, Rust, C, C++, Ruby, C#, Swift, PHP — these get `mode: "scope"` with shadow filtering and binding analysis. Scala, Lua, and Zig have symbol parsing but fall through to `mode: "name-match"` for rename, so review the diff or run `--verify`.
+**Scope-aware rename (14):** Go, JavaScript/TypeScript, Python, Java, Kotlin, Rust, C, C++, Ruby, C#, Swift, PHP, Lua, Zig — these get `mode: "scope"` with shadow filtering and binding analysis. Only Scala falls through to `mode: "name-match"` for rename — review the diff or run `--verify`.
 
 ## Limitations
 
