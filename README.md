@@ -10,7 +10,7 @@ Instead of raw files and grep output, edr returns structured code context:
 - **`focus file:Symbol`** — reads a symbol, not the whole file. Includes relevant surrounding context.
 - **`focus SymbolName`** — resolves likely matches and opens the best candidate.
 - **`edit --old X --new Y --verify`** — diff, updated context, and verification feedback.
-- **`rename file:Symbol --to NewName`** — semantic rename with scope-aware safety where supported.
+- **`rename file:Symbol --to NewName --cross-file --verify`** — scope-aware rename across files; mode reports whether scope or name-match was used.
 - **`refs-to file:Symbol`** — inspect references before changing code.
 - **`edit file:Func --move-after other.go:Target`** — move a symbol across files atomically.
 - **`edr --orient cmd/ --focus file:Sym --edit ...`** — survey, inspect, and mutate in one call when needed.
@@ -100,6 +100,26 @@ edr edit internal/dispatch/dispatch.go \
     --old 'case "search":' --new 'case "search", "find":' --verify
 ```
 
+Rename a symbol across the repo with the build as the safety net:
+
+```
+$ edr rename internal/dispatch/dispatch_edit.go:runSmartEdit --to runSmartEditDispatch --cross-file --verify
+{"status":"applied","to":"runSmartEditDispatch","mode":"scope","n":2,"code":2,"from":"runSmartEdit"}
+--- a/internal/dispatch/dispatch.go
++++ b/internal/dispatch/dispatch.go
+@@ -106,7 +106,7 @@
+-			result, err = runSmartEdit(ctx, db, root, args, flags)
++			result, err = runSmartEditDispatch(ctx, db, root, args, flags)
+--- a/internal/dispatch/dispatch_edit.go
++++ b/internal/dispatch/dispatch_edit.go
+@@ -13,7 +13,7 @@
+-func runSmartEdit(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
++func runSmartEditDispatch(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
+{"verify":"ok"}
+```
+
+`mode: "scope"` means the scope builder bound each ref by lexical resolution — no shadowed locals, no string literals, no comment matches. `mode: "name-match"` would mean the language fell through to the regex fallback and the diff needs review. `--verify` runs the project's build after the rewrite and reverts if it breaks.
+
 **Batched:** gather everything in one call, mutate in one call:
 
 ```bash
@@ -124,7 +144,7 @@ Without edr, agents grep to find code, read line ranges, guess what's relevant, 
 | `focus file:Symbol` | Symbol body + dependency signatures |
 | `focus SymbolName` | Ranked resolution, auto-opens best match |
 | `edit --old X --new Y --verify` | Diff + updated context + verification feedback |
-| `rename file:Sym --to New` | Cross-file rename with diffs and occurrence count |
+| `rename file:Sym --to New [--cross-file] [--verify]` | Same-file by default; `--cross-file` walks the repo. `mode` field flags scope vs name-match. |
 | `refs-to file:Sym` | References for impact analysis |
 | `edit file:Sym --move-after B.go:Tgt` | Atomic two-file move with diffs |
 | Re-read unchanged file | Deduplicated (zero output, zero waste) |
@@ -145,7 +165,7 @@ Under the hood:
 | `orient [path]` | Structural overview of a directory or project (replaces `map`) |
 | `focus file[:Symbol]` | Read file or symbol with context (replaces `read`) |
 | `edit file` | Edit, write, create files. `--verify` to check build. |
-| `rename file:Symbol` | Rename a symbol across references with scope-aware safety where supported |
+| `rename file:Symbol` | Rename a symbol; same-file by default, `--cross-file` for repo-wide. Scope-aware where supported. |
 | `refs-to file:Symbol` | List references to a symbol |
 | `status` | Repo root, index coverage, undo, build state, warnings |
 | `undo` | Revert last edit/write (auto-checkpointed) |
@@ -178,13 +198,15 @@ Full flag reference: `edr --help` or `edr <command> --help`.
 
 ## Languages
 
-edr reads and edits any text file. Symbol-aware features (symbol reads, `--signatures`, `orient`) require a supported language:
+edr reads and edits any text file. Symbol-aware features (symbol reads, `--signatures`, `orient`) require a supported language; rename safety further depends on whether the language has a scope builder admitted for writes:
 
-**Symbol parsing:** Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, C#, Kotlin, Swift, Ruby, PHP, Scala, Lua, Zig
+**Symbol parsing (16):** Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, C#, Kotlin, Swift, Ruby, PHP, Scala, Lua, Zig
+
+**Scope-aware rename (12):** Go, JavaScript/TypeScript, Python, Java, Kotlin, Rust, C, C++, Ruby, C#, Swift, PHP — these get `mode: "scope"` with shadow filtering and binding analysis. Scala, Lua, and Zig have symbol parsing but fall through to `mode: "name-match"` for rename, so review the diff or run `--verify`.
 
 ## Limitations
 
-- **Structural navigation, not full code analysis.** edr finds functions, classes, and references with lexer-based parsers, import graphs, and scope heuristics — not by type-checking. The main semantic promise is rename safety: where a language's scope builder is admitted for writes, rename avoids shadowed or unrelated same-name identifiers. Unsupported or immature languages fall back to name-based matching and report that mode so diffs can be reviewed.
+- **Structural navigation, not full code analysis.** edr finds functions, classes, and references with lexer-based parsers, import graphs, and scope heuristics — not by type-checking. The main semantic promise is rename safety: where a language's scope builder is admitted for writes, rename avoids shadowed or unrelated same-name identifiers. The `mode` field on the rename result reports which path ran (`scope` is safe, `name-match` may contain cross-class false positives — review the diff or run `--verify`).
 - **macOS and Linux only.** Windows is not planned.
 - **Pure Go.** No CGO, no C compiler needed. Single ~6MB binary.
 
