@@ -178,6 +178,21 @@ TUPLES=(
 
 check_tool() { command -v "$1" >/dev/null 2>&1; }
 
+# count_word counts word-bounded occurrences of name across all
+# tracked files under dir, respecting .gitignore. Used as a
+# language-agnostic oracle to cross-check rename's reported n
+# against the actual filesystem delta — catches both FNs (rename
+# missed a caller) and FPs (rename touched too many).
+count_word() {
+  local dir=$1 name=$2
+  if ! command -v rg >/dev/null 2>&1; then
+    printf '%s' '?'
+    return
+  fi
+  rg -wF --count-matches -- "$name" "$dir" 2>/dev/null \
+    | awk -F: '{s+=$NF} END{print s+0}'
+}
+
 # Worktree root. Per-repo disposable checkouts live under here so the
 # main trees never get modified. Cleaned up on exit.
 WT_DIR="${TMPDIR:-/tmp}/edr-oracle-wt-$$"
@@ -219,8 +234,9 @@ for tuple in "${TUPLES[@]}"; do
 done
 
 pass=0; fail=0; skip=0; total=0
-printf "%-22s %-6s %-8s %6s  %s\n" "label" "mode" "result" "files" "notes"
-printf "%s\n" "----------------------------------------------------------------------"
+oracle_ok=0; oracle_mismatch=0
+printf "%-22s %-6s %-8s %-10s %6s  %s\n" "label" "mode" "result" "oracle" "files" "notes"
+printf "%s\n" "--------------------------------------------------------------------------------"
 
 for tuple in "${TUPLES[@]}"; do
   total=$((total + 1))
@@ -231,11 +247,11 @@ for tuple in "${TUPLES[@]}"; do
   src_path="$REPO_BASE/$repo"
   wt_path="$WT_DIR/$repo"
   if [ ! -d "$src_path" ]; then
-    printf "%-22s %-6s %-8s %6s  %s\n" "$label" "-" "SKIP" "-" "missing $src_path"
+    printf "%-22s %-6s %-8s %-10s %6s  %s\n" "$label" "-" "SKIP" "-" "-" "missing $src_path"
     skip=$((skip + 1)); continue
   fi
   if [ ! -d "$wt_path" ]; then
-    printf "%-22s %-6s %-8s %6s  %s\n" "$label" "-" "SKIP" "-" "worktree setup failed"
+    printf "%-22s %-6s %-8s %-10s %6s  %s\n" "$label" "-" "SKIP" "-" "-" "worktree setup failed"
     skip=$((skip + 1)); continue
   fi
   # Pull the build tool from the last `&&` chunk if present — typical
@@ -245,17 +261,50 @@ for tuple in "${TUPLES[@]}"; do
   last_chunk="${build_cmd##*&& }"
   tool="${last_chunk%% *}"
   if ! check_tool "$tool"; then
-    printf "%-22s %-6s %-8s %6s  %s\n" "$label" "-" "SKIP" "-" "tool $tool not installed"
+    printf "%-22s %-6s %-8s %-10s %6s  %s\n" "$label" "-" "SKIP" "-" "-" "tool $tool not installed"
     skip=$((skip + 1)); continue
   fi
+
+  # Word-bounded oracle: count before so we can diff against rename's
+  # reported n. Extracts the symbol from `path:Symbol`. We treat
+  # punctuation suffixes (Ruby `?`/`!`) as part of the name; rg -wF
+  # will scope its boundaries appropriately.
+  old_name="${target##*:}"
+  before_old=$(count_word "$wt_path" "$old_name")
 
   set +o pipefail
   rename_json=$(cd "$wt_path" && "$EDR_BIN" rename "$target" --to "$new_name" --cross-file --force 2>&1 | head -1)
   set -o pipefail
   status=$(printf "%s" "$rename_json" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')
   mode=$(printf "%s" "$rename_json" | sed -n 's/.*"mode":"\([^"]*\)".*/\1/p')
+  reported_n=$(printf "%s" "$rename_json" | sed -n 's/.*"n":\([0-9]*\).*/\1/p')
+  [ -z "$reported_n" ] && reported_n=0
   files_changed=$(cd "$wt_path" && git diff --stat 2>/dev/null | tail -1 | awk '{print $1}')
   [ -z "$files_changed" ] && files_changed=0
+
+  # After-counts and oracle. delta_old = mentions actually rewritten
+  # by rename. Should equal reported_n. Mismatch is a flag (FN if
+  # delta < n, FP if delta > n). Skip when status != applied or rg
+  # is unavailable.
+  oracle="-"; oracle_note=""
+  if [ "$status" = "applied" ] && command -v rg >/dev/null 2>&1; then
+    after_old=$(count_word "$wt_path" "$old_name")
+    delta_old=$((before_old - after_old))
+    # Consistency check: rename reports n rewrites, grep delta on
+    # word-bounded oldName mentions should also equal n. Mismatch
+    # signals inconsistent reporting (a real-world example: the
+    # receiver-bug class where rename touched more code than its
+    # n claimed). Leftover oldName mentions are not flagged — they
+    # may be unrelated occurrences elsewhere in the repo.
+    if [ "$delta_old" = "$reported_n" ]; then
+      oracle="OK"
+      oracle_ok=$((oracle_ok + 1))
+    else
+      oracle="MISMATCH"
+      oracle_mismatch=$((oracle_mismatch + 1))
+      oracle_note="grep_delta=$delta_old vs reported=$reported_n"
+    fi
+  fi
 
   result="-"; notes=""
   if [ "$status" = "applied" ]; then
@@ -275,7 +324,10 @@ for tuple in "${TUPLES[@]}"; do
     notes=$(printf "%s" "$rename_json" | cut -c1-60)
   fi
 
-  printf "%-22s %-6s %-8s %6s  %s\n" "$label" "${mode:--}" "$result" "$files_changed" "$notes"
+  if [ -n "$oracle_note" ]; then
+    if [ -n "$notes" ]; then notes="$notes; $oracle_note"; else notes="$oracle_note"; fi
+  fi
+  printf "%-22s %-6s %-8s %-10s %6s  %s\n" "$label" "${mode:--}" "$result" "$oracle" "$files_changed" "$notes"
 
   # Restore the worktree to HEAD for the next iteration. Safe — the
   # worktree is disposable and shares .git with the source repo,
@@ -285,3 +337,4 @@ done
 
 echo
 printf "Total: %d  PASS: %d  FAIL: %d  SKIP: %d  Mode: %s\n" "$total" "$pass" "$fail" "$skip" "$EDR_EVAL_FORCE_MODE"
+printf "Oracle: OK=%d  MISMATCH=%d (grep delta vs rename's reported n)\n" "$oracle_ok" "$oracle_mismatch"
