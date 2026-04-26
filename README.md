@@ -1,8 +1,8 @@
-# edr — agent-native code editing tools
+# edr — code-aware editing tools for agents
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Without edr, agents grep to find code, read line ranges, guess what's relevant, edit, then re-read to check. Each step is a separate tool call returning raw text the agent has to filter. edr replaces that with code-aware primitives:
+edr replaces grep + read + edit with code-aware primitives that return structured output sized to the task:
 
 | Operation | What the agent gets |
 |---|---|
@@ -14,7 +14,7 @@ Without edr, agents grep to find code, read line ranges, guess what's relevant, 
 | `refs-to file:Sym` | References for impact analysis |
 | `files "pattern"` | Trigram-accelerated text search |
 
-Fully local, shell-friendly, no telemetry. Designed to replace generic file operations with agent-oriented ones.
+Fully local, shell-friendly, no telemetry.
 
 ## Install
 
@@ -51,7 +51,7 @@ git clone https://github.com/jordw/edr.git && ./edr/setup.sh
 
 ## Example
 
-Ask for one function and `edr focus` returns it *plus* the signatures of every helper it calls — so the agent has enough API in hand to reason about an edit without a second read:
+Ask for one function and `edr focus` returns it *plus* the signatures of every helper it calls — so the agent can plan the edit without a second read:
 
 ```
 $ edr focus internal/dispatch/dispatch.go:Dispatch
@@ -87,7 +87,7 @@ dispatch_index.go   func runIndex(...) (any, error)
 dispatch_files.go   func runFiles(...) (any, error)
 ```
 
-The agent asked for `Dispatch`. It also got back signatures for `runSmartEdit`, `runSearchUnified`, `runVerify`, `runIndex`, and `runFiles` — every helper the function calls — from the files they actually live in. No grep, no guessing, no second tool call. (And as a side effect, 53 lines of body beats dumping the whole 1011-line file.)
+The agent asked for `Dispatch`. The response includes signatures for every helper it calls — `runSmartEdit`, `runSearchUnified`, `runVerify`, `runIndex`, `runFiles` — pulled from the files they live in. 53 lines vs. 1011 for the full file.
 
 Typical workflow: orient → focus → edit:
 
@@ -134,7 +134,7 @@ edr -e internal/dispatch/dispatch.go --old '"search"' --new '"search", "find"' \
 
 ## Under the hood
 
-- **Symbol extraction** is pure-Go, lexer-based per language — no CGO, no build step, works on broken code.
+- **Symbol extraction** is pure-Go and lexer-based per language; it tolerates broken or in-progress code.
 - **Sessions** track what the agent has already seen and return only what changed on re-reads — repeated reads of an unchanged file emit nothing.
 - **Indexing** is optional. `edr index` builds a trigram + symbol index; on the Linux kernel (93K files), indexed operations complete in 0.02–0.5s. Without an index, files are parsed on demand.
 - **Edits** use span-based transactions with a TOCTOU hash guard, optional build verification, and auto-checkpointed undo.
@@ -185,13 +185,13 @@ edr reads and edits any text file. Symbol-aware features (symbol reads, `--signa
 
 **Symbol parsing (16):** Go, Python, JavaScript/JSX, TypeScript/TSX, Rust, Java, C, C++, C#, Kotlin, Swift, Ruby, PHP, Scala, Lua, Zig
 
-**Scope-aware rename (14):** Go, JavaScript/TypeScript, Python, Java, Kotlin, Rust, C, C++, Ruby, C#, Swift, PHP, Lua, Zig — these get `mode: "scope"` with shadow filtering and binding analysis. Only Scala falls through to `mode: "name-match"` for rename — review the diff or run `--verify`.
+**Scope-aware rename (14):** Go, JavaScript/TypeScript, Python, Java, Kotlin, Rust, C, C++, Ruby, C#, Swift, PHP, Lua, Zig. Scala falls back to text-replace.
 
 ## Limitations
 
-- **Structural navigation, not full code analysis.** edr finds functions, classes, and references with lexer-based parsers, import graphs, and scope heuristics — not by type-checking. The main semantic promise is rename safety: where a language's scope builder is admitted for writes, rename avoids shadowed or unrelated same-name identifiers. The `mode` field on the rename result reports which path ran (`scope` is safe, `name-match` may contain cross-class false positives — review the diff or run `--verify`).
+- **Structural navigation, not type-checking.** edr finds functions, classes, and references with lexer-based parsers, import graphs, and scope heuristics. Rename is safe where the scope builder is admitted (see Languages); otherwise it falls back to text replace and the diff needs review.
 - **macOS and Linux only.** Windows is not planned.
-- **Pure Go.** No CGO, no C compiler needed. Single ~6MB binary.
+- **Pure Go.** No CGO; single ~6MB binary.
 
 ## Development
 
