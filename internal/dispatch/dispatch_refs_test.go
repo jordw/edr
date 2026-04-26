@@ -524,6 +524,116 @@ end
 	}
 }
 
+// TestRefsTo_RubyClassMethod: Rails-style. A class method defined in
+// app/models/foo.rb is called as Foo.method(...) from app/controllers/.
+// No `require_relative` (Rails autoloading). Class-scope decl must
+// not block cross-file ref walking.
+func TestRefsTo_RubyClassMethod(t *testing.T) {
+	db, _ := setupRefsRepo(t, map[string]string{
+		"models/mentor_invitation.rb": `class MentorInvitation
+  def self.invite(mentor)
+    'token'
+  end
+end
+`,
+		"controllers/mentors_controller.rb": `class MentorsController
+  def create
+    MentorInvitation.invite(@mentor)
+  end
+end
+`,
+	})
+	res, err := dispatch.Dispatch(context.Background(), db, "refs-to",
+		[]string{"models/mentor_invitation.rb:invite"}, map[string]any{})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	m := res.(map[string]any)
+	refs, _ := m["refs"].([]map[string]any)
+	var gotCaller bool
+	for _, r := range refs {
+		file, _ := r["file"].(string)
+		if strings.HasSuffix(file, "mentors_controller.rb") {
+			gotCaller = true
+		}
+	}
+	if !gotCaller {
+		t.Errorf("expected controller ref for class-method invite; got %+v", refs)
+	}
+}
+
+// TestRefsTo_JavaStaticMethod: a static method on a class is called
+// as Foo.method() from another file. The method decl lives in class
+// scope, not file scope; cross-file ref walking must still run.
+func TestRefsTo_JavaStaticMethod(t *testing.T) {
+	db, _ := setupRefsRepo(t, map[string]string{
+		"Foo.java": `public class Foo {
+    public static String invite() {
+        return "token";
+    }
+}
+`,
+		"Caller.java": `public class Caller {
+    public void run() {
+        String t = Foo.invite();
+    }
+}
+`,
+	})
+	res, err := dispatch.Dispatch(context.Background(), db, "refs-to",
+		[]string{"Foo.java:invite"}, map[string]any{})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	m := res.(map[string]any)
+	refs, _ := m["refs"].([]map[string]any)
+	var gotCaller bool
+	for _, r := range refs {
+		file, _ := r["file"].(string)
+		if strings.HasSuffix(file, "Caller.java") {
+			gotCaller = true
+		}
+	}
+	if !gotCaller {
+		t.Errorf("expected Caller.java ref for static method; got %+v", refs)
+	}
+}
+
+// TestRefsTo_PythonClassMethod: a @classmethod defined inside a class
+// is called as Cls.method() from another file. Class-scope decl must
+// not block cross-file ref walking.
+func TestRefsTo_PythonClassMethod(t *testing.T) {
+	db, _ := setupRefsRepo(t, map[string]string{
+		"models.py": `class MentorInvitation:
+    @classmethod
+    def invite(cls, mentor):
+        return 'token'
+`,
+		"app.py": `from models import MentorInvitation
+
+def run():
+    return MentorInvitation.invite('mentor')
+`,
+	})
+	res, err := dispatch.Dispatch(context.Background(), db, "refs-to",
+		[]string{"models.py:invite"}, map[string]any{})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	m := res.(map[string]any)
+	refs, _ := m["refs"].([]map[string]any)
+	var gotCaller bool
+	for _, r := range refs {
+		file, _ := r["file"].(string)
+		if strings.HasSuffix(file, "app.py") {
+			gotCaller = true
+		}
+	}
+	if !gotCaller {
+		t.Errorf("expected app.py ref for classmethod; got %+v", refs)
+	}
+}
+
 // TestRefsTo_RustCrossFile: a top-level fn defined in lib.rs is called
 // as a bare ident in caller.rs (no `use` — Rust's builder won't resolve
 // it). Cross-file walking surfaces the call as cross_file_unresolved.
@@ -1803,6 +1913,81 @@ func TestRename_RubyRequireRelativeRewritten(t *testing.T) {
 	appData, _ := os.ReadFile(filepath.Join(dir, "app.rb"))
 	if !strings.Contains(string(appData), "calculate(5)") {
 		t.Errorf("app.rb caller not renamed; got:\n%s", appData)
+	}
+}
+
+// TestRename_RubyAutoloadClassMethod: Rails-style autoload. Caller does
+// not `require_relative` the def file, files live in different dirs.
+// Method has a receiver, so candidate selection widens to all .rb files
+// and per-ref disambiguation (acceptableTypes) keeps it precise.
+func TestRename_RubyAutoloadClassMethod(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"models/mentor_invitation.rb": `class MentorInvitation
+  def self.invite(mentor)
+    'token'
+  end
+end
+`,
+		"controllers/mentors_controller.rb": `class MentorsController
+  def create
+    MentorInvitation.invite(@mentor)
+  end
+end
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"models/mentor_invitation.rb:invite"},
+		map[string]any{"new_name": "issue_token", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	defData, _ := os.ReadFile(filepath.Join(dir, "models/mentor_invitation.rb"))
+	if !strings.Contains(string(defData), "def self.issue_token") {
+		t.Errorf("def not renamed; got:\n%s", defData)
+	}
+	callerData, _ := os.ReadFile(filepath.Join(dir, "controllers/mentors_controller.rb"))
+	if !strings.Contains(string(callerData), "MentorInvitation.issue_token") {
+		t.Errorf("autoloaded caller not renamed; got:\n%s", callerData)
+	}
+}
+
+// TestRename_PHPAutoloadStaticMethod: Laravel-style PSR-4 autoload.
+// Caller uses fully-qualified name without a `use` import. Static method
+// has a receiver class, so the autoload widening kicks in.
+func TestRename_PHPAutoloadStaticMethod(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"app/Models/MentorInvitation.php": `<?php
+namespace App\Models;
+
+class MentorInvitation {
+    public static function invite($mentor) {
+        return "token";
+    }
+}
+`,
+		"app/Http/Controllers/MentorsController.php": `<?php
+namespace App\Http\Controllers;
+
+class MentorsController {
+    public function create() {
+        return \App\Models\MentorInvitation::invite($this->mentor);
+    }
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"app/Models/MentorInvitation.php:invite"},
+		map[string]any{"new_name": "issueToken", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	defData, _ := os.ReadFile(filepath.Join(dir, "app/Models/MentorInvitation.php"))
+	if !strings.Contains(string(defData), "function issueToken") {
+		t.Errorf("def not renamed; got:\n%s", defData)
+	}
+	callerData, _ := os.ReadFile(filepath.Join(dir, "app/Http/Controllers/MentorsController.php"))
+	if !strings.Contains(string(callerData), "MentorInvitation::issueToken") {
+		t.Errorf("autoloaded caller not renamed; got:\n%s", callerData)
 	}
 }
 

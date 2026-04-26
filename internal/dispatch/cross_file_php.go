@@ -2,11 +2,14 @@ package dispatch
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/scope"
 	"github.com/jordw/edr/internal/scope/namespace"
+	scopestore "github.com/jordw/edr/internal/scope/store"
 )
 
 // phpCrossFileSpans is the PHP branch of
@@ -59,6 +62,18 @@ func phpCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 	}
 
 	isMethod := sym.Receiver != ""
+	// Laravel-style autoloading (PSR-4): callers don't `require` the
+	// def file. Same logic as Ruby — for method renames we have a
+	// receiver discriminator, so widen candidates to every PHP file
+	// in the repo and let per-ref disambiguation below filter FPs.
+	if isMethod {
+		for _, p := range allPHPFiles(db.Root(), db.EdrDir()) {
+			if p != sym.File {
+				candidates[p] = true
+			}
+		}
+	}
+
 	acceptableTypes := map[string]bool{}
 	if sym.Receiver != "" {
 		acceptableTypes[sym.Receiver] = true
@@ -154,6 +169,44 @@ func php_ext_matches(file string, exts []string) bool {
 		}
 	}
 	return false
+}
+
+// allPHPFiles enumerates every .php / .phtml file under root.
+// Prefers the persisted scope index, falls back to a walk.
+func allPHPFiles(root, edrDir string) []string {
+	if idx, _ := scopestore.Load(edrDir); idx != nil {
+		results := idx.AllResults()
+		out := make([]string, 0, len(results))
+		for rel := range results {
+			low := strings.ToLower(rel)
+			if !strings.HasSuffix(low, ".php") && !strings.HasSuffix(low, ".phtml") {
+				continue
+			}
+			out = append(out, filepath.Join(root, rel))
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	skipDirs := map[string]bool{".git": true, ".edr": true, "vendor": true, "node_modules": true, "storage": true}
+	var out []string
+	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			if skipDirs[info.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		low := strings.ToLower(path)
+		if strings.HasSuffix(low, ".php") || strings.HasSuffix(low, ".phtml") {
+			out = append(out, path)
+		}
+		return nil
+	})
+	return out
 }
 
 

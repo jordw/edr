@@ -130,13 +130,19 @@ func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []stri
 		}
 	}
 
-	// Cross-file: for file-scope decls only. Go walks siblings in the
-	// same directory (package scope) for unresolved refs, AND walks the
-	// whole repo for `pkg.Name` property-access call sites (cross-
-	// package invocations of exported Go symbols). TS/JS walks all TS
-	// files under the repo root and filters by name matching an Import
-	// decl OR property-access use of the name.
-	if decl.Scope == 1 {
+	// Cross-file: admit decls in scopes that are cross-file visible —
+	// file scope plus class/interface/namespace, so methods on classes
+	// in Ruby/Java/Python/etc. are reachable. Excludes function/block/for
+	// scopes, where decls are local and have no cross-file callers.
+	declScopeKind := scope.ScopeFile
+	if sid := int(decl.Scope) - 1; sid >= 0 && sid < len(result.Scopes) {
+		declScopeKind = result.Scopes[sid].Kind
+	}
+	crossFileVisible := declScopeKind == scope.ScopeFile ||
+		declScopeKind == scope.ScopeClass ||
+		declScopeKind == scope.ScopeInterface ||
+		declScopeKind == scope.ScopeNamespace
+	if crossFileVisible {
 		switch ext {
 		case ".go":
 			entries = append(entries, goCrossFileRefs(absFile, symbolName, persistedIndex, root)...)

@@ -2,11 +2,14 @@ package dispatch
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/scope"
 	"github.com/jordw/edr/internal/scope/namespace"
+	scopestore "github.com/jordw/edr/internal/scope/store"
 )
 
 // rubyCrossFileSpans is the Ruby branch of
@@ -59,6 +62,21 @@ func rubyCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sy
 	}
 
 	isMethod := sym.Receiver != ""
+	// Rails-style autoloading: callers don't `require_relative` the
+	// def file, so the import-graph filter above admits nothing. For
+	// method renames we have a discriminator (the receiver type), so
+	// it's safe to widen candidates to every .rb file in the repo
+	// and rely on per-ref disambiguation below (acceptableTypes +
+	// dotBaseIdentBefore) to filter FPs. Top-level renames stay on
+	// the import-graph path — they have no receiver discriminator,
+	// so widening would rewrite same-named bare calls indiscriminately.
+	if isMethod {
+		for _, p := range allRubyFiles(db.Root(), db.EdrDir()) {
+			if p != sym.File {
+				candidates[p] = true
+			}
+		}
+	}
 	acceptableTypes := map[string]bool{}
 	if sym.Receiver != "" {
 		acceptableTypes[sym.Receiver] = true
@@ -157,6 +175,43 @@ func ruby_ext_matches(file string, exts []string) bool {
 		}
 	}
 	return false
+}
+
+// allRubyFiles enumerates every .rb file under root. Prefers the
+// persisted scope index (cheap, parsed) and falls back to a walk
+// when the index isn't built.
+func allRubyFiles(root, edrDir string) []string {
+	if idx, _ := scopestore.Load(edrDir); idx != nil {
+		results := idx.AllResults()
+		out := make([]string, 0, len(results))
+		for rel := range results {
+			if !strings.HasSuffix(strings.ToLower(rel), ".rb") {
+				continue
+			}
+			out = append(out, filepath.Join(root, rel))
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	skipDirs := map[string]bool{".git": true, ".edr": true, "vendor": true, ".bundle": true, "coverage": true, "tmp": true, "log": true, "node_modules": true}
+	var out []string
+	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			if skipDirs[info.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(strings.ToLower(path), ".rb") {
+			out = append(out, path)
+		}
+		return nil
+	})
+	return out
 }
 
 
