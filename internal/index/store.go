@@ -26,7 +26,6 @@ type SymbolStore interface {
 	FindSemanticCallers(ctx context.Context, symbolName, symbolFile string) ([]SymbolInfo, error)
 	FindSameFileCallers(ctx context.Context, symbolName, symbolFile string) ([]SymbolInfo, error)
 	FindSemanticReferences(ctx context.Context, symbolName, symbolFile string) ([]SymbolInfo, error)
-	HasRefs(ctx context.Context) bool // Deprecated: always true, refs are heuristic
 
 	// File metadata
 	GetFileHash(ctx context.Context, path string) (string, error)

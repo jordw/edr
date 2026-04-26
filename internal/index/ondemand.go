@@ -821,10 +821,6 @@ func isCFamilyFile(path string) bool {
 	return false
 }
 
-func (o *OnDemand) HasRefs(_ context.Context) bool {
-	return true // always available on-demand
-}
-
 // --- Metadata ---
 
 func (o *OnDemand) Stats(ctx context.Context) (files int, symbols int, err error) {

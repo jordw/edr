@@ -90,9 +90,7 @@ type RenameResult struct {
 	CodeMentions       int            `json:"code_mentions,omitempty"`
 	CommentMode        string         `json:"comment_mode,omitempty"` // "rewrite" (default) or "skip"
 	Status       string             `json:"status"` // "applied", "dry_run", "noop"
-	Noop         bool               `json:"noop,omitempty"` // deprecated: use Status
 	Hashes       map[string]string  `json:"hashes,omitempty"`
-	DryRun       bool               `json:"dry_run,omitempty"` // deprecated: use Status
 	Preview      []RenameOccurrence `json:"preview,omitempty"`
 	Diffs        []RenameDiff       `json:"diffs,omitempty"`
 	Warnings     []string           `json:"warnings,omitempty"`
