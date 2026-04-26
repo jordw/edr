@@ -4,22 +4,17 @@
 
 **edr gives coding agents code-aware file tools that front-load the context needed for the next step.**
 
-Instead of raw files and grep output, edr gives agents a small set of code-aware primitives organized by what they're trying to do:
+Without edr, agents grep to find code, read line ranges, guess what's relevant, edit, then re-read to check. Each step is a separate tool call returning raw text the agent has to filter. edr replaces that with code-aware primitives:
 
-**Read — structured context, not raw bytes.**
-- `orient` — structural overview, budgeted by symbols and files.
-- `focus file:Symbol` (or just `SymbolName`) — symbol body plus its dependency signatures.
-- `refs-to file:Symbol` — references for impact analysis.
-- `files "pattern"` — trigram-accelerated text search.
-
-**Write — scope-aware mutations with safety nets.**
-- `edit --old X --new Y --verify` — diff, updated context, build verification.
-- `rename file:Symbol --to New --cross-file --verify` — scope-aware rename; the `mode` field flags `scope` vs `name-match` so you know what you got.
-
-**Workflow — designed for how agents actually call tools.**
-- Chain operations in one call (`edr -o ... -f ... -e ...`).
-- Repeated reads deduplicated, delta-only on changes.
-- Auto-checkpointed undo.
+| Operation | What the agent gets |
+|---|---|
+| `orient` | Budgeted structural overview (symbols and files) |
+| `focus file:Symbol` | Symbol body + dependency signatures |
+| `focus SymbolName` | Ranked resolution, auto-opens best match |
+| `edit --old X --new Y --verify` | Diff + updated context + build verification |
+| `rename file:Sym --to New [--cross-file] [--verify]` | Scope-aware; `mode` field flags `scope` vs `name-match` |
+| `refs-to file:Sym` | References for impact analysis |
+| `files "pattern"` | Trigram-accelerated text search |
 
 Fully local, shell-friendly, no telemetry. Designed to replace generic file operations with agent-oriented ones.
 
@@ -139,25 +134,10 @@ edr -e internal/dispatch/dispatch.go --old '"search"' --new '"search", "find"' \
     -e internal/dispatch/dispatch_search.go --old 'runSearchUnified' --new 'runSearchUnified' --all
 ```
 
-## How it works
-
-Without edr, agents grep to find code, read line ranges, guess what's relevant, edit, then re-read to check. Each step is a separate tool call returning raw text the agent has to filter. edr replaces that with code-aware primitives:
-
-| Operation | What the agent gets |
-|---|---|
-| `orient` | Budgeted structural overview (symbols and files) |
-| `focus file:Symbol` | Symbol body + dependency signatures |
-| `focus SymbolName` | Ranked resolution, auto-opens best match |
-| `edit --old X --new Y --verify` | Diff + updated context + verification feedback |
-| `rename file:Sym --to New [--cross-file] [--verify]` | Same-file by default; `--cross-file` walks the repo. `mode` field flags scope vs name-match. |
-| `refs-to file:Sym` | References for impact analysis |
-| `edit file:Sym --move-after B.go:Tgt` | Atomic two-file move with diffs |
-| Re-read unchanged file | Deduplicated (zero output, zero waste) |
-
-Under the hood:
+## Under the hood
 
 - **Symbol extraction** is pure-Go, lexer-based per language — no CGO, no build step, works on broken code.
-- **Sessions** track what the agent has already seen and return only what changed on re-reads.
+- **Sessions** track what the agent has already seen and return only what changed on re-reads — repeated reads of an unchanged file emit nothing.
 - **Indexing** is optional. `edr index` builds a trigram + symbol index; on the Linux kernel (93K files), indexed operations complete in 0.02–0.5s. Without an index, files are parsed on demand.
 - **Edits** use span-based transactions with a TOCTOU hash guard, optional build verification, and auto-checkpointed undo.
 
