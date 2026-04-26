@@ -264,7 +264,12 @@ func (p *zigParser) handleIdent(word []byte) {
 		p.isPub = true
 		return
 	case "fn":
-		if !p.inContainer() {
+		// Skip nested fn inside another fn body (e.g., a closure-like
+		// inline def — rare in Zig but cheap to guard). Inside a
+		// struct/enum/union body we DO want to emit the method;
+		// resolveReceivers (handwritten_adapt.go) promotes Type
+		// "function" → "method" when the parent symbol is a struct.
+		if !p.inFunction() {
 			p.parseFn()
 		}
 		p.isPub = false

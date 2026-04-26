@@ -352,6 +352,18 @@ test "clone with arena" {
 		{"constant", "Allocator"},
 		{"constant", "testing"},
 		{"struct", "BufSet"},
+		{"function", "init"},
+		{"function", "deinit"},
+		{"function", "insert"},
+		{"function", "contains"},
+		{"function", "remove"},
+		{"function", "count"},
+		{"function", "iterator"},
+		{"function", "allocator"},
+		{"function", "cloneWithAllocator"},
+		{"function", "clone"},
+		{"function", "free"},
+		{"function", "copy"},
 		{"function", "clone with arena"},
 	}
 

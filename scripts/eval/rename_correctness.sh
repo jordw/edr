@@ -170,6 +170,9 @@ TUPLES=(
   # Lua: cross-file rename via `require`. Walk-based candidate
   # selection (Lua `require` is runtime; no static import graph).
   "lua:cross-file-require|edr|scripts/eval/fixtures/lua-require/lib.lua:compute|calculate|cd scripts/eval/fixtures/lua-require && lua app.lua"
+  # Zig: @import("lib.zig") + `lib.compute(...)` caller. Walks all
+  # .zig files; tightens around the import-graph gap.
+  "zig:cross-file-import|edr|scripts/eval/fixtures/zig-import/lib.zig:compute|calculate|cd scripts/eval/fixtures/zig-import && zig run app.zig"
   # Zig: same-file fn + caller. `zig run` typechecks and executes; a
   # missed caller surfaces as a missing-symbol compile error.
   "zig:compute-free|edr|scripts/eval/fixtures/zig-demo/app.zig:compute|calculate|cd scripts/eval/fixtures/zig-demo && zig run app.zig"
@@ -177,6 +180,9 @@ TUPLES=(
   "zig:pub-const|edr|scripts/eval/fixtures/zig-const/app.zig:MAX_RETRIES|MAX_ATTEMPTS|cd scripts/eval/fixtures/zig-const && zig run app.zig"
   # Zig: enum-typed const decl + type-annotation refs.
   "zig:enum-decl|edr|scripts/eval/fixtures/zig-enum/app.zig:Status|State|cd scripts/eval/fixtures/zig-enum && zig run app.zig"
+  # Zig: struct method (`pub fn bump(self: *Counter)`) + property
+  # callers. Required parse_zig.go to also index struct-internal fns.
+  "zig:struct-method|edr|scripts/eval/fixtures/zig-method/app.zig:bump|advance|cd scripts/eval/fixtures/zig-method && zig run app.zig"
 )
 
 check_tool() { command -v "$1" >/dev/null 2>&1; }

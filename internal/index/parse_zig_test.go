@@ -74,6 +74,7 @@ const fake_str = "fn FakeFunc() void {}";
 		{"constant", "std"},
 		{"constant", "mem"},
 		{"struct", "Point"},
+		{"function", "distance"},
 		{"enum", "Color"},
 		{"type", "Value"},
 		{"type", "ParseError"},
