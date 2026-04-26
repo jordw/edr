@@ -55,7 +55,7 @@ Ask for one function and `edr focus` returns it *plus* the signatures of every h
 
 ```
 $ edr focus internal/dispatch/dispatch.go:Dispatch
-{"file":"internal/dispatch/dispatch.go","sym":"Dispatch","lines":[79,123]}
+{"file":"internal/dispatch/dispatch.go","sym":"Dispatch","lines":[87,139]}
 func Dispatch(ctx context.Context, db index.SymbolStore, cmd string, args []string, flags map[string]any) (any, error) {
 	root := db.Root()
 	setRootOnce.Do(func() { output.SetRoot(root) })
@@ -87,7 +87,7 @@ dispatch_index.go   func runIndex(...) (any, error)
 dispatch_files.go   func runFiles(...) (any, error)
 ```
 
-The agent asked for `Dispatch`. It also got back signatures for `runSmartEdit`, `runSearchUnified`, `runVerify`, `runIndex`, and `runFiles` — every helper the function calls — from the files they actually live in. No grep, no guessing, no second tool call. (And as a side effect, 45 lines of body beats dumping the whole 965-line file.)
+The agent asked for `Dispatch`. It also got back signatures for `runSmartEdit`, `runSearchUnified`, `runVerify`, `runIndex`, and `runFiles` — every helper the function calls — from the files they actually live in. No grep, no guessing, no second tool call. (And as a side effect, 53 lines of body beats dumping the whole 1011-line file.)
 
 Typical workflow: orient → focus → edit:
 
@@ -201,7 +201,7 @@ Setup on a new machine:
 git clone https://github.com/jordw/edr.git
 cd edr
 ./setup.sh                    # build + install edr (deps auto-installed via brew/apt/apk)
-./scripts/eval/setup.sh       # clone the 12-repo test corpus as siblings of edr (~30 GB)
+./scripts/eval/setup.sh       # clone the 13-repo test corpus as siblings of edr (~30 GB)
 go test ./internal/...        # run the full suite
 ```
 
