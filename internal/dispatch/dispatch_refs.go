@@ -12,6 +12,7 @@ import (
 	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/scope"
 	scopec "github.com/jordw/edr/internal/scope/c"
+	scopecpp "github.com/jordw/edr/internal/scope/cpp"
 	"github.com/jordw/edr/internal/scope/csharp"
 	"github.com/jordw/edr/internal/scope/golang"
 	"github.com/jordw/edr/internal/scope/java"
@@ -167,6 +168,8 @@ func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []stri
 			entries = append(entries, phpCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
 		case ".c", ".h":
 			entries = append(entries, cCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
+		case ".cpp", ".cxx", ".cc", ".c++", ".hpp", ".hxx", ".hh", ".h++":
+			entries = append(entries, cppCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
 		case ".cs":
 			entries = append(entries, csharpCrossFileRefs(root, absFile, symbolName, persistedIndex)...)
 		}
@@ -877,6 +880,20 @@ func cCrossFileRefs(root, originFile, name string, idx *scopestore.Index) []refE
 		map[string]bool{".c": true, ".h": true},
 		map[string]bool{".git": true, ".edr": true, "build": true, "dist": true, "out": true, "node_modules": true},
 		scopec.Parse)
+}
+
+// cppCrossFileRefs walks every .cpp/.hpp (and friends) under root,
+// parses with the C++ scope builder, and emits refs whose name
+// matches. Mirrors cCrossFileRefs — class methods declared in a
+// header have callers spread across the .cpp/.hpp pair plus the
+// translation units that include the header. Without this branch,
+// refs-to from a `.hpp` decl returned count=0 even when the
+// canonical-merge had wired the def + decl into the same DeclID.
+func cppCrossFileRefs(root, originFile, name string, idx *scopestore.Index) []refEntry {
+	return genericCrossFileRefs(root, originFile, name, idx,
+		map[string]bool{".cpp": true, ".cxx": true, ".cc": true, ".c++": true, ".hpp": true, ".hxx": true, ".hh": true, ".h++": true},
+		map[string]bool{".git": true, ".edr": true, "build": true, "dist": true, "out": true, "node_modules": true},
+		scopecpp.Parse)
 }
 
 // csharpCrossFileRefs: same-project .cs files that reference `name`.

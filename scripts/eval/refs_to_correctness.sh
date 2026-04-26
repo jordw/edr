@@ -56,6 +56,12 @@ TUPLES=(
   "cs:class-method|edr|scripts/eval/fixtures/csharp-method/Counter.cs:Value|=1"
   "php:class-method|edr|scripts/eval/fixtures/php-method/Counter.php:value|=1"
 
+  # C++ method declared in a header, called from a translation unit
+  # that #includes it. Returned count=0 before the cppCrossFileRefs
+  # branch was wired up in runRefsTo — `int Counter::value()` decl
+  # in .hpp with callers in main.cpp.
+  "cpp:header-method|edr|scripts/eval/fixtures/cpp-method/src/Counter.hpp:value|>=1"
+
   # Lua: method-syntax (`:`) callers — covers the property-access
   # path the rename layer relies on for module-pattern code.
   "lua:method-self|edr|scripts/eval/fixtures/lua-method-self/app.lua:bump|=2"
