@@ -919,10 +919,18 @@ func (b *builder) handleIdent(word []byte) {
 		// Emit a synthetic KindClass decl for the extension. This
 		// gives the cross-file hierarchy walker a place to attach
 		// the conformance protocols introduced by the extension and
-		// a body span the walker can search for methods. The decl
-		// duplicates the original class's name; MergeDuplicateDecls
-		// will canonicalise the DeclID at parse end so refs to the
-		// type still resolve consistently.
+		// a body span the walker can search for methods.
+		//
+		// The synthetic decl shares its Name with the original
+		// class definition (which may live in this file or another).
+		// Within the file, the hierarchy walker's
+		// findEnclosingClass tie-breaker prefers the decl with
+		// non-empty SuperTypes — which is this synthetic for an
+		// `extension Foo: Proto` form — so the right one is picked
+		// at lookup time. Across files, the walker iterates all
+		// candidates' decls anyway, so each per-file synthetic
+		// contributes its own SuperTypes / methods independently.
+		// No DeclID merging happens or is needed.
 		idx := len(b.res.Decls)
 		b.emitDecl(name, scope.KindClass, mkSpan(startByte, endByte))
 		b.pendingClassDeclIdx = idx

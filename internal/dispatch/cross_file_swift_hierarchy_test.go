@@ -31,8 +31,8 @@ class Circle: Shape {
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "shapes.swift"))
 	src := string(data)
-	if strings.Count(src, "computeArea() -> Int") < 2 {
-		t.Errorf("expected both methods renamed; got:\n%s", src)
+	if got := strings.Count(src, "computeArea() -> Int"); got != 2 {
+		t.Errorf("expected exactly 2 methods renamed, got %d:\n%s", got, src)
 	}
 	if strings.Contains(src, "func area() -> Int") {
 		t.Errorf("file still contains original area; got:\n%s", src)

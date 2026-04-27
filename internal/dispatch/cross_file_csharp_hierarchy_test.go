@@ -31,8 +31,8 @@ public class Circle : Shape {
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "Shapes.cs"))
 	src := string(data)
-	if strings.Count(src, "ComputeArea()") < 2 {
-		t.Errorf("expected both methods renamed; got:\n%s", src)
+	if got := strings.Count(src, "ComputeArea()"); got != 2 {
+		t.Errorf("expected exactly 2 methods renamed, got %d:\n%s", got, src)
 	}
 	if strings.Contains(src, "int Area()") {
 		t.Errorf("file still contains original Area; got:\n%s", src)
@@ -161,8 +161,8 @@ public class Foo : IService {
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "App.cs"))
 	src := string(data)
-	if strings.Count(src, "Execute()") < 2 {
-		t.Errorf("expected IService.Run + Foo.Run renamed; got:\n%s", src)
+	if got := strings.Count(src, "Execute()"); got != 2 {
+		t.Errorf("expected exactly 2 (IService.Run + Foo.Run) renamed, got %d:\n%s", got, src)
 	}
 	if !strings.Contains(src, "Configure()") {
 		t.Errorf("Configure() should not be renamed: %s", src)

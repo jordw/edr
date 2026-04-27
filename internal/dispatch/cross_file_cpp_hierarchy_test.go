@@ -34,8 +34,8 @@ public:
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "shapes.hpp"))
 	src := string(data)
-	if strings.Count(src, "computeArea()") < 2 {
-		t.Errorf("expected both methods renamed; got:\n%s", src)
+	if got := strings.Count(src, "computeArea()"); got != 2 {
+		t.Errorf("expected exactly 2 methods renamed, got %d:\n%s", got, src)
 	}
 	if strings.Contains(src, "int area()") {
 		t.Errorf("file still contains original area; got:\n%s", src)
@@ -180,8 +180,8 @@ public:
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "app.hpp"))
 	src := string(data)
-	if strings.Count(src, "execute()") < 2 {
-		t.Errorf("expected Base + Foo renamed; got:\n%s", src)
+	if got := strings.Count(src, "execute()"); got != 2 {
+		t.Errorf("expected exactly 2 (Base + Foo) renamed, got %d:\n%s", got, src)
 	}
 }
 

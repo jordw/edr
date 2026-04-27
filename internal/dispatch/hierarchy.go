@@ -152,12 +152,25 @@ type hierarchyKey struct {
 //
 // When multiple decls share the receiverName (e.g. Rust's
 // `struct Foo` + synthetic `impl Trait for Foo` decl, or
-// TS class+interface declaration merging), prefer the one with
-// non-empty SuperTypes so the up-walk has something to follow.
-// This matters for Rust where the struct decl carries no
-// SuperTypes and the synthetic impl-block decl carries the trait.
+// TS class+interface declaration merging), the lookup uses two
+// tie-breakers in order:
+//
+//  1. Prefer a decl with non-empty SuperTypes. The up-walk has
+//     somewhere to go; without supers there's no hierarchy edge
+//     to follow. This matters for Rust where the struct decl
+//     carries no SuperTypes and the synthetic impl-block decl
+//     carries the trait.
+//
+//  2. If all candidates are empty-supers, pick by Kind precedence
+//     (Class > Interface > Enum > Type > Namespace) — falling
+//     back to first-encountered within the same kind. The choice
+//     is mostly cosmetic when supers are empty (no walk fires
+//     either way) but makes the result deterministic across
+//     repeated runs and across the dual-emit pattern that some
+//     languages use (TS class shadow into NSType, Rust struct
+//     KindType + synthetic KindClass).
 func findEnclosingClass(r *scope.Result, receiverName string) *scope.Decl {
-	var fallback *scope.Decl
+	var supered, fallback *scope.Decl
 	for i := range r.Decls {
 		d := &r.Decls[i]
 		if d.Name != receiverName {
@@ -167,13 +180,39 @@ func findEnclosingClass(r *scope.Result, receiverName string) *scope.Decl {
 			continue
 		}
 		if len(d.SuperTypes) > 0 {
-			return d
+			if supered == nil || classKindRank(d.Kind) < classKindRank(supered.Kind) {
+				supered = d
+			}
+			continue
 		}
-		if fallback == nil {
+		if fallback == nil || classKindRank(d.Kind) < classKindRank(fallback.Kind) {
 			fallback = d
 		}
 	}
+	if supered != nil {
+		return supered
+	}
 	return fallback
+}
+
+// classKindRank ranks class-like decl kinds for the deterministic
+// tie-breaker in findEnclosingClass. Lower value = higher
+// preference. Kinds outside the class-like set return a large
+// sentinel so they never beat a real class-like decl.
+func classKindRank(k scope.DeclKind) int {
+	switch k {
+	case scope.KindClass:
+		return 0
+	case scope.KindInterface:
+		return 1
+	case scope.KindEnum:
+		return 2
+	case scope.KindType:
+		return 3
+	case scope.KindNamespace:
+		return 4
+	}
+	return 100
 }
 
 // isClassLikeFileScope reports whether d is a top-level class /

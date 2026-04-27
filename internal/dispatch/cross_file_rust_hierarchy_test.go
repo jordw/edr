@@ -64,8 +64,8 @@ impl Greeter for Hello {
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "src/lib.rs"))
 	src := string(data)
-	if strings.Count(src, "fn say_hello(") < 2 {
-		t.Errorf("expected both Trait + impl methods renamed; got:\n%s", src)
+	if got := strings.Count(src, "fn say_hello("); got != 2 {
+		t.Errorf("expected exactly 2 (Trait + impl) renamed, got %d:\n%s", got, src)
 	}
 	if strings.Contains(src, "fn greet(") {
 		t.Errorf("file still contains original greet; got:\n%s", src)
@@ -111,8 +111,8 @@ impl Speak for Cat {
 	if !strings.Contains(string(speak), "fn vocalize(") {
 		t.Errorf("speak.rs trait method not renamed: %s", speak)
 	}
-	if strings.Count(string(main), "fn vocalize(") < 2 {
-		t.Errorf("main.rs: expected both Dog + Cat impls renamed; got:\n%s", main)
+	if got := strings.Count(string(main), "fn vocalize("); got != 2 {
+		t.Errorf("main.rs: expected exactly 2 (Dog + Cat) impls renamed, got %d:\n%s", got, main)
 	}
 }
 
@@ -141,7 +141,7 @@ impl Greeter for Hello {
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "src/main.rs"))
 	src := string(data)
-	if strings.Count(src, "fn say_hello(") < 2 {
-		t.Errorf("expected both methods renamed; got:\n%s", src)
+	if got := strings.Count(src, "fn say_hello("); got != 2 {
+		t.Errorf("expected exactly 2 methods renamed, got %d:\n%s", got, src)
 	}
 }
