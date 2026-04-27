@@ -104,7 +104,7 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 	// Strict binding-tier audit: even when scope ran, the rewrite set
 	// may include probable/ambiguous refs that strict refuses on.
 	if strict && scopeDone {
-		audit, ok := auditSameFileBinding(sym)
+		audit, ok := auditFileBindings(fileSpans, sym)
 		if !ok {
 			return &output.RenameResult{
 				OldName:        oldName,

@@ -2,8 +2,10 @@ package dispatch
 
 import (
 	"os"
+	"sort"
 
 	"github.com/jordw/edr/internal/index"
+	"github.com/jordw/edr/internal/output"
 	"github.com/jordw/edr/internal/scope"
 	scopestore "github.com/jordw/edr/internal/scope/store"
 )
@@ -33,47 +35,95 @@ type strictAudit struct {
 // in the refusal payload. Counts in `Counts` are exact regardless.
 const strictAuditSampleCap = 10
 
-// auditSameFileBinding parses the target file with the scope builder,
-// finds the rename target, and partitions same-file refs by binding
-// tier. Returns whether the audit could run (false on parse failure
-// or when the language isn't scope-supported — strict callers should
-// refuse on `ok=false` rather than silently let through).
-func auditSameFileBinding(sym *index.SymbolInfo) (strictAudit, bool) {
-	if !scopeSupported(sym.File) {
+// auditFileBindings walks every file the rename would touch (the keys
+// of fileSpans), parses each via the scope builder, and partitions
+// name-matching refs by binding tier. The aggregate is what --strict
+// gates on: any non-Resolved entry refuses. Returns ok=false if no
+// file in fileSpans could be audited (parse failure / unsupported
+// language); strict callers refuse on ok=false rather than silently
+// let through.
+//
+// Why per-file rather than per-span: spans in fileSpans don't carry
+// binding-kind metadata, so we re-parse and look up by name. Walking
+// every name-matching ref (rather than only the spans the renamer
+// chose) is over-conservative on purpose — strict's contract is
+// "every byte changed is binding-confirmed AND no ambient ambiguity
+// in touched files." The renamer may correctly skip some ambiguous
+// refs but strict still surfaces them so the caller knows the file
+// has untyped call sites worth a manual look.
+func auditFileBindings(fileSpans map[string][]span, sym *index.SymbolInfo) (strictAudit, bool) {
+	aggregate := strictAudit{Counts: map[string]int{}}
+	anyOK := false
+
+	files := make([]string, 0, len(fileSpans))
+	for f := range fileSpans {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+
+	for _, file := range files {
+		a, ok := auditOneFile(file, sym)
+		if !ok {
+			continue
+		}
+		anyOK = true
+		aggregate.Resolved += a.Resolved
+		for k, v := range a.Counts {
+			aggregate.Counts[k] += v
+		}
+		for _, r := range a.Refused {
+			if len(aggregate.Refused) >= strictAuditSampleCap {
+				break
+			}
+			aggregate.Refused = append(aggregate.Refused, r)
+		}
+	}
+	return aggregate, anyOK
+}
+
+// auditOneFile parses `file` and tier-counts its name-matching refs.
+// In the target file (file == sym.File) the Resolved counter is
+// gated on the actual target DeclID so unrelated same-name decls
+// don't inflate the count. In other files there is no target decl
+// to match against, so any name-matching Resolved ref counts.
+func auditOneFile(file string, sym *index.SymbolInfo) (strictAudit, bool) {
+	if !scopeSupported(file) {
 		return strictAudit{}, false
 	}
-	src, err := os.ReadFile(sym.File)
+	src, err := os.ReadFile(file)
 	if err != nil {
 		return strictAudit{}, false
 	}
-	result := scopestore.Parse(sym.File, src)
+	result := scopestore.Parse(file, src)
 	if result == nil {
 		return strictAudit{}, false
 	}
 
-	var target *scope.Decl
-	for i := range result.Decls {
-		d := &result.Decls[i]
-		if d.Name != sym.Name {
-			continue
-		}
-		if d.Span.StartByte == sym.StartByte {
-			target = d
-			break
-		}
-		if sym.StartByte <= d.Span.StartByte && d.Span.EndByte <= sym.EndByte {
-			if target == nil {
-				target = d
+	var targetID scope.DeclID
+	if file == sym.File {
+		for i := range result.Decls {
+			d := &result.Decls[i]
+			if d.Name != sym.Name {
+				continue
+			}
+			if d.Span.StartByte == sym.StartByte {
+				targetID = d.ID
+				break
+			}
+			if sym.StartByte <= d.Span.StartByte && d.Span.EndByte <= sym.EndByte {
+				if targetID == 0 {
+					targetID = d.ID
+				}
 			}
 		}
-	}
-	if target == nil {
-		return strictAudit{}, false
+		if targetID == 0 {
+			return strictAudit{}, false
+		}
 	}
 
 	audit := strictAudit{Counts: map[string]int{}}
 	lines := computeLineStarts(src)
-	rel := sym.File
+	rel := output.Rel(file)
 
 	addRefused := func(span scope.Span, tier, reason string) {
 		audit.Counts[tier]++
@@ -89,34 +139,36 @@ func auditSameFileBinding(sym *index.SymbolInfo) (strictAudit, bool) {
 	}
 
 	for _, ref := range result.Refs {
-		// Only refs that name-match the target are in scope for the
-		// rewrite — strict gates on them, the rest are unrelated.
 		if ref.Name != sym.Name {
 			continue
 		}
 		switch ref.Binding.Kind {
 		case scope.BindResolved:
-			if ref.Binding.Decl == target.ID {
+			// Target file: only count refs to the actual target decl
+			// so unrelated same-name decls (sibling classes, builtin
+			// resolves, etc.) don't inflate Resolved. Other files:
+			// no target available — every name-matching Resolved ref
+			// counts as a binding-confirmed candidate.
+			if targetID == 0 || ref.Binding.Decl == targetID {
 				audit.Resolved++
 			}
 		case scope.BindAmbiguous:
-			// Any name-matching ambiguous ref blocks strict, regardless
-			// of whether the candidate set contains target.ID — strict
-			// can't tell which decl the call dispatches to, and the
-			// language renamers may emit it as a candidate match
-			// downstream.
 			addRefused(ref.Span, "ambiguous", ref.Binding.Reason)
 		case scope.BindProbable:
-			// Same logic. Property-access refs (Ruby/Python obj.method,
+			// Property-access refs (Ruby/Python obj.method,
 			// Lua/Zig namespaced calls) typically have no Decl set —
 			// strict treats them as not binding-confirmed.
 			addRefused(ref.Span, "probable", ref.Binding.Reason)
 		case scope.BindUnresolved:
-			// Name-matching unresolved refs aren't in the rewrite set,
-			// but they're a strict-mode signal: the user almost
-			// certainly meant for the rename to cover them, and
-			// silently skipping would violate the strict contract.
-			addRefused(ref.Span, "unresolved", ref.Binding.Reason)
+			// Per-file scope binding is blind to cross-file resolution
+			// in languages whose call sites go through the symbol-
+			// index pipeline (Go same-package, C/C++ headers): a
+			// legitimate cross-file ref looks BindUnresolved at this
+			// layer even though the rename correctly handles it.
+			// Counting it would over-refuse on the common cross-file
+			// Go case. Strict gates only on Probable/Ambiguous —
+			// genuine binding-gap signal is exposed via
+			// 'refs-to --include-name-match'.
 		}
 	}
 

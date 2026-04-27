@@ -80,6 +80,79 @@ end
 	}
 }
 
+// TestStrict_RenameRefusesOnCrossFileProbable: rename target lives in
+// a.rb, but the call sites that the Ruby cross-file renamer pulls into
+// fileSpans include a property_access ref in b.rb (BindProbable). The
+// audit must walk b.rb (not just a.rb) and refuse on the cross-file
+// probable ref. This is the gap the same-file-only audit had.
+func TestStrict_RenameRefusesOnCrossFileProbable(t *testing.T) {
+	db, _ := setupRefsRepo(t, map[string]string{
+		"a.rb": `class A
+  def compute
+    1
+  end
+end
+`,
+		"b.rb": `require_relative 'a'
+
+a = A.new
+a.compute
+`,
+	})
+
+	res, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"a.rb:compute"},
+		map[string]any{"new_name": "calculate", "cross_file": true, "strict": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	rr := mustRename(t, res)
+	if rr.Status != "refused" {
+		t.Fatalf("status=%q want refused; result=%+v", rr.Status, rr)
+	}
+	if rr.RefusedReason != "strict_refused" {
+		t.Errorf("refused_reason=%q want strict_refused", rr.RefusedReason)
+	}
+	// At least one refused example must come from b.rb — that's the
+	// whole point of walking files beyond sym.File.
+	sawBRb := false
+	for _, ex := range rr.RefusedExamples {
+		if strings.HasSuffix(ex.File, "b.rb") {
+			sawBRb = true
+			break
+		}
+	}
+	if !sawBRb {
+		t.Errorf("no refused example came from b.rb; examples=%+v", rr.RefusedExamples)
+	}
+}
+
+// TestStrict_RenameCrossFileSucceedsOnResolved: cross-file rename of a
+// Go function where every call site binds BindResolved across files.
+// Strict must accept and apply.
+func TestStrict_RenameCrossFileSucceedsOnResolved(t *testing.T) {
+	db, dir := setupRefsRepo(t, map[string]string{
+		"go.mod": "module example.com/foo\n",
+		"a.go":   "package foo\n\nfunc Compute(x int) int { return x * 2 }\n",
+		"b.go":   "package foo\n\nfunc Use() int { return Compute(5) + Compute(7) }\n",
+	})
+
+	res, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"a.go:Compute"},
+		map[string]any{"new_name": "Calculate", "cross_file": true, "strict": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	rr := mustRename(t, res)
+	if rr.Status != "applied" {
+		t.Fatalf("status=%q want applied; result=%+v", rr.Status, rr)
+	}
+	bData, _ := os.ReadFile(filepath.Join(dir, "b.go"))
+	if !strings.Contains(string(bData), "Calculate(5)") || strings.Contains(string(bData), "Compute(") {
+		t.Errorf("b.go did not get cross-file rename applied: %s", bData)
+	}
+}
+
 // TestStrict_RenameForceMutuallyExclusive: --strict and --force must
 // not be combined. The dispatcher rejects the pairing immediately.
 func TestStrict_RenameForceMutuallyExclusive(t *testing.T) {
