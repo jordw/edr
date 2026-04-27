@@ -129,3 +129,132 @@ module.exports = { run };
 		t.Errorf("lib declaration should be renamed; got:\n%s", lib)
 	}
 }
+
+// TestRename_TS_HierarchySameFile: same-file class hierarchy override
+// propagation regression. Renaming a method on a base class also
+// rewrites the same-named method on a sibling class that extends it.
+func TestRename_TS_HierarchySameFile(t *testing.T) {
+	db, dir := tsFixture(t, map[string]string{
+		"src/shapes.ts": `export class Shape {
+    area(): number { return 0; }
+}
+
+export class Circle extends Shape {
+    area(): number { return 3.14; }
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"src/shapes.ts:area"},
+		map[string]any{"new_name": "computeArea", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "src/shapes.ts"))
+	src := string(data)
+	if !strings.Contains(src, "Shape {") || strings.Count(src, "computeArea(): number") != 2 {
+		t.Errorf("expected both methods renamed; got:\n%s", src)
+	}
+	if strings.Contains(src, "area(): number") {
+		t.Errorf("file still contains original area(); got:\n%s", src)
+	}
+}
+
+// TestRename_TS_HierarchyCrossFileDownWalk: base class in base.ts,
+// subclass in impl.ts. Renaming a method on the base must rewrite
+// the override on the subclass via the down-walk through the import
+// graph. (Interface targets are deferred — the symbol index does
+// not yet extract interface members.)
+func TestRename_TS_HierarchyCrossFileDownWalk(t *testing.T) {
+	db, dir := tsFixture(t, map[string]string{
+		"src/base.ts": `export class Service {
+    run(input: string): string { return input; }
+}
+`,
+		"src/impl.ts": `import { Service } from "./base";
+
+export class ServiceImpl extends Service {
+    run(input: string): string { return input.toUpperCase(); }
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"src/base.ts:run"},
+		map[string]any{"new_name": "execute", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	base, _ := os.ReadFile(filepath.Join(dir, "src/base.ts"))
+	impl, _ := os.ReadFile(filepath.Join(dir, "src/impl.ts"))
+	if !strings.Contains(string(base), "execute(input: string)") {
+		t.Errorf("base.ts did not rename: %s", base)
+	}
+	if !strings.Contains(string(impl), "execute(input: string)") {
+		t.Errorf("impl.ts override did not rename: %s", impl)
+	}
+	if strings.Contains(string(impl), "run(input") {
+		t.Errorf("impl.ts still contains old run(): %s", impl)
+	}
+}
+
+// TestRename_TS_HierarchyCrossFileUpWalk: rename on the subclass
+// should rewrite the base class's method too (up-walk via the
+// SuperTypes list of the enclosing class).
+func TestRename_TS_HierarchyCrossFileUpWalk(t *testing.T) {
+	db, dir := tsFixture(t, map[string]string{
+		"src/base.ts": `export class Service {
+    run(input: string): string { return input; }
+}
+`,
+		"src/impl.ts": `import { Service } from "./base";
+
+export class ServiceImpl extends Service {
+    run(input: string): string { return input.toUpperCase(); }
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"src/impl.ts:run"},
+		map[string]any{"new_name": "execute", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	base, _ := os.ReadFile(filepath.Join(dir, "src/base.ts"))
+	impl, _ := os.ReadFile(filepath.Join(dir, "src/impl.ts"))
+	if !strings.Contains(string(impl), "execute(input: string)") {
+		t.Errorf("impl.ts did not rename: %s", impl)
+	}
+	if !strings.Contains(string(base), "execute(input: string)") {
+		t.Errorf("base.ts base method did not rename via up-walk: %s", base)
+	}
+}
+
+// TestRename_TS_HierarchyUnrelatedClassNotRewritten: negative test.
+// Two classes with same-named methods but no inheritance link — only
+// the target should change.
+func TestRename_TS_HierarchyUnrelatedClassNotRewritten(t *testing.T) {
+	db, dir := tsFixture(t, map[string]string{
+		"src/a.ts": `export class Alpha {
+    process(): number { return 1; }
+}
+`,
+		"src/b.ts": `export class Beta {
+    process(): number { return 2; }
+}
+`,
+	})
+	_, err := dispatch.Dispatch(context.Background(), db, "rename",
+		[]string{"src/a.ts:process"},
+		map[string]any{"new_name": "compute", "cross_file": true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	a, _ := os.ReadFile(filepath.Join(dir, "src/a.ts"))
+	b, _ := os.ReadFile(filepath.Join(dir, "src/b.ts"))
+	if !strings.Contains(string(a), "compute(): number") {
+		t.Errorf("a.ts target not renamed: %s", a)
+	}
+	if !strings.Contains(string(b), "process(): number") {
+		t.Errorf("b.ts unrelated class incorrectly rewritten: %s", b)
+	}
+}

@@ -58,11 +58,13 @@ func Parse(file string, src []byte) *scope.Result {
 // in c.ts bind to the same DeclID.
 func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 	b := &builder{
-		file:             file,
-		canonicalPath:    canonicalPath,
-		res:              &scope.Result{File: file},
-		s:                lexkit.New(src),
-		pendingOwnerDecl: -1,
+		file:                file,
+		canonicalPath:       canonicalPath,
+		res:                 &scope.Result{File: file},
+		s:                   lexkit.New(src),
+		pendingOwnerDecl:    -1,
+		pendingClassDeclIdx: -1,
+		classSuperTypes:     map[int][]string{},
 	}
 	// Enable JSX parsing for .jsx/.tsx. Plain .ts/.js never has JSX;
 	// in those, `<` means generic param or less-than, never element.
@@ -75,6 +77,15 @@ func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 	b.run()
 	b.closeScopesToDepth(0)
 	b.resolveRefs()
+	// Copy classSuperTypes (keyed by decl index) onto Decl.SuperTypes
+	// so the cross-file hierarchy walker (EmitOverrideSpans) can read
+	// them. Done before MergeDuplicateDecls so merged decls inherit
+	// supertype lists if the merger preserves their slot.
+	for idx, supers := range b.classSuperTypes {
+		if idx >= 0 && idx < len(b.res.Decls) && len(supers) > 0 {
+			b.res.Decls[idx].SuperTypes = supers
+		}
+	}
 	scope.MergeDuplicateDecls(b.res)
 	return b.res
 }
@@ -213,6 +224,31 @@ type builder struct {
 	// `(x) => { ... }` use the regular '{' → '}' scope machinery and do
 	// NOT appear on this stack.
 	arrowExprStack []arrowExprEntry
+
+	// Supertype tracking — populates Decl.SuperTypes for class /
+	// interface decls so cross-file override propagation
+	// (EmitOverrideSpans) can walk the hierarchy. Mirrors the Java
+	// builder's pattern.
+	//
+	// pendingClassDeclIdx: index into res.Decls of the class /
+	// interface decl whose header is currently being parsed (between
+	// its name ident and its body '{'). -1 when not in a class
+	// header. inSuperTypes flips on at `extends` / `implements`
+	// keywords and back off at body '{'. superTypeNeedsName is true
+	// at the start of a supertype section (after extends/implements
+	// or a top-level `,`); only the first ident in the section is
+	// recorded so generic type-args inside `<...>` don't get
+	// captured as supertypes. supertypeAngleDepth tracks `<...>`
+	// inside the supertype clause (e.g. `extends Base<T, U>`); the
+	// builder's main inGenericParams machinery only tracks decl-name
+	// generics, not supertype-arg generics. classSuperTypes
+	// accumulates per-decl-index lists; values flushed onto
+	// Decl.SuperTypes after the run() loop completes.
+	pendingClassDeclIdx  int
+	inSuperTypes         bool
+	superTypeNeedsName   bool
+	supertypeAngleDepth  int
+	classSuperTypes      map[int][]string
 }
 
 // arrowExprEntry records the ambient state at the moment an expression-
@@ -438,6 +474,13 @@ func (b *builder) run() {
 			if b.inGenericParams && b.genericDepth == 1 {
 				b.genericSectionNeedsName = true
 			}
+			// Top-level `,` between supertypes: `implements I1, I2` —
+			// the next ident is a fresh supertype name. Skip when
+			// inside generic args (`Iface<T, U>`) — that comma
+			// separates type params, not supertypes.
+			if b.inSuperTypes && !b.inGenericParams && b.supertypeAngleDepth == 0 {
+				b.superTypeNeedsName = true
+			}
 		case lexkit.IsDefaultIdentStart(c) || c == '$':
 			word := b.s.ScanIdentTable(&identStart, &identCont)
 			b.handleIdent(word)
@@ -485,6 +528,17 @@ func (b *builder) run() {
 				b.prevByte = '<'
 				continue
 			}
+			// Generic args within a supertype clause (`extends
+			// Base<T, U>`) — the builder's inGenericParams machinery
+			// only tracks decl-name generics, so we keep our own
+			// depth counter while inSuperTypes.
+			if b.inSuperTypes {
+				b.supertypeAngleDepth++
+				b.s.Pos++
+				b.regexOK = true
+				b.prevByte = '<'
+				continue
+			}
 			// JSX element start: in .tsx/.jsx files, '<' in expression
 			// position followed by a letter, '/', or '>' starts a JSX
 			// element. Consume the whole element (with embedded {...}
@@ -504,6 +558,13 @@ func (b *builder) run() {
 					b.inGenericParams = false
 					b.genericSectionNeedsName = false
 				}
+				b.s.Pos++
+				b.regexOK = true
+				b.prevByte = '>'
+				continue
+			}
+			if b.inSuperTypes && b.supertypeAngleDepth > 0 {
+				b.supertypeAngleDepth--
 				b.s.Pos++
 				b.regexOK = true
 				b.prevByte = '>'
@@ -687,11 +748,36 @@ func (b *builder) handleIdent(word []byte) {
 			"implements", "as", "from":
 			b.regexOK = true
 		}
+		// extends/implements within a class/interface header: the
+		// next ident (or commas-separated idents) name supertypes.
+		// We only enter this state when we just emitted a class /
+		// interface decl whose body hasn't opened yet — `T extends
+		// U` in generic constraints lands inside `<...>` (handled
+		// by inGenericParams) and shouldn't trigger.
+		if (name == "extends" || name == "implements") && b.pendingClassDeclIdx >= 0 && !b.inGenericParams {
+			b.inSuperTypes = true
+			b.superTypeNeedsName = true
+		}
 		// Track 'this' so the next property access (this.X) can resolve
 		// against the enclosing class's field/method decls.
 		b.prevIdentIsThis = name == "this"
 		b.prevByte = 'k'
 		return
+	}
+
+	// Supertype name capture: `class Foo extends Bar implements I1, I2`.
+	// The first ident after `extends` or `implements` (and the first
+	// after each top-level `,`) is a supertype name. We record it
+	// against the pending class decl, then fall through so the ident
+	// also emits as a normal ref (so refs-to from the supertype's
+	// decl finds this use). Skip while inside generic args `<...>`
+	// (those are type params for the supertype, not supertype names
+	// themselves).
+	if b.inSuperTypes && b.superTypeNeedsName && !b.inGenericParams &&
+		b.supertypeAngleDepth == 0 && b.pendingClassDeclIdx >= 0 {
+		b.classSuperTypes[b.pendingClassDeclIdx] = append(
+			b.classSuperTypes[b.pendingClassDeclIdx], name)
+		b.superTypeNeedsName = false
 	}
 
 	if b.prevByte == '.' {
@@ -780,6 +866,13 @@ func (b *builder) handleIdent(word []byte) {
 
 	if b.declContext != "" {
 		kind := b.declContext
+		// Capture the primary-decl idx BEFORE emit so we point at
+		// the NSValue slot (emitDecl dual-emits classes as primary
+		// + NSType shadow; we want supers attached to the primary
+		// since that's what EmitOverrideSpans matches receivers
+		// against). After-emit, primary is at this idx, shadow (if
+		// any) at idx+1.
+		primaryIdx := len(b.res.Decls)
 		b.emitDecl(name, kind, mkSpan(startByte, endByte))
 		b.declContext = "" // always clear; comma re-enables from varDeclKind
 		switch kind {
@@ -788,6 +881,9 @@ func (b *builder) handleIdent(word []byte) {
 			b.genericParamsExpected = true
 		case scope.KindClass, scope.KindInterface, scope.KindType:
 			b.genericParamsExpected = true
+			if kind == scope.KindClass || kind == scope.KindInterface {
+				b.pendingClassDeclIdx = primaryIdx
+			}
 		}
 		b.regexOK = false
 		b.prevByte = 'i'
@@ -1077,6 +1173,16 @@ func (b *builder) handleOpenBrace() {
 		// also contain '{' but those are type-position, and we haven't
 		// consumed the '<' yet; clearing there would break them.
 		b.genericParamsExpected = false
+		// Class / interface body opens — close the supertype window
+		// so anything inside the body (including a base-class call
+		// `super.method()` or a TS type-arg ident with the same name
+		// as a member) is not mistaken for a supertype name.
+		if kind == scope.ScopeClass || kind == scope.ScopeInterface {
+			b.inSuperTypes = false
+			b.superTypeNeedsName = false
+			b.supertypeAngleDepth = 0
+			b.pendingClassDeclIdx = -1
+		}
 	}
 	b.openScope(kind, uint32(b.s.Pos-1))
 	// Flush pending params into the newly-opened scope. Value params

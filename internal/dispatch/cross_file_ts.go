@@ -58,10 +58,27 @@ func tsCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Symb
 	// Hierarchy propagation: when renaming a method, emit rewrite
 	// spans for same-named methods in classes/interfaces that the
 	// target's enclosing class extends or implements (and vice
-	// versa — subclasses overriding the target). Keeps the type-
-	// check consistent across the inheritance graph.
+	// versa — subclasses overriding the target). Both directions
+	// are walked by the shared EmitOverrideSpans helper using the
+	// SuperTypes lists populated by the TS scope builder.
+	//
+	// TS has no same-package concept, so the down-walk can't find
+	// subclasses via SamePackageFiles. We supply extra candidates
+	// from the symbol index: files that reference the enclosing
+	// class name are likely to contain subclasses that import it.
 	if sym.Receiver != "" {
-		tsEmitHierarchySpans(out, resolver, sym, target)
+		var extraCandidates []string
+		if refs, err := db.FindSemanticReferences(ctx, sym.Receiver, sym.File); err == nil {
+			seen := map[string]struct{}{sym.File: {}}
+			for _, r := range refs {
+				if _, ok := seen[r.File]; ok {
+					continue
+				}
+				seen[r.File] = struct{}{}
+				extraCandidates = append(extraCandidates, r.File)
+			}
+		}
+		EmitOverrideSpans(out, tsResolverDeps{r: resolver}, sym, extraCandidates...)
 	}
 
 	candidates := map[string]bool{}
@@ -431,75 +448,26 @@ func findReExportsWithSpans(src []byte) []namespace.TSReExportSpan {
 //
 // Scope: same-file for now. Cross-file hierarchy can be chased
 // through import graphs in a later pass.
-func tsEmitHierarchySpans(out map[string][]span, resolver *namespace.TSResolver, sym *index.SymbolInfo, target *scope.Decl) {
-	src := resolver.Source(sym.File)
-	if len(src) == 0 {
-		return
-	}
-	hierarchy := namespace.TSFindClassHierarchy(src)
-	if len(hierarchy) == 0 {
-		return
-	}
-	// Find the target's enclosing class/interface by containment.
-	var enclosing *namespace.TSClassHierarchy
-	for i := range hierarchy {
-		h := &hierarchy[i]
-		if h.BodyStart <= target.Span.StartByte && target.Span.EndByte <= h.BodyEnd {
-			enclosing = h
-			break
-		}
-	}
-	if enclosing == nil {
-		return
-	}
-	// Build set of "related" class/interface names:
-	//   1. The enclosing's supers (types it extends/implements).
-	//   2. Any class that extends/implements the enclosing.
-	related := map[string]bool{}
-	for _, s := range enclosing.Supers {
-		related[s] = true
-	}
-	for _, h := range hierarchy {
-		for _, s := range h.Supers {
-			if s == enclosing.Name {
-				related[h.Name] = true
-				break
-			}
-		}
-	}
-	if len(related) == 0 {
-		return
-	}
-	// For each related class/interface, find a method decl with
-	// matching name inside its body span and emit a span.
-	targetRes := resolver.Result(sym.File)
-	if targetRes == nil {
-		return
-	}
-	for _, h := range hierarchy {
-		if !related[h.Name] || h.Name == enclosing.Name {
-			continue
-		}
-		for i := range targetRes.Decls {
-			d := &targetRes.Decls[i]
-			if d.Name != sym.Name {
-				continue
-			}
-			if d.Kind != scope.KindMethod {
-				continue
-			}
-			if d.Span.StartByte < h.BodyStart || d.Span.EndByte > h.BodyEnd {
-				continue
-			}
-			if d.ID == target.ID {
-				continue
-			}
-			out[sym.File] = append(out[sym.File], span{
-				start: d.Span.StartByte,
-				end:   d.Span.EndByte,
-			})
-		}
-	}
+// tsResolverDeps adapts TSResolver to the dispatch HierarchyDeps
+// interface used by EmitOverrideSpans.
+type tsResolverDeps struct {
+	r *namespace.TSResolver
+}
+
+func (d tsResolverDeps) Result(file string) *scope.Result { return d.r.Result(file) }
+func (d tsResolverDeps) SamePackageFiles(file string) []string {
+	return d.r.SamePackageFiles(file)
+}
+func (d tsResolverDeps) FilesForImport(spec, importingFile string) []string {
+	return d.r.FilesForImport(spec, importingFile)
+}
+
+// ImportSpec returns the bare module specifier (e.g. "./foo",
+// "react") — the imported binding name is part of the destructuring
+// in TS source and isn't part of the spec FilesForImport accepts.
+func (d tsResolverDeps) ImportSpec(decl *scope.Decl) string {
+	module, _ := SplitImportSignature(decl)
+	return module
 }
 
 // tsRelatedTypes returns the transitive set of class/interface

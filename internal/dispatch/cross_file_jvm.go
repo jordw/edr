@@ -280,6 +280,21 @@ func (d javaResolverDeps) FilesForImport(spec, importingFile string) []string {
 	return d.r.FilesForImport(spec, importingFile)
 }
 
+// ImportSpec builds the Java-native FQN: `pkg.Class` for named
+// imports, `pkg.*` for star imports.
+func (d javaResolverDeps) ImportSpec(decl *scope.Decl) string {
+	module, orig := SplitImportSignature(decl)
+	if module == "" {
+		return ""
+	}
+	switch orig {
+	case "", "*":
+		return module + ".*"
+	default:
+		return module + "." + orig
+	}
+}
+
 // javaHierarchySpans returns identifier-level spans for every
 // same-name method decl in an interface or parent class that sym's
 // enclosing class extends/implements (and vice versa — subclasses

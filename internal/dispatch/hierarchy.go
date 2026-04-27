@@ -27,6 +27,13 @@ type HierarchyDeps interface {
 	// (Python sys.path, C #include search). Empty when the spec is
 	// external (stdlib / third-party / unresolved).
 	FilesForImport(spec, importingFile string) []string
+
+	// ImportSpec reconstructs the language-native import spec from
+	// a KindImport decl. Convention varies: Java fuses module +
+	// name (`foo.bar.Baz`); TS keeps the module spec separate and
+	// the name in a destructuring binding (`./foo`). Each adapter
+	// formats so its FilesForImport accepts the result.
+	ImportSpec(d *scope.Decl) string
 }
 
 // EmitOverrideSpans walks the inheritance hierarchy reachable from
@@ -36,13 +43,20 @@ type HierarchyDeps interface {
 //   - Up (supers): for each class/interface name in the enclosing's
 //     SuperTypes, find its same-name method in same-package or
 //     imported files and emit its identifier span. Renaming
-//     ServiceImpl.run also rewrites Service.run on the interface.
+//     ServiceImpl.run also rewrites Service.run on the supertype.
 //
-//   - Down (subs): for each class in same-package or imported files
-//     whose SuperTypes includes the enclosing's name, emit its
-//     same-name method's identifier span. Renaming Service.run on
-//     the interface also rewrites ServiceImpl.run on every
-//     implementation.
+//   - Down (subs): for each class in same-package, imported, or
+//     extraCandidates files whose SuperTypes includes the
+//     enclosing's name, emit its same-name method's identifier
+//     span. Renaming Service.run on the supertype also rewrites
+//     ServiceImpl.run on every subclass.
+//
+// extraCandidates is for languages that don't have a same-package
+// concept (TS/JS) — callers pass in files derived from a reverse
+// reference query (e.g. FindSemanticReferences on the enclosing
+// class name) so the down-walk can find subclasses that import the
+// target file. Pass nil when the language already populates
+// candidates via SamePackageFiles.
 //
 // Constraints (intentional v1):
 //   - Method matching is by name only. Signature-aware matching
@@ -53,9 +67,7 @@ type HierarchyDeps interface {
 //   - sym.Receiver must be populated — non-method targets short-
 //     circuit. The Receiver field is stamped by the symbol index
 //     based on the parser's notion of the method's owner.
-//   - Candidate files exclude the target file, so the rename
-//     target's own decl is never re-emitted.
-func EmitOverrideSpans(out map[string][]span, deps HierarchyDeps, sym *index.SymbolInfo) {
+func EmitOverrideSpans(out map[string][]span, deps HierarchyDeps, sym *index.SymbolInfo, extraCandidates ...string) {
 	if sym.Receiver == "" {
 		return
 	}
@@ -77,10 +89,23 @@ func EmitOverrideSpans(out map[string][]span, deps HierarchyDeps, sym *index.Sym
 	}
 
 	// Candidate files: same-package siblings + anything reachable via
-	// the target file's import graph. For a Java rename in
-	// com/example/A.java extending com.other.Base, the candidates
-	// include com/example/*.java AND com/other/Base.java.
+	// the target file's import graph + extra candidates supplied by
+	// the caller (e.g. files that reference the enclosing class
+	// name, used by TS where subclasses import the base).
 	candidates := gatherHierarchyCandidates(deps, sym.File, targetRes)
+	if len(extraCandidates) > 0 {
+		seen := make(map[string]struct{}, len(candidates))
+		for _, c := range candidates {
+			seen[c] = struct{}{}
+		}
+		for _, c := range extraCandidates {
+			if _, ok := seen[c]; ok {
+				continue
+			}
+			seen[c] = struct{}{}
+			candidates = append(candidates, c)
+		}
+	}
 
 	// Track emitted (file, startByte, endByte) so duplicate
 	// candidate paths don't double-emit the same span.
@@ -153,12 +178,14 @@ func isClassLikeFileScope(d *scope.Decl) bool {
 	return false
 }
 
-// gatherHierarchyCandidates returns the deduped union of same-
-// package siblings and import-resolvable files for the target file.
-// The same target file is excluded (caller emits same-file spans
-// elsewhere).
+// gatherHierarchyCandidates returns the deduped list of files to
+// scan for hierarchy-related class decls: same-package siblings,
+// import-resolvable files, plus the target file itself (so sibling
+// classes in the same file get walked too — TS often co-locates a
+// base class and its concrete subclass). Duplicate spans are
+// guarded by the caller's seen-set.
 func gatherHierarchyCandidates(deps HierarchyDeps, targetFile string, targetRes *scope.Result) []string {
-	seen := map[string]struct{}{targetFile: {}}
+	seen := map[string]struct{}{}
 	var out []string
 	add := func(f string) {
 		if _, ok := seen[f]; ok {
@@ -167,6 +194,8 @@ func gatherHierarchyCandidates(deps HierarchyDeps, targetFile string, targetRes 
 		seen[f] = struct{}{}
 		out = append(out, f)
 	}
+
+	add(targetFile)
 
 	for _, f := range deps.SamePackageFiles(targetFile) {
 		add(f)
@@ -177,7 +206,7 @@ func gatherHierarchyCandidates(deps HierarchyDeps, targetFile string, targetRes 
 		if d.Kind != scope.KindImport {
 			continue
 		}
-		spec := importSpecFromDecl(d)
+		spec := deps.ImportSpec(d)
 		if spec == "" {
 			continue
 		}
@@ -188,39 +217,22 @@ func gatherHierarchyCandidates(deps HierarchyDeps, targetFile string, targetRes 
 	return out
 }
 
-// importSpecFromDecl reconstructs the original import specification
-// from a KindImport decl's Signature. The cross-language convention
-// is "<modulePath>\x00<origName>" with origName == "*" for whole-
-// module imports. Java callers historically reassemble e.g.
-// "org.springframework.core.MyClass" by joining module and name —
-// preserve that shape here.
-func importSpecFromDecl(d *scope.Decl) string {
+// SplitImportSignature parses the cross-language import-decl
+// signature convention "<modulePath>\x00<origName>" into its parts.
+// origName == "*" means a whole-module import. Returns ("", "") on
+// malformed input. Adapters use this to build language-native
+// import specs.
+func SplitImportSignature(d *scope.Decl) (module, orig string) {
 	sig := d.Signature
 	if sig == "" {
-		return ""
+		return "", ""
 	}
-	idx := -1
 	for i := 0; i < len(sig); i++ {
 		if sig[i] == 0 {
-			idx = i
-			break
+			return sig[:i], sig[i+1:]
 		}
 	}
-	if idx < 0 {
-		return sig
-	}
-	module := sig[:idx]
-	orig := sig[idx+1:]
-	switch orig {
-	case "", "*":
-		// Whole-module / star: reassemble as module path. For
-		// Java this is "pkg.*"; for languages that don't use
-		// trailing-star wildcards the resolver typically tolerates
-		// the bare module form.
-		return module + ".*"
-	default:
-		return module + "." + orig
-	}
+	return sig, ""
 }
 
 // emitMatchingMethodInClass searches every candidate file for a
