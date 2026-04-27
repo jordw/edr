@@ -58,12 +58,21 @@ func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 		recordOwnerDeclIdx:      -1,
 		pendingNamespaceDeclIdx: -1,
 		namespacePathDeclIdx:    -1,
+		pendingClassDeclIdx:     -1,
+		classSuperTypes:         map[int][]string{},
 	}
 	b.openScope(scope.ScopeFile, 0)
 	b.stmtStart = true
 	b.run()
 	b.closeScopesToDepth(0)
 	b.resolveRefs()
+	// Copy classSuperTypes onto Decl.SuperTypes for the cross-file
+	// hierarchy walker.
+	for idx, supers := range b.classSuperTypes {
+		if idx >= 0 && idx < len(b.res.Decls) && len(supers) > 0 {
+			b.res.Decls[idx].SuperTypes = supers
+		}
+	}
 	scope.MergeDuplicateDecls(b.res)
 	return b.res
 }
@@ -248,6 +257,30 @@ type builder struct {
 	// `using var x = ...` (C# 8+). Treat the following `var` like a
 	// local var decl.
 	usingVarExpected bool
+
+	// Class-supertype tracking — populates Decl.SuperTypes for class
+	// / interface decls so the cross-file hierarchy walker
+	// (EmitOverrideSpans) can walk both directions.
+	//
+	// pendingClassDeclIdx holds the just-emitted class/interface
+	// decl until its body `{` opens. inSuperTypes is on between the
+	// inheritance `:` and the body `{` (or a `where` constraint
+	// keyword). supertypeAngleDepth tracks generic args inside the
+	// supertype clause (`: Generic<T, U>`); the existing
+	// inGenericParams machinery only covers decl-name generics.
+	// classBaseLastIdent uses "last ident wins" so qualified names
+	// like `Foo.Bar.Base` keep the leaf segment.
+	//
+	// Partial classes: each per-file declaration of `partial class
+	// Foo : Base` records its own SuperTypes on its own Decl. The
+	// hierarchy walker iterates all decls in candidate files, so
+	// every partial contributes regardless of which file declared
+	// the base list.
+	pendingClassDeclIdx int
+	inSuperTypes        bool
+	supertypeAngleDepth int
+	classBaseLastIdent  string
+	classSuperTypes     map[int][]string
 }
 
 type pendingParam struct {
@@ -467,6 +500,12 @@ func (b *builder) run() {
 			if b.localVarDeclKind != "" && !b.inParamList && !b.inGenericParams {
 				b.typePositionIdent = true
 			}
+			// Supertype list separator (`: A, B, C`): flush the
+			// captured name and reset for the next section. Skip
+			// when inside generic args (`: Generic<T, U>`).
+			if b.inSuperTypes && b.supertypeAngleDepth == 0 {
+				b.flushSuperTypeArg()
+			}
 		case c == '<':
 			if b.genericParamsExpected {
 				b.genericParamsExpected = false
@@ -483,6 +522,16 @@ func (b *builder) run() {
 				b.prevByte = '<'
 				continue
 			}
+			// Generic args inside a supertype clause
+			// (`: Dictionary<K, V>`). The decl-name generic
+			// machinery doesn't apply here; we keep our own
+			// depth so the inner `,` doesn't flush.
+			if b.inSuperTypes {
+				b.supertypeAngleDepth++
+				b.s.Pos++
+				b.prevByte = '<'
+				continue
+			}
 			b.s.Pos++
 			b.prevByte = '<'
 		case c == '>':
@@ -492,6 +541,12 @@ func (b *builder) run() {
 					b.inGenericParams = false
 					b.genericSectionNeedsName = false
 				}
+				b.s.Pos++
+				b.prevByte = '>'
+				continue
+			}
+			if b.inSuperTypes && b.supertypeAngleDepth > 0 {
+				b.supertypeAngleDepth--
 				b.s.Pos++
 				b.prevByte = '>'
 				continue
@@ -521,6 +576,16 @@ func (b *builder) run() {
 		case c == ':':
 			b.s.Pos++
 			b.prevByte = ':'
+			// Inheritance `:` after a class/interface header. We
+			// detect it by pendingClassDeclIdx still set (cleared
+			// on body '{'); other `:` uses (constructor base call,
+			// labeled statement) happen inside a body where this is
+			// false.
+			if b.pendingClassDeclIdx >= 0 && !b.inSuperTypes {
+				b.inSuperTypes = true
+				b.classBaseLastIdent = ""
+				b.supertypeAngleDepth = 0
+			}
 		case lexkit.DefaultIdentStart[c]:
 			word := b.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
 			b.handleIdent(word)
@@ -851,6 +916,12 @@ func (b *builder) handleIdent(word []byte) {
 		b.prevByte = 'k'
 		return
 	case "where":
+		// `where T : new()` generic constraint clause terminates the
+		// supertype section. Flush whatever's captured so far; the
+		// constraint idents that follow are not supertypes.
+		if b.inSuperTypes {
+			b.flushSuperTypeSection()
+		}
 		b.prevByte = 'k'
 		return
 	}
@@ -876,6 +947,14 @@ func (b *builder) handleIdent(word []byte) {
 			b.res.Decls[b.namespacePathDeclIdx].Signature = string(b.namespacePathBuf)
 			b.prevByte = 'i'
 			return
+		}
+		// Qualified supertype name: `: System.Collections.List` —
+		// each segment after a `.` overwrites classBaseLastIdent so
+		// the leaf wins. The `.` handler doesn't update prevByte to
+		// 'i' until we set it below, so this branch is the only
+		// place dotted segments hit the supertype capture.
+		if b.inSuperTypes && b.supertypeAngleDepth == 0 {
+			b.classBaseLastIdent = name
 		}
 		b.emitPropertyRef(name, mkSpan(startByte, endByte))
 		b.prevByte = 'i'
@@ -949,6 +1028,12 @@ func (b *builder) handleIdent(word []byte) {
 				b.recordPrimaryCtor = true
 				b.recordOwnerDeclIdx = len(b.res.Decls) - 1
 			}
+		}
+		// Track the class/interface so the upcoming `: Base, IA, IB`
+		// inheritance clause appends supertype names onto its decl.
+		// Cleared when the body `{` opens.
+		if kind == scope.KindClass || kind == scope.KindInterface {
+			b.pendingClassDeclIdx = len(b.res.Decls) - 1
 		}
 		b.declContext = ""
 		b.genericParamsExpected = true
@@ -1090,7 +1175,36 @@ func (b *builder) handleIdent(word []byte) {
 
 	// Fallback: emit as a ref.
 	b.emitRef(name, mkSpan(startByte, endByte))
+	// Supertype name capture: while inside the inheritance clause
+	// at depth 0 (outside `<...>` generic args), record the latest
+	// ident. Qualified names `Foo.Bar.Base` reduce to the leaf via
+	// "last ident wins".
+	if b.inSuperTypes && b.supertypeAngleDepth == 0 {
+		b.classBaseLastIdent = name
+	}
 	b.prevByte = 'i'
+}
+
+// flushSuperTypeArg appends the captured base/interface ident to
+// classSuperTypes and resets the per-section state. Called on `,`
+// inside the inheritance clause.
+func (b *builder) flushSuperTypeArg() {
+	if b.pendingClassDeclIdx < 0 || b.classBaseLastIdent == "" {
+		b.classBaseLastIdent = ""
+		return
+	}
+	b.classSuperTypes[b.pendingClassDeclIdx] = append(
+		b.classSuperTypes[b.pendingClassDeclIdx], b.classBaseLastIdent)
+	b.classBaseLastIdent = ""
+}
+
+// flushSuperTypeSection finalises the inheritance window and clears
+// inSuperTypes. Called on body `{` and on the `where` constraint
+// keyword that terminates the base list.
+func (b *builder) flushSuperTypeSection() {
+	b.flushSuperTypeArg()
+	b.inSuperTypes = false
+	b.supertypeAngleDepth = 0
 }
 
 func (b *builder) handleOpenBrace() {
@@ -1103,6 +1217,15 @@ func (b *builder) handleOpenBrace() {
 		kind = *b.pendingScope
 		b.pendingScope = nil
 		b.genericParamsExpected = false
+	}
+	// Class / interface body opens — flush the pending supertype
+	// section onto Decl.SuperTypes and clear the trackers so
+	// nothing leaks into the body.
+	if b.inSuperTypes {
+		b.flushSuperTypeSection()
+	}
+	if kind == scope.ScopeClass || kind == scope.ScopeInterface {
+		b.pendingClassDeclIdx = -1
 	}
 	// Any pending namespace decl becomes a block namespace scope;
 	// drop the pending marker so it isn't also opened on the next

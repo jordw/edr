@@ -43,7 +43,18 @@ func csharpCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.
 	}
 
 	if sym.Receiver != "" {
-		csEmitHierarchySpans(out, resolver, sym, target)
+		var extraCandidates []string
+		if refs, err := db.FindSemanticReferences(ctx, sym.Receiver, sym.File); err == nil {
+			seen := map[string]struct{}{sym.File: {}}
+			for _, r := range refs {
+				if _, ok := seen[r.File]; ok {
+					continue
+				}
+				seen[r.File] = struct{}{}
+				extraCandidates = append(extraCandidates, r.File)
+			}
+		}
+		EmitOverrideSpans(out, csharpResolverDeps{r: resolver}, sym, extraCandidates...)
 	}
 
 	candidates := map[string]bool{}
@@ -154,59 +165,25 @@ func csharp_ext_matches(file string, exts []string) bool {
 }
 
 
-func csEmitHierarchySpans(out map[string][]span, resolver *namespace.CSharpResolver, sym *index.SymbolInfo, target *scope.Decl) {
-	src := resolver.Source(sym.File)
-	if len(src) == 0 {
-		return
-	}
-	hier := namespace.CSFindClassHierarchy(src)
-	if len(hier) == 0 {
-		return
-	}
-	var enclosing *namespace.CSClassHierarchy
-	for i := range hier {
-		h := &hier[i]
-		if h.BodyStart <= target.Span.StartByte && target.Span.EndByte <= h.BodyEnd {
-			enclosing = h
-			break
-		}
-	}
-	if enclosing == nil {
-		return
-	}
-	related := map[string]bool{}
-	for _, t := range namespace.CSRelatedTypes(src, enclosing.Name) {
-		related[t] = true
-	}
-	if len(related) == 0 {
-		return
-	}
-	targetRes := resolver.Result(sym.File)
-	if targetRes == nil {
-		return
-	}
-	for _, h := range hier {
-		if !related[h.Name] || h.Name == enclosing.Name {
-			continue
-		}
-		for i := range targetRes.Decls {
-			d := &targetRes.Decls[i]
-			if d.Name != sym.Name {
-				continue
-			}
-			if d.Kind != scope.KindMethod && d.Kind != scope.KindFunction {
-				continue
-			}
-			if d.Span.StartByte < h.BodyStart || d.Span.EndByte > h.BodyEnd {
-				continue
-			}
-			if d.ID == target.ID {
-				continue
-			}
-			out[sym.File] = append(out[sym.File], span{
-				start: d.Span.StartByte,
-				end:   d.Span.EndByte,
-			})
-		}
-	}
+// csharpResolverDeps adapts CSharpResolver to the dispatch
+// HierarchyDeps interface used by EmitOverrideSpans.
+type csharpResolverDeps struct {
+	r *namespace.CSharpResolver
+}
+
+func (d csharpResolverDeps) Result(file string) *scope.Result { return d.r.Result(file) }
+func (d csharpResolverDeps) SamePackageFiles(file string) []string {
+	return d.r.SamePackageFiles(file)
+}
+func (d csharpResolverDeps) FilesForImport(spec, importingFile string) []string {
+	return d.r.FilesForImport(spec, importingFile)
+}
+
+// ImportSpec rebuilds a C# `using Foo.Bar;` spec from a KindImport
+// decl. The CS builder stamps Signature with the dotted module
+// path; the imported binding name (when aliased via `using
+// Alias = Foo.Bar`) is the alias, not the spec.
+func (d csharpResolverDeps) ImportSpec(decl *scope.Decl) string {
+	module, _ := SplitImportSignature(decl)
+	return module
 }
