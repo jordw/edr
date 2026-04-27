@@ -28,6 +28,8 @@ func resolveImports(parsed []parsedFile, root string) {
 	resolveImportsCSharp(parsed)
 	resolveImportsC(parsed)
 	resolveImportsCpp(parsed)
+	resolveImportsLua(parsed)
+	resolveImportsZig(parsed)
 }
 
 // parseImportSignature splits a Decl.Signature value stamped by a

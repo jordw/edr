@@ -13,6 +13,7 @@
 //   - `pub const Name = struct/enum/union/error{}`   → KindClass / KindEnum / KindType
 //   - `pub const x = expr`                           → KindConst
 //   - `var x = expr`                                 → KindVar
+//   - `const x = @import("path.zig")` (also `var`)    → KindImport
 //   - Function params (`name: T`)                    → KindParam
 //   - Block-scope captures `if (cond) |x| { ... }`,
 //     `while (cond) |x| { }`, `for (xs) |x, i| { }`  → KindLet
@@ -45,6 +46,7 @@ func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 		canonicalPath: canonicalPath,
 		res:           &scope.Result{File: file},
 		s:             lexkit.New(src),
+		importDeclIdx: -1,
 	}
 	b.openScope(scope.ScopeFile, 0)
 	b.run()
@@ -100,6 +102,15 @@ type builder struct {
 	pendingFunc       bool
 	pendingClassKind  scope.ScopeKind // if non-empty, opens with this Kind
 
+	// Import-binding detection: `const NAME = @import("PATH")` (also
+	// `var`) rewrites the buffered KindConst/KindVar decl to KindImport
+	// with Signature "<PATH>\x00*". importDeclIdx records the index of
+	// the buffered decl whose kind we'll rewrite if the next
+	// `@import("...")` lands within the same statement; importPending
+	// is true between seeing `@import` and capturing the string literal.
+	importDeclIdx int
+	importPending bool
+
 	prevByte byte
 }
 
@@ -135,7 +146,11 @@ func (b *builder) run() {
 		case c == '/' && b.s.PeekAt(1) == '/':
 			b.s.SkipLineComment()
 		case c == '"':
+			start := b.s.Pos
 			b.s.ScanSimpleString('"')
+			if b.importPending {
+				b.applyImportPath(start, b.s.Pos)
+			}
 			b.prevByte = '"'
 		case c == '\'':
 			b.s.ScanSimpleString('\'')
@@ -145,7 +160,14 @@ func (b *builder) run() {
 			// without emitting a ref — the name is reserved syntax.
 			b.s.Pos++
 			if !b.s.EOF() && lexkit.DefaultIdentStart[b.s.Peek()] {
-				b.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
+				word := b.s.ScanIdentTable(&lexkit.DefaultIdentStart, &lexkit.DefaultIdentCont)
+				// `const NAME = @import("PATH")`: arm string capture
+				// so the next string literal is treated as the import
+				// path. Only fires when we have a buffered const/var
+				// decl (importDeclIdx >= 0) and the prior token was `=`.
+				if string(word) == "import" && b.importDeclIdx >= 0 && b.prevByte == '=' {
+					b.importPending = true
+				}
 			}
 			b.prevByte = ')'
 		case c == '(':
@@ -224,6 +246,8 @@ func (b *builder) run() {
 			b.containerScope = ""
 			b.pendingFunc = false
 			b.pendingClassKind = ""
+			b.importDeclIdx = -1
+			b.importPending = false
 			b.prevByte = ';'
 		case c == '=':
 			b.s.Pos++
@@ -392,6 +416,10 @@ func (b *builder) handleDeclName(name string, span scope.Span) {
 		b.declSeen = true
 		// Stash idx so we can rewrite the kind on container detection.
 		b.funcDeclIdx = idx
+		// Also record as the import-binding candidate; if the RHS turns
+		// out to be `@import("...")` we'll rewrite kind to KindImport.
+		b.importDeclIdx = idx
+		b.importPending = false
 	case declTest:
 		// `test "name" { ... }` or `test { ... }` — just open a block scope
 		// at the body. Don't emit a decl; the test name (if any) is a
@@ -509,6 +537,31 @@ func (b *builder) emitDeclLocal(name string, span scope.Span, kind scope.DeclKin
 		Exported:  b.declPub,
 	})
 	return idx
+}
+
+// applyImportPath finalises a `const NAME = @import("PATH")` (or
+// `var NAME = ...`) detection by rewriting the buffered KindConst /
+// KindVar decl to KindImport with Signature "<PATH>\x00*". startPos
+// and endPos cover the scanned string literal including its opening
+// and closing double quotes.
+func (b *builder) applyImportPath(startPos, endPos int) {
+	b.importPending = false
+	idx := b.importDeclIdx
+	b.importDeclIdx = -1
+	if idx < 0 || idx >= len(b.res.Decls) {
+		return
+	}
+	if endPos-startPos < 2 || b.s.Src[startPos] != '"' || b.s.Src[endPos-1] != '"' {
+		return
+	}
+	path := string(b.s.Src[startPos+1 : endPos-1])
+	if path == "" {
+		return
+	}
+	d := &b.res.Decls[idx]
+	d.Kind = scope.KindImport
+	// Whole-module handle (Zig has no per-name import syntax).
+	d.Signature = path + "\x00*"
 }
 
 func (b *builder) emitRef(name string, span scope.Span) {

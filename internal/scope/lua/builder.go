@@ -8,6 +8,8 @@
 // What this builder handles:
 //   - `local name = expr` / `local name`             → KindLet
 //   - `local a, b, c = ...`                          → multiple KindLet
+//   - `local name = require("path")`                 → KindImport
+//     (also `require"path"` and `require'path'`)
 //   - `local function name(...)`                     → KindFunction (current scope)
 //   - `function name(...)`                           → KindFunction (file scope)
 //   - `function obj.f(...)` / `function obj:f(...)`  → KindMethod (file scope)
@@ -93,6 +95,19 @@ type builder struct {
 	// in the current scope.
 	localPending bool
 
+	// Require-binding detection: `local NAME = require("PATH")` rewrites
+	// the buffered KindLet decl to KindImport with Signature
+	// "<PATH>\x00<NAME>" so the imports_lua resolver can rebind refs to
+	// the source module's exported decl.
+	//
+	// Single-LHS only: multi-LHS forms like `local a, b = require("x"),
+	// require("y")` are out of scope; we disable detection when the LHS
+	// has more than one name.
+	localFirstDeclIdx int  // res.Decls index of the lone `local` decl, -1 if 0 or 2+
+	localDeclCount    int  // number of decls emitted in current `local` statement
+	requireRHSExpect  bool // saw `=` after single-LHS `local`; expect `require` next
+	requirePending    bool // saw `require` ident in RHS; expect string literal
+
 	// forVars: state for `for NAME[, NAME]* (in|=) ... do`. Idents up to
 	// `in` or `=` become KindLet decls; opened in the do-block scope.
 	forVarsPending bool
@@ -147,17 +162,27 @@ func (b *builder) run() {
 			// Newline ends a `local` statement if no `=` was seen — flush
 			// pending names as decls.
 			b.flushLocalIfPending()
+			b.clearRequireDetection()
 		case c == ';':
 			b.s.Pos++
 			b.flushLocalIfPending()
+			b.clearRequireDetection()
 			b.prevByte = ';'
 		case c == '-' && b.s.PeekAt(1) == '-':
 			b.skipComment()
 		case c == '"':
+			start := b.s.Pos
 			b.s.ScanSimpleString('"')
+			if b.requirePending {
+				b.applyRequirePath(start, b.s.Pos, '"')
+			}
 			b.prevByte = '"'
 		case c == '\'':
+			start := b.s.Pos
 			b.s.ScanSimpleString('\'')
+			if b.requirePending {
+				b.applyRequirePath(start, b.s.Pos, '\'')
+			}
 			b.prevByte = '\''
 		case c == '[' && (b.s.PeekAt(1) == '[' || b.s.PeekAt(1) == '='):
 			save := b.s.Pos
@@ -218,13 +243,20 @@ func (b *builder) run() {
 				b.prevByte = '='
 				break
 			}
-			// `local NAME = ...` — flush pending names as decls.
+			// `local NAME = ...` — flush pending names as decls. If the
+			// LHS was a single name, arm require-binding detection so
+			// `local NAME = require("PATH")` retroactively becomes a
+			// KindImport.
+			if b.localPending && b.localDeclCount == 1 && b.localFirstDeclIdx >= 0 {
+				b.requireRHSExpect = true
+			}
 			b.flushLocalIfPending()
 			// `for NAME = init, limit do` — first form (numeric).
 			b.flushForVarsIfPending()
 			b.prevByte = '='
 		case c == ',':
 			b.s.Pos++
+			b.clearRequireDetection()
 			b.prevByte = ','
 		case lexkit.DefaultIdentStart[c]:
 			startByte := uint32(b.s.Pos)
@@ -304,8 +336,17 @@ func (b *builder) handleIdent(word []byte, startByte, endByte uint32) {
 			b.prevByte = 'k'
 			return
 		}
-		// Otherwise it's `local x[, y]+ [= ...]`. Buffer as KindLet.
-		b.emitDeclLocal(name, span, scope.KindLet)
+		// Otherwise it's `local x[, y]+ [= ...]`. Buffer as KindLet —
+		// may be retroactively rewritten to KindImport if the RHS
+		// turns out to be `require("...")` and this is the only name.
+		idx := b.emitDeclLocal(name, span, scope.KindLet)
+		if b.localDeclCount == 0 {
+			b.localFirstDeclIdx = idx
+		} else {
+			// 2+ LHS names disable require-binding detection.
+			b.localFirstDeclIdx = -1
+		}
+		b.localDeclCount++
 		b.prevByte = 'i'
 		return
 	}
@@ -316,6 +357,10 @@ func (b *builder) handleIdent(word []byte, startByte, endByte uint32) {
 		b.prevByte = 'k'
 	case "local":
 		b.localPending = true
+		b.localFirstDeclIdx = -1
+		b.localDeclCount = 0
+		b.requireRHSExpect = false
+		b.requirePending = false
 		b.prevByte = 'k'
 	case "do":
 		// Standalone `do` or the body opener after `while`/`for`. Either
@@ -374,6 +419,19 @@ func (b *builder) handleIdent(word []byte, startByte, endByte uint32) {
 			b.funcLastSpan = span
 			b.prevByte = 'i'
 			return
+		}
+		// `local NAME = require("PATH")` — if we're in require-RHS-
+		// expect state and this ident is `require`, suppress the ref
+		// (so it doesn't show up as an unresolved global) and arm
+		// string capture. Any other ident in this position cancels
+		// detection — the RHS isn't a require call.
+		if b.requireRHSExpect {
+			b.requireRHSExpect = false
+			if name == "require" {
+				b.requirePending = true
+				b.prevByte = 'i'
+				return
+			}
 		}
 		b.emitRef(name, span)
 		b.prevByte = 'i'
@@ -450,6 +508,44 @@ func (b *builder) flushLocalIfPending() {
 	if b.localPending {
 		b.localPending = false
 	}
+}
+
+// clearRequireDetection resets require-binding detection state without
+// applying any rewrite. Called at statement boundaries (newline, `;`,
+// `,`) so a stale `local NAME = require` that never reached its string
+// literal doesn't accidentally rewrite a later decl.
+func (b *builder) clearRequireDetection() {
+	b.requireRHSExpect = false
+	b.requirePending = false
+	b.localFirstDeclIdx = -1
+	b.localDeclCount = 0
+}
+
+// applyRequirePath finalises a `local NAME = require("PATH")` detection
+// by rewriting the buffered KindLet decl to KindImport with a Signature
+// shaped per the cross-language convention ("<modulePath>\x00<origName>").
+// startPos and endPos are the byte range of the scanned string literal
+// including the quotes; quote is the matching quote byte.
+func (b *builder) applyRequirePath(startPos, endPos int, quote byte) {
+	b.requirePending = false
+	idx := b.localFirstDeclIdx
+	if idx < 0 || idx >= len(b.res.Decls) {
+		return
+	}
+	if endPos-startPos < 2 || b.s.Src[startPos] != quote || b.s.Src[endPos-1] != quote {
+		return
+	}
+	path := string(b.s.Src[startPos+1 : endPos-1])
+	if path == "" {
+		return
+	}
+	d := &b.res.Decls[idx]
+	d.Kind = scope.KindImport
+	// Lua's require returns the whole module table; there is no per-name
+	// import syntax. Use the cross-language module-handle convention
+	// (origName="*") so the resolver treats this as a module binding,
+	// not a named-export rewrite.
+	d.Signature = path + "\x00*"
 }
 
 func (b *builder) flushForVarsIfPending() {
