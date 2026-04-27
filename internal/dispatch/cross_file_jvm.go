@@ -2,7 +2,6 @@ package dispatch
 
 import (
 	"context"
-	"strings"
 
 	"github.com/jordw/edr/internal/index"
 	"github.com/jordw/edr/internal/scope"
@@ -267,109 +266,31 @@ func javaCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sy
 	return out, true
 }
 
+// javaResolverDeps adapts JavaResolver to the dispatch
+// HierarchyDeps interface used by EmitOverrideSpans.
+type javaResolverDeps struct {
+	r *namespace.JavaResolver
+}
+
+func (d javaResolverDeps) Result(file string) *scope.Result { return d.r.Result(file) }
+func (d javaResolverDeps) SamePackageFiles(file string) []string {
+	return d.r.SamePackageFiles(file)
+}
+func (d javaResolverDeps) FilesForImport(spec, importingFile string) []string {
+	return d.r.FilesForImport(spec, importingFile)
+}
+
 // javaHierarchySpans returns identifier-level spans for every
 // same-name method decl in an interface or parent class that sym's
-// enclosing class extends/implements. Returns nil for non-method
-// targets or when the target class has no supertypes recorded.
+// enclosing class extends/implements (and vice versa — subclasses
+// of sym's class). Delegates to the shared EmitOverrideSpans walker.
 //
-// The scan is bounded: we look at same-package siblings and files
-// reached by the target file''s imports. We do not chase transitive
-// supertype chains (renaming a method on a grandchild class would
-// update the direct parent but not the grandparent) — the common
-// case is immediate interface implementation, which this covers.
+// The scan is bounded: same-package siblings + files reached via
+// the target file's imports. Transitive supertype chains
+// (grandparents, etc.) are out of scope for v1.
 func javaHierarchySpans(sym *index.SymbolInfo, r *namespace.JavaResolver) map[string][]span {
 	out := map[string][]span{}
-	if sym.Receiver == "" {
-		return out // not a method; nothing to do
-	}
-	targetRes := r.Result(sym.File)
-	if targetRes == nil {
-		return out
-	}
-	// Find the enclosing class decl in the target file by name.
-	var supers []string
-	for i := range targetRes.Decls {
-		d := &targetRes.Decls[i]
-		if d.Name == sym.Receiver && d.Scope == scope.ScopeID(1) {
-			supers = d.SuperTypes
-			break
-		}
-	}
-	if len(supers) == 0 {
-		return out
-	}
-	// Candidate files to scan: same-package siblings + anything
-	// reachable via the target file''s imports.
-	var candidates []string
-	candidates = append(candidates, r.SamePackageFiles(sym.File)...)
-	for _, d := range targetRes.Decls {
-		if d.Kind != scope.KindImport {
-			continue
-		}
-		idx := strings.IndexByte(d.Signature, 0)
-		var modulePath, originalName string
-		if idx >= 0 {
-			modulePath = d.Signature[:idx]
-			originalName = d.Signature[idx+1:]
-		} else {
-			modulePath = d.Signature
-		}
-		var spec string
-		if originalName == "*" {
-			spec = modulePath + ".*"
-		} else if originalName != "" {
-			spec = modulePath + "." + originalName
-		} else {
-			spec = modulePath
-		}
-		candidates = append(candidates, r.FilesForImport(spec, sym.File)...)
-	}
-	// For each candidate, look for a class/interface decl whose name
-	// is in our supertype list. If the containing class has a
-	// same-name method as the target, emit that method''s span.
-	seenSpan := map[[3]uint32]bool{}
-	for _, cand := range candidates {
-		candRes := r.Result(cand)
-		if candRes == nil {
-			continue
-		}
-		// Find the supertype class/interface''s decl index (it''s at
-		// file scope; scope ID tracks the class body).
-		superScopeID := scope.ScopeID(0)
-		for i := range candRes.Decls {
-			d := &candRes.Decls[i]
-			if d.Scope != scope.ScopeID(1) {
-				continue
-			}
-			for _, s := range supers {
-				if d.Name == s {
-					// Find the scope ID that represents this class''s body.
-					// It''s the first scope with FullSpan inside/after
-					// d''s FullSpan. Simpler: scan decls whose scope
-					// is nested inside this decl''s FullSpan.
-					for j := range candRes.Decls {
-						m := &candRes.Decls[j]
-						if m.Kind == scope.KindMethod && m.Name == sym.Name &&
-							m.Span.StartByte >= d.Span.StartByte &&
-							m.Span.EndByte <= d.FullSpan.EndByte {
-							key := [3]uint32{uint32(len(out)), m.Span.StartByte, m.Span.EndByte}
-							if seenSpan[key] {
-								continue
-							}
-							seenSpan[key] = true
-							// Supertype's method declaration — emit
-							// the identifier span directly.
-							out[cand] = append(out[cand], span{
-								start: m.Span.StartByte,
-								end:   m.Span.EndByte,
-							})
-						}
-					}
-					_ = superScopeID
-				}
-			}
-		}
-	}
+	EmitOverrideSpans(out, javaResolverDeps{r: r}, sym)
 	return out
 }
 

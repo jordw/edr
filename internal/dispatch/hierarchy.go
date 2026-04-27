@@ -1,0 +1,303 @@
+package dispatch
+
+import (
+	"github.com/jordw/edr/internal/index"
+	"github.com/jordw/edr/internal/scope"
+)
+
+// HierarchyDeps is the per-language data the hierarchy walker needs.
+// Implementations adapt the language's resolver (JavaResolver,
+// TSResolver, etc.) to the small surface required for cross-file
+// supertype/subtype walks.
+type HierarchyDeps interface {
+	// Result returns the parsed scope.Result for `file`. The walker
+	// tolerates nil — files that fail to parse are skipped.
+	Result(file string) *scope.Result
+
+	// SamePackageFiles returns sibling files that share the same
+	// logical module / package as `file` (Java package, Kotlin
+	// package, Python package directory, Ruby module nesting in
+	// Zeitwerk-style projects, etc.). Empty if the language has no
+	// same-package concept.
+	SamePackageFiles(file string) []string
+
+	// FilesForImport resolves an import specification appearing in
+	// `importingFile` to the target file paths. Multiple paths may
+	// be returned for languages with ambiguous resolution rules
+	// (Python sys.path, C #include search). Empty when the spec is
+	// external (stdlib / third-party / unresolved).
+	FilesForImport(spec, importingFile string) []string
+}
+
+// EmitOverrideSpans walks the inheritance hierarchy reachable from
+// the rename target's enclosing class and appends override-method
+// identifier spans to `out`. Both directions are walked:
+//
+//   - Up (supers): for each class/interface name in the enclosing's
+//     SuperTypes, find its same-name method in same-package or
+//     imported files and emit its identifier span. Renaming
+//     ServiceImpl.run also rewrites Service.run on the interface.
+//
+//   - Down (subs): for each class in same-package or imported files
+//     whose SuperTypes includes the enclosing's name, emit its
+//     same-name method's identifier span. Renaming Service.run on
+//     the interface also rewrites ServiceImpl.run on every
+//     implementation.
+//
+// Constraints (intentional v1):
+//   - Method matching is by name only. Signature-aware matching
+//     (arity, types) belongs to a later pass; method-overloading
+//     languages (Java/C++) may emit too many spans for now.
+//   - Only one hop in each direction. Transitive walks (A → B → C)
+//     are out of scope until repeat-traversal cycles are guarded.
+//   - sym.Receiver must be populated — non-method targets short-
+//     circuit. The Receiver field is stamped by the symbol index
+//     based on the parser's notion of the method's owner.
+//   - Candidate files exclude the target file, so the rename
+//     target's own decl is never re-emitted.
+func EmitOverrideSpans(out map[string][]span, deps HierarchyDeps, sym *index.SymbolInfo) {
+	if sym.Receiver == "" {
+		return
+	}
+	if deps == nil {
+		return
+	}
+
+	targetRes := deps.Result(sym.File)
+	if targetRes == nil {
+		return
+	}
+
+	// Find the enclosing class/interface decl in the target file by
+	// matching name + file-scope + class-like kind. Receiver names
+	// are language-specific but the lookup convention is shared.
+	encl := findEnclosingClass(targetRes, sym.Receiver)
+	if encl == nil {
+		return
+	}
+
+	// Candidate files: same-package siblings + anything reachable via
+	// the target file's import graph. For a Java rename in
+	// com/example/A.java extending com.other.Base, the candidates
+	// include com/example/*.java AND com/other/Base.java.
+	candidates := gatherHierarchyCandidates(deps, sym.File, targetRes)
+
+	// Track emitted (file, startByte, endByte) so duplicate
+	// candidate paths don't double-emit the same span.
+	seen := map[hierarchyKey]struct{}{}
+
+	// Up walk: for each super name, find a class with that name in
+	// candidates and emit its same-name method.
+	for _, superName := range encl.SuperTypes {
+		emitMatchingMethodInClass(out, deps, candidates, superName, sym.Name, seen)
+	}
+
+	// Down walk: for each candidate, find classes whose SuperTypes
+	// list contains the enclosing's name and emit their same-name
+	// method.
+	for _, cand := range candidates {
+		candRes := deps.Result(cand)
+		if candRes == nil {
+			continue
+		}
+		for i := range candRes.Decls {
+			d := &candRes.Decls[i]
+			if !isClassLikeFileScope(d) {
+				continue
+			}
+			if !containsString(d.SuperTypes, encl.Name) {
+				continue
+			}
+			emitMatchingMethodInClassDecl(out, cand, candRes, d, sym.Name, seen)
+		}
+	}
+}
+
+type hierarchyKey struct {
+	file  string
+	start uint32
+	end   uint32
+}
+
+// findEnclosingClass returns the file-scope class/interface/enum
+// decl whose name matches receiverName, or nil. The match relies on
+// the convention that all class-like decls live at file scope
+// (Scope == ScopeID(1) — the file's own scope, since 0 is the zero
+// value for "no scope assigned").
+func findEnclosingClass(r *scope.Result, receiverName string) *scope.Decl {
+	for i := range r.Decls {
+		d := &r.Decls[i]
+		if d.Name != receiverName {
+			continue
+		}
+		if !isClassLikeFileScope(d) {
+			continue
+		}
+		return d
+	}
+	return nil
+}
+
+// isClassLikeFileScope reports whether d is a top-level class /
+// interface / enum / record declaration. We accept anything in the
+// class kinds since per-language nuances (records, enums, traits,
+// protocols) all act as receiver types for methods.
+func isClassLikeFileScope(d *scope.Decl) bool {
+	if d.Scope != scope.ScopeID(1) {
+		return false
+	}
+	switch d.Kind {
+	case scope.KindClass, scope.KindInterface, scope.KindEnum, scope.KindType:
+		return true
+	}
+	return false
+}
+
+// gatherHierarchyCandidates returns the deduped union of same-
+// package siblings and import-resolvable files for the target file.
+// The same target file is excluded (caller emits same-file spans
+// elsewhere).
+func gatherHierarchyCandidates(deps HierarchyDeps, targetFile string, targetRes *scope.Result) []string {
+	seen := map[string]struct{}{targetFile: {}}
+	var out []string
+	add := func(f string) {
+		if _, ok := seen[f]; ok {
+			return
+		}
+		seen[f] = struct{}{}
+		out = append(out, f)
+	}
+
+	for _, f := range deps.SamePackageFiles(targetFile) {
+		add(f)
+	}
+
+	for i := range targetRes.Decls {
+		d := &targetRes.Decls[i]
+		if d.Kind != scope.KindImport {
+			continue
+		}
+		spec := importSpecFromDecl(d)
+		if spec == "" {
+			continue
+		}
+		for _, f := range deps.FilesForImport(spec, targetFile) {
+			add(f)
+		}
+	}
+	return out
+}
+
+// importSpecFromDecl reconstructs the original import specification
+// from a KindImport decl's Signature. The cross-language convention
+// is "<modulePath>\x00<origName>" with origName == "*" for whole-
+// module imports. Java callers historically reassemble e.g.
+// "org.springframework.core.MyClass" by joining module and name —
+// preserve that shape here.
+func importSpecFromDecl(d *scope.Decl) string {
+	sig := d.Signature
+	if sig == "" {
+		return ""
+	}
+	idx := -1
+	for i := 0; i < len(sig); i++ {
+		if sig[i] == 0 {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return sig
+	}
+	module := sig[:idx]
+	orig := sig[idx+1:]
+	switch orig {
+	case "", "*":
+		// Whole-module / star: reassemble as module path. For
+		// Java this is "pkg.*"; for languages that don't use
+		// trailing-star wildcards the resolver typically tolerates
+		// the bare module form.
+		return module + ".*"
+	default:
+		return module + "." + orig
+	}
+}
+
+// emitMatchingMethodInClass searches every candidate file for a
+// class whose Name matches className, then within that class emits
+// the identifier span of any method whose Name matches methodName.
+func emitMatchingMethodInClass(
+	out map[string][]span,
+	deps HierarchyDeps,
+	candidates []string,
+	className, methodName string,
+	seen map[hierarchyKey]struct{},
+) {
+	for _, cand := range candidates {
+		candRes := deps.Result(cand)
+		if candRes == nil {
+			continue
+		}
+		for i := range candRes.Decls {
+			d := &candRes.Decls[i]
+			if d.Name != className {
+				continue
+			}
+			if !isClassLikeFileScope(d) {
+				continue
+			}
+			emitMatchingMethodInClassDecl(out, cand, candRes, d, methodName, seen)
+		}
+	}
+}
+
+// emitMatchingMethodInClassDecl emits identifier spans for every
+// method in classDecl's body whose name matches methodName, modulo
+// previously-seen spans.
+func emitMatchingMethodInClassDecl(
+	out map[string][]span,
+	file string,
+	res *scope.Result,
+	classDecl *scope.Decl,
+	methodName string,
+	seen map[hierarchyKey]struct{},
+) {
+	bodyEnd := classDecl.FullSpan.EndByte
+	if bodyEnd == 0 {
+		// FullSpan unset — fall back to the identifier span end,
+		// which is at least non-zero. Methods inside a class
+		// without FullSpan won't be matched, but the span check
+		// also won't false-positive into other decls.
+		bodyEnd = classDecl.Span.EndByte
+	}
+	for i := range res.Decls {
+		m := &res.Decls[i]
+		if m.Kind != scope.KindMethod {
+			continue
+		}
+		if m.Name != methodName {
+			continue
+		}
+		if m.Span.StartByte < classDecl.Span.StartByte || m.Span.EndByte > bodyEnd {
+			continue
+		}
+		key := hierarchyKey{file: file, start: m.Span.StartByte, end: m.Span.EndByte}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out[file] = append(out[file], span{
+			start: m.Span.StartByte,
+			end:   m.Span.EndByte,
+		})
+	}
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
