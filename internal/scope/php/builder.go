@@ -63,17 +63,27 @@ func Parse(file string, src []byte) *scope.Result {
 // cross-file references via imports can bind to matching DeclIDs.
 func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 	b := &builder{
-		file:             file,
-		canonicalPath:    canonicalPath,
-		res:              &scope.Result{File: file},
-		s:                lexkit.New(src),
-		pendingOwnerDecl: -1,
-		stmtStart:        true,
+		file:                file,
+		canonicalPath:       canonicalPath,
+		res:                 &scope.Result{File: file},
+		s:                   lexkit.New(src),
+		pendingOwnerDecl:    -1,
+		stmtStart:           true,
+		pendingClassDeclIdx: -1,
+		pendingTraitUseIdx:  -1,
+		classSuperTypes:     map[int][]string{},
 	}
 	b.openScope(scope.ScopeFile, 0)
 	b.run()
 	b.closeScopesToDepth(0)
 	b.resolveRefs()
+	// Copy classSuperTypes onto Decl.SuperTypes so the cross-file
+	// hierarchy walker (EmitOverrideSpans) can read them.
+	for idx, supers := range b.classSuperTypes {
+		if idx >= 0 && idx < len(b.res.Decls) && len(supers) > 0 {
+			b.res.Decls[idx].SuperTypes = supers
+		}
+	}
 	scope.MergeDuplicateDecls(b.res)
 	return b.res
 }
@@ -161,6 +171,32 @@ type builder struct {
 	// '{') to patch FullSpan.EndByte on the method decl, not the
 	// enclosing class scope.
 	pendingMethodOwnerDecl int
+
+	// Class-supertype tracking — populates Decl.SuperTypes for class /
+	// interface decls so the cross-file hierarchy walker
+	// (EmitOverrideSpans) can walk both directions.
+	//
+	// Header form: `class Foo extends Base implements I1, I2`. The
+	// pendingClassDeclIdx holds the just-emitted class/interface
+	// decl until its body `{` opens; inSuperTypes is on between
+	// `extends`/`implements` and `{`; superTypeNeedsName is true
+	// at the start of a section (after the keyword or a `,`).
+	// classBaseLastIdent records the most recent ident in the
+	// section (handles qualified names `\Foo\Bar` — last segment
+	// wins) and is flushed on `,`/keyword/`{`.
+	//
+	// Body form: `class Foo { use Trait1, Trait2; ... }`. The trait
+	// `use` statement is detected at stmt-start in class scope;
+	// pendingTraitUseIdx is the enclosing class decl index, and
+	// idents are captured into classSuperTypes until the `;`
+	// terminator.
+	pendingClassDeclIdx     int
+	inSuperTypes            bool
+	superTypeNeedsName      bool
+	classBaseLastIdent      string
+	pendingTraitUseIdx      int
+	traitUseLastIdent       string
+	classSuperTypes         map[int][]string
 
 	// Namespace statement handling: `namespace Foo\Bar;` opens a
 	// namespace scope for everything that follows (until another
@@ -285,10 +321,24 @@ func (b *builder) run() {
 			if b.inParamList && b.paramDepth == 1 {
 				b.paramSectionNeedsName = true
 			}
+			// Supertype list separator (`implements I1, I2`): flush
+			// the captured name and reset for the next section.
+			if b.inSuperTypes {
+				b.flushSuperTypeArg()
+			}
+			// Trait-use list separator (`use Trait1, Trait2`).
+			if b.pendingTraitUseIdx >= 0 {
+				b.flushTraitUseArg()
+			}
 			b.closeArrowIfTerminating()
 		case c == ';':
 			b.s.Pos++
 			b.prevByte = ';'
+			// Trait-use statement ends here. Append the final ident
+			// and clear the tracker.
+			if b.pendingTraitUseIdx >= 0 {
+				b.flushTraitUse()
+			}
 			b.endStatement()
 		case c == '[':
 			b.s.Pos++
@@ -610,11 +660,24 @@ func (b *builder) handleIdent(word []byte) {
 		b.handleNamespaceKeyword(startByte)
 		return
 	case "use":
-		// Two forms:
+		// Three forms:
 		//   at stmt-start at file scope: `use Foo\Bar;` import
+		//   at stmt-start in class body: `use Trait1, Trait2;` mixin
 		//   following `)` of a closure param list: `function() use ($x)`
 		if wasStmtStart && b.currentScopeKind() != scope.ScopeClass {
 			b.handleUseImport()
+			return
+		}
+		if wasStmtStart && b.currentScopeKind() == scope.ScopeClass {
+			// Trait-use statement. Bind to the enclosing class decl
+			// via the scope stack's ownerDeclIdx; capture trait
+			// idents until the `;` terminator (or `{` for the
+			// `use Trait { method as alias; }` adjustment block).
+			if classIdx, ok := b.enclosingClassDeclIdx(); ok {
+				b.pendingTraitUseIdx = classIdx
+				b.traitUseLastIdent = ""
+			}
+			b.prevByte = 'k'
 			return
 		}
 		// Closure capture-list form.
@@ -657,8 +720,16 @@ func (b *builder) handleIdent(word []byte) {
 		b.prevByte = 'k'
 		return
 	case "extends", "implements":
-		// Type-position ident(s) follow. Treat as plain refs via normal
-		// fallthrough (do nothing special here).
+		// Type-position ident(s) follow. The first ident in this
+		// section (and the first after each top-level `,`) names a
+		// supertype to record on the pending class. `extends`
+		// terminates a prior implements section and vice versa, so
+		// flush before re-arming.
+		if b.pendingClassDeclIdx >= 0 {
+			b.flushSuperTypeSection()
+			b.inSuperTypes = true
+			b.superTypeNeedsName = true
+		}
 		b.prevByte = 'k'
 		return
 	case "new":
@@ -702,14 +773,18 @@ func (b *builder) handleIdent(word []byte) {
 
 	// After `class`, `interface`, `trait`, `enum`: ident is the decl name.
 	if b.declContext == scope.KindClass {
+		idx := len(b.res.Decls)
 		b.emitDecl(name, scope.KindClass, mkSpan(startByte, endByte), scope.NSValue)
 		b.declContext = ""
+		b.pendingClassDeclIdx = idx
 		b.prevByte = 'i'
 		return
 	}
 	if b.declContext == scope.KindInterface {
+		idx := len(b.res.Decls)
 		b.emitDecl(name, scope.KindInterface, mkSpan(startByte, endByte), scope.NSValue)
 		b.declContext = ""
+		b.pendingClassDeclIdx = idx
 		b.prevByte = 'i'
 		return
 	}
@@ -760,7 +835,85 @@ func (b *builder) handleIdent(word []byte) {
 
 	// Otherwise: emit as a ref.
 	b.emitRef(name, mkSpan(startByte, endByte))
+	// Supertype name capture: while inside a class header's
+	// `extends`/`implements` clause OR a class-body `use Trait1,
+	// Trait2;` statement, record the latest ident as the candidate
+	// supertype name. Qualified names `\Foo\Bar` overwrite on each
+	// segment so the leaf wins (consistent with the cross-language
+	// convention used by the hierarchy walker).
+	if b.inSuperTypes {
+		b.classBaseLastIdent = name
+		b.superTypeNeedsName = false
+	}
+	if b.pendingTraitUseIdx >= 0 {
+		b.traitUseLastIdent = name
+	}
 	b.prevByte = 'i'
+}
+
+// flushSuperTypeArg appends the captured base/interface ident to
+// classSuperTypes and resets the per-section state. Called on `,`
+// inside the extends/implements clause.
+func (b *builder) flushSuperTypeArg() {
+	if b.pendingClassDeclIdx < 0 || b.classBaseLastIdent == "" {
+		b.classBaseLastIdent = ""
+		b.superTypeNeedsName = true
+		return
+	}
+	b.classSuperTypes[b.pendingClassDeclIdx] = append(
+		b.classSuperTypes[b.pendingClassDeclIdx], b.classBaseLastIdent)
+	b.classBaseLastIdent = ""
+	b.superTypeNeedsName = true
+}
+
+// flushSuperTypeSection finalises the entire extends/implements
+// window and clears inSuperTypes. Called on `{` (body opens) and
+// when the keyword switches (`extends Base implements I` flushes
+// "Base" before re-arming for the implements list).
+func (b *builder) flushSuperTypeSection() {
+	b.flushSuperTypeArg()
+	b.inSuperTypes = false
+	b.superTypeNeedsName = false
+	b.classBaseLastIdent = ""
+}
+
+// flushTraitUseArg appends the captured trait ident to the
+// enclosing class's classSuperTypes. Called on `,` inside a
+// `use Trait1, Trait2;` statement.
+func (b *builder) flushTraitUseArg() {
+	if b.pendingTraitUseIdx < 0 || b.traitUseLastIdent == "" {
+		b.traitUseLastIdent = ""
+		return
+	}
+	b.classSuperTypes[b.pendingTraitUseIdx] = append(
+		b.classSuperTypes[b.pendingTraitUseIdx], b.traitUseLastIdent)
+	b.traitUseLastIdent = ""
+}
+
+// flushTraitUse finalises the trait-use statement on `;` and clears
+// the tracker.
+func (b *builder) flushTraitUse() {
+	b.flushTraitUseArg()
+	b.pendingTraitUseIdx = -1
+	b.traitUseLastIdent = ""
+}
+
+// enclosingClassDeclIdx returns the decl index of the nearest
+// enclosing class on the scope stack, or (0, false) if not inside a
+// class body. Used by the trait-use trigger.
+func (b *builder) enclosingClassDeclIdx() (int, bool) {
+	entries := b.stack.Entries()
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := &entries[i]
+		if e.Data.kind != scope.ScopeClass {
+			continue
+		}
+		if e.Data.ownerDeclIdx < 0 {
+			continue
+		}
+		return e.Data.ownerDeclIdx, true
+	}
+	return 0, false
 }
 
 // handleNamespaceKeyword handles `namespace Name;` and `namespace Name { ... }`.
@@ -1069,6 +1222,16 @@ func (b *builder) handleOpenBrace() {
 	if b.pendingScope != nil {
 		kind = *b.pendingScope
 		b.pendingScope = nil
+	}
+	// Class/interface body opens — close the supertype window and
+	// flush the trailing captured name onto Decl.SuperTypes. Done
+	// unconditionally so a malformed class with no `{` body can't
+	// leak state into the next class.
+	if b.inSuperTypes {
+		b.flushSuperTypeSection()
+	}
+	if kind == scope.ScopeClass || kind == scope.ScopeInterface {
+		b.pendingClassDeclIdx = -1
 	}
 	b.openScope(kind, startByte)
 	b.stmtStart = true

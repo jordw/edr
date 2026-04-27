@@ -46,7 +46,18 @@ func phpCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 	}
 
 	if sym.Receiver != "" {
-		phpEmitHierarchySpans(out, resolver, sym, target)
+		var extraCandidates []string
+		if refs, err := db.FindSemanticReferences(ctx, sym.Receiver, sym.File); err == nil {
+			seen := map[string]struct{}{sym.File: {}}
+			for _, r := range refs {
+				if _, ok := seen[r.File]; ok {
+					continue
+				}
+				seen[r.File] = struct{}{}
+				extraCandidates = append(extraCandidates, r.File)
+			}
+		}
+		EmitOverrideSpans(out, phpResolverDeps{r: resolver}, sym, extraCandidates...)
 	}
 
 	candidates := map[string]bool{}
@@ -238,59 +249,31 @@ func phpBaseIdentBefore(src []byte, refStart uint32, isArrow, isScope bool) stri
 }
 
 
-func phpEmitHierarchySpans(out map[string][]span, resolver *namespace.PHPResolver, sym *index.SymbolInfo, target *scope.Decl) {
-	src := resolver.Source(sym.File)
-	if len(src) == 0 {
-		return
+// phpResolverDeps adapts PHPResolver to the dispatch HierarchyDeps
+// interface used by EmitOverrideSpans.
+type phpResolverDeps struct {
+	r *namespace.PHPResolver
+}
+
+func (d phpResolverDeps) Result(file string) *scope.Result { return d.r.Result(file) }
+func (d phpResolverDeps) SamePackageFiles(file string) []string {
+	return d.r.SamePackageFiles(file)
+}
+func (d phpResolverDeps) FilesForImport(spec, importingFile string) []string {
+	return d.r.FilesForImport(spec, importingFile)
+}
+
+// ImportSpec rebuilds the PHP-native FQN. The PHP builder stamps
+// Signature with the namespace path + class name; PSR-4 autoload
+// resolution treats the FQN (`App\Domain\Service`) as the import
+// spec, so reassemble module + name with `\` between.
+func (d phpResolverDeps) ImportSpec(decl *scope.Decl) string {
+	module, orig := SplitImportSignature(decl)
+	if module == "" {
+		return orig
 	}
-	hier := namespace.PHPFindClassHierarchy(src)
-	if len(hier) == 0 {
-		return
+	if orig == "" || orig == "*" {
+		return module
 	}
-	var enclosing *namespace.PHPClassHierarchy
-	for i := range hier {
-		h := &hier[i]
-		if h.BodyStart <= target.Span.StartByte && target.Span.EndByte <= h.BodyEnd {
-			enclosing = h
-			break
-		}
-	}
-	if enclosing == nil {
-		return
-	}
-	related := map[string]bool{}
-	for _, t := range namespace.PHPRelatedTypes(src, enclosing.Name) {
-		related[t] = true
-	}
-	if len(related) == 0 {
-		return
-	}
-	targetRes := resolver.Result(sym.File)
-	if targetRes == nil {
-		return
-	}
-	for _, h := range hier {
-		if !related[h.Name] || h.Name == enclosing.Name {
-			continue
-		}
-		for i := range targetRes.Decls {
-			d := &targetRes.Decls[i]
-			if d.Name != sym.Name {
-				continue
-			}
-			if d.Kind != scope.KindMethod && d.Kind != scope.KindFunction {
-				continue
-			}
-			if d.Span.StartByte < h.BodyStart || d.Span.EndByte > h.BodyEnd {
-				continue
-			}
-			if d.ID == target.ID {
-				continue
-			}
-			out[sym.File] = append(out[sym.File], span{
-				start: d.Span.StartByte,
-				end:   d.Span.EndByte,
-			})
-		}
-	}
+	return module + "\\" + orig
 }
