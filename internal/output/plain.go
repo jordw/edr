@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -408,7 +409,54 @@ func plainEdit(w *os.File, op Op, multi bool) {
 	}
 }
 
+// plainRenameRefused renders a strict-mode (or future) rename
+// refusal: header carries reason + counts + see-also pointer, body
+// lists the first few refused refs in file:line form.
+func plainRenameRefused(w *os.File, op Op) {
+	h := map[string]any{}
+	hStr(h, "status", op, "status")
+	hStr(h, "from", op, "old_name")
+	hStr(h, "to", op, "new_name")
+	hStr(h, "refused_reason", op, "refused_reason")
+	if d, ok := op["refused_detail"].(string); ok && d != "" {
+		h["detail"] = d
+	}
+	if c, ok := op["refused_counts"].(map[string]any); ok && len(c) > 0 {
+		h["refused_counts"] = c
+	}
+	if s, ok := op["see_also"].(string); ok && s != "" {
+		h["see_also"] = s
+	}
+	writeHeader(w, h)
+
+	if examples, ok := op["refused_examples"].([]any); ok {
+		for _, ex := range examples {
+			em, ok := ex.(map[string]any)
+			if !ok {
+				continue
+			}
+			file, _ := em["file"].(string)
+			line := anyInt(em["line"])
+			tier, _ := em["tier"].(string)
+			reason, _ := em["reason"].(string)
+			if reason == "" {
+				fmt.Fprintf(w, "%s:%d  %s\n", file, line, tier)
+			} else {
+				fmt.Fprintf(w, "%s:%d  %s  (%s)\n", file, line, tier, reason)
+			}
+		}
+	}
+}
+
 func plainRename(w *os.File, op Op) {
+	// Refused output: --strict (or future modes) declined to apply.
+	// Render counts + first few examples + the see-also pointer; skip
+	// preview/diffs/files_changed since nothing changed on disk.
+	if status, _ := op["status"].(string); status == "refused" {
+		plainRenameRefused(w, op)
+		return
+	}
+
 	h := map[string]any{}
 	hStr(h, "status", op, "status")
 	hStr(h, "from", op, "old_name")
@@ -919,6 +967,11 @@ func plainRefsTo(w *os.File, op Op) {
 	if b, ok := op["binding"].(map[string]any); ok && len(b) > 0 {
 		h["binding"] = b
 	}
+	// --include-name-match: count of word-bounded text matches that
+	// scope did not bind. by_file / list expansion go in the body.
+	if v := anyInt(op["name_match_extra"]); v > 0 {
+		h["name_match_extra"] = v
+	}
 	if v, ok := op["stale_index"].(bool); ok && v {
 		h["stale_index"] = true
 	}
@@ -956,6 +1009,43 @@ func plainRefsTo(w *os.File, op Op) {
 			fmt.Fprintf(w, "%s%d:%d\n", prefix, line, col)
 		} else {
 			fmt.Fprintf(w, "%s%d:%d  (%s)\n", prefix, line, col, reason)
+		}
+	}
+
+	// --include-name-match expansions. by_file: per-file counts of
+	// name-match-only matches. list: per-occurrence entries (already
+	// capped at the dispatch layer by --budget).
+	if perFile, ok := op["name_match_by_file"].(map[string]any); ok && len(perFile) > 0 {
+		fmt.Fprintln(w, "--- name-match-only (by file) ---")
+		// Stable order: largest first, then file path.
+		type fc struct {
+			file  string
+			count int
+		}
+		fcs := make([]fc, 0, len(perFile))
+		for f, c := range perFile {
+			fcs = append(fcs, fc{file: f, count: anyInt(c)})
+		}
+		sort.Slice(fcs, func(i, j int) bool {
+			if fcs[i].count != fcs[j].count {
+				return fcs[i].count > fcs[j].count
+			}
+			return fcs[i].file < fcs[j].file
+		})
+		for _, e := range fcs {
+			fmt.Fprintf(w, "  %s  %d\n", e.file, e.count)
+		}
+	}
+	if entries, ok := op["name_match_entries"].([]any); ok && len(entries) > 0 {
+		fmt.Fprintln(w, "--- name-match-only ---")
+		for _, e := range entries {
+			em, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			file, _ := em["file"].(string)
+			line := anyInt(em["line"])
+			fmt.Fprintf(w, "  %s:%d\n", file, line)
 		}
 	}
 }

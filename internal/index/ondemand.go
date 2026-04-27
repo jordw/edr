@@ -811,6 +811,14 @@ func (o *OnDemand) FindSemanticReferences(ctx context.Context, symbolName, symbo
 	return o.FindSemanticCallers(ctx, symbolName, symbolFile)
 }
 
+// FindNameMatchReferences returns word-bounded text matches across the
+// repo with no import-graph filter. Each entry is a single occurrence
+// (not a containing symbol) so callers can diff against scope-bound
+// ref locations to compute the name-match-only set.
+func (o *OnDemand) FindNameMatchReferences(ctx context.Context, symbolName string) ([]SymbolInfo, error) {
+	return findReferencesTextBased(ctx, o, symbolName)
+}
+
 // isCFamilyFile returns true for C/C++/Objective-C source files where the
 // header/source split makes the import graph unreliable for finding callers.
 func isCFamilyFile(path string) bool {

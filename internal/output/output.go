@@ -105,16 +105,38 @@ type RenameResult struct {
 	// string-literal lookalikes also bump this, so it is signal not proof.
 	CodeMentions       int            `json:"code_mentions,omitempty"`
 	CommentMode        string         `json:"comment_mode,omitempty"` // "rewrite" (default) or "skip"
-	Status       string             `json:"status"` // "applied", "dry_run", "noop"
+	Status       string             `json:"status"` // "applied", "dry_run", "noop", "refused"
 	Hashes       map[string]string  `json:"hashes,omitempty"`
 	Preview      []RenameOccurrence `json:"preview,omitempty"`
 	Diffs        []RenameDiff       `json:"diffs,omitempty"`
 	Warnings     []string           `json:"warnings,omitempty"`
 	Truncated    bool               `json:"truncated,omitempty"`
+
+	// Refusal fields. Set when Status == "refused" — currently emitted
+	// by --strict when scope path can't run or when the rewrite set
+	// includes non-Resolved refs. RefusedCounts maps tier name (e.g.
+	// "probable") to the exact count; RefusedExamples is a capped
+	// sample of file:line entries for human review. SeeAlso names the
+	// follow-up command an agent can run to inspect the broader set.
+	RefusedReason   string           `json:"refused_reason,omitempty"`
+	RefusedDetail   string           `json:"refused_detail,omitempty"`
+	RefusedCounts   map[string]int   `json:"refused_counts,omitempty"`
+	RefusedExamples []RefusedExample `json:"refused_examples,omitempty"`
+	SeeAlso         string           `json:"see_also,omitempty"`
+
 	// OldContents holds pre-mutation file contents (relative path → content).
 	// Used by checkpoint logic to snapshot secondary files for undo.
 	// Excluded from JSON output.
 	OldContents  map[string][]byte  `json:"-"`
+}
+
+// RefusedExample is one entry in a refusal report — a single ref that
+// blocked --strict from rewriting.
+type RefusedExample struct {
+	File   string `json:"file"`
+	Line   int    `json:"line"`
+	Tier   string `json:"tier"`             // "ambiguous" | "probable" | "unresolved"
+	Reason string `json:"reason,omitempty"` // Binding.Reason, if set
 }
 
 // RenameDiff holds a per-file unified diff for dry-run rename preview.

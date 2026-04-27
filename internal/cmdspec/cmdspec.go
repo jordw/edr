@@ -163,7 +163,8 @@ var Registry = []*Spec{
 			{Name: "verify_command", Type: FlagString, Default: "", Desc: "Custom verify command (overrides auto-detect; e.g. \"go test ./...\")"},
 			{Name: "verify_level", Type: FlagString, Default: "", Desc: "Verify level: build (default) or test"},
 			{Name: "cross_file", Type: FlagBool, Default: false, Desc: "Rename across all files, not just the defining file"},
-			{Name: "force", Type: FlagBool, Default: false, Desc: "With --cross-file, proceed even if the name is ambiguous (defined by multiple symbols)"},
+			{Name: "strict", Type: FlagBool, Default: false, Desc: "Refuse unless every ref is binding-confirmed (BindResolved). Refuses on probable/ambiguous/unresolved refs and on scope-fallback to name-match"},
+			{Name: "force", Type: FlagBool, Default: false, Desc: "Bypass strict gate and blast-radius cap; rewrite ambiguous/probable refs without warning"},
 			{Name: "comments", Type: FlagString, Default: "rewrite", Desc: "How to handle matches inside comments: 'rewrite' (default) or 'skip'"},
 			{Name: "update_comments", Type: FlagBool, Default: false, Desc: "Also rewrite word-bounded mentions of the old name in comments anywhere in touched files (opt-in; --comments=skip overrides)"},
 		},
@@ -259,10 +260,14 @@ var Registry = []*Spec{
 		Flags: filesFlags,
 	},
 	{
-		Name: "refs-to", Desc: "List references to a symbol (scope-aware, single-file for v1).",
+		Name: "refs-to", Desc: "List references to a symbol (scope-aware, cross-file).",
 		Category: CatRead, MinArgs: 1, MaxArgs: 1, FileScoped: true,
 		Flags: []FlagSpec{
 			{Name: "budget", Type: FlagInt, Default: 0, Desc: "Max refs to return (0 = unlimited)"},
+			{Name: "strict", Type: FlagBool, Default: false, Desc: "Show only binding-confirmed (BindResolved) refs; suppress probable/ambiguous/unresolved"},
+			{Name: "include_name_match", Type: FlagBool, Default: false, Desc: "Also report word-bounded text matches that scope did not bind. Default form: count only"},
+			{Name: "by_file", Type: FlagBool, Default: false, Desc: "With --include-name-match, group name-match-only counts by file"},
+			{Name: "list", Type: FlagBool, Default: false, Desc: "With --include-name-match, list every name-match-only entry (capped by --budget)"},
 		},
 	},
 	{

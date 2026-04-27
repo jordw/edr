@@ -26,6 +26,13 @@ type SymbolStore interface {
 	FindSemanticCallers(ctx context.Context, symbolName, symbolFile string) ([]SymbolInfo, error)
 	FindSameFileCallers(ctx context.Context, symbolName, symbolFile string) ([]SymbolInfo, error)
 	FindSemanticReferences(ctx context.Context, symbolName, symbolFile string) ([]SymbolInfo, error)
+	// Word-bounded text matches across the repo with no import-graph
+	// filter. Looser than FindSemanticReferences — returns every
+	// occurrence of symbolName as a whole word in any supported file.
+	// Used by 'refs-to --include-name-match' to surface text matches
+	// that scope did not bind, including same-named symbols on
+	// unrelated classes.
+	FindNameMatchReferences(ctx context.Context, symbolName string) ([]SymbolInfo, error)
 
 	// File metadata
 	GetFileHash(ctx context.Context, path string) (string, error)

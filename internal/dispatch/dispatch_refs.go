@@ -32,7 +32,7 @@ import (
 // the appropriate language scope builder, locates the symbol, and lists
 // every reference bound to it. Single-file for v1; cross-file resolution
 // requires the persistent scope index that isn't wired yet.
-func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
+func runRefsTo(ctx context.Context, db index.SymbolStore, root string, args []string, flags map[string]any) (any, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("refs-to: need exactly one argument of the form file:Symbol")
 	}
@@ -181,6 +181,28 @@ func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []stri
 		}
 	}
 
+	// Snapshot covered (file, startByte) before strict filtering — the
+	// name-match-only diff below should subtract everything scope bound,
+	// not just what strict kept.
+	covered := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		covered[nameMatchKey(e.file, e.span[0])] = struct{}{}
+	}
+
+	// --strict: filter to BindResolved refs only. Suppresses probable/
+	// ambiguous/unresolved entries entirely so callers that need a high-
+	// confidence ref set don't have to post-filter.
+	strict := flagBool(flags, "strict", false)
+	if strict {
+		filtered := entries[:0]
+		for _, e := range entries {
+			if e.kind == scope.BindResolved {
+				filtered = append(filtered, e)
+			}
+		}
+		entries = filtered
+	}
+
 	budget := flagInt(flags, "budget", 0)
 	truncated := false
 	if budget > 0 && len(entries) > budget {
@@ -250,6 +272,26 @@ func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []stri
 	if len(binding) > 0 {
 		payload["binding"] = binding
 	}
+
+	// --include-name-match: report word-bounded text matches that scope
+	// did not bind. Default form is count-only; --by-file aggregates by
+	// file, --list emits per-occurrence entries (capped by --budget).
+	if flagBool(flags, "include_name_match", false) {
+		nm, nmErr := db.FindNameMatchReferences(ctx, symbolName)
+		if nmErr == nil {
+			byFile := flagBool(flags, "by_file", false)
+			listAll := flagBool(flags, "list", false)
+			extra, perFile, sample := computeNameMatchOnly(nm, covered, root, byFile || listAll, listAll, budget)
+			payload["name_match_extra"] = extra
+			if byFile && len(perFile) > 0 {
+				payload["name_match_by_file"] = perFile
+			}
+			if listAll && len(sample) > 0 {
+				payload["name_match_entries"] = sample
+			}
+		}
+	}
+
 	// Stale-index warning: refs-to may undercount cross-file refs when
 	// the trigram + symbol index hasn't been ticked since recent edits.
 	// Surface it so callers don't trust an incomplete count silently.
@@ -258,6 +300,48 @@ func runRefsTo(_ context.Context, db index.SymbolStore, root string, args []stri
 		payload["warnings"] = []any{"index is stale — cross-file refs may be undercounted; run 'edr index' to refresh"}
 	}
 	return payload, nil
+}
+
+// nameMatchKey forms the dedup key for a name-match diff. Files use
+// the relative path so absolute-path entries from FindNameMatchReferences
+// align with the relative paths we've already emitted in entries.
+func nameMatchKey(relFile string, startByte uint32) string {
+	return fmt.Sprintf("%s:%d", relFile, startByte)
+}
+
+// computeNameMatchOnly subtracts the covered set from the name-match
+// candidates and returns (totalCount, perFileCounts, sampleEntries).
+// perFileCounts is populated only when byFile is true; sampleEntries
+// only when wantSample is true (and capped by budget).
+func computeNameMatchOnly(matches []index.SymbolInfo, covered map[string]struct{}, root string, byFile, wantSample bool, budget int) (int, map[string]int, []map[string]any) {
+	total := 0
+	var perFile map[string]int
+	if byFile {
+		perFile = map[string]int{}
+	}
+	var sample []map[string]any
+	cap := budget
+	if cap <= 0 {
+		cap = 50
+	}
+	for _, m := range matches {
+		rel := output.Rel(m.File)
+		if _, ok := covered[nameMatchKey(rel, m.StartByte)]; ok {
+			continue
+		}
+		total++
+		if byFile {
+			perFile[rel]++
+		}
+		if wantSample && len(sample) < cap {
+			sample = append(sample, map[string]any{
+				"file": rel,
+				"line": int(m.StartLine),
+				"span": [2]uint32{m.StartByte, m.EndByte},
+			})
+		}
+	}
+	return total, perFile, sample
 }
 
 // goCrossFileRefs returns refs to `name` from sibling .go files in
