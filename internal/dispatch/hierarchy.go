@@ -284,7 +284,11 @@ func emitMatchingMethodInClassDecl(
 	}
 	for i := range res.Decls {
 		m := &res.Decls[i]
-		if m.Kind != scope.KindMethod {
+		// Accept both KindMethod and KindFunction. The Python
+		// builder (and likely future Lua/Ruby/etc.) emit methods
+		// inside class bodies as KindFunction; the body-span
+		// containment check below filters out free functions.
+		if m.Kind != scope.KindMethod && m.Kind != scope.KindFunction {
 			continue
 		}
 		if m.Name != methodName {

@@ -49,17 +49,27 @@ func Parse(file string, src []byte) *scope.Result {
 // `from pkg.mod import foo` in other.py bind to the same DeclID.
 func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 	b := &builder{
-		file:             file,
-		canonicalPath:    canonicalPath,
-		res:              &scope.Result{File: file},
-		s:                lexkit.New(src),
-		atLineStart:      true,
-		pendingOwnerDecl: -1,
+		file:                file,
+		canonicalPath:       canonicalPath,
+		res:                 &scope.Result{File: file},
+		s:                   lexkit.New(src),
+		atLineStart:         true,
+		pendingOwnerDecl:    -1,
+		pendingClassDeclIdx: -1,
+		classSuperTypes:     map[int][]string{},
 	}
 	b.openScope(scope.ScopeFile, 0, -1)
 	b.run()
 	b.closeScopesToDepth(0)
 	b.resolveRefs()
+	// Copy classSuperTypes (keyed by decl index) onto Decl.SuperTypes
+	// so the cross-file hierarchy walker (EmitOverrideSpans) can read
+	// them.
+	for idx, supers := range b.classSuperTypes {
+		if idx >= 0 && idx < len(b.res.Decls) && len(supers) > 0 {
+			b.res.Decls[idx].SuperTypes = supers
+		}
+	}
 	return b.res
 }
 
@@ -174,6 +184,36 @@ type builder struct {
 	// on the matching close.
 	bracketStack []bracketFrame
 
+	// Class-base tracking — populates Decl.SuperTypes for class decls
+	// from `class Foo(Base, Mixin):`. Mirrors the Java/TS pattern.
+	//
+	// pendingClassDeclIdx: index in res.Decls of the class decl whose
+	// header is currently being parsed (between its name and the body
+	// `:` or close paren). -1 when not in a class header.
+	// classBaseListPending: true after the class name has emitted,
+	// waiting to see whether an opening `(` follows; flips to
+	// inClassBases on `(` and clears on `:` (no-paren classes).
+	// inClassBases: between `(` and matching `)` of the class header.
+	// classBaseDepth + classBaseSubscriptDepth track nested `()` /
+	// `[]` so generic args (`Generic[T]`) and parenthesised
+	// expressions don't confuse the section walker.
+	// classBaseSkipKwarg: true once `=` is seen at depth 1 — the
+	// rest of this section is a kwarg like `metaclass=Meta` and
+	// should not be captured as a base.
+	// classBaseLastIdent: the most-recent ident seen at depth 1 in
+	// the current section (handles dotted names like `mod.Base`
+	// by overwriting on each segment so the final ident wins).
+	// classSuperTypes: per-decl-index list of base names; flushed
+	// onto Decl.SuperTypes after the run() loop completes.
+	pendingClassDeclIdx     int
+	classBaseListPending    bool
+	inClassBases            bool
+	classBaseDepth          int
+	classBaseSubscriptDepth int
+	classBaseSkipKwarg      bool
+	classBaseLastIdent      string
+	classSuperTypes         map[int][]string
+
 	prevByte byte
 }
 
@@ -229,7 +269,17 @@ func (b *builder) run() {
 			prevPrev := b.prevByte
 			b.s.Pos++
 			b.prevByte = '('
-			if b.paramListPending {
+			if b.classBaseListPending {
+				// `class Foo(...)` header: enter base-list mode.
+				b.classBaseListPending = false
+				b.inClassBases = true
+				b.classBaseDepth = 1
+				b.classBaseSubscriptDepth = 0
+				b.classBaseSkipKwarg = false
+				b.classBaseLastIdent = ""
+			} else if b.inClassBases {
+				b.classBaseDepth++
+			} else if b.paramListPending {
 				b.paramListPending = false
 				b.inParamList = true
 				b.paramDepth = 1
@@ -249,7 +299,16 @@ func (b *builder) run() {
 		case c == ')':
 			b.s.Pos++
 			b.prevByte = ')'
-			if b.inParamList {
+			if b.inClassBases {
+				b.classBaseDepth--
+				if b.classBaseDepth == 0 {
+					// Flush the trailing base name and clear state.
+					b.flushClassBase()
+					b.inClassBases = false
+					b.classBaseSkipKwarg = false
+					b.classBaseLastIdent = ""
+				}
+			} else if b.inParamList {
 				b.paramDepth--
 				if b.paramDepth == 0 {
 					b.inParamList = false
@@ -266,11 +325,25 @@ func (b *builder) run() {
 			// the header line — the body is the next indented block.
 			b.s.Pos++
 			b.prevByte = ':'
+			// `class Foo:` (no parens) — close the pending base list
+			// without entering it. Defensive: also clears stale state
+			// if a malformed `class Foo(:` ever slipped through.
+			if b.classBaseListPending {
+				b.classBaseListPending = false
+				b.pendingClassDeclIdx = -1
+			}
 		case c == ',':
 			b.s.Pos++
 			b.prevByte = ','
 			if b.inParamList && b.paramDepth == 1 {
 				b.paramSectionNeedsName = true
+			}
+			// Top-level comma in class base list: finalize the
+			// current section and start a new one.
+			if b.inClassBases && b.classBaseDepth == 1 && b.classBaseSubscriptDepth == 0 {
+				b.flushClassBase()
+				b.classBaseLastIdent = ""
+				b.classBaseSkipKwarg = false
 			}
 			if b.inAssignLHS {
 				// Next ident may be another LHS target.
@@ -285,6 +358,14 @@ func (b *builder) run() {
 		case c == '=' && b.s.PeekAt(1) != '=':
 			b.s.Pos++
 			b.prevByte = '='
+			// In a class base list at top depth, `=` introduces a
+			// kwarg (e.g. `metaclass=Meta`) — drop the captured
+			// ident and skip the rest of this section so the kwarg
+			// value isn't recorded as a base.
+			if b.inClassBases && b.classBaseDepth == 1 && b.classBaseSubscriptDepth == 0 {
+				b.classBaseSkipKwarg = true
+				b.classBaseLastIdent = ""
+			}
 			// Commit pending LHS idents as decls.
 			if b.inAssignLHS && len(b.assignLHS) > 0 {
 				for _, p := range b.assignLHS {
@@ -323,10 +404,19 @@ func (b *builder) run() {
 			openPos := b.s.Pos
 			b.s.Pos++
 			b.prevByte = '['
+			if b.inClassBases {
+				// Generic args inside a base — `Generic[T]`,
+				// `List[Item]`. Track depth so the inner idents
+				// aren't taken as base names.
+				b.classBaseSubscriptDepth++
+			}
 			b.pushBracket('[', openPos)
 		case c == ']':
 			b.s.Pos++
 			b.prevByte = ']'
+			if b.inClassBases && b.classBaseSubscriptDepth > 0 {
+				b.classBaseSubscriptDepth--
+			}
 			b.popBracket('[', uint32(b.s.Pos))
 		case c == '{':
 			openPos := b.s.Pos
@@ -477,6 +567,18 @@ func (b *builder) handleIdent(word []byte) {
 	endByte := uint32(b.s.Pos)
 	name := string(word)
 
+	// Class-base capture: while inside `class Foo(... here ...)` at
+	// depth 1, outside any subscript, and not in a kwarg-skipped
+	// section, record the latest ident as the candidate base name.
+	// Subsequent dotted segments overwrite, so qualified bases like
+	// `mod.Base` keep "Base" — the last segment is what the
+	// hierarchy walker matches on. Capture happens before the
+	// keyword switch so language keywords (which idents can't
+	// shadow at this position) don't leak in.
+	if b.inClassBases && b.classBaseDepth == 1 && b.classBaseSubscriptDepth == 0 && !b.classBaseSkipKwarg {
+		b.classBaseLastIdent = name
+	}
+
 	switch name {
 	case "def":
 		b.declContext = scope.KindFunction
@@ -587,6 +689,12 @@ func (b *builder) handleIdent(word []byte) {
 		// After def/class, the next `(` starts a param list.
 		if kind == scope.KindFunction {
 			b.paramListPending = true
+		}
+		// After class, track the base-class list so the upcoming
+		// `(Base, Mixin)` clause populates Decl.SuperTypes.
+		if kind == scope.KindClass {
+			b.pendingClassDeclIdx = len(b.res.Decls) - 1
+			b.classBaseListPending = true
 		}
 		// Import-binding bookkeeping. Track which decl this emit
 		// produced so `as <alias>` can retarget the pending entry, and
@@ -1017,6 +1125,21 @@ func (b *builder) emitRef(name string, span scope.Span) {
 		Namespace: scope.NSValue,
 		Scope:     scopeID,
 	})
+}
+
+// flushClassBase appends the captured base-class ident (if any) to
+// classSuperTypes for the pending class decl. Called on `,` between
+// bases and on the closing `)` of the base list. Resets the
+// per-section state ready for the next base.
+func (b *builder) flushClassBase() {
+	if b.classBaseSkipKwarg || b.classBaseLastIdent == "" {
+		return
+	}
+	if b.pendingClassDeclIdx < 0 {
+		return
+	}
+	b.classSuperTypes[b.pendingClassDeclIdx] = append(
+		b.classSuperTypes[b.pendingClassDeclIdx], b.classBaseLastIdent)
 }
 
 func (b *builder) emitPropertyRef(name string, span scope.Span) {

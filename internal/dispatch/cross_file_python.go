@@ -58,10 +58,24 @@ func pythonCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.
 
 	// Hierarchy propagation: emit rewrite spans for same-named
 	// methods in classes related to sym.Receiver via Python's
-	// `class Foo(Bar, Mixin):` inheritance graph (same-file
-	// only for v1).
+	// `class Foo(Bar, Mixin):` inheritance graph. Walks both
+	// directions through the shared EmitOverrideSpans helper.
+	// Reverse-discovery: files that reference sym.Receiver are
+	// likely to host subclasses, even when they don't share a
+	// package with the target.
 	if sym.Receiver != "" {
-		pyEmitHierarchySpans(out, resolver, sym, target)
+		var extraCandidates []string
+		if refs, err := db.FindSemanticReferences(ctx, sym.Receiver, sym.File); err == nil {
+			seen := map[string]struct{}{sym.File: {}}
+			for _, r := range refs {
+				if _, ok := seen[r.File]; ok {
+					continue
+				}
+				seen[r.File] = struct{}{}
+				extraCandidates = append(extraCandidates, r.File)
+			}
+		}
+		EmitOverrideSpans(out, pythonResolverDeps{r: resolver}, sym, extraCandidates...)
 	}
 
 	candidates := map[string]bool{}
@@ -214,65 +228,26 @@ func pyBaseIdentBefore(src []byte, refStart uint32) string {
 }
 
 
-// pyEmitHierarchySpans finds same-named methods in classes related
-// to sym.Receiver via the inheritance graph in sym.File and emits
-// isDef spans into out[sym.File].
-func pyEmitHierarchySpans(out map[string][]span, resolver *namespace.PythonResolver, sym *index.SymbolInfo, target *scope.Decl) {
-	src := resolver.Source(sym.File)
-	if len(src) == 0 {
-		return
-	}
-	hier := namespace.PyFindClassHierarchy(src)
-	if len(hier) == 0 {
-		return
-	}
-	// Find target's enclosing class by body-span containment.
-	var enclosing *namespace.PyClassHierarchy
-	for i := range hier {
-		h := &hier[i]
-		if h.BodyStart <= target.Span.StartByte && target.Span.EndByte <= h.BodyEnd {
-			enclosing = h
-			break
-		}
-	}
-	if enclosing == nil {
-		return
-	}
-	related := map[string]bool{}
-	for _, t := range namespace.PyRelatedTypes(src, enclosing.Name) {
-		related[t] = true
-	}
-	if len(related) == 0 {
-		return
-	}
-	targetRes := resolver.Result(sym.File)
-	if targetRes == nil {
-		return
-	}
-	for _, h := range hier {
-		if !related[h.Name] || h.Name == enclosing.Name {
-			continue
-		}
-		for i := range targetRes.Decls {
-			d := &targetRes.Decls[i]
-			if d.Name != sym.Name {
-				continue
-			}
-			// Python builder emits class methods as KindFunction
-			// (no separate method kind for nested defs).
-			if d.Kind != scope.KindMethod && d.Kind != scope.KindFunction {
-				continue
-			}
-			if d.Span.StartByte < h.BodyStart || d.Span.EndByte > h.BodyEnd {
-				continue
-			}
-			if d.ID == target.ID {
-				continue
-			}
-			out[sym.File] = append(out[sym.File], span{
-				start: d.Span.StartByte,
-				end:   d.Span.EndByte,
-			})
-		}
-	}
+// pythonResolverDeps adapts PythonResolver to the dispatch
+// HierarchyDeps interface used by EmitOverrideSpans.
+type pythonResolverDeps struct {
+	r *namespace.PythonResolver
 }
+
+func (d pythonResolverDeps) Result(file string) *scope.Result { return d.r.Result(file) }
+func (d pythonResolverDeps) SamePackageFiles(file string) []string {
+	return d.r.SamePackageFiles(file)
+}
+func (d pythonResolverDeps) FilesForImport(spec, importingFile string) []string {
+	return d.r.FilesForImport(spec, importingFile)
+}
+
+// ImportSpec rebuilds the Python-native import spec from a KindImport
+// decl. The Python builder stamps Signature = "<modulePath>\x00<name>"
+// where modulePath is the dotted path (possibly with leading dots for
+// relative imports). FilesForImport accepts the bare module path.
+func (d pythonResolverDeps) ImportSpec(decl *scope.Decl) string {
+	module, _ := SplitImportSignature(decl)
+	return module
+}
+
