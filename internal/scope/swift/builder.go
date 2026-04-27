@@ -52,18 +52,27 @@ func Parse(file string, src []byte) *scope.Result {
 // cross-file references via imports can bind to matching DeclIDs.
 func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 	b := &builder{
-		file:             file,
-		canonicalPath:    canonicalPath,
-		res:              &scope.Result{File: file},
-		s:                lexkit.New(src),
-		pendingOwnerDecl: -1,
-		importDeclIdx:    -1,
+		file:                file,
+		canonicalPath:       canonicalPath,
+		res:                 &scope.Result{File: file},
+		s:                   lexkit.New(src),
+		pendingOwnerDecl:    -1,
+		importDeclIdx:       -1,
+		pendingClassDeclIdx: -1,
+		classSuperTypes:     map[int][]string{},
 	}
 	b.openScope(scope.ScopeFile, 0)
 	b.stmtStart = true
 	b.run()
 	b.closeScopesToDepth(0)
 	b.resolveRefs()
+	// Copy classSuperTypes onto Decl.SuperTypes for the cross-file
+	// hierarchy walker (EmitOverrideSpans).
+	for idx, supers := range b.classSuperTypes {
+		if idx >= 0 && idx < len(b.res.Decls) && len(supers) > 0 {
+			b.res.Decls[idx].SuperTypes = supers
+		}
+	}
 	return b.res
 }
 
@@ -235,6 +244,30 @@ type builder struct {
 	// Used for regex-vs-operator heuristics (v1 skips regex anyway) and
 	// composite-literal detection.
 	prevByte byte
+
+	// Class-supertype tracking — populates Decl.SuperTypes for class
+	// / struct / protocol / enum decls (and synthetic "extension"
+	// decls) so the cross-file hierarchy walker (EmitOverrideSpans)
+	// can walk both directions.
+	//
+	// pendingClassDeclIdx holds the just-emitted class decl until
+	// its body `{` opens. inSuperTypes is on between the inheritance
+	// `:` and the body `{`. supertypeAngleDepth tracks `<...>` for
+	// generic args (`: Container<T>`).
+	// classBaseLastIdent uses "last ident wins" so qualified names
+	// `App.Domain.Base` keep the leaf segment.
+	//
+	// Extensions: Swift `extension Foo: ProtoA` declares additional
+	// protocol conformance, often in a different file from Foo's
+	// original definition. We emit a synthetic KindClass decl with
+	// name=Foo whenever an extension declares supertypes; the
+	// hierarchy walker then sees the conformance regardless of
+	// which file it lives in.
+	pendingClassDeclIdx int
+	inSuperTypes        bool
+	supertypeAngleDepth int
+	classBaseLastIdent  string
+	classSuperTypes     map[int][]string
 }
 
 // closureEntry tracks an open closure scope (opened by a '{' where a
@@ -370,6 +403,13 @@ func (b *builder) run() {
 				b.prevByte = '<'
 				continue
 			}
+			// Generic args inside a supertype clause (`: Container<T>`).
+			if b.inSuperTypes {
+				b.supertypeAngleDepth++
+				b.s.Pos++
+				b.prevByte = '<'
+				continue
+			}
 			b.s.Pos++
 			b.prevByte = '<'
 		case c == '>':
@@ -379,6 +419,12 @@ func (b *builder) run() {
 					b.inGenericParams = false
 					b.genericSectionNeedsName = false
 				}
+				b.s.Pos++
+				b.prevByte = '>'
+				continue
+			}
+			if b.inSuperTypes && b.supertypeAngleDepth > 0 {
+				b.supertypeAngleDepth--
 				b.s.Pos++
 				b.prevByte = '>'
 				continue
@@ -414,6 +460,12 @@ func (b *builder) run() {
 			if (sk == scope.ScopeClass || sk == scope.ScopeInterface) && b.structDepth == 0 {
 				b.structNeedsName = true
 			}
+			// Supertype list separator (`: A, B, C`): flush the
+			// captured name and reset for the next section. Skip
+			// when inside generic args (`Container<K, V>`).
+			if b.inSuperTypes && b.supertypeAngleDepth == 0 {
+				b.flushSuperTypeArg()
+			}
 		case c == '.':
 			b.s.Pos++
 			b.prevByte = '.'
@@ -426,6 +478,15 @@ func (b *builder) run() {
 				// Type annotation follows — subsequent idents become refs.
 				b.paramSectionNeedsName = false
 				b.paramLabelSeen = false
+			}
+			// Inheritance `:` after a class/protocol/extension header.
+			// pendingClassDeclIdx is set between the decl name and
+			// the body `{`; cleared on body open.
+			if b.pendingClassDeclIdx >= 0 && !b.inSuperTypes &&
+				!b.inParamList && !b.inGenericParams {
+				b.inSuperTypes = true
+				b.classBaseLastIdent = ""
+				b.supertypeAngleDepth = 0
 			}
 		case lexkit.IsDefaultIdentStart(c) || c == '$':
 			word := b.s.ScanIdentTable(&identStart, &identCont)
@@ -834,6 +895,12 @@ func (b *builder) handleIdent(word []byte) {
 			}
 		}
 		b.emitPropertyRef(name, mkSpan(startByte, endByte))
+		// Qualified supertype name: `: App.Domain.Base` — each
+		// segment after `.` overwrites classBaseLastIdent so the
+		// leaf wins.
+		if b.inSuperTypes && b.supertypeAngleDepth == 0 {
+			b.classBaseLastIdent = name
+		}
 		b.prevByte = 'i'
 		return
 	}
@@ -849,6 +916,16 @@ func (b *builder) handleIdent(word []byte) {
 		b.extensionTargetSpan = mkSpan(startByte, endByte)
 		// Emit the target as a ref so refs-to-type queries pick it up.
 		b.emitRef(name, mkSpan(startByte, endByte))
+		// Emit a synthetic KindClass decl for the extension. This
+		// gives the cross-file hierarchy walker a place to attach
+		// the conformance protocols introduced by the extension and
+		// a body span the walker can search for methods. The decl
+		// duplicates the original class's name; MergeDuplicateDecls
+		// will canonicalise the DeclID at parse end so refs to the
+		// type still resolve consistently.
+		idx := len(b.res.Decls)
+		b.emitDecl(name, scope.KindClass, mkSpan(startByte, endByte))
+		b.pendingClassDeclIdx = idx
 		b.prevByte = 'i'
 		return
 	}
@@ -959,6 +1036,11 @@ func (b *builder) handleIdent(word []byte) {
 			b.genericParamsPending = true
 		case scope.KindClass, scope.KindInterface, scope.KindType, scope.KindEnum:
 			b.genericParamsPending = true
+			// Track this class/protocol/enum so the upcoming
+			// `: Base, ProtoA` clause appends supertype names.
+			if kind == scope.KindClass || kind == scope.KindInterface {
+				b.pendingClassDeclIdx = len(b.res.Decls) - 1
+			}
 		}
 		// If this was a control-flow binding (if/guard/while let x), clear.
 		b.bindingKindInControl = ""
@@ -974,7 +1056,34 @@ func (b *builder) handleIdent(word []byte) {
 	// We only emit fields/methods via declContext, so fall through.
 
 	b.emitRef(name, mkSpan(startByte, endByte))
+	// Supertype name capture: while inside the inheritance clause
+	// at depth 0 (outside `<...>` generic args), record the latest
+	// ident. Qualified names `App.Domain.Base` reduce to the leaf
+	// via "last ident wins".
+	if b.inSuperTypes && b.supertypeAngleDepth == 0 {
+		b.classBaseLastIdent = name
+	}
 	b.prevByte = 'i'
+}
+
+// flushSuperTypeArg appends the captured supertype ident to
+// classSuperTypes. Called on `,` between supertypes.
+func (b *builder) flushSuperTypeArg() {
+	if b.pendingClassDeclIdx < 0 || b.classBaseLastIdent == "" {
+		b.classBaseLastIdent = ""
+		return
+	}
+	b.classSuperTypes[b.pendingClassDeclIdx] = append(
+		b.classSuperTypes[b.pendingClassDeclIdx], b.classBaseLastIdent)
+	b.classBaseLastIdent = ""
+}
+
+// flushSuperTypeSection finalises the inheritance window and
+// clears inSuperTypes. Called on body `{`.
+func (b *builder) flushSuperTypeSection() {
+	b.flushSuperTypeArg()
+	b.inSuperTypes = false
+	b.supertypeAngleDepth = 0
 }
 
 // peekIsLabelThenName reports whether the bytes following the current
@@ -1062,11 +1171,20 @@ func (b *builder) handleOpenBrace() {
 	b.stmtStart = true
 	b.prevByte = '{'
 
+	// Class/protocol/extension body opens — flush the supertype
+	// section and clear pendingClassDeclIdx.
+	if b.inSuperTypes {
+		b.flushSuperTypeSection()
+	}
+
 	// Explicit scope push via pendingScope (class/struct/enum/protocol/
 	// extension/func/init/deinit/subscript body).
 	if b.pendingScope != nil {
 		kind := *b.pendingScope
 		b.pendingScope = nil
+		if kind == scope.ScopeClass || kind == scope.ScopeInterface {
+			b.pendingClassDeclIdx = -1
+		}
 		b.openScope(kind, uint32(b.s.Pos-1))
 		// Flush type-params and value-params into the new scope.
 		if kind == scope.ScopeFunction || kind == scope.ScopeClass || kind == scope.ScopeInterface {

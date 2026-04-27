@@ -58,6 +58,22 @@ func swiftCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.S
 				end:   sib.Span.EndByte,
 			})
 		}
+		// Hierarchy override propagation via the shared walker.
+		// Reverse-discovery via FindSemanticReferences picks up
+		// classes (and `extension Foo`-emitted synthetic decls)
+		// that import or otherwise reference the target type.
+		var extraCandidates []string
+		if refs, err := db.FindSemanticReferences(ctx, sym.Receiver, sym.File); err == nil {
+			seen := map[string]struct{}{sym.File: {}}
+			for _, ref := range refs {
+				if _, ok := seen[ref.File]; ok {
+					continue
+				}
+				seen[ref.File] = struct{}{}
+				extraCandidates = append(extraCandidates, ref.File)
+			}
+		}
+		EmitOverrideSpans(out, swiftResolverDeps{r: resolver}, sym, extraCandidates...)
 	}
 
 	candidates := map[string]bool{}
@@ -379,4 +395,26 @@ func swiftSiblingMethodDecls(res *scope.Result, src []byte, methodName, ownerNam
 		out = append(out, d)
 	}
 	return out
+}
+
+// swiftResolverDeps adapts SwiftResolver to the dispatch
+// HierarchyDeps interface used by EmitOverrideSpans.
+type swiftResolverDeps struct {
+	r *namespace.SwiftResolver
+}
+
+func (d swiftResolverDeps) Result(file string) *scope.Result { return d.r.Result(file) }
+func (d swiftResolverDeps) SamePackageFiles(file string) []string {
+	return d.r.SamePackageFiles(file)
+}
+func (d swiftResolverDeps) FilesForImport(spec, importingFile string) []string {
+	return d.r.FilesForImport(spec, importingFile)
+}
+
+// ImportSpec returns the bare module name from an `import Foundation`
+// decl. Swift imports a whole module by name; the imported binding
+// name is unused for the resolver's purposes.
+func (d swiftResolverDeps) ImportSpec(decl *scope.Decl) string {
+	module, _ := SplitImportSignature(decl)
+	return module
 }
