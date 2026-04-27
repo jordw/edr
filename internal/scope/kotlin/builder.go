@@ -59,17 +59,26 @@ func Parse(file string, src []byte) *scope.Result {
 // behavior reduces to Parse — file-local DeclIDs.
 func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 	b := &builder{
-		file:             file,
-		canonicalPath:    canonicalPath,
-		res:              &scope.Result{File: file},
-		s:                lexkit.New(src),
-		pendingOwnerDecl: -1,
+		file:                file,
+		canonicalPath:       canonicalPath,
+		res:                 &scope.Result{File: file},
+		s:                   lexkit.New(src),
+		pendingOwnerDecl:    -1,
+		pendingClassDeclIdx: -1,
+		classSuperTypes:     map[int][]string{},
 	}
 	b.openScope(scope.ScopeFile, 0)
 	b.stmtStart = true
 	b.run()
 	b.closeScopesToDepth(0)
 	b.resolveRefs()
+	// Copy classSuperTypes onto Decl.SuperTypes so the cross-file
+	// hierarchy walker (EmitOverrideSpans) can read them.
+	for idx, supers := range b.classSuperTypes {
+		if idx >= 0 && idx < len(b.res.Decls) && len(supers) > 0 {
+			b.res.Decls[idx].SuperTypes = supers
+		}
+	}
 	return b.res
 }
 
@@ -238,6 +247,26 @@ type builder struct {
 	// as a ref; the next ident-after-'.' is the function name (not a
 	// property access). Cleared when the fun name is emitted.
 	extReceiverConsumed bool
+
+	// Class-supertype tracking — populates Decl.SuperTypes for class
+	// / interface / object decls so the cross-file hierarchy walker
+	// (EmitOverrideSpans) can walk both directions.
+	//
+	// pendingClassDeclIdx holds the just-emitted class/interface
+	// decl until its body `{` opens. inSuperTypes is on between the
+	// inheritance `:` and the body `{`. supertypeAngleDepth and
+	// supertypeParenDepth track `<...>` (generic args, e.g.
+	// `: List<T>`) and `(...)` (constructor calls, e.g. `: Base()`)
+	// inside the supertype clause; idents inside those are not
+	// supertype names.
+	// classBaseLastIdent uses "last ident wins" so qualified names
+	// `com.example.Base` keep the leaf segment.
+	pendingClassDeclIdx  int
+	inSuperTypes         bool
+	supertypeAngleDepth  int
+	supertypeParenDepth  int
+	classBaseLastIdent   string
+	classSuperTypes      map[int][]string
 }
 
 type pendingParam struct {
@@ -335,6 +364,12 @@ func (b *builder) run() {
 			b.s.Pos++
 			b.parenVarStack = append(b.parenVarStack, b.localVarDeclKind)
 			b.prevByte = '('
+			// Constructor call after a supertype name (`: Base()`).
+			// Track depth so idents inside the parens (call args)
+			// don't get captured as supertype names.
+			if b.inSuperTypes {
+				b.supertypeParenDepth++
+			}
 			if b.ctorListPending {
 				b.ctorListPending = false
 				b.genericParamsExpected = false
@@ -369,6 +404,9 @@ func (b *builder) run() {
 			if n := len(b.parenVarStack); n > 0 {
 				b.localVarDeclKind = b.parenVarStack[n-1]
 				b.parenVarStack = b.parenVarStack[:n-1]
+			}
+			if b.inSuperTypes && b.supertypeParenDepth > 0 {
+				b.supertypeParenDepth--
 			}
 			if b.inParamList {
 				b.paramDepth--
@@ -427,6 +465,12 @@ func (b *builder) run() {
 			if b.inGenericParams && b.genericDepth == 1 {
 				b.genericSectionNeedsName = true
 			}
+			// Supertype list separator (`: Base(), IA, IB`): flush
+			// the captured name and reset for the next section. Skip
+			// when inside generic args or a constructor-call paren.
+			if b.inSuperTypes && b.supertypeAngleDepth == 0 && b.supertypeParenDepth == 0 {
+				b.flushSuperTypeArg()
+			}
 		case c == ':':
 			b.s.Pos++
 			b.prevByte = ':'
@@ -435,6 +479,18 @@ func (b *builder) run() {
 			}
 			if b.inCtorList && b.ctorDepth == 1 {
 				b.ctorSawColon = true
+			}
+			// Inheritance `:` after a class/interface header. The
+			// pendingClassDeclIdx is set between the decl name and
+			// the body `{`; cleared on body open. Other `:` uses
+			// (param-list type annotations, ctor-list type
+			// annotations) are filtered above.
+			if b.pendingClassDeclIdx >= 0 && !b.inSuperTypes &&
+				!b.inParamList && !b.inCtorList && !b.inGenericParams {
+				b.inSuperTypes = true
+				b.classBaseLastIdent = ""
+				b.supertypeAngleDepth = 0
+				b.supertypeParenDepth = 0
 			}
 		case c == '<':
 			if b.genericParamsExpected {
@@ -452,6 +508,14 @@ func (b *builder) run() {
 				b.prevByte = '<'
 				continue
 			}
+			// Generic args inside a supertype clause
+			// (`: Container<K, V>`).
+			if b.inSuperTypes {
+				b.supertypeAngleDepth++
+				b.s.Pos++
+				b.prevByte = '<'
+				continue
+			}
 			b.s.Pos++
 			b.prevByte = '<'
 		case c == '>':
@@ -461,6 +525,12 @@ func (b *builder) run() {
 					b.inGenericParams = false
 					b.genericSectionNeedsName = false
 				}
+				b.s.Pos++
+				b.prevByte = '>'
+				continue
+			}
+			if b.inSuperTypes && b.supertypeAngleDepth > 0 {
+				b.supertypeAngleDepth--
 				b.s.Pos++
 				b.prevByte = '>'
 				continue
@@ -820,6 +890,12 @@ func (b *builder) handleIdent(word []byte) {
 			}
 		}
 		b.emitPropertyRef(name, mkSpan(startByte, endByte))
+		// Qualified supertype name: `: com.example.Base()` — each
+		// segment after `.` overwrites classBaseLastIdent so the
+		// leaf wins.
+		if b.inSuperTypes && b.supertypeAngleDepth == 0 && b.supertypeParenDepth == 0 {
+			b.classBaseLastIdent = name
+		}
 		b.prevByte = 'i'
 		return
 	}
@@ -910,6 +986,12 @@ func (b *builder) handleIdent(word []byte) {
 		case scope.KindClass, scope.KindInterface, scope.KindEnum:
 			b.genericParamsExpected = true
 			b.ctorListPending = true
+			// Track this class/interface/object so the upcoming
+			// `: Base(), IA, IB` clause appends supertype names
+			// onto its decl. Cleared when the body `{` opens.
+			if kind == scope.KindClass || kind == scope.KindInterface {
+				b.pendingClassDeclIdx = len(b.res.Decls) - 1
+			}
 		case scope.KindFunction, scope.KindMethod:
 			b.genericParamsExpected = true
 			b.paramListPending = true
@@ -922,7 +1004,36 @@ func (b *builder) handleIdent(word []byte) {
 
 	// Fallback: emit as a ref.
 	b.emitRef(name, mkSpan(startByte, endByte))
+	// Supertype name capture: while inside the inheritance clause
+	// at depth 0 (outside `<...>` generic args and outside `(...)`
+	// constructor-call parens), record the latest ident.
+	// Qualified names `com.example.Base` reduce to the leaf via
+	// "last ident wins".
+	if b.inSuperTypes && b.supertypeAngleDepth == 0 && b.supertypeParenDepth == 0 {
+		b.classBaseLastIdent = name
+	}
 	b.prevByte = 'i'
+}
+
+// flushSuperTypeArg appends the captured base/interface ident to
+// classSuperTypes. Called on `,` between supertypes.
+func (b *builder) flushSuperTypeArg() {
+	if b.pendingClassDeclIdx < 0 || b.classBaseLastIdent == "" {
+		b.classBaseLastIdent = ""
+		return
+	}
+	b.classSuperTypes[b.pendingClassDeclIdx] = append(
+		b.classSuperTypes[b.pendingClassDeclIdx], b.classBaseLastIdent)
+	b.classBaseLastIdent = ""
+}
+
+// flushSuperTypeSection finalises the inheritance window and clears
+// inSuperTypes. Called on body `{`.
+func (b *builder) flushSuperTypeSection() {
+	b.flushSuperTypeArg()
+	b.inSuperTypes = false
+	b.supertypeAngleDepth = 0
+	b.supertypeParenDepth = 0
 }
 
 // flushCtorFields handles the end of a primary constructor `)`. If a
@@ -1094,6 +1205,13 @@ func (b *builder) handleOpenBrace() {
 	b.prevByte = '{'
 	b.stmtStart = true
 
+	// Class/interface body opens — flush the supertype section and
+	// clear pendingClassDeclIdx. Done unconditionally so a malformed
+	// header without `:` can't leak state.
+	if b.inSuperTypes {
+		b.flushSuperTypeSection()
+	}
+
 	kind := scope.ScopeBlock
 	lambdaExpected := b.lambdaBraceExpected
 	blockExpected := b.blockBraceExpected
@@ -1103,6 +1221,9 @@ func (b *builder) handleOpenBrace() {
 		kind = *b.pendingScope
 		b.pendingScope = nil
 		b.genericParamsExpected = false
+		if kind == scope.ScopeClass || kind == scope.ScopeInterface {
+			b.pendingClassDeclIdx = -1
+		}
 	} else if !blockExpected && (lambdaExpected || isLambdaPrev(prevB)) {
 		// Lambda expression `{ a, b -> body }` or `{ it * 2 }`. Open a
 		// function scope. Params (if any) are detected by scanning the

@@ -311,7 +311,60 @@ func javaHierarchySpans(sym *index.SymbolInfo, r *namespace.JavaResolver) map[st
 
 func kotlinCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.SymbolInfo) (map[string][]span, bool) {
 	r := namespace.NewKotlinResolver(db.Root())
-	return jvmCrossFileSpans(ctx, db, sym, r.Result, r.Source, r.SamePackageFiles, namespace.KotlinPopulator(r), r)
+	out, ok := jvmCrossFileSpans(ctx, db, sym, r.Result, r.Source, r.SamePackageFiles, namespace.KotlinPopulator(r), r)
+	if !ok {
+		return out, ok
+	}
+	// Hierarchy override propagation: when renaming a method on a
+	// class with bases or interfaces, also rewrite same-name
+	// methods in those supertypes (and in subclasses). Mirrors the
+	// Java path. Reverse-discovery via FindSemanticReferences picks
+	// up subclasses that import the target.
+	if sym.Receiver != "" {
+		var extraCandidates []string
+		if refs, err := db.FindSemanticReferences(ctx, sym.Receiver, sym.File); err == nil {
+			seen := map[string]struct{}{sym.File: {}}
+			for _, ref := range refs {
+				if _, ok := seen[ref.File]; ok {
+					continue
+				}
+				seen[ref.File] = struct{}{}
+				extraCandidates = append(extraCandidates, ref.File)
+			}
+		}
+		EmitOverrideSpans(out, kotlinResolverDeps{r: r}, sym, extraCandidates...)
+	}
+	return out, true
+}
+
+// kotlinResolverDeps adapts KotlinResolver to the dispatch
+// HierarchyDeps interface used by EmitOverrideSpans.
+type kotlinResolverDeps struct {
+	r *namespace.KotlinResolver
+}
+
+func (d kotlinResolverDeps) Result(file string) *scope.Result { return d.r.Result(file) }
+func (d kotlinResolverDeps) SamePackageFiles(file string) []string {
+	return d.r.SamePackageFiles(file)
+}
+func (d kotlinResolverDeps) FilesForImport(spec, importingFile string) []string {
+	return d.r.FilesForImport(spec, importingFile)
+}
+
+// ImportSpec rebuilds a Kotlin import FQN from a KindImport decl.
+// Same shape as Java: `module + "." + name` for named imports,
+// `module + ".*"` for star imports.
+func (d kotlinResolverDeps) ImportSpec(decl *scope.Decl) string {
+	module, orig := SplitImportSignature(decl)
+	if module == "" {
+		return ""
+	}
+	switch orig {
+	case "", "*":
+		return module + ".*"
+	default:
+		return module + "." + orig
+	}
 }
 
 // buildVarTypes returns a map from variable/parameter/field NAME to

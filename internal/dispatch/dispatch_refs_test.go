@@ -1717,11 +1717,11 @@ class ServiceImpl : Service {
 	if !strings.Contains(string(impl), "fun runImpl(") {
 		t.Errorf("ServiceImpl.run should have been rewritten; got:\n%s", impl)
 	}
-	// Document the current limitation: interface decl is NOT updated.
-	// When Phase 8 ships, flip this to Contains("runImpl") and drop the
-	// NotContains check.
-	if strings.Contains(string(svc), "fun runImpl(") {
-		t.Errorf("Phase 8 not yet landed — Service.run should still read `fun run`; got:\n%s", svc)
+	// Phase 7 (hierarchy uplift) shipped: the interface decl now
+	// gets rewritten too via the up-walk through ServiceImpl's
+	// SuperTypes=[Service].
+	if !strings.Contains(string(svc), "fun runImpl(") {
+		t.Errorf("Service.run should have been rewritten via up-walk; got:\n%s", svc)
 	}
 }
 
