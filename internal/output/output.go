@@ -7,15 +7,31 @@ import (
 	"strings"
 )
 
+// CLI-process-scoped repo root used by Rel as a fallback. Acceptable for
+// the single-root CLI; programmatic / multi-root callers should use RelFor
+// with an explicit root instead so two simultaneous Dispatch calls against
+// different repos don't race on this global.
 var root string
 
-// SetRoot sets the repo root for relative path output.
+// SetRoot updates the process-level repo root used by Rel. Each Dispatch
+// call sets it (no longer once-only) so a second Dispatch against a
+// different repo within the same process gets the right root for diff
+// labels and result paths.
 func SetRoot(r string) {
 	root = r
 }
 
-// Rel converts an absolute path to a repo-relative path.
+// Rel converts an absolute path to a repo-relative path using the global
+// root set by SetRoot. Convenience wrapper for the CLI; multi-root callers
+// should use RelFor.
 func Rel(abs string) string {
+	return RelFor(root, abs)
+}
+
+// RelFor converts an absolute path to a repo-relative path against an
+// explicit root. Prefer this in code that may be called from contexts
+// without a stable global (e.g., parallel dispatch over multiple roots).
+func RelFor(root, abs string) string {
 	if root != "" && strings.HasPrefix(abs, root+"/") {
 		return abs[len(root)+1:]
 	}

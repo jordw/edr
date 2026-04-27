@@ -33,6 +33,10 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 	dryRun := flagBool(flags, "dry_run", false)
 	crossFile := flagBool(flags, "cross_file", false)
 	force := flagBool(flags, "force", false)
+	strict := flagBool(flags, "strict", false)
+	if strict && force {
+		return nil, fmt.Errorf("rename: --strict and --force are mutually exclusive")
+	}
 	commentMode := flagString(flags, "comments", "rewrite")
 	switch commentMode {
 	case "rewrite", "skip":
@@ -80,6 +84,60 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 		if spans, ok := scopeAwareSameFileSpans(sym); ok {
 			fileSpans[sym.File] = spans
 			scopeDone = true
+		}
+	}
+
+	// Strict mode: refuse before the legacy regex fallback runs, so
+	// strict never silently degrades to name-match. Done before the
+	// fileSpans build below so the refusal carries no edits.
+	if strict && !scopeDone {
+		return &output.RenameResult{
+			OldName:        oldName,
+			NewName:        newName,
+			Status:         "refused",
+			RefusedReason:  "strict_refused",
+			RefusedDetail:  fmt.Sprintf("scope-aware rename is not available for %s; --strict refuses to fall back to name-match", filepath.Ext(sym.File)),
+			SeeAlso:        fmt.Sprintf("edr refs-to %s:%s --include-name-match", output.Rel(sym.File), oldName),
+		}, nil
+	}
+
+	// Strict binding-tier audit: even when scope ran, the rewrite set
+	// may include probable/ambiguous refs that strict refuses on.
+	if strict && scopeDone {
+		audit, ok := auditSameFileBinding(sym)
+		if !ok {
+			return &output.RenameResult{
+				OldName:        oldName,
+				NewName:        newName,
+				Status:         "refused",
+				RefusedReason:  "strict_refused",
+				RefusedDetail:  "could not audit binding tiers for the target file",
+				SeeAlso:        fmt.Sprintf("edr refs-to %s:%s --include-name-match", output.Rel(sym.File), oldName),
+			}, nil
+		}
+		if audit.nonResolvedTotal() > 0 {
+			refusedExamples := make([]output.RefusedExample, 0, len(audit.Refused))
+			for _, r := range audit.Refused {
+				refusedExamples = append(refusedExamples, output.RefusedExample{
+					File:   r.File,
+					Line:   r.Line,
+					Tier:   r.Tier,
+					Reason: r.Reason,
+				})
+			}
+			counts := make(map[string]int, len(audit.Counts))
+			for k, v := range audit.Counts {
+				counts[k] = v
+			}
+			return &output.RenameResult{
+				OldName:         oldName,
+				NewName:         newName,
+				Status:          "refused",
+				RefusedReason:   "strict_refused",
+				RefusedCounts:   counts,
+				RefusedExamples: refusedExamples,
+				SeeAlso:         fmt.Sprintf("edr refs-to %s:%s --include-name-match", output.Rel(sym.File), oldName),
+			}, nil
 		}
 	}
 
@@ -355,336 +413,4 @@ func runRename(ctx context.Context, db index.SymbolStore, root string, args []st
 
 	result.Status = "applied"
 	return result, nil
-}
-
-// commentSyntaxFor returns a small bitmask describing which comment styles
-// the file's language uses. Approximate but enough to cover the languages we
-// support: line comments via // for C-family/JS/TS/Rust/Go, # for Python/Ruby
-// /shell/Makefile, -- for SQL/Lua, ; for Lisp/asm. Block comments via /* */
-// for C-family/JS/TS/Rust/Go, """ for Python.
-func commentSyntaxFor(file string) commentSyntax {
-	ext := ""
-	for i := len(file) - 1; i >= 0; i-- {
-		if file[i] == '.' {
-			ext = file[i:]
-			break
-		}
-		if file[i] == '/' {
-			break
-		}
-	}
-	switch ext {
-	case ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh",
-		".m", ".mm", ".java", ".kt", ".kts", ".scala", ".sc",
-		".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
-		".go", ".rs", ".swift", ".cs", ".dart", ".groovy", ".php":
-		return commentSyntax{slashSlash: true, slashStar: true}
-	case ".py", ".pyi":
-		return commentSyntax{hash: true, tripleQuote: true}
-	case ".rb", ".sh", ".bash", ".zsh", ".pl", ".pm", ".tcl", ".cmake":
-		return commentSyntax{hash: true}
-	case ".lua", ".sql":
-		return commentSyntax{dashDash: true}
-	}
-	// Default: slash-slash + slash-star covers most curly-brace languages we
-	// haven't enumerated.
-	return commentSyntax{slashSlash: true, slashStar: true}
-}
-
-type commentSyntax struct {
-	slashSlash  bool
-	slashStar   bool
-	hash        bool
-	dashDash    bool
-	tripleQuote bool
-}
-
-// positionInComment reports whether the byte at `pos` in `data` falls inside
-// a comment, scanning back to the start of the line for line-comments and
-// scanning the file for the most recent unterminated block-comment opener.
-//
-// Cheap and approximate — we don't tokenize strings, so a comment marker
-// inside a string literal will be misclassified. For the rename use case the
-// trade-off is fine: a false positive (treating "// foo" inside a string as
-// a comment) just means we report it as a comment edit, which is at worst
-// noisy in the summary, never an incorrect edit.
-func positionInComment(data []byte, pos int, syn commentSyntax) bool {
-	if pos < 0 || pos >= len(data) {
-		return false
-	}
-	// Scan back to the line start.
-	lineStart := pos
-	for lineStart > 0 && data[lineStart-1] != '\n' {
-		lineStart--
-	}
-	for i := lineStart; i < pos; i++ {
-		c := data[i]
-		if syn.slashSlash && c == '/' && i+1 < len(data) && data[i+1] == '/' {
-			return true
-		}
-		if syn.hash && c == '#' {
-			return true
-		}
-		if syn.dashDash && c == '-' && i+1 < len(data) && data[i+1] == '-' {
-			return true
-		}
-	}
-	// Block-comment scan: look for the nearest /* before pos that isn't
-	// closed before pos. (Skip when the language doesn't use /* */.)
-	if syn.slashStar {
-		open := bytes.LastIndex(data[:pos], []byte("/*"))
-		if open >= 0 {
-			close := bytes.Index(data[open:pos], []byte("*/"))
-			if close < 0 {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// expandToDocComment scans backwards from startByte to include preceding
-// comment lines (// or #) that are part of the symbol's documentation.
-func expandToDocComment(file string, startByte uint32) uint32 {
-	data, err := os.ReadFile(file)
-	if err != nil || startByte == 0 {
-		return startByte
-	}
-
-	pos := int(startByte)
-	for pos > 0 {
-		// Skip backwards over the newline before startByte.
-		nl := pos - 1
-		if nl < 0 || data[nl] != '\n' {
-			break
-		}
-		// Find the start of the previous line.
-		lineStart := nl
-		for lineStart > 0 && data[lineStart-1] != '\n' {
-			lineStart--
-		}
-		line := bytes.TrimSpace(data[lineStart:nl])
-		if len(line) >= 2 && line[0] == '/' && line[1] == '/' {
-			pos = lineStart
-		} else if len(line) >= 1 && line[0] == '#' {
-			pos = lineStart
-		} else if len(line) >= 2 && line[0] == '/' && line[1] == '*' {
-			pos = lineStart
-		} else if len(line) >= 3 && bytes.HasPrefix(line, []byte("///")) {
-			pos = lineStart
-		} else if len(line) >= 1 && line[0] == '*' {
-			// Middle or end of a block comment (/** ... */).
-			pos = lineStart
-		} else {
-			break
-		}
-	}
-	return uint32(pos)
-}
-
-// findIdentOccurrences scans data[lo:hi] for word-bounded occurrences of
-// name and returns one span per match. Used to pick up oldName mentions in
-// a symbol's leading doc-comment block once the apply layer is span-based
-// (the legacy regex sweep handled this implicitly).
-func findIdentOccurrences(data []byte, lo, hi uint32, name string) []span {
-	if name == "" {
-		return nil
-	}
-	if hi > uint32(len(data)) {
-		hi = uint32(len(data))
-	}
-	if lo >= hi {
-		return nil
-	}
-	var out []span
-	nb := []byte(name)
-	i := int(lo)
-	end := int(hi)
-	for i+len(nb) <= end {
-		idx := bytes.Index(data[i:end], nb)
-		if idx < 0 {
-			break
-		}
-		abs := i + idx
-		absEnd := abs + len(nb)
-		leftOK := abs == 0 || !isIdentByte(data[abs-1])
-		rightOK := absEnd >= len(data) || !isIdentByte(data[absEnd])
-		if leftOK && rightOK {
-			out = append(out, span{uint32(abs), uint32(absEnd)})
-		}
-		i = abs + 1
-	}
-	return out
-}
-
-// dedupSpans drops exact duplicates (same start+end) and contained
-// duplicates so the apply pass doesn't double-count or skip emissions
-// from multiple handlers (e.g. same-file decl + hierarchy emit).
-func dedupSpans(in []span) []span {
-	if len(in) <= 1 {
-		return in
-	}
-	seen := make(map[uint64]bool, len(in))
-	out := make([]span, 0, len(in))
-	for _, s := range in {
-		k := uint64(s.start)<<32 | uint64(s.end)
-		if seen[k] {
-			continue
-		}
-		seen[k] = true
-		out = append(out, s)
-	}
-	return out
-}
-
-func isIdentByte(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-		(c >= '0' && c <= '9') || c == '_'
-}
-
-// findCommentMentions returns spans for word-bounded occurrences of name
-// inside comment regions of data (per syn). Used by --update-comments to
-// rewrite doc/comment mentions of the renamed symbol that the symbol-graph
-// resolver does not return as refs (it only expands the *declaration's*
-// leading doc comment, not arbitrary mentions in unrelated comments).
-func findCommentMentions(data []byte, name string, syn commentSyntax) []span {
-	if name == "" {
-		return nil
-	}
-	nb := []byte(name)
-	var out []span
-	i := 0
-	for i+len(nb) <= len(data) {
-		idx := bytes.Index(data[i:], nb)
-		if idx < 0 {
-			break
-		}
-		abs := i + idx
-		absEnd := abs + len(nb)
-		leftOK := abs == 0 || !isIdentByte(data[abs-1])
-		rightOK := absEnd >= len(data) || !isIdentByte(data[absEnd])
-		if leftOK && rightOK && positionInComment(data, abs, syn) {
-			out = append(out, span{uint32(abs), uint32(absEnd)})
-		}
-		i = abs + 1
-	}
-	return out
-}
-
-// countNameInCode counts word-bounded occurrences of name in data that are
-// NOT inside a comment (per syn). Used as a sanity check against the resolver:
-// if the resolver finds fewer code spans than this returns, some references
-// were missed (or are intentionally skipped — shadowed locals, look-alikes
-// in string literals — so this is signal not proof).
-func countNameInCode(data []byte, name string, syn commentSyntax) int {
-	if name == "" {
-		return 0
-	}
-	nb := []byte(name)
-	count := 0
-	i := 0
-	for i+len(nb) <= len(data) {
-		idx := bytes.Index(data[i:], nb)
-		if idx < 0 {
-			break
-		}
-		abs := i + idx
-		absEnd := abs + len(nb)
-		leftOK := abs == 0 || !isIdentByte(data[abs-1])
-		rightOK := absEnd >= len(data) || !isIdentByte(data[absEnd])
-		if leftOK && rightOK && !positionInComment(data, abs, syn) {
-			count++
-		}
-		i = abs + 1
-	}
-	return count
-}
-
-// companionExtsForLang returns the template / view / DSL extensions
-// associated with a source language. Rename does not parse these
-// (their syntax is heterogeneous — ERB embeds Ruby in HTML, jbuilder
-// is method-chained DSL, etc.), so we only scan them for word-bounded
-// mentions and warn — not rewrite.
-func companionExtsForLang(srcExt string) []string {
-	switch strings.ToLower(srcExt) {
-	case ".rb":
-		return []string{".erb", ".haml", ".slim", ".rabl", ".jbuilder", ".builder"}
-	case ".php":
-		return []string{".twig", ".vue"}
-	}
-	return nil
-}
-
-type companionMention struct {
-	file  string
-	count int
-}
-
-// companionFileMentions scans companion / template files (per
-// companionExtsForLang) for word-bounded mentions of oldName.
-// Files already targeted by the rename pass (in fileSpans) are
-// skipped — the existing code-mention warning covers those.
-//
-// Uses the trigram index when available (matches the access pattern
-// of `edr files`) and falls back to a filesystem walk. Returns the
-// total mention count and per-file breakdown for the warning.
-func companionFileMentions(root, edrDir, srcFile, oldName string, fileSpans map[string][]span) (int, []companionMention) {
-	exts := companionExtsForLang(filepath.Ext(srcFile))
-	if len(exts) == 0 || oldName == "" {
-		return 0, nil
-	}
-	extSet := make(map[string]bool, len(exts))
-	for _, e := range exts {
-		extSet[e] = true
-	}
-
-	var candidates []string
-	if h, _ := idx.ReadHeader(edrDir); h != nil && len(oldName) >= 3 {
-		tris := idx.QueryTrigrams(strings.ToLower(oldName))
-		if cands, ok := idx.Query(edrDir, tris); ok {
-			for _, rel := range cands {
-				if extSet[strings.ToLower(filepath.Ext(rel))] {
-					candidates = append(candidates, filepath.Join(root, rel))
-				}
-			}
-		}
-	}
-	if candidates == nil {
-		// Fallback walk — no usable index, or oldName too short for trigrams.
-		skipDirs := map[string]bool{".git": true, ".edr": true, "vendor": true, ".bundle": true, "node_modules": true, "tmp": true, "log": true, "coverage": true}
-		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil
-			}
-			if info.IsDir() {
-				if skipDirs[info.Name()] {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if extSet[strings.ToLower(filepath.Ext(path))] {
-				candidates = append(candidates, path)
-			}
-			return nil
-		})
-	}
-
-	total := 0
-	var mentions []companionMention
-	for _, abs := range candidates {
-		if _, alreadyEdited := fileSpans[abs]; alreadyEdited {
-			continue
-		}
-		data, err := os.ReadFile(abs)
-		if err != nil {
-			continue
-		}
-		spans := findIdentOccurrences(data, 0, uint32(len(data)), oldName)
-		if len(spans) == 0 {
-			continue
-		}
-		total += len(spans)
-		mentions = append(mentions, companionMention{file: output.Rel(abs), count: len(spans)})
-	}
-	return total, mentions
 }

@@ -191,3 +191,53 @@ func TestTokenEstimate(t *testing.T) {
 		}
 	}
 }
+
+func TestRelFor(t *testing.T) {
+	cases := []struct {
+		name  string
+		root  string
+		abs   string
+		want  string
+	}{
+		{"strip prefix", "/repo", "/repo/cmd/main.go", "cmd/main.go"},
+		{"empty root passthrough", "", "/anywhere/file.go", "/anywhere/file.go"},
+		{"non-prefix passthrough", "/repo", "/other/file.go", "/other/file.go"},
+		{"exact root", "/repo", "/repo", "/repo"},
+		{"prefix without separator must not match", "/repo", "/repo-backup/file", "/repo-backup/file"},
+		{"already relative passthrough", "/repo", "cmd/main.go", "cmd/main.go"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := RelFor(c.root, c.abs)
+			if got != c.want {
+				t.Errorf("RelFor(%q, %q) = %q, want %q", c.root, c.abs, got, c.want)
+			}
+		})
+	}
+}
+
+// TestRel_GlobalRetargets covers the scenario this refactor unblocked:
+// SetRoot is no longer once-only, so a second Dispatch against a different
+// repo in the same process gets the right relativization. The old sync.Once
+// would have stuck Rel on the first root forever.
+func TestRel_GlobalRetargets(t *testing.T) {
+	t.Cleanup(func() { SetRoot("") })
+
+	SetRoot("/first")
+	if got := Rel("/first/a.go"); got != "a.go" {
+		t.Fatalf("first root: Rel = %q, want %q", got, "a.go")
+	}
+	// Path under the second root must NOT be confused with the first.
+	if got := Rel("/second/a.go"); got != "/second/a.go" {
+		t.Fatalf("first root rejecting second-root path: Rel = %q, want passthrough", got)
+	}
+
+	SetRoot("/second")
+	if got := Rel("/second/a.go"); got != "a.go" {
+		t.Fatalf("after retarget: Rel = %q, want %q", got, "a.go")
+	}
+	// Old root is no longer privileged.
+	if got := Rel("/first/a.go"); got != "/first/a.go" {
+		t.Fatalf("after retarget, old root: Rel = %q, want passthrough", got)
+	}
+}

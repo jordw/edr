@@ -204,3 +204,44 @@ func equal(a, b []string) bool {
 	}
 	return true
 }
+
+func TestIsAlwaysIgnoredPath(t *testing.T) {
+	cases := []struct {
+		rel  string
+		want bool
+	}{
+		// Bare segments at top level — the user's reported case.
+		{".claude/worktrees/agent-a04ff5ea/AGENTS.md", true},
+		{".git/index", true},
+		{".edr/sessions/abc.json", true},
+
+		// Mid-path segments — a nested .git (worktree under a non-ignored
+		// dir) should still be caught.
+		{"vendor/somepkg/.git/HEAD", true},
+		{"foo/.claude/bar.txt", true},
+
+		// Dot-prefixed names that are NOT in alwaysIgnore — should pass through.
+		// Catching these would over-prune .gitignore, .github/, .vscode/ etc.,
+		// which the gitignore policy handles separately.
+		{".github/workflows/ci.yml", false},
+		{".gitignore", false},
+		{".vscode/settings.json", false},
+
+		// Substring near-misses must not match.
+		{"docs/.claudeignore", false},
+		{"foo/agitated/bar.go", false},
+		{"my.git.backup/file", false},
+
+		// Normal paths.
+		{"internal/walk/walk.go", false},
+		{"cmd/commands.go", false},
+		{"", false},
+
+	}
+	for _, c := range cases {
+		got := IsAlwaysIgnoredPath(c.rel)
+		if got != c.want {
+			t.Errorf("IsAlwaysIgnoredPath(%q) = %v, want %v", c.rel, got, c.want)
+		}
+	}
+}

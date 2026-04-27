@@ -20,8 +20,6 @@ import (
 	"github.com/jordw/edr/internal/staleness"
 )
 
-var setRootOnce sync.Once
-
 // resolveSymbolArgs resolves 1 or 2 args to a symbol.
 // With 1 arg: global name resolution (errors if ambiguous).
 // With 2 args: file + name lookup.
@@ -86,7 +84,11 @@ func resolveSymbolArgs(ctx context.Context, db index.SymbolStore, root string, a
 // bypasses the CLI layer so callers can invoke commands programmatically.
 func Dispatch(ctx context.Context, db index.SymbolStore, cmd string, args []string, flags map[string]any) (any, error) {
 	root := db.Root()
-	setRootOnce.Do(func() { output.SetRoot(root) })
+	// Always overwrite — earlier this used sync.Once, but a second
+	// Dispatch against a different repo in the same process needs to
+	// retarget output.Rel to the new root. RelFor is the explicit-
+	// root alternative for callers that can't rely on a stable global.
+	output.SetRoot(root)
 
 	// Read commands (files, search) use idx.StatChanges at query time
 	// to detect modified/new/deleted files — no synchronous index

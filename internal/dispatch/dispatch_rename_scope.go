@@ -272,143 +272,28 @@ func scopeAwareCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *in
 	}
 	out := map[string][]span{sym.File: originSpans}
 
-	// Namespace-driven cross-file resolution per language. Each
-	// branch parses the target file with canonical DeclID hashing,
-	// resolves the candidate files' imports + same-package siblings,
-	// and emits refs that bind to the target by canonical DeclID.
-	switch ext := strings.ToLower(filepath.Ext(sym.File)); ext {
-	case ".go":
-		crossSpans, ok := goCrossFileSpans(ctx, db, sym)
-		if !ok {
+	// Namespace-driven cross-file resolution per language. Per-
+	// extension renamers live in cross_file_registry.go and each
+	// encodes its own commit policy (always-commit vs commit-only-
+	// on-non-empty vs language-specific rules).
+	if renamer, ok := crossFileRenamers[strings.ToLower(filepath.Ext(sym.File))]; ok {
+		res := renamer(ctx, db, sym)
+		if res.commit {
+			for f, spans := range res.spans {
+				out[f] = append(out[f], spans...)
+			}
+			return out, res.warnings, true
+		}
+		// Go/Java/Kotlin signal a hard failure (ok=false in their
+		// inner resolver) by returning commit=false from a renamer
+		// that has no fall-through path. Preserve the legacy hard-
+		// abort for those — falling through to the generic ref
+		// filter would mask a real resolver bug. Other languages
+		// (Rust without Cargo, TS/JS / Python / C++ / C# / Swift /
+		// PHP / Ruby with empty results) intentionally fall through.
+		switch strings.ToLower(filepath.Ext(sym.File)) {
+		case ".go", ".java", ".kt", ".kts":
 			return nil, nil, false
-		}
-		for f, spans := range crossSpans {
-			out[f] = append(out[f], spans...)
-		}
-		return out, nil, true
-	case ".java":
-		crossSpans, ok := javaCrossFileSpans(ctx, db, sym)
-		if !ok {
-			return nil, nil, false
-		}
-		for f, spans := range crossSpans {
-			out[f] = append(out[f], spans...)
-		}
-		return out, nil, true
-	case ".kt", ".kts":
-		crossSpans, ok := kotlinCrossFileSpans(ctx, db, sym)
-		if !ok {
-			return nil, nil, false
-		}
-		for f, spans := range crossSpans {
-			out[f] = append(out[f], spans...)
-		}
-		return out, nil, true
-	case ".rs":
-		// Only use the namespace-driven Rust path when we can
-		// compute a canonical module path (Cargo.toml reachable).
-		// Otherwise fall through to the generic ref-filtering path
-		// below — which uses rustSameCrateRefs and preserves the
-		// shadow guard for test-fixture setups with no Cargo.toml.
-		if crossSpans, ok := rustCrossFileSpans(ctx, db, sym); ok {
-			for f, spans := range crossSpans {
-				out[f] = append(out[f], spans...)
-			}
-			return out, nil, true
-		}
-	case ".c", ".h":
-		if crossSpans, ok := cCrossFileSpans(ctx, db, sym); ok {
-			for f, spans := range crossSpans {
-				out[f] = append(out[f], spans...)
-			}
-			return out, nil, true
-		}
-	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".d.ts":
-		// Namespace path takes over ONLY when it actually resolves
-		// cross-file matches. CommonJS `require(...)` destructuring
-		// and bare `module.exports` patterns aren't modeled, so for
-		// those the empty namespace result must fall through to the
-		// generic ref-filtering path below.
-		if crossSpans, ok := tsCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
-			for f, spans := range crossSpans {
-				out[f] = append(out[f], spans...)
-			}
-			return out, nil, true
-		}
-	case ".py", ".pyi":
-		// Same fall-through rule as TS/JS: let the generic path
-		// handle cases the namespace resolver doesn't cover
-		// (bare `import X`, star imports, etc.).
-		if crossSpans, ok := pythonCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
-			for f, spans := range crossSpans {
-				out[f] = append(out[f], spans...)
-			}
-			return out, nil, true
-		}
-	case ".rb":
-		// Commit to Ruby's resolver when it produces a result OR when
-		// the rename target is a method. Methods always need our
-		// receiver-aware path; the legacy fallback below would
-		// silently rewrite same-name calls on unrelated classes. For
-		// top-level (non-method) renames with no cross-file matches,
-		// fall through so the legacy path can still handle imports
-		// the namespace resolver doesn't model.
-		if crossSpans, warns, ok := rubyCrossFileSpans(ctx, db, sym); ok {
-			if len(crossSpans) > 0 || sym.Receiver != "" {
-				for f, spans := range crossSpans {
-					out[f] = append(out[f], spans...)
-				}
-				return out, warns, true
-			}
-		}
-	case ".lua":
-		// Lua has no static type info or trackable imports; the
-		// resolver walks every .lua file unconditionally. Always
-		// commit to its result — the legacy fallback below is
-		// import-graph filtered and would miss `dofile`/`require`
-		// callers that the walk picks up.
-		if crossSpans, warns, ok := luaCrossFileSpans(ctx, db, sym); ok {
-			for f, spans := range crossSpans {
-				out[f] = append(out[f], spans...)
-			}
-			return out, warns, true
-		}
-	case ".zig":
-		// Zig has `@import("foo.zig")` but it's not in our import
-		// graph; walk every .zig file and emit name-matched refs.
-		if crossSpans, warns, ok := zigCrossFileSpans(ctx, db, sym); ok {
-			for f, spans := range crossSpans {
-				out[f] = append(out[f], spans...)
-			}
-			return out, warns, true
-		}
-	case ".cpp", ".cxx", ".cc", ".c++", ".hpp", ".hxx", ".hh", ".h++":
-		if crossSpans, ok := cppCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
-			for f, spans := range crossSpans {
-				out[f] = append(out[f], spans...)
-			}
-			return out, nil, true
-		}
-	case ".cs":
-		if crossSpans, ok := csharpCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
-			for f, spans := range crossSpans {
-				out[f] = append(out[f], spans...)
-			}
-			return out, nil, true
-		}
-	case ".swift":
-		if crossSpans, ok := swiftCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
-			for f, spans := range crossSpans {
-				out[f] = append(out[f], spans...)
-			}
-			return out, nil, true
-		}
-	case ".php", ".phtml":
-		if crossSpans, ok := phpCrossFileSpans(ctx, db, sym); ok && len(crossSpans) > 0 {
-			for f, spans := range crossSpans {
-				out[f] = append(out[f], spans...)
-			}
-			return out, nil, true
 		}
 	}
 

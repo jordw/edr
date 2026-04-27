@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"github.com/jordw/edr/internal/walk"
 )
 
 // Changes holds the result of comparing indexed file metadata against the
@@ -132,7 +134,16 @@ func StatChanges(root, edrDir string) *Changes {
 	}
 
 	c := &Changes{}
-	for _, r := range results {
+	for ri, r := range results {
+		// Prune entries that now live under an always-ignored
+		// directory (.git, .edr, .claude). These are stale — the
+		// walker no longer visits them, so without an explicit
+		// delete here `edr orient` keeps surfacing files like
+		// .claude/worktrees/agent-*/ from old index builds.
+		if walk.IsAlwaysIgnoredPath(refs[ri].path) {
+			c.Deleted = append(c.Deleted, refs[ri].path)
+			continue
+		}
 		switch {
 		case r.deleted:
 			c.Deleted = append(c.Deleted, r.rel)
@@ -162,9 +173,18 @@ func StatChanges(root, edrDir string) *Changes {
 			rel := filepath.Join(dir, e.Name())
 			if e.IsDir() {
 				// Recurse into directories that aren't in our indexed set.
+				// Skip ignore-policy paths first — without this, a directory
+				// like .claude/ that the walker excludes still gets descended
+				// here, surfacing every worktree file as a new candidate.
+				if walk.IsAlwaysIgnoredPath(rel) {
+					continue
+				}
 				if _, known := indexedDirs[rel]; !known {
 					walkNewDir(root, rel, indexedSet, &c.New)
 				}
+				continue
+			}
+			if walk.IsAlwaysIgnoredPath(rel) {
 				continue
 			}
 			if _, indexed := indexedSet[rel]; !indexed {

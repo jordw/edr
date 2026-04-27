@@ -11,11 +11,29 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // alwaysIgnore contains repo metadata names that are always skipped regardless of .gitignore.
 var alwaysIgnore = []string{
 	".git", ".edr", ".claude",
+}
+
+// IsAlwaysIgnoredPath reports whether rel contains a path segment in
+// alwaysIgnore (.git, .edr, .claude). Used by callers — notably the
+// symbol index — to prune stale entries that point into directories
+// the walker no longer visits, so reports like `edr orient` don't
+// surface .claude/worktrees files just because they were indexed
+// before the ignore policy covered them.
+func IsAlwaysIgnoredPath(rel string) bool {
+	for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+		for _, ign := range alwaysIgnore {
+			if seg == ign {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // DefaultIgnore is the fallback ignore list used when no .gitignore exists.
