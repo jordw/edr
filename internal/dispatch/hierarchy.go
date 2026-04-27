@@ -164,15 +164,16 @@ func findEnclosingClass(r *scope.Result, receiverName string) *scope.Decl {
 }
 
 // isClassLikeFileScope reports whether d is a top-level class /
-// interface / enum / record declaration. We accept anything in the
-// class kinds since per-language nuances (records, enums, traits,
-// protocols) all act as receiver types for methods.
+// interface / enum / record / module declaration. We accept anything
+// that can host methods and participate in inheritance — per-
+// language nuances (records, enums, traits, protocols, Ruby modules)
+// all act as receiver types and can be referenced by SuperTypes.
 func isClassLikeFileScope(d *scope.Decl) bool {
 	if d.Scope != scope.ScopeID(1) {
 		return false
 	}
 	switch d.Kind {
-	case scope.KindClass, scope.KindInterface, scope.KindEnum, scope.KindType:
+	case scope.KindClass, scope.KindInterface, scope.KindEnum, scope.KindType, scope.KindNamespace:
 		return true
 	}
 	return false

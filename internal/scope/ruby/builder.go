@@ -55,11 +55,22 @@ func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 		pendingOwnerDecl: -1,
 		stmtStart:        true,
 		regexOK:          true,
+		classSuperTypes:  map[int][]string{},
+		pendingMixinIdx:  -1,
 	}
 	b.openScope(scope.ScopeFile, 0, rbOpenerFile)
 	b.run()
 	b.closeScopesToDepth(0)
 	b.resolveRefs()
+	// Copy classSuperTypes onto Decl.SuperTypes for the cross-file
+	// hierarchy walker. Done before MergeDuplicateDecls so unified
+	// decls inherit the supertype list when the merger preserves
+	// the slot.
+	for idx, supers := range b.classSuperTypes {
+		if idx >= 0 && idx < len(b.res.Decls) && len(supers) > 0 {
+			b.res.Decls[idx].SuperTypes = supers
+		}
+	}
 	scope.MergeDuplicateDecls(b.res)
 	return b.res
 }
@@ -166,6 +177,26 @@ type builder struct {
 	// prevWasIdent is true when the last-scanned token was an identifier
 	// (not a keyword). Used for brace-disambiguation.
 	prevWasIdent bool
+
+	// Class-supertype tracking — populates Decl.SuperTypes for class /
+	// module decls so the cross-file hierarchy walker
+	// (EmitOverrideSpans) can walk both directions.
+	//
+	// classSuperTypes: per-decl-index list of base / mixin names.
+	// Populated from `class Foo < Base` (the parent-class clause)
+	// and from `include Mod` / `extend Mod` / `prepend Mod`
+	// statements at the top of a class or module body.
+	//
+	// pendingMixinKw + pendingMixinIdx: when an include/extend/
+	// prepend keyword is seen at statement-start inside a class /
+	// namespace scope, pendingMixinKw stores the keyword name and
+	// pendingMixinIdx records the enclosing class decl. The next
+	// idents (comma-separated) are recorded as mixin supertypes
+	// against pendingMixinIdx until the statement boundary.
+	classSuperTypes        map[int][]string
+	pendingMixinKw         string
+	pendingMixinIdx        int
+	pendingMixinLastIdent  string
 }
 
 type pendingAssign struct {
@@ -389,6 +420,11 @@ func (b *builder) run() {
 			b.prevByte = ','
 			b.prevWasIdent = false
 			// A comma in a comma-separated LHS keeps the pending LHS alive.
+			// Mixin-arg separator: `include A, B` — flush A and reset
+			// the last-ident slot so B becomes the next captured name.
+			if b.pendingMixinKw != "" {
+				b.flushPendingMixinArg()
+			}
 		case c == '|':
 			// `|` outside of inPipeParams is logical-or (`||`) or bitwise-or.
 			// We just pass through; pipe param scanning is invoked right
@@ -443,6 +479,50 @@ func (b *builder) endStatement() {
 	b.flushAssignLHSAsRefs()
 	b.assignHadDot = false
 	b.assignStopped = false
+	// Mixin sequence ends at the statement boundary. Append the
+	// final captured name (if any) and clear the pending state.
+	b.flushPendingMixin()
+}
+
+// flushPendingMixinArg appends the last-captured ident to the
+// pending class's SuperTypes and clears the slot for the next arg.
+// Used by the comma handler when parsing `include A, B`.
+func (b *builder) flushPendingMixinArg() {
+	if b.pendingMixinIdx < 0 || b.pendingMixinLastIdent == "" {
+		return
+	}
+	b.classSuperTypes[b.pendingMixinIdx] = append(
+		b.classSuperTypes[b.pendingMixinIdx], b.pendingMixinLastIdent)
+	b.pendingMixinLastIdent = ""
+}
+
+// flushPendingMixin finalises the active mixin sequence and clears
+// the tracker. Called at statement boundaries (newline, `;`).
+func (b *builder) flushPendingMixin() {
+	b.flushPendingMixinArg()
+	b.pendingMixinKw = ""
+	b.pendingMixinIdx = -1
+	b.pendingMixinLastIdent = ""
+}
+
+// enclosingClassDeclIdx returns the decl index of the nearest
+// enclosing class or module on the scope stack, or (0, false) if
+// the current position isn't inside a class/module body. Used by
+// the include/extend/prepend trigger to attach mixins to the right
+// class.
+func (b *builder) enclosingClassDeclIdx() (int, bool) {
+	entries := b.stack.Entries()
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := &entries[i]
+		if e.Data.kind != scope.ScopeClass && e.Data.kind != scope.ScopeNamespace {
+			continue
+		}
+		if e.Data.ownerDeclIdx < 0 {
+			continue
+		}
+		return e.Data.ownerDeclIdx, true
+	}
+	return 0, false
 }
 
 // flushAssignLHSAsRefs converts buffered LHS idents to refs. Called when
@@ -504,6 +584,22 @@ func (b *builder) handleIdent(word []byte) {
 		b.prevWasIdent = true
 		b.braceIsBlock = true
 		return
+	}
+
+	// Mixin trigger: `include Mod` / `extend Mod` / `prepend Mod` at
+	// statement-start inside a class or module body adds Mod as a
+	// supertype of the enclosing class for hierarchy-aware rename.
+	// Falls through so the keyword ident itself still emits a ref
+	// (the bottom-of-handleIdent path) — `include` is a real method
+	// call in Ruby and refs-to from Object#include should still find
+	// the use.
+	if wasStmtStart && (name == "include" || name == "extend" || name == "prepend") {
+		if topClassIdx, ok := b.enclosingClassDeclIdx(); ok {
+			// Defensive: flush any unfinished prior mixin sequence.
+			b.flushPendingMixin()
+			b.pendingMixinKw = name
+			b.pendingMixinIdx = topClassIdx
+		}
 	}
 
 	// Keywords.
@@ -632,6 +728,16 @@ func (b *builder) handleIdent(word []byte) {
 		b.regexOK = false
 		b.braceIsBlock = false
 		return
+	}
+
+	// Mixin name capture. While pendingMixinKw is set, idents on the
+	// same statement (after the keyword) are mixin-module names. Use
+	// "last ident wins" so qualified names like Foo::Bar reduce to
+	// the leaf "Bar" — the hierarchy walker matches by name. Done
+	// before the assignLHS branch so comma-separated mixin args
+	// (`include A, B`) aren't swallowed as LHS candidates.
+	if b.pendingMixinKw != "" && name != b.pendingMixinKw {
+		b.pendingMixinLastIdent = name
 	}
 
 	// Statement-start bare ident: candidate assignment LHS.
@@ -944,6 +1050,7 @@ func (b *builder) handleClassKeyword(kwStart uint32) {
 		leafStart = nameStart + i + 2
 	}
 	leafEnd := leafStart + len(leaf)
+	classDeclIdx := len(b.res.Decls)
 	b.emitDecl(leaf, scope.KindClass, mkSpan(uint32(leafStart), uint32(leafEnd)), scope.NSConstant)
 	// Open class scope BEFORE checking the optional `< Super` so that
 	// Super is emitted as a ref at the file scope (where it actually lives).
@@ -968,6 +1075,11 @@ func (b *builder) handleClassKeyword(kwStart uint32) {
 			}
 			_ = superEnd
 			b.emitRef(leafSuper, mkSpan(uint32(leafSuperStart), uint32(leafSuperStart+len(leafSuper))))
+			// Record on the class's SuperTypes so the cross-file
+			// hierarchy walker can walk up from Foo to Base. Use the
+			// leaf segment of qualified names (consistent with the
+			// hierarchy walker's name-based matching).
+			b.classSuperTypes[classDeclIdx] = append(b.classSuperTypes[classDeclIdx], leafSuper)
 		}
 	}
 	b.openScope(scope.ScopeClass, kwStart, rbOpenerClass)

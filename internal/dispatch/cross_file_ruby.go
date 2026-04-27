@@ -48,7 +48,18 @@ func rubyCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sy
 	}
 
 	if sym.Receiver != "" {
-		rbEmitHierarchySpans(out, resolver, sym, target)
+		var extraCandidates []string
+		if refs, err := db.FindSemanticReferences(ctx, sym.Receiver, sym.File); err == nil {
+			seen := map[string]struct{}{sym.File: {}}
+			for _, r := range refs {
+				if _, ok := seen[r.File]; ok {
+					continue
+				}
+				seen[r.File] = struct{}{}
+				extraCandidates = append(extraCandidates, r.File)
+			}
+		}
+		EmitOverrideSpans(out, rubyResolverDeps{r: resolver}, sym, extraCandidates...)
 	}
 
 	candidates := map[string]bool{}
@@ -298,59 +309,25 @@ func allRubyFiles(root, edrDir string) []string {
 }
 
 
-func rbEmitHierarchySpans(out map[string][]span, resolver *namespace.RubyResolver, sym *index.SymbolInfo, target *scope.Decl) {
-	src := resolver.Source(sym.File)
-	if len(src) == 0 {
-		return
-	}
-	hier := namespace.RbFindClassHierarchy(src)
-	if len(hier) == 0 {
-		return
-	}
-	var enclosing *namespace.RbClassHierarchy
-	for i := range hier {
-		h := &hier[i]
-		if h.BodyStart <= target.Span.StartByte && target.Span.EndByte <= h.BodyEnd {
-			enclosing = h
-			break
-		}
-	}
-	if enclosing == nil {
-		return
-	}
-	related := map[string]bool{}
-	for _, t := range namespace.RbRelatedTypes(src, enclosing.Name) {
-		related[t] = true
-	}
-	if len(related) == 0 {
-		return
-	}
-	targetRes := resolver.Result(sym.File)
-	if targetRes == nil {
-		return
-	}
-	for _, h := range hier {
-		if !related[h.Name] || h.Name == enclosing.Name {
-			continue
-		}
-		for i := range targetRes.Decls {
-			d := &targetRes.Decls[i]
-			if d.Name != sym.Name {
-				continue
-			}
-			if d.Kind != scope.KindMethod && d.Kind != scope.KindFunction {
-				continue
-			}
-			if d.Span.StartByte < h.BodyStart || d.Span.EndByte > h.BodyEnd {
-				continue
-			}
-			if d.ID == target.ID {
-				continue
-			}
-			out[sym.File] = append(out[sym.File], span{
-				start: d.Span.StartByte,
-				end:   d.Span.EndByte,
-			})
-		}
-	}
+// rubyResolverDeps adapts RubyResolver to the dispatch HierarchyDeps
+// interface used by EmitOverrideSpans.
+type rubyResolverDeps struct {
+	r *namespace.RubyResolver
+}
+
+func (d rubyResolverDeps) Result(file string) *scope.Result { return d.r.Result(file) }
+func (d rubyResolverDeps) SamePackageFiles(file string) []string {
+	return d.r.SamePackageFiles(file)
+}
+func (d rubyResolverDeps) FilesForImport(spec, importingFile string) []string {
+	return d.r.FilesForImport(spec, importingFile)
+}
+
+// ImportSpec returns the bare path string from a Ruby require/
+// require_relative decl. The Ruby builder stamps Signature with the
+// path as the module portion; the imported binding name is unused
+// here since require returns Object#require's result, not a name.
+func (d rubyResolverDeps) ImportSpec(decl *scope.Decl) string {
+	module, _ := SplitImportSignature(decl)
+	return module
 }
