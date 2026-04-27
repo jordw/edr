@@ -52,17 +52,26 @@ func Parse(file string, src []byte) *scope.Result {
 // cross-file references via imports can bind to matching DeclIDs.
 func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 	b := &builder{
-		file:             file,
-		canonicalPath:    canonicalPath,
-		res:              &scope.Result{File: file},
-		s:                lexkit.New(src),
-		pendingOwnerDecl: -1,
+		file:                file,
+		canonicalPath:       canonicalPath,
+		res:                 &scope.Result{File: file},
+		s:                   lexkit.New(src),
+		pendingOwnerDecl:    -1,
+		pendingClassDeclIdx: -1,
+		classSuperTypes:     map[int][]string{},
 	}
 	b.openScope(scope.ScopeFile, 0)
 	b.stmtStart = true
 	b.run()
 	b.closeScopesToDepth(0)
 	b.resolveRefs()
+	// Copy classSuperTypes onto Decl.SuperTypes for the cross-file
+	// hierarchy walker.
+	for idx, supers := range b.classSuperTypes {
+		if idx >= 0 && idx < len(b.res.Decls) && len(supers) > 0 {
+			b.res.Decls[idx].SuperTypes = supers
+		}
+	}
 	return b.res
 }
 
@@ -159,6 +168,31 @@ type builder struct {
 	// `static` are NOT Exported (internal linkage).
 	sawStatic bool
 
+	// Class-supertype tracking — populates Decl.SuperTypes for class
+	// / struct decls so the cross-file hierarchy walker
+	// (EmitOverrideSpans) can walk both directions.
+	//
+	// pendingClassDeclIdx holds the just-emitted class/struct decl
+	// until its body `{` opens. inSuperTypes is on between the
+	// inheritance `:` and the body `{`. supertypeAngleDepth tracks
+	// generic args inside the supertype clause (`: Container<T>`)
+	// — C++ template args are independent of the decl-name template
+	// machinery so we keep our own counter. classBaseLastIdent
+	// captures qualified `std::iostream::base` via "last ident
+	// wins" so the leaf segment is what reaches Decl.SuperTypes.
+	//
+	// Access modifiers (public/private/protected) and `virtual` are
+	// keywords that flow through unrecognised — they're recognised
+	// as keywords but don't affect the supertype tracker. The
+	// classBaseLastIdent overwrite-on-each-ident pattern means
+	// modifier idents don't end up captured as bases (the actual
+	// type ident comes after).
+	pendingClassDeclIdx int
+	inSuperTypes        bool
+	supertypeAngleDepth int
+	classBaseLastIdent  string
+	classSuperTypes     map[int][]string
+
 	prevByte byte
 }
 
@@ -234,6 +268,9 @@ func (b *builder) run() {
 				b.commitPendingParamSection()
 				b.paramSectionNeedsName = true
 				b.pendingParamName = ""
+			} else if b.inSuperTypes && b.supertypeAngleDepth == 0 {
+				// Multi-inheritance separator (`: A, B, C`).
+				b.flushSuperTypeArg()
 			} else if b.currentScopeKind() == scope.ScopeClass && b.classDepth == 0 {
 				b.flushClassField()
 			}
@@ -257,6 +294,16 @@ func (b *builder) run() {
 				b.scopeQualifierPending = true
 			} else {
 				b.prevByte = ':'
+				// Inheritance `:` after a class/struct header.
+				// pendingClassDeclIdx is set between the class
+				// decl name and its body `{`; cleared on body
+				// open, so other `:` uses (constructor init
+				// list, ternary, bit-field) are filtered.
+				if b.pendingClassDeclIdx >= 0 && !b.inSuperTypes {
+					b.inSuperTypes = true
+					b.classBaseLastIdent = ""
+					b.supertypeAngleDepth = 0
+				}
 			}
 		case c == '.':
 			b.s.Pos++
@@ -278,6 +325,9 @@ func (b *builder) run() {
 				b.s.Pos++
 			} else if b.prevByte == 'i' || b.angleDepth > 0 {
 				b.angleDepth++
+				if b.inSuperTypes {
+					b.supertypeAngleDepth++
+				}
 				b.s.Pos++
 			} else {
 				b.s.Pos++
@@ -293,6 +343,9 @@ func (b *builder) run() {
 			}
 			if b.angleDepth > 0 {
 				b.angleDepth--
+			}
+			if b.inSuperTypes && b.supertypeAngleDepth > 0 {
+				b.supertypeAngleDepth--
 			}
 			b.s.Pos++
 			b.prevByte = '>'
@@ -540,6 +593,12 @@ func (b *builder) handleIdent(word []byte) {
 
 	if b.prevByte == '.' {
 		b.emitPropertyRef(name, mkSpan(startByte, endByte))
+		// Qualified supertype name: `: std::iostream::base` —
+		// each `::`-separated segment after the first overwrites
+		// classBaseLastIdent so the leaf wins.
+		if b.inSuperTypes && b.supertypeAngleDepth == 0 {
+			b.classBaseLastIdent = name
+		}
 		b.prevByte = 'i'
 		return
 	}
@@ -564,6 +623,10 @@ func (b *builder) handleIdent(word []byte) {
 		case scope.KindFunction, scope.KindMethod:
 			b.paramListPending = true
 			b.functionDeclPending = true
+		case scope.KindClass:
+			// Track the class/struct/union so the upcoming
+			// `: public Base, ...` clause appends supertypes.
+			b.pendingClassDeclIdx = len(b.res.Decls) - 1
 		}
 		b.prevByte = 'i'
 		return
@@ -610,7 +673,33 @@ func (b *builder) handleIdent(word []byte) {
 	}
 
 	b.emitRef(name, mkSpan(startByte, endByte))
+	// Supertype name capture: while inside the inheritance clause
+	// at depth 0 (outside `<...>`), record the latest ident.
+	if b.inSuperTypes && b.supertypeAngleDepth == 0 {
+		b.classBaseLastIdent = name
+	}
 	b.prevByte = 'i'
+}
+
+// flushSuperTypeArg appends the captured base ident to
+// classSuperTypes and resets the per-section state. Called on `,`
+// inside the inheritance clause.
+func (b *builder) flushSuperTypeArg() {
+	if b.pendingClassDeclIdx < 0 || b.classBaseLastIdent == "" {
+		b.classBaseLastIdent = ""
+		return
+	}
+	b.classSuperTypes[b.pendingClassDeclIdx] = append(
+		b.classSuperTypes[b.pendingClassDeclIdx], b.classBaseLastIdent)
+	b.classBaseLastIdent = ""
+}
+
+// flushSuperTypeSection finalises the inheritance window and
+// clears inSuperTypes. Called on body `{`.
+func (b *builder) flushSuperTypeSection() {
+	b.flushSuperTypeArg()
+	b.inSuperTypes = false
+	b.supertypeAngleDepth = 0
 }
 
 // handleUsingDirective scans a `using ...;` statement after the
@@ -805,12 +894,19 @@ func (b *builder) handleOpenBrace() {
 	b.stmtStart = true
 	b.prevByte = '{'
 
+	// Class/struct body opens — flush the supertype section onto
+	// Decl.SuperTypes and clear the trackers.
+	if b.inSuperTypes {
+		b.flushSuperTypeSection()
+	}
+
 	if b.pendingScope != nil {
 		kind := *b.pendingScope
 		b.pendingScope = nil
 		b.openScope(kind, uint32(b.s.Pos-1))
 		if kind == scope.ScopeClass {
 			b.classDepth = 0
+			b.pendingClassDeclIdx = -1
 		}
 		if len(b.pendingParams) > 0 {
 			for _, p := range b.pendingParams {

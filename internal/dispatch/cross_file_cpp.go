@@ -103,7 +103,26 @@ func cppCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sym
 	}
 
 	if derivedReceiver != "" {
-		cppEmitHierarchySpans(out, resolver, sym, target, derivedReceiver)
+		// EmitOverrideSpans reads sym.Receiver directly. C++
+		// definitions in .cpp files often have Receiver unset
+		// because the parser sees `Class::method` syntax that the
+		// symbol index doesn't always lift into Receiver. Use the
+		// derived form via a copy to preserve sym for subsequent
+		// callers in this dispatch.
+		symCopy := *sym
+		symCopy.Receiver = derivedReceiver
+		var extraCandidates []string
+		if refs, err := db.FindSemanticReferences(ctx, derivedReceiver, sym.File); err == nil {
+			seen := map[string]struct{}{sym.File: {}}
+			for _, r := range refs {
+				if _, ok := seen[r.File]; ok {
+					continue
+				}
+				seen[r.File] = struct{}{}
+				extraCandidates = append(extraCandidates, r.File)
+			}
+		}
+		EmitOverrideSpans(out, cppResolverDeps{r: resolver}, &symCopy, extraCandidates...)
 	}
 
 	candidates := map[string]bool{}
@@ -626,63 +645,25 @@ func cppCollectLocalShadows(r *scope.Result, src []byte) []cppShadow {
 	return out
 }
 
-// cppEmitHierarchySpans finds same-named methods in classes/
-// structs related to derivedReceiver via the inheritance graph
-// in either sym.File or its sibling .hpp/.cpp, and emits isDef
-// spans into out for each matching decl.
-//
-// C++ class declarations live in the header; out-of-line method
-// definitions live in the source (.cpp). The dispatch already
-// includes sym.File and sibling files in the candidate set, so
-// the per-candidate ref/decl walks pick up the .cpp side. This
-// helper handles the .hpp side: walk every class body in the
-// header, find method decls in related classes' bodies.
-func cppEmitHierarchySpans(out map[string][]span, resolver *namespace.CppResolver, sym *index.SymbolInfo, target *scope.Decl, receiver string) {
-	files := []string{sym.File}
-	files = append(files, resolver.SamePackageFiles(sym.File)...)
-	for _, file := range files {
-		src := resolver.Source(file)
-		if len(src) == 0 {
-			continue
-		}
-		hier := namespace.CppFindClassHierarchy(src)
-		if len(hier) == 0 {
-			continue
-		}
-		related := map[string]bool{}
-		for _, t := range namespace.CppRelatedTypes(src, receiver) {
-			related[t] = true
-		}
-		if len(related) == 0 {
-			continue
-		}
-		res := resolver.Result(file)
-		if res == nil {
-			continue
-		}
-		for _, h := range hier {
-			if !related[h.Name] || h.Name == receiver {
-				continue
-			}
-			for i := range res.Decls {
-				d := &res.Decls[i]
-				if d.Name != sym.Name {
-					continue
-				}
-				if d.Kind != scope.KindMethod && d.Kind != scope.KindFunction {
-					continue
-				}
-				if d.Span.StartByte < h.BodyStart || d.Span.EndByte > h.BodyEnd {
-					continue
-				}
-				if d.ID == target.ID {
-					continue
-				}
-				out[file] = append(out[file], span{
-					start: d.Span.StartByte,
-					end:   d.Span.EndByte,
-					})
-			}
-		}
-	}
+// cppResolverDeps adapts CppResolver to the dispatch HierarchyDeps
+// interface used by EmitOverrideSpans.
+type cppResolverDeps struct {
+	r *namespace.CppResolver
+}
+
+func (d cppResolverDeps) Result(file string) *scope.Result { return d.r.Result(file) }
+func (d cppResolverDeps) SamePackageFiles(file string) []string {
+	return d.r.SamePackageFiles(file)
+}
+func (d cppResolverDeps) FilesForImport(spec, importingFile string) []string {
+	return d.r.FilesForImport(spec, importingFile)
+}
+
+// ImportSpec rebuilds a `#include` path from a KindImport decl.
+// The C++ builder stamps Signature with the include path
+// (`std/iostream`, `local/header.hpp`); the imported binding name
+// is unused for the resolver's purposes.
+func (d cppResolverDeps) ImportSpec(decl *scope.Decl) string {
+	module, _ := SplitImportSignature(decl)
+	return module
 }
