@@ -73,12 +73,21 @@ func ParseCanonical(file, canonicalPath string, src []byte) *scope.Result {
 		pendingOwnerDecl:     -1,
 		pendingImplTargetIdx: -1,
 		implForRefIdx:        -1,
+		classSuperTypes:      map[int][]string{},
 	}
 	b.openScope(scope.ScopeFile, 0)
 	b.stmtStart = true
 	b.run()
 	b.closeScopesToDepth(0)
 	b.resolveRefs()
+	// Copy classSuperTypes onto Decl.SuperTypes so the cross-file
+	// hierarchy walker (EmitOverrideSpans) can read trait
+	// implementations as supertype edges.
+	for idx, supers := range b.classSuperTypes {
+		if idx >= 0 && idx < len(b.res.Decls) && len(supers) > 0 {
+			b.res.Decls[idx].SuperTypes = supers
+		}
+	}
 	return b.res
 }
 
@@ -141,6 +150,24 @@ type builder struct {
 	// pendingImplTraitName is the simple trait name for an upcoming
 	// `impl Trait for Type { }` body, or empty. Consumed by openScope.
 	pendingImplTraitName string
+
+	// pendingImplTargetName is the simple target type name for the
+	// upcoming impl body. Used to emit a synthetic class decl that
+	// anchors methods declared in the impl block — without it the
+	// cross-file hierarchy walker (EmitOverrideSpans) couldn't find
+	// methods inside `impl Foo { fn method }` since the struct
+	// decl's body span is just the field list.
+	pendingImplTargetName string
+
+	// pendingImplTargetSpan is the byte range of the target type
+	// ident in the impl header (`impl Trait for Type` → span of
+	// "Type"). Used as the synthetic decl's identifier span.
+	pendingImplTargetSpan scope.Span
+
+	// classSuperTypes maps a class/synthetic decl index to its
+	// supertype list. Populated for `impl Trait for Type` (Type
+	// gains [Trait]) and copied onto Decl.SuperTypes after parse.
+	classSuperTypes map[int][]string
 
 	// implRefStartIdx is the index into res.Refs at which we started
 	// collecting refs emitted between `impl` and the opening `{`. Used
@@ -1165,6 +1192,31 @@ func (b *builder) handleOpenBrace() {
 			// `impl` keyword and this `{`, then match its name against
 			// top-level struct/enum decls.
 			b.resolveImplTarget()
+
+			// Emit a synthetic class decl that anchors the methods
+			// declared in this impl block. The cross-file hierarchy
+			// walker (EmitOverrideSpans) can't see methods inside
+			// `impl Foo { fn method }` otherwise, since the struct
+			// decl's body span is just the field list.
+			//
+			// For `impl Trait for Type`, also stamp Trait onto the
+			// synthetic decl's SuperTypes so the walker treats the
+			// implementation as a hierarchy edge: renaming a method
+			// on Trait propagates to every `impl Trait for X { fn
+			// method }`, and vice versa.
+			if b.pendingImplTargetName != "" {
+				idx := len(b.res.Decls)
+				b.emitDecl(b.pendingImplTargetName, scope.KindClass, b.pendingImplTargetSpan)
+				if b.pendingImplTraitName != "" {
+					b.classSuperTypes[idx] = append(b.classSuperTypes[idx], b.pendingImplTraitName)
+				}
+				// Wire the synthetic decl as the scope owner so
+				// closeTopScope patches its FullSpan to the closing
+				// brace.
+				b.pendingOwnerDecl = idx
+				b.pendingImplTargetName = ""
+				b.pendingImplTargetSpan = scope.Span{}
+			}
 		}
 
 		b.openScope(kind, uint32(b.s.Pos-1))
@@ -1297,18 +1349,22 @@ func (b *builder) resolveImplTarget() {
 	// Simple target type name: last ref after `for` (or last ref overall
 	// if no `for`).
 	var target string
+	var targetSpan scope.Span
 	targetSlice := b.res.Refs[targetSliceStart:]
 	for i := len(targetSlice) - 1; i >= 0; i-- {
-		n := targetSlice[i].Name
-		if n == "" {
+		ref := targetSlice[i]
+		if ref.Name == "" {
 			continue
 		}
-		target = n
+		target = ref.Name
+		targetSpan = ref.Span
 		break
 	}
 	b.implRefStartIdx = -1
 	b.implForRefIdx = -1
 	b.pendingImplTraitName = trait
+	b.pendingImplTargetName = target
+	b.pendingImplTargetSpan = targetSpan
 	if target == "" {
 		return
 	}

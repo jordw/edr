@@ -54,6 +54,30 @@ func rustCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sy
 		return out, true
 	}
 
+	// Hierarchy override propagation. Rust expresses "Foo implements
+	// Trait" via `impl Trait for Foo { ... }` blocks; the Rust scope
+	// builder emits a synthetic KindClass decl per impl block with
+	// SuperTypes=[Trait] (or empty for inherent `impl Foo`). The
+	// shared EmitOverrideSpans walker needs sym.Receiver populated;
+	// for Rust we derive it by finding the synthetic class decl
+	// whose body span encloses the target method.
+	if receiver := rustDeriveReceiver(targetRes, target); receiver != "" {
+		var extraCandidates []string
+		if refs, err := db.FindSemanticReferences(ctx, receiver, sym.File); err == nil {
+			seen := map[string]struct{}{sym.File: {}}
+			for _, r := range refs {
+				if _, ok := seen[r.File]; ok {
+					continue
+				}
+				seen[r.File] = struct{}{}
+				extraCandidates = append(extraCandidates, r.File)
+			}
+		}
+		symCopy := *sym
+		symCopy.Receiver = receiver
+		EmitOverrideSpans(out, rustResolverDeps{r: resolver}, &symCopy, extraCandidates...)
+	}
+
 	// Candidate files: symbol-index references plus every .rs file
 	// under the crate's src/. The crate walk catches callers whose
 	// import graph hasn't been indexed (common for Rust because the
@@ -167,4 +191,90 @@ func rustCrossFileSpans(ctx context.Context, db index.SymbolStore, sym *index.Sy
 	}
 
 	return out, true
+}
+
+// rustResolverDeps adapts RustResolver to the dispatch HierarchyDeps
+// interface used by EmitOverrideSpans.
+type rustResolverDeps struct {
+	r *namespace.RustResolver
+}
+
+func (d rustResolverDeps) Result(file string) *scope.Result { return d.r.Result(file) }
+func (d rustResolverDeps) SamePackageFiles(file string) []string {
+	return d.r.SamePackageFiles(file)
+}
+func (d rustResolverDeps) FilesForImport(spec, importingFile string) []string {
+	return d.r.FilesForImport(spec, importingFile)
+}
+
+// ImportSpec returns the bare module path from a `use` decl. The
+// imported name is part of the path's last segment, but Rust's
+// FilesForImport only consults the path.
+func (d rustResolverDeps) ImportSpec(decl *scope.Decl) string {
+	module, _ := SplitImportSignature(decl)
+	return module
+}
+
+// rustDeriveReceiver finds the enclosing impl-block target type for
+// the rename target. The Rust scope builder emits a synthetic
+// KindClass decl per impl block whose FullSpan covers the impl
+// body; the target method lives inside that span. Returns the
+// synthetic decl's name (e.g. "Foo" for a method inside `impl Trait
+// for Foo`), or "" if the target isn't inside any impl block (e.g.
+// a free function or a trait-method declaration on a trait decl).
+func rustDeriveReceiver(res *scope.Result, target *scope.Decl) string {
+	if res == nil || target == nil {
+		return ""
+	}
+	// Pick the tightest enclosing class-like decl by FullSpan
+	// containment. The synthetic impl-block decls are KindClass at
+	// file scope; tighter (smaller) FullSpan wins so nested impls
+	// don't bleed into outer ones.
+	bestName := ""
+	var bestSpan uint32
+	for i := range res.Decls {
+		d := &res.Decls[i]
+		if d.Kind != scope.KindClass {
+			continue
+		}
+		if d.Scope != 1 {
+			continue
+		}
+		// Containment check.
+		if d.FullSpan.StartByte > target.Span.StartByte ||
+			d.FullSpan.EndByte < target.Span.EndByte {
+			continue
+		}
+		// Skip the synthetic decl that IS the target (in case the
+		// user is renaming a class-name itself).
+		if d.ID == target.ID {
+			continue
+		}
+		spanWidth := d.FullSpan.EndByte - d.FullSpan.StartByte
+		if bestName == "" || spanWidth < bestSpan {
+			bestName = d.Name
+			bestSpan = spanWidth
+		}
+	}
+	if bestName != "" {
+		return bestName
+	}
+	// Trait method declaration: target's enclosing scope is a
+	// ScopeInterface owned by the trait decl. Find a trait decl
+	// whose FullSpan contains the target.
+	for i := range res.Decls {
+		d := &res.Decls[i]
+		if d.Kind != scope.KindInterface {
+			continue
+		}
+		if d.Scope != 1 {
+			continue
+		}
+		if d.FullSpan.StartByte > target.Span.StartByte ||
+			d.FullSpan.EndByte < target.Span.EndByte {
+			continue
+		}
+		return d.Name
+	}
+	return ""
 }

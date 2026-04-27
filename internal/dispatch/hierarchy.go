@@ -149,7 +149,15 @@ type hierarchyKey struct {
 // the convention that all class-like decls live at file scope
 // (Scope == ScopeID(1) — the file's own scope, since 0 is the zero
 // value for "no scope assigned").
+//
+// When multiple decls share the receiverName (e.g. Rust's
+// `struct Foo` + synthetic `impl Trait for Foo` decl, or
+// TS class+interface declaration merging), prefer the one with
+// non-empty SuperTypes so the up-walk has something to follow.
+// This matters for Rust where the struct decl carries no
+// SuperTypes and the synthetic impl-block decl carries the trait.
 func findEnclosingClass(r *scope.Result, receiverName string) *scope.Decl {
+	var fallback *scope.Decl
 	for i := range r.Decls {
 		d := &r.Decls[i]
 		if d.Name != receiverName {
@@ -158,9 +166,14 @@ func findEnclosingClass(r *scope.Result, receiverName string) *scope.Decl {
 		if !isClassLikeFileScope(d) {
 			continue
 		}
-		return d
+		if len(d.SuperTypes) > 0 {
+			return d
+		}
+		if fallback == nil {
+			fallback = d
+		}
 	}
-	return nil
+	return fallback
 }
 
 // isClassLikeFileScope reports whether d is a top-level class /
