@@ -429,3 +429,88 @@ func TestRestoreCheckpoint_PreRestoreIsRestorable(t *testing.T) {
 		t.Errorf("expected v2 after restoring pre-restore, got %q", string(content))
 	}
 }
+
+// --- PatchCheckpointFiles ---
+//
+// PatchCheckpointFiles is the rescue path for multi-file rename: the
+// initial auto-checkpoint only knows the primary target, but rename's
+// scope-aware resolver discovers secondary files only after dispatch.
+// Without these patches, undo cannot restore those secondary files —
+// the failure mode is silent (broken undo). The basic add-new + no-
+// overwrite contract is covered in api_coverage_test.go; the cases
+// below cover what those tests don't:
+// - explicit nil/empty-map inputs (the cmd hook calls PatchCheckpointFiles
+//   unconditionally on rename results, even when no secondaries were touched)
+// - end-to-end: patched content actually round-trips through restore
+
+func TestPatchCheckpointFiles_EmptyMapNoOp(t *testing.T) {
+	dir := t.TempDir()
+	sessDir := filepath.Join(dir, "sessions")
+	repoRoot := filepath.Join(dir, "repo")
+	os.MkdirAll(repoRoot, 0755)
+	os.WriteFile(filepath.Join(repoRoot, "a.go"), []byte("x"), 0644)
+
+	s := New()
+	cp, err := s.CreateCheckpoint(sessDir, repoRoot, "", []string{"a.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := PatchCheckpointFiles(sessDir, cp.ID, repoRoot, nil); err != nil {
+		t.Errorf("nil patch should be no-op, got: %v", err)
+	}
+	if err := PatchCheckpointFiles(sessDir, cp.ID, repoRoot, map[string][]byte{}); err != nil {
+		t.Errorf("empty patch should be no-op, got: %v", err)
+	}
+
+	loaded, _ := LoadCheckpoint(sessDir, cp.ID)
+	if len(loaded.Files) != 1 {
+		t.Errorf("checkpoint mutated by no-op patch: %d files", len(loaded.Files))
+	}
+}
+
+// TestPatchCheckpointFiles_RestoresRenameSecondaryFile is the end-to-end
+// scenario the patch-checkpoint path exists for: a multi-file rename
+// modifies a file the initial checkpoint didn't snapshot, the patch adds
+// it, and a subsequent restore brings it back.
+func TestPatchCheckpointFiles_RestoresRenameSecondaryFile(t *testing.T) {
+	dir := t.TempDir()
+	sessDir := filepath.Join(dir, "sessions")
+	repoRoot := filepath.Join(dir, "repo")
+	os.MkdirAll(repoRoot, 0755)
+
+	primary := filepath.Join(repoRoot, "primary.go")
+	caller := filepath.Join(repoRoot, "caller.go")
+	os.WriteFile(primary, []byte("PRIMARY-V1"), 0644)
+	os.WriteFile(caller, []byte("CALLER-V1"), 0644)
+
+	s := New()
+	cp, err := s.CreateCheckpoint(sessDir, repoRoot, "", []string{"primary.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mutate both files (simulate multi-file rename).
+	os.WriteFile(primary, []byte("PRIMARY-V2"), 0644)
+	os.WriteFile(caller, []byte("CALLER-V2"), 0644)
+
+	// Patch with caller's pre-mutation content.
+	if err := PatchCheckpointFiles(sessDir, cp.ID, repoRoot, map[string][]byte{
+		"caller.go": []byte("CALLER-V1"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, _, err := s.RestoreCheckpoint(sessDir, repoRoot, cp.ID, true, []string{"primary.go", "caller.go"}); err != nil {
+		t.Fatal(err)
+	}
+
+	primaryAfter, _ := os.ReadFile(primary)
+	if string(primaryAfter) != "PRIMARY-V1" {
+		t.Errorf("primary not restored: %q", primaryAfter)
+	}
+	callerAfter, _ := os.ReadFile(caller)
+	if string(callerAfter) != "CALLER-V1" {
+		t.Errorf("caller not restored from patched checkpoint: %q (this is the silent-undo bug)", callerAfter)
+	}
+}
+
